@@ -7,7 +7,7 @@ setup(
     description="A Python framework for building LLM-powered agents with modular state, tools, and MCP support.",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
-    author="in-clouder",
+    author="pygent-ai",
     url="https://github.com/your-org/pygent",
     license="Apache-2.0",
     packages=find_packages(exclude=["examples*", "tests*", "MCPs*", "docs*"]),
@@ -32,3 +32,4 @@ setup(
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
 )
+
