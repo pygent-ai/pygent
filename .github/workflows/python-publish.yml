@@ -114,7 +114,7 @@ jobs:
     environment:
       name: pypi
       # 取消注释并替换为你的 PyPI 项目 URL
-      url: https://pypi.org/project/pygent/
+      url: https://pypi.org/project/pygent-ai/
 
     steps:
       - name: Retrieve release distributions
