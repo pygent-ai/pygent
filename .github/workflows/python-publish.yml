@@ -1,41 +1,106 @@
-# This workflow will upload a Python Package to PyPI when a release is created
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python#publishing-to-package-registries
-
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-name: Upload Python Package
+name: Upload Python Package to PyPI
 
 on:
   release:
     types: [published]
+  # 可选：手动触发发布
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  release-build:
+  test:
     runs-on: ubuntu-latest
-
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+      
+      - name: Install uv (optional but faster)
+        run: pip install uv
+      
+      - name: Install pygent in development mode
+        run: |
+          # 使用 uv 或 pip 二选一
+          uv pip install -e .[dev,test] || pip install -e .[dev,test]
+      
+      - name: Run tests for pygent
+        run: |
+          # 运行 pygent 项目的测试
+          python -m pytest pygent/tests/ -v --cov=pygent --cov-report=xml
+      
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
 
-      - uses: actions/setup-python@v5
+  release-build:
+    runs-on: ubuntu-latest
+    needs: test  # 确保测试通过后才构建
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取所有git历史，用于版本检查
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-
+          cache: 'pip'
+      
+      - name: Install build tools
+        run: |
+          pip install build setuptools wheel
+          pip install uv  # 可选，用于更快的依赖安装
+      
+      - name: Check version consistency
+        if: github.event_name == 'release'
+        run: |
+          # 从 setup.py 提取版本号
+          SETUP_VERSION=$(grep -E "version\s*=" setup.py | head -1 | sed "s/.*['\"]\([^'\"]*\)['\"].*/\1/")
+          
+          # 获取 Release tag（去除 'v' 前缀）
+          RELEASE_TAG="${{ github.event.release.tag_name }}"
+          CLEAN_TAG="${RELEASE_TAG#v}"
+          
+          echo "Setup.py version: $SETUP_VERSION"
+          echo "Release tag: $RELEASE_TAG"
+          echo "Clean tag: $CLEAN_TAG"
+          
+          # 版本一致性检查
+          if [ "$SETUP_VERSION" != "$CLEAN_TAG" ]; then
+            echo "❌ ERROR: Version mismatch!"
+            echo "setup.py version ($SETUP_VERSION) does not match release tag ($CLEAN_TAG)"
+            exit 1
+          fi
+          
+          echo "✅ Version check passed!"
+      
       - name: Build release distributions
         run: |
-          # NOTE: put your own distribution build steps here.
-          python -m pip install build
           python -m build
-
+          
+          # 列出构建的文件用于验证
+          ls -la dist/
+          echo "Package info:"
+          python -m pip install twine
+          python -m twine check dist/*
+      
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:
-          name: release-dists
+          name: pygent-release-dists
           path: dist/
 
   pypi-publish:
@@ -43,28 +108,32 @@ jobs:
     needs:
       - release-build
     permissions:
-      # IMPORTANT: this permission is mandatory for trusted publishing
-      id-token: write
-
-    # Dedicated environments with protections for publishing are strongly recommended.
-    # For more information, see: https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment#deployment-protection-rules
+      id-token: write  # 关键：启用可信发布
+    
+    # 使用环境保护（推荐）
     environment:
       name: pypi
-      # OPTIONAL: uncomment and update to include your PyPI project URL in the deployment status:
-      # url: https://pypi.org/p/YOURPROJECT
-      #
-      # ALTERNATIVE: if your GitHub Release name is the PyPI project version string
-      # ALTERNATIVE: exactly, uncomment the following line instead:
-      # url: https://pypi.org/project/YOURPROJECT/${{ github.event.release.name }}
+      # 取消注释并替换为你的 PyPI 项目 URL
+      url: https://pypi.org/project/pygent/
 
     steps:
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4
         with:
-          name: release-dists
+          name: pygent-release-dists
           path: dist/
-
-      - name: Publish release distributions to PyPI
+      
+      - name: Verify distributions
+        run: |
+          echo "Built distributions:"
+          ls -la dist/
+          
+          # 验证包内容
+          python -m pip install twine
+          python -m twine check dist/*
+      
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          verbose: true
