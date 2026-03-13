@@ -2,12 +2,12 @@ import asyncio
 import json
 import logging
 import os
-from typing import AsyncIterator
+from typing import AsyncIterator, Union
 
 from pygent.agent import BaseAgent
 from pygent.context import BaseContext
-from pygent.llm import AsyncOpenAIClient
-from pygent.message import UserMessage, ToolMessage, BaseMessage
+from pygent.llm import AsyncRequestsClient
+from pygent.message import UserMessage, ToolMessage, BaseMessage, BaseMessageChunk
 from pygent.module.tool import ToolManager
 from pygent.toolkits.file_operations import FileToolkits
 from pygent.toolkits.run_terminal_cmd import TerminalToolkits
@@ -22,7 +22,7 @@ class ReactAgent(BaseAgent):
     def __init__(self, root_dir: str = "."):
         super(ReactAgent, self).__init__()
         self.root_dir = os.path.abspath(root_dir)
-        self.llm = AsyncOpenAIClient(
+        self.llm = AsyncRequestsClient(
             base_url="https://api.deepseek.com",
             api_key=os.environ["DEEPSEEK_API_KEY"],
             model_name="deepseek-chat",
@@ -31,10 +31,10 @@ class ReactAgent(BaseAgent):
         self.tool_manager = ToolManager()
         # 注册文件操作与终端命令工具（绑定到当前 workspace）
         file_toolkits = FileToolkits(session_id="react", workspace_root=self.root_dir)
-        for tool in file_toolkits.get_tool_manager().tools.data.values():
+        for tool in file_toolkits.get_tool_manager().get_registered_tools():
             self.tool_manager.register_tool(tool)
         terminal_toolkits = TerminalToolkits(session_id="react", workspace_root=self.root_dir)
-        for tool in terminal_toolkits.get_tool_manager().tools.data.values():
+        for tool in terminal_toolkits.get_tool_manager().get_registered_tools():
             self.tool_manager.register_tool(tool)
 
     def _tools_param(self):
@@ -85,28 +85,41 @@ class ReactAgent(BaseAgent):
 
         return context.last_message.content
 
-    async def stream(self, user_input: str, max_steps: int = 20) -> AsyncIterator[BaseMessage]:
+    async def stream(self, user_input: str, max_steps: int = 20) -> AsyncIterator[Union[BaseMessage, BaseMessageChunk]]:
         """与 forward 逻辑一致，但按步 yield 每条助手消息与工具结果消息，便于流式展示或日志。"""
         context = BaseContext(system_prompt="""
 你是一个小助手。可以使用 read_file、run_terminal_cmd、write 等工具完成用户请求。
 完成用户请求后请直接回复结论，不要继续发起 tool_calls。
 """)
         context.add_message(UserMessage(content=user_input))
-        logger.info("stream start: user_input=%s", user_input[:200] if user_input else "")
+        tools_param = self._tools_param()
+        logger.info("stream start: user_input=%s, tools_count=%s", user_input[:200] if user_input else "", len(tools_param))
 
         for step in range(max_steps):
-            result = await self.llm.forward(context, tools=self._tools_param())
-            logger.info("stream step=%s: assistant message, content_len=%s, has_tool_calls=%s",
-                        step + 1,
-                        len(getattr(result.content, "data", result.content) or ""),
-                        bool(getattr(context.last_message, "tool_calls", None)))
+            async for chunk in self.llm.stream_forward(context, tools=tools_param):
+                yield chunk
+            last = context.last_message
+            last_type = type(last).__name__
+            has_tool_calls = getattr(last, "tool_calls", None)
+            has_tool_call_chunks = getattr(last, "tool_call_chunks", None)
+            tool_calls_list = list(has_tool_calls.data) if has_tool_calls and hasattr(has_tool_calls, "data") else []
+            chunks_list = list(has_tool_call_chunks.data) if has_tool_call_chunks and hasattr(has_tool_call_chunks, "data") else []
+            logger.info(
+                "stream step=%s: last_message type=%s, has_tool_calls=%s (len=%s), has_tool_call_chunks=%s (len=%s)",
+                step + 1, last_type, bool(has_tool_calls), len(tool_calls_list), bool(has_tool_call_chunks), len(chunks_list),
+            )
+            if tool_calls_list:
+                for i, tc in enumerate(tool_calls_list):
+                    name = getattr(getattr(tc, "tool_name", None), "data", None)
+                    tid = getattr(getattr(tc, "tool_call_id", None), "data", None)
+                    logger.info("stream step=%s: tool_calls[%s] name=%s tool_call_id=%s", step + 1, i, name, tid)
             yield context.last_message
 
-            if not getattr(context.last_message, "tool_calls", None):
-                logger.info("stream done: no more tool_calls")
+            if not getattr(context.last_message, "tool_calls", None) or not context.last_message.tool_calls.data:
+                logger.info("stream done: no tool_calls on last_message")
                 return
 
-            for tool_call in context.last_message.tool_calls:
+            for tool_call in context.last_message.tool_calls.data:
                 name = tool_call.tool_name.data
                 kwargs = self._normalize_tool_kwargs(name, dict(tool_call.arguments.data))
                 logger.info("stream: calling tool name=%s kwargs=%s", name, kwargs)
@@ -126,12 +139,17 @@ async def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     agent = ReactAgent(root_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    input_str = "用 run_terminal_cmd 执行命令 dir 列出当前项目根目录下的文件和文件夹，然后根据结果用一句话回复我列表里前 5 个条目即可，不要重复调用工具。"
+    input_str = "你当前在那个路径下面"
 
     async for message in agent.stream(input_str):
-        logger.info("received message: role=%s content_len=%s",
-                   getattr(message, "role", None) and getattr(message.role, "data", message.role),
-                   len(getattr(message, "content", None) and getattr(message.content, "data", message.content) or ""))
+        if isinstance(message, BaseMessageChunk):
+            print(message.content)
+        else:
+            role = getattr(message, "role", None) and getattr(message.role, "data", message.role)
+            content = getattr(message, "content", None) and getattr(message.content, "data", message.content) or ""
+            logger.info("received message: role=%s content_len=%s", role, len(content))
+            if content:
+                logger.info("agent reply content: %s", content)
 
 
 if __name__ == "__main__":

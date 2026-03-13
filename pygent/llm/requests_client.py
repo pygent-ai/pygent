@@ -5,12 +5,15 @@
 
 import asyncio
 import json
+import logging
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, Any, AsyncGenerator
 
 from pygent.context import BaseContext
 from pygent.llm import BaseAsyncClient
 from pygent.message import AssistantMessage, AssistantMessageChunk, ToolCall, ToolCallChunk
+
+logger = logging.getLogger(__name__)
 
 
 def _http_post(url: str, headers: dict, body: bytes, timeout: int) -> tuple[int, bytes]:
@@ -163,26 +166,49 @@ class AsyncRequestsClient(BaseAsyncClient):
             return None
         return AssistantMessageChunk(content=content, tool_call_chunks=tool_call_chunks or None)
 
-    def _do_request_stream(self, payload: dict):
-        """同步执行流式请求，返回生成器产出 AssistantMessageChunk"""
+    def _stream_worker_sync(self, payload: dict, queue: asyncio.Queue) -> None:
+        """在后台线程中执行：同步流式请求，将 AssistantMessageChunk 放入 queue，结束时 put(None)。"""
         url = self._get_chat_url()
         headers = {
             "Authorization": f"Bearer {self.api_key.data}",
             "Content-Type": "application/json",
         }
         body = json.dumps(payload).encode("utf-8")
-        status, line_iter = _http_post_stream(url, headers, body, self.timeout.data)
-        if status != 200:
-            raise RuntimeError(f"HTTP {status}")
-        for line in line_iter:
-            chunk = self._parse_sse_delta(line)
-            if chunk is not None:
-                yield chunk
+        try:
+            status, line_iter = _http_post_stream(url, headers, body, self.timeout.data)
+            if status != 200:
+                queue.put_nowait(RuntimeError(f"HTTP {status}"))
+                return
+            for line in line_iter:
+                chunk = self._parse_sse_delta(line)
+                if chunk is not None:
+                    queue.put_nowait(chunk)
+        except Exception as e:
+            queue.put_nowait(e)
+        finally:
+            queue.put_nowait(None)
+
+    async def _do_request_stream(self, payload: dict) -> AsyncGenerator[AssistantMessageChunk, Any]:
+        """异步流式请求：在线程中执行同步 I/O，通过 queue 产出 AssistantMessageChunk，不阻塞事件循环。"""
+        queue = asyncio.Queue()
+        loop = asyncio.get_event_loop()
+
+        def worker():
+            self._stream_worker_sync(payload, queue)
+
+        future = loop.run_in_executor(None, worker)
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item
+        await future
 
     async def forward(
         self,
         context: BaseContext,
-        on_chunk: Optional[Callable[[AssistantMessageChunk], None]] = None,
         **kwargs
     ) -> AssistantMessage:
         history = getattr(context, "history", None)
@@ -197,31 +223,64 @@ class AsyncRequestsClient(BaseAsyncClient):
         }
         if self.max_tokens.data:
             request_params["max_tokens"] = self.max_tokens.data
-        stream = self.stream.data or kwargs.get("stream", False)
-        request_params["stream"] = stream
-
-        if not stream:
-            data = await asyncio.to_thread(self._do_request, request_params)
-            assistant_msg = self._parse_response(data)
-            context.add_message(assistant_msg)
-            return context.last_message
-
-        # 流式：在线程中收集 chunks，主协程累积并回调
-        def _collect_chunks():
-            chunks = []
-            for c in self._do_request_stream(request_params):
-                chunks.append(c)
-            return chunks
-
-        chunks = await asyncio.to_thread(_collect_chunks)
-        accumulated = None
-        for c in chunks:
-            if on_chunk is not None:
-                on_chunk(c)
-            accumulated = c if accumulated is None else accumulated + c
-        if accumulated is not None:
-            assistant_msg = accumulated._merge_into_message(AssistantMessage(content=""))
-        else:
-            assistant_msg = AssistantMessage(content="")
+        request_params["stream"] = False
+        data = await asyncio.to_thread(self._do_request, request_params)
+        assistant_msg = self._parse_response(data)
         context.add_message(assistant_msg)
         return context.last_message
+
+    async def stream_forward(
+        self,
+        context: BaseContext,
+        **kwargs
+    ) -> AsyncGenerator[AssistantMessageChunk, Any]:
+        history = context.history
+        messages = []
+        if history is not None:
+            messages = [m.to_openai_format() for m in history]
+        request_params = {
+            "model": self.model_name.data,
+            "messages": messages,
+            "temperature": self.temperature.data,
+            **kwargs
+        }
+        if self.max_tokens.data:
+            request_params["max_tokens"] = self.max_tokens.data
+        request_params["stream"] = True
+
+        tools = request_params.get("tools")
+        tools_count = len(tools) if tools else 0
+        logger.info("[stream_forward] request: messages=%s, tools_count=%s", len(messages), tools_count)
+
+        accumulated = None
+        chunk_index = 0
+        async for chunk in self._do_request_stream(request_params):
+            yield chunk
+            chunk_index += 1
+            if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks and chunk.tool_call_chunks.data:
+                for i, tc in enumerate(chunk.tool_call_chunks.data):
+                    logger.info(
+                        "[stream_forward] chunk#%s tool_call_chunk: index=%s id=%s name=%s args_len=%s",
+                        chunk_index, getattr(tc, "index", None),
+                        getattr(getattr(tc, "tool_call_id", None), "data", tc) if hasattr(tc, "tool_call_id") else None,
+                        getattr(getattr(tc, "tool_name", None), "data", "") if hasattr(tc, "tool_name") else None,
+                        len(getattr(getattr(tc, "arguments", None), "data", "") or "") if hasattr(tc, "arguments") else 0,
+                    )
+            accumulated = chunk if accumulated is None else accumulated + chunk
+
+        if accumulated is not None:
+            has_chunks = getattr(accumulated, "tool_call_chunks", None) and accumulated.tool_call_chunks.data
+            logger.info(
+                "[stream_forward] accumulated: type=%s, content_len=%s, tool_call_chunks_count=%s",
+                type(accumulated).__name__,
+                len(getattr(accumulated.content, "data", accumulated.content) or ""),
+                len(accumulated.tool_call_chunks.data) if has_chunks else 0,
+            )
+            # 关键：流式得到的是 AssistantMessageChunk（只有 tool_call_chunks），
+            # agent 检查的是 tool_calls。必须合并为完整 AssistantMessage 再写入 context。
+            full_message = AssistantMessage(content="") + accumulated
+            tool_calls_count = len(full_message.tool_calls.data) if getattr(full_message, "tool_calls", None) else 0
+            logger.info("[stream_forward] full_message: tool_calls_count=%s", tool_calls_count)
+            context.add_message(full_message)
+        else:
+            raise RuntimeError("[Pygent] No output from stream")
