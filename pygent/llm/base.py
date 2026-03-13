@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 
 from pygent.common import PygentData, PygentOperator, PygentString, PygentDict, PygentInt, PygentFloat, PygentBool
 from pygent.context import BaseContext
+from pygent.message import AssistantMessage
 
 
 class BaseClient(PygentOperator, ABC):
@@ -133,7 +134,7 @@ class BaseAsyncClient(PygentOperator, ABC):
         self.total_requests = PygentInt(0)
         self.total_errors = PygentInt(0)
 
-    async def forward(self, context: BaseContext) -> BaseContext:
+    async def forward(self, context: BaseContext, **kwargs) -> AssistantMessage:
         raise NotImplementedError
 
     def __str__(self) -> str:
