@@ -1,0 +1,444 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cursor Agent Tools (OpenAI-compatible schema)",
+  "description": "工具名称、描述及入参/出参的 OpenAI 标准 schema",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "codebase_search",
+        "description": "按语义在代码库中搜索，用于理解逻辑、查找实现位置。适合「如何/在哪里/是什么」类问题，不适合精确符号或单次查找。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "完整的搜索问题，如：Where is user authentication handled? / 登录后如何保存 token？"
+            },
+            "target_directories": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "限定搜索目录，如 ['src/']；空数组表示整个代码库"
+            },
+            "num_results": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 25,
+              "default": 25,
+              "description": "返回结果数量上限"
+            }
+          },
+          "required": ["query"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_terminal_cmd",
+        "description": "在终端执行给定命令，可指定工作目录、超时与是否后台运行。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "要执行的完整命令字符串"
+            },
+            "working_directory": {
+              "type": "string",
+              "description": "执行命令的工作目录绝对路径，不传则使用当前目录"
+            },
+            "timeout": {
+              "type": "number",
+              "description": "超时时间（毫秒），不传默认 30000"
+            },
+            "description": {
+              "type": "string",
+              "description": "命令的简短描述（约 5–10 个词）"
+            },
+            "is_background": {
+              "type": "boolean",
+              "description": "是否在后台运行该命令",
+              "default": false
+            }
+          },
+          "required": ["command"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "grep",
+        "description": "按精确文本或正则表达式在文件中搜索，支持上下文行数、文件类型、大小写等选项。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "正则表达式或字面量搜索串"
+            },
+            "path": {
+              "type": "string",
+              "description": "要搜索的文件或目录路径，不传则默认为工作区根目录"
+            },
+            "glob": {
+              "type": "string",
+              "description": "文件名过滤，如 '*.js'、'**/*.ts'"
+            },
+            "output_mode": {
+              "type": "string",
+              "enum": ["content", "files_with_matches", "count"],
+              "description": "content=匹配行及上下文；files_with_matches=仅文件路径；count=匹配数量"
+            },
+            "-B": {
+              "type": "number",
+              "description": "匹配行之前显示的上下文行数"
+            },
+            "-A": {
+              "type": "number",
+              "description": "匹配行之后显示的上下文行数"
+            },
+            "-C": {
+              "type": "number",
+              "description": "匹配行前后各显示的上下文行数"
+            },
+            "-i": {
+              "type": "boolean",
+              "description": "是否忽略大小写",
+              "default": false
+            },
+            "type": {
+              "type": "string",
+              "description": "按文件类型过滤，如 js, py, ts"
+            },
+            "head_limit": {
+              "type": "number",
+              "description": "结果数量上限"
+            },
+            "offset": {
+              "type": "number",
+              "description": "跳过前 N 条结果，用于分页"
+            },
+            "multiline": {
+              "type": "boolean",
+              "description": "是否启用跨行匹配（. 匹配换行）",
+              "default": false
+            }
+          },
+          "required": ["pattern"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "从本地读取文件内容，支持按行范围读取；也可读取图片等二进制文件的描述。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "文件的绝对路径或相对工作区的路径"
+            },
+            "offset": {
+              "type": "integer",
+              "description": "起始行号（从 1 开始）"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "最多读取的行数"
+            }
+          },
+          "required": ["path"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write",
+        "description": "将内容写入指定路径；若文件已存在则完整覆盖。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "要写入的文件路径"
+            },
+            "contents": {
+              "type": "string",
+              "description": "文件的完整内容"
+            }
+          },
+          "required": ["path", "contents"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_replace",
+        "description": "在指定文件中做精确字符串替换，可单次或全部替换。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "要修改的文件绝对路径"
+            },
+            "old_string": {
+              "type": "string",
+              "description": "被替换的字符串，需与文件内容精确匹配（含空格与缩进）"
+            },
+            "new_string": {
+              "type": "string",
+              "description": "替换后的新字符串"
+            },
+            "replace_all": {
+              "type": "boolean",
+              "description": "是否替换文件中所有匹配项；默认 false 仅替换第一次",
+              "default": false
+            }
+          },
+          "required": ["path", "old_string", "new_string"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "edit_notebook",
+        "description": "编辑 Jupyter 笔记本的单元格：修改已有单元格或插入新单元格。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target_notebook": {
+              "type": "string",
+              "description": "笔记本文件路径（相对或绝对）"
+            },
+            "cell_idx": {
+              "type": "integer",
+              "description": "要编辑或插入位置的单元格索引（从 0 开始）"
+            },
+            "is_new_cell": {
+              "type": "boolean",
+              "description": "true=新建单元格；false=编辑已有单元格"
+            },
+            "cell_language": {
+              "type": "string",
+              "enum": ["python", "markdown", "javascript", "typescript", "r", "sql", "shell", "raw", "other"],
+              "description": "单元格语言类型"
+            },
+            "old_string": {
+              "type": "string",
+              "description": "要替换的单元格内容；新建单元格时传空字符串"
+            },
+            "new_string": {
+              "type": "string",
+              "description": "新内容或新单元格的完整内容"
+            }
+          },
+          "required": ["target_notebook", "cell_idx", "is_new_cell", "cell_language", "old_string", "new_string"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_file",
+        "description": "删除指定路径的文件；若文件不存在或无权限则报错。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "要删除的文件绝对路径"
+            }
+          },
+          "required": ["path"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_lints",
+        "description": "读取工作区或指定文件/目录的 linter 诊断信息。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "要检查的文件或目录路径列表；不传则返回整个工作区诊断"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_search",
+        "description": "在网络上搜索实时信息，用于获取最新资讯或验证事实。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "search_term": {
+              "type": "string",
+              "description": "搜索关键词或完整查询"
+            },
+            "explanation": {
+              "type": "string",
+              "description": "使用该搜索的一句说明（为何需要此信息）"
+            }
+          },
+          "required": ["search_term", "explanation"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "mcp_web_fetch",
+        "description": "根据 URL 抓取网页内容并转换为可读的 Markdown；不支持需认证或本地/私有地址。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "要抓取的完整有效 URL"
+            }
+          },
+          "required": ["url"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "generate_image",
+        "description": "根据文字描述生成图片文件。仅在用户明确要求生成图片时使用；不用于图表、表格等数据可视化。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "图片的详细描述：主体、布局、风格、颜色、文字等"
+            },
+            "filename": {
+              "type": "string",
+              "description": "保存的文件名（不含路径），不传则自动生成"
+            },
+            "reference_image_paths": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "参考图片的本地路径列表，用于风格或内容参考"
+            }
+          },
+          "required": ["description"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "todo_write",
+        "description": "创建或更新任务列表，用于多步骤任务的规划与进度跟踪。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "todos": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string", "description": "任务唯一标识" },
+                  "content": { "type": "string", "description": "任务描述" },
+                  "status": {
+                    "type": "string",
+                    "enum": ["pending", "in_progress", "completed", "cancelled"],
+                    "description": "任务状态"
+                  }
+                },
+                "required": ["id", "content", "status"]
+              },
+              "description": "任务项列表"
+            },
+            "merge": {
+              "type": "boolean",
+              "description": "true=与现有 todo 按 id 合并；false=用当前列表完全替换现有 todo"
+            }
+          },
+          "required": ["todos", "merge"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "mcp_task",
+        "description": "启动子代理处理复杂、多步骤任务；可指定类型（generalPurpose/shell）、模型、是否只读或后台运行。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "任务的简短描述（3–5 个词）"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "发给子代理的完整任务说明与上下文"
+            },
+            "subagent_type": {
+              "type": "string",
+              "enum": ["generalPurpose", "shell"],
+              "description": "generalPurpose=通用研究与多步执行；shell=命令与 git 等终端任务"
+            },
+            "model": {
+              "type": "string",
+              "enum": ["fast"],
+              "description": "可选模型；不传则继承父级"
+            },
+            "resume": {
+              "type": "string",
+              "description": "要恢复的子代理 ID，用于在完成一轮后继续对话"
+            },
+            "readonly": {
+              "type": "boolean",
+              "description": "是否以只读（Ask）模式运行，限制写操作与 MCP"
+            },
+            "attachments": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "附件文件路径，如视频等，供支持多模态的模型使用"
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "description": "是否在后台运行，完成后可通过 output_file 等查看结果"
+            }
+          },
+          "required": ["description", "prompt", "subagent_type"]
+        }
+      }
+    }
+  ],
+  "outputs_description": {
+    "codebase_search": "匹配的代码片段列表（含文件路径、代码块、简要说明）",
+    "run_terminal_cmd": "终端标准输出/错误文本；需权限时可能包含 required_permissions",
+    "grep": "按 output_mode 返回：匹配行（含上下文）、匹配文件列表或数量",
+    "read_file": "文件内容，行号格式为 行号|内容；图片为二进制描述",
+    "write": "无结构化返回；成功即写入完成",
+    "search_replace": "无结构化返回；成功为编辑确认，失败为错误说明",
+    "edit_notebook": "无结构化返回；成功即笔记本已更新",
+    "delete_file": "无结构化返回；失败时返回错误信息",
+    "read_lints": "诊断列表（文件、行、消息、严重程度等）",
+    "web_search": "搜索结果摘要（标题、片段、URL 等）",
+    "mcp_web_fetch": "页面内容转成的 Markdown 文本；失败为错误信息",
+    "generate_image": "生成图片的路径或展示信息",
+    "todo_write": "无独立返回；用于更新内部任务状态",
+    "mcp_task": "子代理的最终回复文本；后台运行时可能含 output_file 等"
+  }
+}

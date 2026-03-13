@@ -1,0 +1,247 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "codebase_search",
+      "description": "按语义在代码库中搜索，用于理解逻辑、查找实现位置。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "完整的搜索问题" },
+          "target_directories": { "type": "array", "items": { "type": "string" }, "description": "限定搜索目录" },
+          "num_results": { "type": "integer", "minimum": 1, "maximum": 25, "description": "返回结果数量上限" }
+        },
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "run_terminal_cmd",
+      "description": "在终端执行给定命令。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string", "description": "要执行的完整命令" },
+          "working_directory": { "type": "string", "description": "工作目录绝对路径" },
+          "timeout": { "type": "number", "description": "超时毫秒数" },
+          "description": { "type": "string", "description": "命令简短描述" },
+          "is_background": { "type": "boolean", "description": "是否后台运行" }
+        },
+        "required": ["command"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "grep",
+      "description": "按精确文本或正则搜索文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": { "type": "string", "description": "正则或字面量" },
+          "path": { "type": "string", "description": "文件或目录路径" },
+          "glob": { "type": "string", "description": "文件名过滤如 *.js" },
+          "output_mode": { "type": "string", "enum": ["content", "files_with_matches", "count"], "description": "输出模式" },
+          "-B": { "type": "number", "description": "匹配前上下文行数" },
+          "-A": { "type": "number", "description": "匹配后上下文行数" },
+          "-C": { "type": "number", "description": "前后上下文行数" },
+          "-i": { "type": "boolean", "description": "忽略大小写" },
+          "type": { "type": "string", "description": "文件类型" },
+          "head_limit": { "type": "number", "description": "结果上限" },
+          "offset": { "type": "number", "description": "跳过条数" },
+          "multiline": { "type": "boolean", "description": "跨行匹配" }
+        },
+        "required": ["pattern"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "read_file",
+      "description": "读取文件内容，支持按行范围与图片。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "文件路径" },
+          "offset": { "type": "integer", "description": "起始行号" },
+          "limit": { "type": "integer", "description": "读取行数" }
+        },
+        "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "write",
+      "description": "将内容写入指定路径，已存在则覆盖。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "文件路径" },
+          "contents": { "type": "string", "description": "完整内容" }
+        },
+        "required": ["path", "contents"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_replace",
+      "description": "在文件中做精确字符串替换。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "文件路径" },
+          "old_string": { "type": "string", "description": "被替换内容" },
+          "new_string": { "type": "string", "description": "新内容" },
+          "replace_all": { "type": "boolean", "description": "是否替换全部" }
+        },
+        "required": ["path", "old_string", "new_string"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "edit_notebook",
+      "description": "编辑 Jupyter 笔记本单元格。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_notebook": { "type": "string", "description": "笔记本路径" },
+          "cell_idx": { "type": "integer", "description": "单元格索引" },
+          "is_new_cell": { "type": "boolean", "description": "是否新建单元格" },
+          "cell_language": { "type": "string", "enum": ["python", "markdown", "javascript", "typescript", "r", "sql", "shell", "raw", "other"], "description": "单元格语言" },
+          "old_string": { "type": "string", "description": "要替换内容，新建时为空" },
+          "new_string": { "type": "string", "description": "新内容" }
+        },
+        "required": ["target_notebook", "cell_idx", "is_new_cell", "cell_language", "old_string", "new_string"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "delete_file",
+      "description": "删除指定路径的文件。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "文件绝对路径" }
+        },
+        "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "read_lints",
+      "description": "读取 linter 诊断。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "paths": { "type": "array", "items": { "type": "string" }, "description": "文件或目录路径列表" }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "web_search",
+      "description": "网络搜索实时信息。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "search_term": { "type": "string", "description": "搜索词" },
+          "explanation": { "type": "string", "description": "使用该搜索的说明" }
+        },
+        "required": ["search_term", "explanation"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "mcp_web_fetch",
+      "description": "抓取 URL 内容并转为 Markdown。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string", "description": "完整 URL" }
+        },
+        "required": ["url"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "generate_image",
+      "description": "根据描述生成图片。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string", "description": "图片详细描述" },
+          "filename": { "type": "string", "description": "保存文件名" },
+          "reference_image_paths": { "type": "array", "items": { "type": "string" }, "description": "参考图路径" }
+        },
+        "required": ["description"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "todo_write",
+      "description": "创建或更新任务列表。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "todos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "description": "任务 ID" },
+                "content": { "type": "string", "description": "任务描述" },
+                "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"], "description": "状态" }
+              },
+              "required": ["id", "content", "status"]
+            }
+          },
+          "merge": { "type": "boolean", "description": "是否与现有合并" }
+        },
+        "required": ["todos", "merge"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "mcp_task",
+      "description": "启动子代理处理复杂任务。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string", "description": "简短描述" },
+          "prompt": { "type": "string", "description": "完整任务说明" },
+          "subagent_type": { "type": "string", "enum": ["generalPurpose", "shell"], "description": "子代理类型" },
+          "model": { "type": "string", "enum": ["fast"], "description": "模型" },
+          "resume": { "type": "string", "description": "恢复的 agent ID" },
+          "readonly": { "type": "boolean", "description": "只读模式" },
+          "attachments": { "type": "array", "items": { "type": "string" }, "description": "附件路径" },
+          "run_in_background": { "type": "boolean", "description": "后台运行" }
+        },
+        "required": ["description", "prompt", "subagent_type"]
+      }
+    }
+  }
+]

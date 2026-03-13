@@ -51,6 +51,10 @@ class ToolManager(PygentModule):
         """获取工具"""
         return self.tools.data.get(name)
 
+    def get_registered_tools(self) -> List[BaseTool]:
+        """返回已注册的 BaseTool 实例列表，便于合并到其他 ToolManager。"""
+        return list(self.tools.data.values())
+
     def call_tool(self, name: str, *args, **kwargs) -> Dict[str, Any]:
         """调用工具"""
         tool = self.get_tool(name)
