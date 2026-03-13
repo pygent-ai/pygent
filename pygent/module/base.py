@@ -8,9 +8,10 @@ from pygent.common import PygentOperator
 class PygentModule(PygentOperator):
     """Pygent模块基类，提供更丰富的功能"""
     
-    def __init__(self):
+    def __init__(self, is_stream: bool = False):
         super().__init__()
         self._modules = {}
+        self._is_stream = is_stream
         self._init_modules()
     
     def _init_modules(self):
@@ -18,6 +19,20 @@ class PygentModule(PygentOperator):
         for name, value in self.__dict__.items():
             if isinstance(value, PygentOperator):
                 self._modules[name] = value
+    
+    def forward(self, *args, **kwargs) -> Any:
+        """同步调用入口，子类需实现此方法"""
+        raise NotImplementedError("子类必须实现 invoke 方法")
+    
+    def stream_forward(self, *args, **kwargs):
+        """流式调用入口，子类需实现此方法"""
+        raise NotImplementedError("子类必须实现 stream 方法")
+    
+    def __call__(self, *args, **kwargs):
+        """根据 is_stream 调用 stream 或 invoke"""
+        if self._is_stream:
+            return self.stream_forward(*args, **kwargs)
+        return self.forward(*args, **kwargs)
     
     def add_module(self, name: str, module: 'PygentOperator') -> None:
         """添加子模块"""
@@ -35,6 +50,7 @@ class PygentModule(PygentOperator):
     def state_dict(self) -> Dict[str, Any]:
         """获取状态字典（包含子模块）"""
         state = super().state_dict()
+        state['_is_stream'] = self._is_stream
         
         # 添加子模块状态
         modules_state = {}
@@ -50,6 +66,7 @@ class PygentModule(PygentOperator):
         """加载状态字典（包含子模块）"""
         # 分离模块状态
         modules_state = state_dict.pop('_modules', {})
+        self._is_stream = state_dict.pop('_is_stream', False)
         
         # 加载自身状态
         super().load_state_dict(state_dict, strict)
