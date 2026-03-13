@@ -660,6 +660,28 @@ def auto_tool(
 
 # ==================== 类方法装饰器 ====================
 
+def _discover_parameters_from_method(method: Callable) -> Dict[str, Any]:
+    """从方法签名提取参数定义，供 tool_class 生成的工具使用（避免 forward 为 *args,**kwargs 时参数为空）。"""
+    sig = inspect.signature(method)
+    type_hints = get_type_hints(method) if hasattr(method, "__annotations__") else {}
+    parameters = {}
+    for param_name, param in sig.parameters.items():
+        if param_name == "self":
+            continue
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            continue
+        param_type = type_hints.get(param_name, str)
+        required = param.default == inspect.Parameter.empty
+        param_def = ToolParameter(
+            name=param_name,
+            type=param_type,
+            required=required,
+            default=param.default if not required else None,
+        )
+        parameters[param_name] = param_def.data
+    return parameters
+
+
 def tool_method(
     name: Optional[str] = None,
     description: Optional[str] = None,
@@ -667,7 +689,7 @@ def tool_method(
 ):
     """
     类方法装饰器，将类方法转换为工具
-    
+
     使用示例:
         class MathTools:
             @tool_method(name="add", description="加法计算")
@@ -678,7 +700,7 @@ def tool_method(
         @functools.wraps(method)
         def wrapper(self, *args, **kwargs):
             return method(self, *args, **kwargs)
-        
+
         # 存储装饰器信息，供类装饰器使用
         wrapper._is_tool_method = True
         wrapper._tool_config = {
@@ -687,9 +709,9 @@ def tool_method(
             **kwargs
         }
         wrapper._method = method  # 保存原始方法
-        
+
         return wrapper
-    
+
     return decorator
 
 
@@ -758,7 +780,10 @@ def tool_class(
                 }
             )
             
-            return ToolClass()
+            tool = ToolClass()
+            # forward 签名为 *args,**kwargs 时 BaseTool._discover_parameters 无法发现参数，此处从原始方法补充
+            tool.parameters.data.update(_discover_parameters_from_method(original_method))
+            return tool
         
         def get_tool(self, tool_name: str):
             """获取指定工具"""

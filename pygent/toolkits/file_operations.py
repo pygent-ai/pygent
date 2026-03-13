@@ -11,7 +11,7 @@ from typing import Any, List, Optional
 
 from pygent.common import PygentString
 from pygent.module.tool import BaseTool
-from pygent.module.tool.utils import tool_method
+from pygent.module.tool.utils import tool_method, tool_class
 
 
 def _resolve_path(path: str, base: Optional[str] = None) -> Path:
@@ -33,6 +33,7 @@ def _read_file_text(path: Path, offset: Optional[int], limit: Optional[int]) -> 
     return "".join(f"{i + (offset or 1)}|{line}" for i, line in enumerate(lines))
 
 
+@tool_class(description="文件操作工具集：读取、写入、替换、删除、grep、笔记本编辑、linter 诊断。")
 class FileToolkits:
     """文件操作工具集：读取、写入、替换、删除、grep、笔记本编辑、linter 诊断。"""
 

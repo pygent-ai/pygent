@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, Any
 
 from pygent.common import PygentString
-from pygent.module.tool.utils import tool_method
+from pygent.module.tool.utils import tool_method, tool_class
 
 
 # 终端命令：超时与输出上限（避免长时间阻塞或内存溢出）
@@ -28,6 +28,7 @@ def _decode_output(data: bytes, max_bytes: int = _MAX_OUTPUT_BYTES) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+@tool_class(description="终端命令工具：带超时、工作目录、编码与错误处理的可靠执行。")
 class TerminalToolkits:
     """终端命令工具：带超时、工作目录、编码与错误处理的可靠执行。"""
 
