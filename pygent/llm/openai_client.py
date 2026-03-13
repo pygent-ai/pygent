@@ -24,7 +24,7 @@ class AsyncOpenAIClient(BaseAsyncClient):
 
         self.client = AsyncClient(base_url=self.base_url, api_key=self.api_key, timeout=self.timeout)
 
-    async def forward(self, context: BaseContext, **kwargs) -> BaseContext:
+    async def forward(self, context: BaseContext, **kwargs) -> AssistantMessage:
         request_params = {
             "model": self.model_name.data,
             "messages": [m.to_openai_format() for m in context.history],
@@ -49,4 +49,4 @@ class AsyncOpenAIClient(BaseAsyncClient):
             context.add_message(AssistantMessage(content=content, tool_calls=tool_calls_list))
         else:
             context.add_message(AssistantMessage(content=content))
-        return context
+        return context.last_message
