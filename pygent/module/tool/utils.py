@@ -715,119 +715,109 @@ def tool_method(
     return decorator
 
 
-# ==================== 类装饰器 ====================
+# ==================== 工具类基类与类装饰器 ====================
+
+
+class ToolClassBase:
+    """
+    工具集基类：将类中所有 @tool_method 方法汇总为工具管理器，供 get_tool / call_tool / get_all_tools 等使用。
+    子类可直接继承以获得完整类型提示；也可继续使用 @tool_class(...) 装饰器（装饰器会自动注入本基类）。
+    """
+    _tool_class_metadata: Dict[str, Any]
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._tool_manager = None
+
+    def get_tool_manager(self):
+        """延迟初始化工具管理器"""
+        from .tool_manager import ToolManager
+        if not hasattr(self, '_tool_manager') or self._tool_manager is None:
+            self._tool_manager = ToolManager()
+            for attr_name in dir(self):
+                attr = getattr(self, attr_name)
+                if callable(attr) and getattr(attr, '_is_tool_method', False):
+                    tool_instance = self._create_tool_from_method(attr)
+                    if tool_instance:
+                        self._tool_manager.register_tool(tool_instance)
+        return self._tool_manager
+
+    def _create_tool_from_method(self, method_wrapper: Callable) -> Optional[BaseTool]:
+        """从 @tool_method 包装器创建工具实例"""
+        if not getattr(method_wrapper, '_tool_config', None):
+            return None
+        config = method_wrapper._tool_config
+        original_method = getattr(method_wrapper, '_method', method_wrapper)
+        tool_class_name = f"Tool_{config['name'].title().replace('_', '')}"
+
+        def forward(self_tool: BaseTool, *args: Any, **kwargs: Any) -> Any:
+            return original_method(self, *args, **kwargs)
+
+        ToolClass = type(
+            tool_class_name,
+            (BaseTool,),
+            {
+                "__init__": lambda self_tool: BaseTool.__init__(self_tool, **config),
+                "forward": forward,
+                "__doc__": getattr(original_method, "__doc__", None),
+            },
+        )
+        tool = ToolClass()
+        tool.parameters.data.update(_discover_parameters_from_method(original_method))
+        return tool
+
+    def get_tool(self, tool_name: str) -> Optional[BaseTool]:
+        """获取指定工具"""
+        return self.get_tool_manager().get_tool(tool_name)
+
+    def call_tool(self, tool_name: str, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        """调用工具"""
+        return self.get_tool_manager().call_tool(tool_name, *args, **kwargs)
+
+    def get_all_tools(self) -> List[BaseTool]:
+        """获取所有工具"""
+        return self.get_tool_manager().get_registered_tools()
+
+    def get_openai_functions(self) -> List[Dict[str, Any]]:
+        """获取 OpenAI 函数格式"""
+        return self.get_tool_manager().get_openai_functions()
+
 
 def tool_class(
     class_name: Optional[str] = None,
     description: Optional[str] = None,
     version: str = "1.0.0",
-    **kwargs
+    **kwargs: Any,
 ):
     """
-    类装饰器，将类中的所有@tool_method方法转换为工具
-    
+    类装饰器：为类注入 ToolClassBase 并设置元数据，使其中所有 @tool_method 方法成为工具集。
+    使用后类具有 get_tool_manager / get_tool / call_tool / get_all_tools / get_openai_functions 等方法。
     使用示例:
         @tool_class(description="数学工具集")
-        class MathTools:
+        class MathTools(ToolClassBase):
             @tool_method(name="add", description="加法")
             def add(self, a: float, b: float) -> float:
                 return a + b
     """
     def decorator(cls: Type) -> Type:
-        # 创建工具管理器
         from .tool_manager import ToolManager
-        
-        # 定义获取工具管理器的方法
-        def get_tool_manager(self):
-            """延迟初始化工具管理器"""
-            if not hasattr(self, '_tool_manager') or self._tool_manager is None:
-                self._tool_manager = ToolManager()
-                
-                # 注册所有工具方法
-                for attr_name in dir(self):
-                    attr = getattr(self, attr_name)
-                    if callable(attr) and hasattr(attr, '_is_tool_method'):
-                        # 创建工具实例
-                        tool_instance = self._create_tool_from_method(attr)
-                        if tool_instance:
-                            self._tool_manager.register_tool(tool_instance)
-            
-            return self._tool_manager
-        
-        def _create_tool_from_method(self, method_wrapper):
-            """从方法包装器创建工具实例"""
-            if not hasattr(method_wrapper, '_tool_config'):
-                return None
-            
-            config = method_wrapper._tool_config
-            original_method = method_wrapper._method if hasattr(method_wrapper, '_method') else method_wrapper
-            
-            # 创建工具类
-            tool_class_name = f"Tool_{config['name'].title().replace('_', '')}"
-            
-            # 定义forward方法（绑定self）
-            def forward(self_tool, *args, **kwargs):
-                return original_method(self, *args, **kwargs)
-            
-            # 动态创建工具类
-            ToolClass = type(
-                tool_class_name,
-                (BaseTool,),
-                {
-                    "__init__": lambda self_tool: BaseTool.__init__(self_tool, **config),
-                    "forward": forward,
-                    "__doc__": original_method.__doc__,
-                }
-            )
-            
-            tool = ToolClass()
-            # forward 签名为 *args,**kwargs 时 BaseTool._discover_parameters 无法发现参数，此处从原始方法补充
-            tool.parameters.data.update(_discover_parameters_from_method(original_method))
-            return tool
-        
-        def get_tool(self, tool_name: str):
-            """获取指定工具"""
-            return self.get_tool_manager().get_tool(tool_name)
-        
-        def call_tool(self, tool_name: str, *args, **kwargs):
-            """调用工具"""
-            return self.get_tool_manager().call_tool(tool_name, *args, **kwargs)
-        
-        def get_all_tools(self):
-            """获取所有工具"""
-            return self.get_tool_manager().get_all_schemas()
-        
-        def get_openai_functions(self):
-            """获取OpenAI函数格式"""
-            return self.get_tool_manager().get_openai_functions()
-        
-        # 添加方法到类
-        cls.get_tool_manager = get_tool_manager
-        cls._create_tool_from_method = _create_tool_from_method
-        cls.get_tool = get_tool
-        cls.call_tool = call_tool
-        cls.get_all_tools = get_all_tools
-        cls.get_openai_functions = get_openai_functions
-        
-        # 添加类级别元数据
+        # 确保类继承 ToolClassBase（便于类型检查与 IDE 识别方法）
+        if ToolClassBase not in cls.__mro__:
+            cls.__bases__ = (ToolClassBase,) + cls.__bases__
         cls._tool_class_metadata = {
             "class_name": class_name or cls.__name__,
-            "description": description or cls.__doc__ or f"工具类: {cls.__name__}",
+            "description": description or (cls.__doc__ or "").strip() or f"工具类: {cls.__name__}",
             "version": version,
-            **kwargs
+            **kwargs,
         }
-        
-        # 初始化实例属性
-        original_init = cls.__init__ if hasattr(cls, '__init__') else lambda self: None
-        
-        def new_init(self, *args, **kwargs):
+        original_init = getattr(cls, "__init__", lambda self: None)
+
+        def new_init(self: Any, *args: Any, **kwargs: Any) -> None:
             original_init(self, *args, **kwargs)
             self._tool_manager = None
-        
+
         cls.__init__ = new_init
-        
         return cls
-    
+
     return decorator
 
 
@@ -1027,6 +1017,7 @@ __all__ = [
     # 主要装饰器
     'tool',
     'auto_tool',
+    'ToolClassBase',
     'tool_method',
     'tool_class',
     'async_tool',

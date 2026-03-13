@@ -11,6 +11,8 @@ from pygent.message import UserMessage, ToolMessage, BaseMessage, BaseMessageChu
 from pygent.module.tool import ToolManager
 from pygent.toolkits.file_operations import FileToolkits
 from pygent.toolkits.run_terminal_cmd import TerminalToolkits
+from pygent.toolkits.web_search import WebSearchToolkits
+from pygent.toolkits.web_fetch import WebFetchToolkits
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -29,12 +31,18 @@ class ReactAgent(BaseAgent):
         )
 
         self.tool_manager = ToolManager()
-        # 注册文件操作与终端命令工具（绑定到当前 workspace）
+        # 注册文件操作、终端命令与网络工具（绑定到当前 workspace）
         file_toolkits = FileToolkits(session_id="react", workspace_root=self.root_dir)
-        for tool in file_toolkits.get_tool_manager().get_registered_tools():
+        for tool in file_toolkits.get_all_tools():
             self.tool_manager.register_tool(tool)
         terminal_toolkits = TerminalToolkits(session_id="react", workspace_root=self.root_dir)
-        for tool in terminal_toolkits.get_tool_manager().get_registered_tools():
+        for tool in terminal_toolkits.get_all_tools():
+            self.tool_manager.register_tool(tool)
+        web_search_toolkits = WebSearchToolkits(session_id="react", workspace_root=self.root_dir)
+        for tool in web_search_toolkits.get_all_tools():
+            self.tool_manager.register_tool(tool)
+        web_fetch_toolkits = WebFetchToolkits(session_id="react", workspace_root=self.root_dir)
+        for tool in web_fetch_toolkits.get_all_tools():
             self.tool_manager.register_tool(tool)
 
     def _tools_param(self):
@@ -139,9 +147,10 @@ async def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     agent = ReactAgent(root_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    input_str = "你当前在那个路径下面"
 
-    async for message in agent.stream(input_str):
+    input_str = "请结合你能获取到的公开资料，概括说明一下心力衰竭的一线治疗方案。然后把结果存放在我的桌面上"
+
+    async for message in agent.stream(input_str, max_steps=200):
         if isinstance(message, BaseMessageChunk):
             print(message.content)
         else:

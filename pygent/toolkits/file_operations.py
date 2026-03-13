@@ -11,7 +11,7 @@ from typing import Any, List, Optional
 
 from pygent.common import PygentString
 from pygent.module.tool import BaseTool
-from pygent.module.tool.utils import tool_method, tool_class
+from pygent.module.tool.utils import ToolClassBase, tool_method, tool_class
 
 
 def _resolve_path(path: str, base: Optional[str] = None) -> Path:
@@ -34,7 +34,7 @@ def _read_file_text(path: Path, offset: Optional[int], limit: Optional[int]) -> 
 
 
 @tool_class(description="文件操作工具集：读取、写入、替换、删除、grep、笔记本编辑、linter 诊断。")
-class FileToolkits:
+class FileToolkits(ToolClassBase):
     """文件操作工具集：读取、写入、替换、删除、grep、笔记本编辑、linter 诊断。"""
 
     def __init__(self, session_id: str, workspace_root: Optional[str] = None):
@@ -341,15 +341,3 @@ class FileToolkits:
             for line in ctx:
                 out_lines.append(f"{fp}:{line}")
         return "\n".join(out_lines) if out_lines else "无匹配"
-
-    def get_tools(self) -> List[BaseTool]:
-        """返回本工具集中所有 @tool_method 对应的 BaseTool 列表，供 ToolManager.register_tools() 使用。"""
-        tools: List[BaseTool] = []
-        for attr_name in dir(self):
-            if attr_name.startswith("_"):
-                continue
-            attr = getattr(self, attr_name)
-            tools.append(attr)
-        return tools
-
-
