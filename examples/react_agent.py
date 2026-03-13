@@ -1,12 +1,19 @@
+import asyncio
 import json
 import os
+from collections import AsyncIterable
 
 from pygent.agent import BaseAgent
 from pygent.context import BaseContext
 from pygent.llm import AsyncOpenAIClient
-from pygent.message import UserMessage, ToolMessage
+from pygent.message import UserMessage, ToolMessage, BaseMessage
 from pygent.module.tool import ToolManager
-from pygent.toolkits import RestrictedTerminal
+
+from dotenv import load_dotenv
+load_dotenv()
+import logging
+
+logger = logging.getLogger("react_stream_agent")
 
 
 class ReactAgent(BaseAgent):
@@ -19,9 +26,7 @@ class ReactAgent(BaseAgent):
         )
 
         self.tool_manager = ToolManager()
-        terminal = RestrictedTerminal(root_dir=root_dir)
-        self.tool_manager.add_module("terminal", terminal)
-        self.tool_manager.register_tools(terminal.get_tools())
+        # todo add file operations and run_terminal_cmd
 
     def _tools_param(self):
         """OpenAI-compatible tools format."""
@@ -34,8 +39,8 @@ class ReactAgent(BaseAgent):
 """)
         context.add_message(UserMessage(content=user_input))
 
-        context = await self.llm.forward(context, tools=self._tools_param())
-
+        result = await self.llm.forward(context, tools=self._tools_param())
+        logger.info(result)
         while getattr(context.last_message, "tool_calls", None):
             for tool_call in context.last_message.tool_calls:
                 name = tool_call.tool_name.data
@@ -45,8 +50,24 @@ class ReactAgent(BaseAgent):
                 context.add_message(
                     ToolMessage(content=content, tool_call_id=tool_call.tool_call_id.data)
                 )
-            context = await self.llm.forward(context, tools=self._tools_param())
+            result = await self.llm.forward(context, tools=self._tools_param())
+            logger.info(result)
 
         return context.last_message.content
 
+    async def stream(self, user_input: str) -> AsyncIterable[BaseMessage]:
+        # todo finish and test end to end
+        pass
 
+
+async def main():
+    agent = ReactAgent()
+    # todo
+    input_str = ""
+
+    async for message in agent.stream(input_str):
+        logger.info(message)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

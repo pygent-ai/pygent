@@ -1144,7 +1144,7 @@ wheels = [
 ]
 
 [[package]]
-name = "pygent"
+name = "pygent-ai"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
