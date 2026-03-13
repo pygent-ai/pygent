@@ -1,8 +1,11 @@
+import logging
 from typing import Any, Dict, List, Optional
 
 from pygent.module import PygentModule
 from pygent.common import PygentDict
 from pygent.module.tool import BaseTool
+
+logger = logging.getLogger(__name__)
 
 
 class ToolManager(PygentModule):
@@ -28,7 +31,7 @@ class ToolManager(PygentModule):
         tool_name = tool.metadata.data["name"]
 
         if tool_name in self.tools.data:
-            print(f"警告: 工具 '{tool_name}' 已存在，将被替换")
+            logger.warning("工具 '%s' 已存在，将被替换", tool_name)
 
         self.tools.data[tool_name] = tool
 
@@ -42,7 +45,7 @@ class ToolManager(PygentModule):
         if tool_name not in self.tool_categories.data[category_key]:
             self.tool_categories.data[category_key].append(tool_name)
 
-        print(f"工具 '{tool_name}' 已注册")
+        logger.debug("工具 '%s' 已注册", tool_name)
 
     def get_tool(self, name: str) -> Optional[BaseTool]:
         """获取工具"""
