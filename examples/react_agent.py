@@ -148,7 +148,7 @@ async def main():
     )
     agent = ReactAgent(root_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-    input_str = "请结合你能获取到的公开资料，概括说明一下心力衰竭的一线治疗方案。然后把结果存放在我的桌面上"
+    input_str = "搜索一下今天关于openclaw的新闻，把文件放在我桌面上"
 
     async for message in agent.stream(input_str, max_steps=200):
         if isinstance(message, BaseMessageChunk):
