@@ -12,13 +12,11 @@ setup(
     license="Apache-2.0",
     packages=find_packages(exclude=["examples*", "tests*", "MCPs*", "docs*"]),
     python_requires=">=3.11",
-    install_requires=[
-        "fastmcp>=2.14.5",
-        "openai>=2.17.0",
-    ],
+    install_requires=[],
     extras_require={
         "dev": [
             "pytest>=7.0.0",
+            "pytest-cov>=4.0.0",
         ],
     },
     classifiers=[

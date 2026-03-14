@@ -11,34 +11,34 @@ import unittest
 
 from pygent.module.tool import ToolManager, BaseTool
 
-LOCAL_MCP_DIR = _root / "MCPs" / "LocalMemoryMCP"
+MCP_SERVER_SCRIPT = _root / "tests" / "mcp_test_server.py"
 
 
-@unittest.skipUnless(LOCAL_MCP_DIR.is_dir(), "LocalMemoryMCP not found at MCPs/LocalMemoryMCP")
+@unittest.skipUnless(MCP_SERVER_SCRIPT.is_file(), "mcp_test_server.py not found")
 class TestToolManagerMCPStdio(unittest.TestCase):
     """Test ToolManager.add_mcp_server_stdio with LocalMemoryMCP."""
 
     def test_add_mcp_server_stdio_registers_tools(self):
         manager = ToolManager()
         tools = manager.add_mcp_server_stdio(
-            server_id="local_memory",
-            command="python",
-            args=["main.py"],
-            cwd=str(LOCAL_MCP_DIR),
+            server_id="mcp_test",
+            command=sys.executable,
+            args=[str(MCP_SERVER_SCRIPT)],
+            cwd=str(_root),
         )
         self.assertIsInstance(tools, list)
         self.assertGreater(len(tools), 0)
         for t in tools:
             self.assertIsInstance(t, BaseTool)
-        self.assertIn("local_memory", manager.mcp_clients.data)
+        self.assertIn("mcp_test", manager.mcp_clients.data)
 
     def test_add_mcp_server_stdio_tool_call(self):
         manager = ToolManager()
         manager.add_mcp_server_stdio(
-            server_id="local_memory",
-            command="python",
-            args=["main.py"],
-            cwd=str(LOCAL_MCP_DIR),
+            server_id="mcp_test",
+            command=sys.executable,
+            args=[str(MCP_SERVER_SCRIPT)],
+            cwd=str(_root),
         )
         tool = manager.get_tool("get_memory_statistics")
         self.assertIsNotNone(tool)
@@ -50,9 +50,9 @@ class TestToolManagerMCPStdio(unittest.TestCase):
         manager = ToolManager()
         tools = manager.add_mcp_server_stdio(
             server_id="mem",
-            command="python",
-            args=["main.py"],
-            cwd=str(LOCAL_MCP_DIR),
+            command=sys.executable,
+            args=[str(MCP_SERVER_SCRIPT)],
+            cwd=str(_root),
             tool_name_prefix="mem",
         )
         self.assertGreater(len(tools), 0)
