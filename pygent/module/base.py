@@ -1,6 +1,5 @@
 from typing import Any, Dict, List, Type, get_type_hints, get_origin, get_args
 import json
-import yaml
 from pathlib import Path
 from pygent.common import PygentOperator
 
@@ -83,23 +82,13 @@ class PygentModule(PygentOperator):
         # 在元数据中添加模块信息
         save_path = super().save(path, format, include_metadata)
         
-        if include_metadata:
-            # 重新加载文件，添加模块信息
+        if include_metadata and format == 'json':
+            # 重新加载文件，添加模块信息（仅 json 为文本格式可重写）
             path_obj = Path(path)
             with open(path_obj, 'r', encoding='utf-8') as f:
-                if format == 'json':
-                    save_data = json.load(f)
-                elif format == 'yaml':
-                    save_data = yaml.safe_load(f)
-            
-            # 添加模块信息
+                save_data = json.load(f)
             save_data['module_names'] = list(self._modules.keys())
-            
-            # 重新保存
             with open(path_obj, 'w', encoding='utf-8') as f:
-                if format == 'json':
-                    json.dump(save_data, f, indent=2, default=str)
-                elif format == 'yaml':
-                    yaml.dump(save_data, f, default_flow_style=False)
-        
+                json.dump(save_data, f, indent=2, default=str)
+
         return save_path

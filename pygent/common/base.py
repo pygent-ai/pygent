@@ -843,7 +843,7 @@ class PygentOperator:
 
         Args:
             path: 文件路径
-            format: 保存格式，支持 'json', 'pickle', 'yaml'
+            format: 保存格式，支持 'json', 'pickle'
             include_metadata: 是否包含元数据（类型信息等）
 
         Returns:
@@ -874,11 +874,6 @@ class PygentOperator:
             with open(path_obj, 'wb') as f:
                 pickle.dump(save_data, f)
 
-        elif format == 'yaml':
-            import yaml
-            with open(path_obj, 'w', encoding='utf-8') as f:
-                yaml.dump(save_data, f, default_flow_style=False)
-
         else:
             raise ValueError(f"Unsupported format: {format}")
 
@@ -902,7 +897,7 @@ class PygentOperator:
         # 自动检测格式
         if format == 'auto':
             format = path_obj.suffix.lower()[1:]  # 去掉点号
-            if format not in ['json', 'pickle', 'yaml']:
+            if format not in ['json', 'pickle']:
                 format = 'pickle'  # 默认使用pickle
 
         # 加载数据
@@ -913,11 +908,6 @@ class PygentOperator:
         elif format == 'pickle':
             with open(path_obj, 'rb') as f:
                 loaded_data = pickle.load(f)
-
-        elif format == 'yaml':
-            import yaml
-            with open(path_obj, 'r', encoding='utf-8') as f:
-                loaded_data = yaml.safe_load(f)
 
         else:
             raise ValueError(f"Unsupported format: {format}")
