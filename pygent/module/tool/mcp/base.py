@@ -1,91 +1,77 @@
 """
-Base MCP client that inherits PygentOperator and uses PygentData.
-Provides sync wrappers over the async MCP SDK (list_tools, call_tool).
+Base MCP client using only Python standard library (no mcp package).
+Implements JSON-RPC 2.0 over stdio/SSE for list_tools and call_tool.
 """
 
-import asyncio
+import json
 from typing import Any, Dict, List, Optional
 
 from pygent.common import PygentOperator, PygentString
 
-# MCP SDK imports (optional at module load for lazy use)
-try:
-    from mcp import ClientSession
-    _MCP_AVAILABLE = True
-except ImportError:
-    _MCP_AVAILABLE = False
+
+class _DotDict:
+    """Wrapper for dict to support attribute access (getattr)."""
+
+    def __init__(self, d: Dict[str, Any]):
+        self._d = {}
+        for k, v in d.items():
+            if isinstance(v, dict):
+                self._d[k] = _DotDict(v)
+            elif isinstance(v, list):
+                self._d[k] = [_DotDict(x) if isinstance(x, dict) else x for x in v]
+            else:
+                self._d[k] = v
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self._d.get(name)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._d.get(key, default)
+
+    def to_dict(self) -> Dict[str, Any]:
+        def _conv(v: Any) -> Any:
+            if isinstance(v, _DotDict):
+                return v.to_dict()
+            if isinstance(v, list):
+                return [_conv(x) for x in v]
+            return v
+        return {k: _conv(v) for k, v in self._d.items()}
 
 
 class BaseMCPClient(PygentOperator):
     """
-    Base MCP client: inherits PygentOperator, uses PygentData for config.
-    Subclasses implement transport (stdio vs SSE) via _run_with_transport().
+    Base MCP client: inherits PygentOperator.
+    Subclasses implement transport via _request(method, params).
     """
 
     server_id: PygentString
-    """Identifier for this MCP server (e.g. used as tool name prefix)."""
 
     def __init__(self, server_id: str, **kwargs: Any):
         super().__init__()
         self.server_id = PygentString(server_id)
-        if not _MCP_AVAILABLE:
-            raise RuntimeError(
-                "MCP SDK is not installed. Install with: pip install mcp"
-            )
 
-    def _run_async(self, coro: Any) -> Any:
-        """Run an async coroutine in a new event loop."""
-        return asyncio.run(coro)
-
-    async def _session_flow(
-        self,
-        read_stream: Any,
-        write_stream: Any,
-        *,
-        list_tools_only: bool = False,
-        call_tool_name: Optional[str] = None,
-        call_tool_arguments: Optional[Dict[str, Any]] = None,
-    ) -> Any:
+    def _request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Create session, initialize, then either list_tools or call_tool.
-        Returns ListToolsResult or CallToolResult.
+        Override in subclasses: send JSON-RPC request, return parsed result.
+        Raises on error.
         """
-        async with ClientSession(read_stream, write_stream) as session:
-            await session.initialize()
-            if list_tools_only:
-                return await session.list_tools()
-            if call_tool_name is not None:
-                return await session.call_tool(
-                    call_tool_name,
-                    arguments=call_tool_arguments,
-                )
-            return await session.list_tools()
-
-    async def _connect_and_run(
-        self,
-        list_tools_only: bool = False,
-        call_tool_name: Optional[str] = None,
-        call_tool_arguments: Optional[Dict[str, Any]] = None,
-    ) -> Any:
-        """
-        Override in subclasses: open transport, run _session_flow, return result.
-        """
-        raise NotImplementedError("Subclasses must implement _connect_and_run")
+        raise NotImplementedError("Subclasses must implement _request")
 
     def list_tools(self) -> List[Any]:
-        """Sync: list tools from the MCP server. Returns list of mcp.types.Tool."""
-        result = self._run_async(
-            self._connect_and_run(list_tools_only=True)
-        )
-        if hasattr(result, "tools"):
-            return list(result.tools)
-        return []
+        """List tools from MCP server. Returns list of tool objects (name, description, inputSchema)."""
+        result = self._request("tools/list", params={})
+        tools = result.get("tools") or []
+        out = []
+        for t in tools:
+            out.append(_DotDict(t) if isinstance(t, dict) else t)
+        return out
 
     def call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Any:
-        """Sync: call a tool by name. Returns mcp.types.CallToolResult."""
-        return self._run_async(
-            self._connect_and_run(
-                call_tool_name=name,
-                call_tool_arguments=arguments,
-            )
+        """Call tool by name. Returns result with .content, .isError, .structuredContent."""
+        result = self._request(
+            "tools/call",
+            params={"name": name, "arguments": arguments or {}},
         )
+        return _DotDict(result)

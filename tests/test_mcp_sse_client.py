@@ -1,4 +1,4 @@
-"""Tests for MCP SSE client using LocalMemoryMCP server (SSE transport)."""
+"""Tests for MCP SSE client using the built-in mcp test server (SSE transport)."""
 
 import sys
 import time
@@ -13,15 +13,15 @@ import unittest
 
 from pygent.module.tool.mcp import SSEMCPClient
 
-LOCAL_MCP_DIR = _root / "MCPs" / "LocalMemoryMCP"
+MCP_SERVER_SCRIPT = _root / "tests" / "mcp_test_server.py"
 SSE_URL = "http://127.0.0.1:8765/sse"
 
 
 def _start_sse_server():
-    """Start LocalMemoryMCP with SSE in a subprocess. Returns the process."""
+    """Start mcp_test_server with SSE in a subprocess. Returns the process."""
     proc = subprocess.Popen(
-        [sys.executable, "run_sse.py"],
-        cwd=LOCAL_MCP_DIR,
+        [sys.executable, str(MCP_SERVER_SCRIPT), "--sse"],
+        cwd=_root,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -41,7 +41,7 @@ def _wait_for_sse_port(port: int = 8765, max_wait: float = 10.0):
     return False
 
 
-@unittest.skipUnless(LOCAL_MCP_DIR.is_dir(), "LocalMemoryMCP not found at MCPs/LocalMemoryMCP")
+@unittest.skipUnless(MCP_SERVER_SCRIPT.is_file(), "mcp_test_server.py not found")
 class TestSSEMCPClientLocalMemory(unittest.TestCase):
     """Test SSEMCPClient against LocalMemoryMCP run with SSE (run_sse.py)."""
 
@@ -49,8 +49,6 @@ class TestSSEMCPClientLocalMemory(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if not (LOCAL_MCP_DIR / "run_sse.py").exists():
-            raise unittest.SkipTest("run_sse.py not found in LocalMemoryMCP")
         cls._process = _start_sse_server()
         if not _wait_for_sse_port():
             if cls._process:

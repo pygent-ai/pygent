@@ -10,14 +10,20 @@ from pygent.common import PygentDict, PygentBool, PygentInt, PygentString
 from .base import BaseMCPClient
 
 
-def _json_schema_to_parameters(input_schema: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def _json_schema_to_parameters(input_schema: Any) -> Dict[str, Dict[str, Any]]:
     """
     Convert MCP/JSON Schema inputSchema to BaseTool parameters dict.
     inputSchema has optional 'properties' and 'required'.
     """
     parameters: Dict[str, Dict[str, Any]] = {}
-    props = input_schema.get("properties") or {}
-    required_list = input_schema.get("required") or []
+    if hasattr(input_schema, "to_dict"):
+        schema = input_schema.to_dict()
+    elif isinstance(input_schema, dict):
+        schema = input_schema
+    else:
+        schema = {}
+    props = schema.get("properties") or {}
+    required_list = schema.get("required") or []
 
     for param_name, prop in props.items():
         if not isinstance(prop, dict):

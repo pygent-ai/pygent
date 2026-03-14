@@ -1,4 +1,4 @@
-"""Tests for MCP stdio client using LocalMemoryMCP server."""
+"""Tests for MCP stdio client using the built-in mcp test server."""
 
 import sys
 from pathlib import Path
@@ -11,20 +11,20 @@ import unittest
 
 from pygent.module.tool.mcp import StdioMCPClient
 
-# LocalMemoryMCP lives at MCPs/LocalMemoryMCP; server must be run with cwd there so imports work
-LOCAL_MCP_DIR = _root / "MCPs" / "LocalMemoryMCP"
+# Use built-in mcp test server (tests/mcp_test_server.py)
+MCP_SERVER_SCRIPT = _root / "tests" / "mcp_test_server.py"
 
 
-@unittest.skipUnless(LOCAL_MCP_DIR.is_dir(), "LocalMemoryMCP not found at MCPs/LocalMemoryMCP")
+@unittest.skipUnless(MCP_SERVER_SCRIPT.is_file(), "mcp_test_server.py not found")
 class TestStdioMCPClientLocalMemory(unittest.TestCase):
     """Test StdioMCPClient against the LocalMemoryMCP (DeepMemory) server."""
 
     def setUp(self):
         self.client = StdioMCPClient(
-            server_id="local_memory",
-            command="python",
-            args=["main.py"],
-            cwd=LOCAL_MCP_DIR,
+            server_id="mcp_test",
+            command=sys.executable,
+            args=[str(MCP_SERVER_SCRIPT)],
+            cwd=_root,
         )
 
     def test_list_tools(self):
