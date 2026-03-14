@@ -79,7 +79,7 @@ class StdioMCPClient(BaseMCPClient):
             "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "pygent", "version": "0.1.0"},
+                "clientInfo": {"name": "pygent", "version": "0.1.1"},
             },
         }
         proc.stdin.write(json.dumps(req_init) + "\n")
