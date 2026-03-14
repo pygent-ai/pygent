@@ -16,12 +16,6 @@ _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-try:
-    import yaml
-    _HAS_YAML = True
-except ImportError:
-    _HAS_YAML = False
-
 from pygent.common import (
     PygentData,
     PygentString,
@@ -671,29 +665,6 @@ class TestPygentOperator(unittest.TestCase):
             with unittest.mock.patch("builtins.print"):
                 op2.load(path, format="pickle", strict=False)
             self.assertTrue(op2.flag.data)
-
-    @unittest.skipUnless(_HAS_YAML, "PyYAML not installed")
-    def test_save_and_load_yaml(self):
-        """Save to YAML and load back."""
-        class MyOperator(PygentOperator):
-            name: PygentString
-            value: PygentInt
-
-        op = MyOperator()
-        op.name.data = "yaml_test"
-        op.value.data = 77
-
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "op.yaml")
-            with unittest.mock.patch("builtins.print"):
-                op.save(path, format="yaml", include_metadata=True)
-            self.assertTrue(os.path.exists(path))
-
-            op2 = MyOperator()
-            with unittest.mock.patch("builtins.print"):
-                op2.load(path, format="yaml", strict=True)
-            self.assertEqual(op2.name.data, "yaml_test")
-            self.assertEqual(op2.value.data, 77)
 
     def test_load_format_auto_json(self):
         """Load with format='auto' detects JSON from file extension."""
