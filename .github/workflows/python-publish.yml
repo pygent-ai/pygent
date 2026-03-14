@@ -94,7 +94,7 @@ jobs:
           # 列出构建的文件用于验证
           ls -la dist/
           echo "Package info:"
-          python -m pip install twine
+          python -m pip install -U twine pkginfo packaging
           python -m twine check dist/*
       
       - name: Upload distributions
@@ -129,7 +129,7 @@ jobs:
           ls -la dist/
           
           # 验证包内容
-          python -m pip install twine
+          python -m pip install -U twine pkginfo packaging
           python -m twine check dist/*
       
       - name: Publish to PyPI
