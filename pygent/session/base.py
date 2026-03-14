@@ -14,16 +14,6 @@ from pygent.context import BaseContext
 from pygent.message import BaseMessage
 
 
-def _message_to_dict(msg: BaseMessage) -> Dict[str, Any]:
-    """将 BaseMessage 转为可 JSON 序列化的 dict。"""
-    return msg.to_dict()
-
-
-def _message_from_dict(data: Dict[str, Any]) -> BaseMessage:
-    """从 dict 恢复 BaseMessage 子类，使用 BaseMessage.from_serialized_dict。"""
-    return BaseMessage.from_serialized_dict(data)
-
-
 def _session_dir(workspace_root: str, session_id: str) -> Path:
     """Session 存储目录：{workspace_root}/sessions/{session_id}"""
     return Path(workspace_root) / "sessions" / session_id
@@ -77,7 +67,7 @@ class Session:
         history_data = []
         if history is not None:
             for msg in history.data if hasattr(history, "data") else history:
-                history_data.append(_message_to_dict(msg))
+                history_data.append(msg.to_dict())
 
         system_prompt = getattr(self.context, "system_prompt", None)
         system_prompt_str = system_prompt.data if hasattr(system_prompt, "data") else (system_prompt or "")
@@ -130,7 +120,7 @@ class Session:
         history_data = payload.get("history", [])
         for d in history_data:
             if isinstance(d, dict):
-                msg = _message_from_dict(d)
+                msg = BaseMessage.from_serialized_dict(d)
                 context.add_message(msg)
 
         session = cls(

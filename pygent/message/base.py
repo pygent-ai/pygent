@@ -116,6 +116,30 @@ class BaseMessage(PygentData):
             name=data.get("name"),
             metadata=data.get("metadata")
         )
+
+    @classmethod
+    def from_serialized_dict(cls, data: Dict[str, Any]) -> 'BaseMessage':
+        """
+        从序列化 dict 恢复为正确的消息子类（SystemMessage/UserMessage/AssistantMessage/ToolMessage）。
+        用于 Session 持久化与恢复。
+        """
+        role = data.get("role", "user")
+        content = data.get("content", "")
+        name = data.get("name")
+
+        if role == "system":
+            return SystemMessage(content=content)
+        if role == "user":
+            return UserMessage(content=content, name=name)
+        if role == "assistant":
+            tool_calls_data = data.get("tool_calls", [])
+            tool_calls = [ToolCall.from_dict(tc) for tc in tool_calls_data if isinstance(tc, dict)]
+            return AssistantMessage(content=content, name=name, tool_calls=tool_calls if tool_calls else None)
+        if role == "tool":
+            return ToolMessage(content=content, tool_call_id=data.get("tool_call_id", ""))
+        if role == "function":
+            return FunctionMessage(content=content, name=name or "")
+        return UserMessage(content=content, name=name)
     
     def __str__(self) -> str:
         """字符串表示"""
