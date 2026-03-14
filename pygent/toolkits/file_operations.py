@@ -14,12 +14,44 @@ from pygent.module.tool import BaseTool
 from pygent.module.tool.utils import ToolClassBase, tool_method, tool_class
 
 
+def _normalize_desktop_path(path: str) -> str:
+    """
+    将大模型常见的「桌面」路径错误归一化为 ~/Desktop/xxx，兼容：
+    - /Users/Desktop/xxx（Unix 风格，在 Windows 下会错误解析为 C:\\Users\\Desktop）
+    - C:\\Users\\Desktop\\xxx（Windows 错误路径，实际桌面是 C:\\Users\\<用户名>\\Desktop）
+    """
+    s = str(path).strip().replace("\\", "/")
+    # /Users/Desktop/xxx 或 /Users/Desktop -> ~/Desktop/xxx
+    if s.startswith("/Users/Desktop") or s.lower().startswith("c:/users/desktop"):
+        if s.lower().startswith("c:/users/desktop"):
+            rest = s[17:].lstrip("/")  # len("c:/users/desktop") = 17
+        else:
+            rest = s[14:].lstrip("/")  # len("/Users/Desktop") = 14
+        return "~/Desktop/" + rest if rest else "~/Desktop"
+    return path.strip()
+
+
 def _resolve_path(path: str, base: Optional[str] = None) -> Path:
-    """将路径解析为绝对路径。"""
-    p = Path(path)
+    """
+    将路径解析为绝对路径，行为类似 bash/shell：
+    - 先归一化常见桌面路径（/Users/Desktop/xxx -> ~/Desktop/xxx）
+    - 再展开 ~ 为用户主目录
+    - 绝对路径（/xxx 或 C:\\xxx）直接使用
+    - 相对路径相对于 base 解析；base 为空时相对于当前工作目录
+    """
+    path_str = _normalize_desktop_path(path)
+    path_str = os.path.expanduser(path_str)
+    p = Path(path_str)
     if not p.is_absolute() and base:
         p = Path(base) / p
-    return p.resolve()
+    resolved = p.resolve()
+    # Windows：若父目录 C:\Users\Desktop 不存在（真实桌面是 C:\Users\<用户名>\Desktop），则使用用户桌面
+    if os.name == "nt" and not resolved.parent.exists():
+        parent_parts = Path(resolved.parent).parts
+        if len(parent_parts) >= 4 and parent_parts[2].lower() == "users" and parent_parts[3].lower() == "desktop":
+            real_desktop = Path.home() / "Desktop"
+            resolved = real_desktop / resolved.name
+    return resolved
 
 
 def _read_file_text(path: Path, offset: Optional[int], limit: Optional[int]) -> str:
@@ -38,6 +70,7 @@ class FileToolkits(ToolClassBase):
     """文件操作工具集：读取、写入、替换、删除、grep、笔记本编辑、linter 诊断。"""
 
     def __init__(self, session_id: str, workspace_root: Optional[str] = None):
+        super().__init__()
         self.session_id = PygentString(session_id)
         self.workspace_root = PygentString(workspace_root) or PygentString(os.getcwd())
 
@@ -55,7 +88,7 @@ class FileToolkits(ToolClassBase):
         读取文件内容。返回格式为 行号|内容；若为二进制/图片则返回简短描述。
 
         Args:
-            path: 文件的绝对路径或相对工作区的路径。
+            path: 文件路径。支持：1) 绝对路径（/Users/xxx/file.txt 或 C:\\Users\\xxx\\file.txt）；2) ~ 表示用户主目录（~/Desktop/file.txt）；3) 相对路径相对于工作区根目录。
             offset: 起始行号（从 1 开始）。
             limit: 最多读取的行数。
         """
@@ -82,14 +115,14 @@ class FileToolkits(ToolClassBase):
 
     @tool_method(
         name="write",
-        description="将内容写入指定路径；若文件已存在则完整覆盖。",
+        description="将内容写入指定路径；若文件已存在则完整覆盖。保存到桌面请用 ~/Desktop/文件名（如 ~/Desktop/总结.txt），跨平台正确。",
     )
     def write(self, path: str, contents: str) -> str:
         """
         将完整内容写入文件，已存在则覆盖。
 
         Args:
-            path: 要写入的文件路径。
+            path: 文件路径。保存到桌面必须用 ~/Desktop/文件名；也支持绝对路径或相对工作区的路径。
             contents: 文件的完整内容。
         """
         p = _resolve_path(path, self.workspace_root)
@@ -115,7 +148,7 @@ class FileToolkits(ToolClassBase):
         在文件中做精确字符串替换。
 
         Args:
-            path: 要修改的文件绝对路径。
+            path: 文件路径。支持绝对路径、~/Desktop/xxx、或相对于工作区的相对路径。
             old_string: 被替换的字符串，需与文件内容精确匹配（含空格与缩进）。
             new_string: 替换后的新字符串。
             replace_all: 是否替换文件中所有匹配项；默认 false 仅替换第一次。
@@ -155,7 +188,7 @@ class FileToolkits(ToolClassBase):
         编辑 Jupyter 笔记本单元格。
 
         Args:
-            target_notebook: 笔记本文件路径（相对或绝对）。
+            target_notebook: 文件路径。支持绝对路径、~/Desktop/xxx、或相对于工作区的相对路径。
             cell_idx: 要编辑或插入位置的单元格索引（从 0 开始）。
             is_new_cell: true=新建单元格；false=编辑已有单元格。
             cell_language: 单元格语言类型。
@@ -202,7 +235,7 @@ class FileToolkits(ToolClassBase):
         删除指定路径的文件。
 
         Args:
-            path: 要删除的文件绝对路径。
+            path: 文件路径。支持绝对路径、~/Desktop/xxx、或相对于工作区的相对路径。
         """
         p = _resolve_path(path, self.workspace_root)
         if not p.exists():
@@ -255,7 +288,7 @@ class FileToolkits(ToolClassBase):
 
         Args:
             pattern: 正则表达式或字面量搜索串。
-            path: 要搜索的文件或目录路径，不传则默认为工作区根目录。
+            path: 要搜索的文件或目录路径。支持绝对路径、~/Desktop/xxx、或相对于工作区的相对路径；不传则默认为工作区根目录。
             glob: 文件名过滤，如 '*.js'、'**/*.ts'。
             output_mode: content=匹配行及上下文；files_with_matches=仅文件路径；count=匹配数量。
             context_before: 匹配行之前显示的上下文行数（-B）。
