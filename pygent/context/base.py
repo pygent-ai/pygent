@@ -12,6 +12,8 @@ class BaseContext(PygentOperator):
         self.system_prompt = None if system_prompt is None else PygentString(system_prompt)
         if system_prompt is not None:
             self.history = PygentList([SystemMessage(self.system_prompt)])
+        else:
+            self.history = PygentList([])
 
     def add_message(self, message: BaseMessage):
         self.history.append(message)

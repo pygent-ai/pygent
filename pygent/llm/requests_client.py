@@ -1,11 +1,13 @@
 """
 基于 urllib 的异步大模型客户端。
 仅使用 Python 内置库（urllib、json、asyncio），支持流式与非流式调用。
+请求体在发送前会规范化为纯 Python 类型，保证与 OpenAI/DeepSeek 等 API 兼容。
 """
 
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Callable, Optional, Any, AsyncGenerator
 
@@ -14,6 +16,53 @@ from pygent.llm import BaseAsyncClient
 from pygent.message import AssistantMessage, AssistantMessageChunk, ToolCall, ToolCallChunk
 
 logger = logging.getLogger(__name__)
+
+# 400 时保存请求/响应体的目录（可通过环境变量 PYGENT_DEBUG_REQUEST_DIR 覆盖）
+_DEBUG_REQUEST_DIR = os.environ.get("PYGENT_DEBUG_REQUEST_DIR", "")
+
+
+def _save_debug_request(request_body: bytes, response_body: bytes, status_code: int) -> None:
+    """将导致 400 的请求体与响应体写入文件，便于排查。"""
+    if not _DEBUG_REQUEST_DIR:
+        return
+    try:
+        os.makedirs(_DEBUG_REQUEST_DIR, exist_ok=True)
+        import time as _t
+        prefix = os.path.join(_DEBUG_REQUEST_DIR, f"pygent_debug_{int(_t.time())}")
+        with open(f"{prefix}_request.json", "wb") as f:
+            f.write(request_body)
+        with open(f"{prefix}_response_{status_code}.txt", "wb") as f:
+            f.write(response_body)
+        logger.info("Debug request/response saved under %s", prefix)
+    except Exception as ex:
+        logger.warning("Failed to save debug request: %s", ex)
+
+
+def _sanitize_for_json(obj: Any) -> Any:
+    """
+    将 payload 递归转为仅含 Python 内置类型的结构，确保 json.dumps 可序列化，
+    并满足 OpenAI/DeepSeek 等 API 对 messages/tools 的格式要求。
+    """
+    from pygent.common import PygentData, PygentString, PygentDict, PygentList, PygentInt, PygentFloat, PygentBool
+    if obj is None:
+        return None
+    if isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, PygentString):
+        return str(obj.data) if hasattr(obj, "data") else str(obj)
+    if isinstance(obj, (PygentInt, PygentFloat, PygentBool)):
+        return obj.data if hasattr(obj, "data") else obj
+    if isinstance(obj, PygentDict):
+        return _sanitize_for_json(dict(obj.data)) if hasattr(obj, "data") else _sanitize_for_json(dict(obj))
+    if isinstance(obj, PygentList):
+        return _sanitize_for_json(list(obj.data) if hasattr(obj, "data") else list(obj))
+    if isinstance(obj, PygentData):
+        return _sanitize_for_json(obj.data)
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(x) for x in obj]
+    return obj
 
 
 def _http_post(url: str, headers: dict, body: bytes, timeout: int) -> tuple[int, bytes]:
@@ -31,8 +80,9 @@ def _http_post(url: str, headers: dict, body: bytes, timeout: int) -> tuple[int,
         raise RuntimeError(str(e)) from e
 
 
-def _http_post_stream(url: str, headers: dict, body: bytes, timeout: int):
-    """使用 urllib 同步 POST 流式请求，返回可迭代的 (status, line_iterator)"""
+def _http_post_stream(url: str, headers: dict, body: bytes, timeout: int, debug_body: Optional[bytes] = None):
+    """使用 urllib 同步 POST 流式请求，返回可迭代的 (status, line_iterator)。
+    若发生 HTTP 错误，会尝试读取响应体并记录；若传入 debug_body 则写入调试文件便于排查 400。"""
     from urllib.request import Request, urlopen
     from urllib.error import HTTPError, URLError
 
@@ -58,7 +108,21 @@ def _http_post_stream(url: str, headers: dict, body: bytes, timeout: int):
                 yield buf.decode("utf-8", errors="replace")
 
         return status, _iter_lines()
-    except (HTTPError, URLError) as e:
+    except HTTPError as e:
+        err_body = b""
+        if e.fp:
+            try:
+                err_body = e.fp.read()
+            except Exception:
+                pass
+        err_text = err_body.decode("utf-8", errors="replace")[:2000] if err_body else ""
+        logger.error("HTTP %s %s. Response body: %s", e.code, e.reason, err_text)
+        if debug_body is not None and e.code == 400:
+            _save_debug_request(debug_body, err_body, e.code)
+        if hasattr(e, "code"):
+            raise RuntimeError(f"HTTP {e.code}: {e.reason}. {err_text}") from e
+        raise RuntimeError(str(e)) from e
+    except URLError as e:
         if hasattr(e, "code"):
             raise RuntimeError(f"HTTP {e.code}: {e.reason}") from e
         raise RuntimeError(str(e)) from e
@@ -96,13 +160,13 @@ class AsyncRequestsClient(BaseAsyncClient):
         return f"{base}/v1/chat/completions"
 
     def _do_request(self, payload: dict) -> dict:
-        """同步执行 HTTP 请求（非流式）"""
+        """同步执行 HTTP 请求（非流式）。payload 会先规范化为纯 Python 类型再序列化。"""
         url = self._get_chat_url()
         headers = {
             "Authorization": f"Bearer {self.api_key.data}",
             "Content-Type": "application/json",
         }
-        body = json.dumps(payload).encode("utf-8")
+        body = json.dumps(_sanitize_for_json(payload), ensure_ascii=False).encode("utf-8")
         for attempt in range(self.max_retries.data + 1):
             try:
                 status, data = _http_post(url, headers, body, self.timeout.data)
@@ -173,9 +237,11 @@ class AsyncRequestsClient(BaseAsyncClient):
             "Authorization": f"Bearer {self.api_key.data}",
             "Content-Type": "application/json",
         }
-        body = json.dumps(payload).encode("utf-8")
+        payload_plain = _sanitize_for_json(payload)
+        body = json.dumps(payload_plain, ensure_ascii=False).encode("utf-8")
+        debug_body = body if _DEBUG_REQUEST_DIR else None
         try:
-            status, line_iter = _http_post_stream(url, headers, body, self.timeout.data)
+            status, line_iter = _http_post_stream(url, headers, body, self.timeout.data, debug_body=debug_body)
             if status != 200:
                 queue.put_nowait(RuntimeError(f"HTTP {status}"))
                 return
@@ -212,9 +278,8 @@ class AsyncRequestsClient(BaseAsyncClient):
         **kwargs
     ) -> AssistantMessage:
         history = getattr(context, "history", None)
-        messages = []
-        if history is not None:
-            messages = [m.to_openai_format() for m in history]
+        iterable = (history.data if hasattr(history, "data") else history) if history is not None else []
+        messages = [m.to_openai_format() for m in iterable]
         request_params = {
             "model": self.model_name.data,
             "messages": messages,
@@ -234,10 +299,9 @@ class AsyncRequestsClient(BaseAsyncClient):
         context: BaseContext,
         **kwargs
     ) -> AsyncGenerator[AssistantMessageChunk, Any]:
-        history = context.history
-        messages = []
-        if history is not None:
-            messages = [m.to_openai_format() for m in history]
+        history = getattr(context, "history", None)
+        iterable = (history.data if hasattr(history, "data") else history) if history is not None else []
+        messages = [m.to_openai_format() for m in iterable]
         request_params = {
             "model": self.model_name.data,
             "messages": messages,
