@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "pygent-ai"
-version = "0.1.1"
+version = "0.1.2"
 description = "A Python framework for building LLM-powered agents with modular state, tools, and MCP support."
 readme = "README.md"
 requires-python = ">=3.11"

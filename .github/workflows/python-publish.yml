@@ -67,21 +67,21 @@ jobs:
       - name: Check version consistency
         if: github.event_name == 'release'
         run: |
-          # 从 setup.py 提取版本号
-          SETUP_VERSION=$(grep -E "version\s*=" setup.py | head -1 | sed "s/.*['\"]\([^'\"]*\)['\"].*/\1/")
+          # 从 pyproject.toml 提取版本号
+          SETUP_VERSION=$(grep -E "^version\s*=" pyproject.toml | sed "s/.*= *['\"]\([^'\"]*\)['\"].*/\1/" | tr -d ' ')
           
           # 获取 Release tag（去除 'v' 前缀）
           RELEASE_TAG="${{ github.event.release.tag_name }}"
           CLEAN_TAG="${RELEASE_TAG#v}"
           
-          echo "Setup.py version: $SETUP_VERSION"
+          echo "pyproject.toml version: $SETUP_VERSION"
           echo "Release tag: $RELEASE_TAG"
           echo "Clean tag: $CLEAN_TAG"
           
           # 版本一致性检查
           if [ "$SETUP_VERSION" != "$CLEAN_TAG" ]; then
             echo "❌ ERROR: Version mismatch!"
-            echo "setup.py version ($SETUP_VERSION) does not match release tag ($CLEAN_TAG)"
+            echo "pyproject.toml version ($SETUP_VERSION) does not match release tag ($CLEAN_TAG)"
             exit 1
           fi
           
