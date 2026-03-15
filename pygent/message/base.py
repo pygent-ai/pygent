@@ -42,11 +42,16 @@ class BaseMessage(PygentData):
         else:
             self.role = PygentString(str(role))
         
-        # 初始化内容
+        # 初始化内容：支持纯文本（str）或多模态 content 列表（OpenAI 格式）
         if isinstance(content, PygentString):
             self.content = content
+            self.data.pop("_content_parts", None)
+        elif isinstance(content, list):
+            self.content = PygentString("")
+            self.data["_content_parts"] = content
         else:
-            self.content = PygentString(str(content))
+            self.content = PygentString(str(content) if content is not None else "")
+            self.data.pop("_content_parts", None)
         
         # 初始化名称（可选）
         if name is not None:
@@ -72,25 +77,49 @@ class BaseMessage(PygentData):
                 else:
                     self.data[key] = str(value)
     
+    def _content_for_api(self) -> Union[str, List[Dict[str, Any]]]:
+        """返回 API 所需的 content：纯 str 或多模态 content 列表（仅含内置类型）。"""
+        if "_content_parts" in self.data:
+            parts = self.data["_content_parts"]
+            if isinstance(parts, list):
+                return self._sanitize_content_parts(parts)
+        return getattr(self.content, "data", self.content) if self.content else ""
+
+    @staticmethod
+    def _sanitize_content_parts(parts: List[Any]) -> List[Dict[str, Any]]:
+        """将多模态 content 列表转为仅含内置类型的 list[dict]，便于 JSON 序列化。"""
+
+        def _plain(v: Any) -> Any:
+            if hasattr(v, "data") and not isinstance(v, type):
+                return _plain(v.data)
+            if isinstance(v, dict):
+                return {k: _plain(val) for k, val in v.items()}
+            if isinstance(v, list):
+                return [_plain(x) for x in v]
+            return v
+
+        out = []
+        for p in parts:
+            if isinstance(p, dict):
+                out.append({k: _plain(v) for k, v in p.items()})
+            else:
+                out.append(_plain(p))
+        return out
+
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式（API请求格式）"""
+        """转换为字典格式（API 请求格式），保证 role/content/name 等为纯 Python 类型。"""
         result = {
-            "role": self.role.data,
-            "content": self.content.data
+            "role": getattr(self.role, "data", self.role),
+            "content": self._content_for_api()
         }
-        
         if self.name is not None:
-            result["name"] = self.name.data
-        
+            result["name"] = getattr(self.name, "data", self.name)
         if self.metadata is not None:
-            # 元数据通常不作为API参数发送
             pass
-        
-        # 添加额外字段
         for key, value in self.data.items():
-            if key not in ['role', 'content', 'name', 'metadata']:
-                result[key] = value
-        
+            if key in ("role", "content", "name", "metadata", "_content_parts"):
+                continue
+            result[key] = getattr(value, "data", value) if hasattr(value, "data") else value
         return result
     
     def to_openai_format(self) -> Dict[str, Any]:
@@ -329,12 +358,10 @@ class AssistantMessage(BaseMessage):
             self.tool_calls = PygentList(tool_calls)
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式"""
+        """转换为字典格式。tool_calls 仅在非空时写入，避免 API 报错（如 DeepSeek 要求非空数组）。"""
         result = super().to_dict()
-        
-        if hasattr(self, 'tool_calls'):
+        if hasattr(self, "tool_calls") and self.tool_calls and self.tool_calls.data:
             result["tool_calls"] = [tc.to_dict() for tc in self.tool_calls.data]
-
         return result
 
 
