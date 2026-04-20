@@ -135,6 +135,35 @@ class BaseMessage(PygentData):
             result["role"] = "tool"
         
         return result
+
+    def to_ollama_format(self) -> Dict[str, Any]:
+        """转换为 Ollama 消息格式。"""
+        result = self.to_dict()
+
+        # Ollama 的 tool_calls.function.arguments 期望为 dict，而非 JSON 字符串
+        if result.get("role") == "assistant" and "tool_calls" in result:
+            tool_calls = []
+            for tc in result.get("tool_calls", []):
+                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                args = fn.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except (json.JSONDecodeError, TypeError):
+                        args = {"raw_arguments": args}
+                tool_calls.append(
+                    {
+                        "id": tc.get("id"),
+                        "type": tc.get("type", "function"),
+                        "function": {
+                            "name": fn.get("name", ""),
+                            "arguments": args if isinstance(args, dict) else {},
+                        },
+                    }
+                )
+            result["tool_calls"] = tool_calls
+
+        return result
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'BaseMessage':
