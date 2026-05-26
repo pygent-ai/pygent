@@ -66,14 +66,18 @@ class ToolManager(PygentModule):
 
         return tool(*args, **kwargs)
 
-    def get_all_schemas(self) -> Dict[str, Any]:
-        """获取所有工具的模式"""
+    def get_all_schemas(self, include_status: bool = True) -> Dict[str, Any]:
+        """Return schemas for all registered tools.
+
+        The default preserves the legacy response shape with runtime status.
+        Pass include_status=False for stable schema/config data only.
+        """
         return {
             "tools": {
-                name: tool.get_schema()
+                name: tool.get_schema(include_status=include_status)
                 for name, tool in self.tools.data.items()
             },
-            "categories": self.tool_categories.data
+            "categories": self.tool_categories.data,
         }
 
     def get_openai_functions(self) -> List[Dict[str, Any]]:
@@ -82,6 +86,20 @@ class ToolManager(PygentModule):
             tool.to_openai_function()
             for tool in self.tools.data.values()
         ]
+
+    def get_openai_tools(self) -> List[Dict[str, Any]]:
+        """Return OpenAI tools format with type/function wrappers."""
+        return [
+            tool.to_openai_tool()
+            for tool in self.tools.data.values()
+        ]
+
+    def get_all_statuses(self) -> Dict[str, Any]:
+        """Return runtime status for all registered tools."""
+        return {
+            name: tool.get_status()
+            for name, tool in self.tools.data.items()
+        }
 
     def add_mcp_server_stdio(
         self,

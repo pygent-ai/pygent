@@ -4,6 +4,7 @@ from typing import Any, AsyncGenerator, Optional
 from pygent.context import BaseContext
 from pygent.llm import BaseAsyncClient
 from pygent.message import AssistantMessage, AssistantMessageChunk, ToolCallChunk
+from pygent.message.adapters import OllamaMessageAdapter
 
 
 class OllamaAsyncClient(BaseAsyncClient):
@@ -81,9 +82,7 @@ class OllamaAsyncClient(BaseAsyncClient):
     async def forward(self, context: BaseContext, **kwargs) -> AssistantMessage:
         ollama = self._get_ollama_module()
 
-        history = getattr(context, "history", None)
-        iterable = (history.data if hasattr(history, "data") else history) if history is not None else []
-        messages = [m.to_ollama_format() for m in iterable]
+        messages = OllamaMessageAdapter.messages_from_context(context)
 
         request_params = {
             "model": self.model_name.data,
@@ -109,9 +108,7 @@ class OllamaAsyncClient(BaseAsyncClient):
     ) -> AsyncGenerator[AssistantMessageChunk, Any]:
         ollama = self._get_ollama_module()
 
-        history = getattr(context, "history", None)
-        iterable = (history.data if hasattr(history, "data") else history) if history is not None else []
-        messages = [m.to_ollama_format() for m in iterable]
+        messages = OllamaMessageAdapter.messages_from_context(context)
 
         request_params = {
             "model": self.model_name.data,

@@ -123,47 +123,16 @@ class BaseMessage(PygentData):
         return result
     
     def to_openai_format(self) -> Dict[str, Any]:
-        """转换为OpenAI消息格式"""
-        result = self.to_dict()
-        
-        # OpenAI特定的格式调整
-        if self.role.data == "function":
-            # OpenAI函数消息格式
-            result["role"] = "function"
-        elif self.role.data == "tool":
-            # OpenAI工具消息格式
-            result["role"] = "tool"
-        
-        return result
+        """Convert to an OpenAI-compatible message payload."""
+        from pygent.message.adapters import OpenAIMessageAdapter
+
+        return OpenAIMessageAdapter.to_message_dict(self)
 
     def to_ollama_format(self) -> Dict[str, Any]:
-        """转换为 Ollama 消息格式。"""
-        result = self.to_dict()
+        """Convert to an Ollama-compatible message payload."""
+        from pygent.message.adapters import OllamaMessageAdapter
 
-        # Ollama 的 tool_calls.function.arguments 期望为 dict，而非 JSON 字符串
-        if result.get("role") == "assistant" and "tool_calls" in result:
-            tool_calls = []
-            for tc in result.get("tool_calls", []):
-                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
-                args = fn.get("arguments", {})
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except (json.JSONDecodeError, TypeError):
-                        args = {"raw_arguments": args}
-                tool_calls.append(
-                    {
-                        "id": tc.get("id"),
-                        "type": tc.get("type", "function"),
-                        "function": {
-                            "name": fn.get("name", ""),
-                            "arguments": args if isinstance(args, dict) else {},
-                        },
-                    }
-                )
-            result["tool_calls"] = tool_calls
-
-        return result
+        return OllamaMessageAdapter.to_message_dict(self)
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'BaseMessage':

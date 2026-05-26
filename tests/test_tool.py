@@ -158,6 +158,24 @@ class TestBaseTool(unittest.TestCase):
         self.assertIn("status", schema)
         self.assertEqual(schema["metadata"]["name"], "echo")
 
+    def test_get_static_schema_and_status_are_separate(self):
+        echo = EchoTool()
+        static_schema = echo.get_schema(include_status=False)
+        self.assertIn("metadata", static_schema)
+        self.assertIn("parameters", static_schema)
+        self.assertIn("openai_function", static_schema)
+        self.assertNotIn("status", static_schema)
+
+        status = echo.get_status()
+        self.assertEqual(status["enabled"], True)
+        self.assertEqual(status["call_count"], 0)
+
+    def test_to_openai_tool(self):
+        echo = EchoTool()
+        tool_schema = echo.to_openai_tool()
+        self.assertEqual(tool_schema["type"], "function")
+        self.assertEqual(tool_schema["function"]["name"], "echo")
+
     def test_enable_disable(self):
         echo = EchoTool()
         self.assertTrue(echo.enabled.data)
@@ -227,6 +245,17 @@ class TestToolManager(unittest.TestCase):
         funcs = mgr.get_openai_functions()
         self.assertEqual(len(funcs), 1)
         self.assertEqual(funcs[0]["name"], "echo")
+
+    def test_get_openai_tools_and_statuses(self):
+        mgr = ToolManager()
+        mgr.register_tool(EchoTool())
+        tools = mgr.get_openai_tools()
+        self.assertEqual(tools[0]["type"], "function")
+        self.assertEqual(tools[0]["function"]["name"], "echo")
+        schemas = mgr.get_all_schemas(include_status=False)
+        self.assertNotIn("status", schemas["tools"]["echo"])
+        statuses = mgr.get_all_statuses()
+        self.assertEqual(statuses["echo"]["call_count"], 0)
 
 
 class TestToolDecorator(unittest.TestCase):

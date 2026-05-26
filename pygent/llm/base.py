@@ -64,7 +64,7 @@ class BaseClient(PygentOperator, ABC):
         self.total_requests = PygentInt(0)
         self.total_errors = PygentInt(0)
 
-    def forward(self, context: BaseContext) -> BaseContext:
+    def forward(self, context: BaseContext) -> AssistantMessage:
         raise NotImplementedError
 
     

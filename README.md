@@ -8,7 +8,7 @@ A Python framework for building LLM-powered agents with modular state management
 - **State management** — Consistent save/load and serialization via `PygentOperator`
 - **LLM-native** — Messages and tools align with OpenAI-style APIs
 - **MCP support** — Use Model Context Protocol (SSE and stdio) tools via `ToolManager`
-- **Toolkits** — Built-in toolkits such as `RestrictedTerminal` for safe shell access
+- **Toolkits** — Built-in toolkits such as `TerminalToolkits` for shell access; `RestrictedTerminal` remains as a compatibility alias.
 
 ## Requirements
 
@@ -33,23 +33,23 @@ uv pip install -e .
 ```python
 from pygent.agent import BaseAgent
 from pygent.context import BaseContext
-from pygent.llm import AsyncOpenAIClient
+from pygent.llm import AsyncRequestsClient
 from pygent.message import UserMessage
 from pygent.module.tool import ToolManager
-from pygent.toolkits import RestrictedTerminal
+from pygent.toolkits import TerminalToolkits
 
 class MyAgent(BaseAgent):
     def __init__(self):
         super().__init__()
-        self.llm = AsyncOpenAIClient(
+        self.llm = AsyncRequestsClient(
             base_url="https://api.openai.com/v1",
             api_key="YOUR_API_KEY",
             model_name="gpt-4",
         )
         self.tool_manager = ToolManager()
-        terminal = RestrictedTerminal(root_dir=".")
+        terminal = TerminalToolkits(session_id="quickstart", workspace_root=".")
         self.tool_manager.add_module("terminal", terminal)
-        self.tool_manager.register_tools(terminal.get_tools())
+        self.tool_manager.register_tools(terminal.get_all_tools())
 
     async def run(self, user_input: str):
         context = BaseContext(system_prompt="You are a helpful assistant.")
@@ -59,6 +59,10 @@ class MyAgent(BaseAgent):
 ```
 
 See [examples/react_agent/react_agent.py](examples/react_agent/react_agent.py) for a full ReAct-style agent with tool calling.
+
+Compatibility note: `AsyncOpenAIClient` is still exported as an alias of
+`AsyncRequestsClient`, and `RestrictedTerminal(root_dir=...)` still delegates to
+`TerminalToolkits`.
 
 ## Project Layout
 

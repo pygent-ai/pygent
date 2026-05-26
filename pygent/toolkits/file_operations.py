@@ -72,7 +72,7 @@ class FileToolkits(ToolClassBase):
     def __init__(self, session_id: str, workspace_root: Optional[str] = None):
         super().__init__()
         self.session_id = PygentString(session_id)
-        self.workspace_root = PygentString(workspace_root) or PygentString(os.getcwd())
+        self.workspace_root = workspace_root or os.getcwd()
 
     @tool_method(
         name="read_file",
