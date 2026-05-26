@@ -179,7 +179,7 @@ class FunctionCall(PygentData):
 
 ## 4. LLM
 
-**Module:** `pygent.llm.base`, `pygent.llm.openai_client`
+**Module:** `pygent.llm.base`, `pygent.llm.requests_client`
 
 ### BaseClient
 
@@ -196,7 +196,7 @@ class BaseClient(PygentOperator, ABC):
 
     def __init__(self, base_url, api_key, model_name, timeout=30, max_retries=3,
                  temperature=0.7, max_tokens=None, stream=False, **kwargs)
-    def forward(self, context: BaseContext) -> BaseContext  # abstract
+    def forward(self, context: BaseContext) -> AssistantMessage  # appends to context
 ```
 
 ### BaseAsyncClient
@@ -204,16 +204,19 @@ class BaseClient(PygentOperator, ABC):
 Same structure as `BaseClient`, with async `forward`:
 
 ```python
-async def forward(self, context: BaseContext) -> BaseContext
+async def forward(self, context: BaseContext) -> AssistantMessage
 ```
 
-### AsyncOpenAIClient
+### AsyncRequestsClient
 
 ```python
-class AsyncOpenAIClient(BaseAsyncClient):
+class AsyncRequestsClient(BaseAsyncClient):
     def __init__(self, base_url, api_key, model_name, ...)
-    async def forward(self, context: BaseContext, **kwargs) -> BaseContext
+    async def forward(self, context: BaseContext, **kwargs) -> AssistantMessage
 ```
+
+`AsyncOpenAIClient` remains exported as a backward-compatible alias of
+`AsyncRequestsClient`.
 
 ---
 
@@ -295,8 +298,11 @@ class BaseTool(PygentModule):
     def __call__(self, *args, **kwargs) -> Dict[str, Any]
     def validate_parameters(self, parameters: Dict) -> Dict[str, List[str]]
     def to_openai_function(self) -> Dict[str, Any]
+    def to_openai_tool(self) -> Dict[str, Any]
     def to_langchain_tool(self) -> Dict[str, Any]
-    def get_schema(self) -> Dict[str, Any]
+    def get_static_schema(self) -> Dict[str, Any]
+    def get_status(self) -> Dict[str, Any]
+    def get_schema(self, include_status=True) -> Dict[str, Any]
     def enable(self) -> None
     def disable(self) -> None
     def reset_stats(self) -> None
@@ -423,35 +429,20 @@ class MCPToolAdapter(BaseTool):
 
 ## 8. Toolkits
 
-**Module:** `pygent.toolkits.terminal`
+**Module:** `pygent.toolkits.run_terminal_cmd`
 
-### RestrictedTerminal
+### TerminalToolkits
 
-Sandboxed terminal for file operations within a root directory.
+Terminal command toolkit bound to a workspace root.
 
 ```python
-class RestrictedTerminal:
-    def __init__(self, root_dir)
-    def get_absolute_path(self, path=None)
-    def safe_path_check(self, path)
-    def change_directory(self, args)
-    def list_files(self, args)
-    def make_directory(self, args)
-    def remove_file_or_dir(self, args)
-    def print_working_directory(self, args)
-    def copy_file(self, args)
-    def move_file(self, args)
-    def view_file(self, args)
-    def show_help(self)
-    def tree_command(self, args)
-    def touch_file(self, args)
-    def find_files(self, args)
-    def process_command(self, cmd_line)
-    def run_command(self, cmd: str) -> str
-    def run_commands(self, commands: list) -> list
+class TerminalToolkits:
+    def __init__(self, session_id, workspace_root=None)
+    def get_all_tools() -> List[BaseTool]
+    def get_tools() -> List[BaseTool]  # compatibility alias
 ```
 
-Supported commands: `cd`, `ls`, `pwd`, `mkdir`, `rm`, `cp`, `mv`, `cat`, `touch`, `tree`, `find`, `help`, `exit`, plus external commands.
+`RestrictedTerminal(root_dir=...)` remains available as a compatibility wrapper.
 
 ---
 

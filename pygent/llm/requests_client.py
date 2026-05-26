@@ -14,6 +14,7 @@ from typing import Callable, Optional, Any, AsyncGenerator
 from pygent.context import BaseContext
 from pygent.llm import BaseAsyncClient
 from pygent.message import AssistantMessage, AssistantMessageChunk, ToolCall, ToolCallChunk
+from pygent.message.adapters import OpenAIMessageAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -277,9 +278,7 @@ class AsyncRequestsClient(BaseAsyncClient):
         context: BaseContext,
         **kwargs
     ) -> AssistantMessage:
-        history = getattr(context, "history", None)
-        iterable = (history.data if hasattr(history, "data") else history) if history is not None else []
-        messages = [m.to_openai_format() for m in iterable]
+        messages = OpenAIMessageAdapter.messages_from_context(context)
         request_params = {
             "model": self.model_name.data,
             "messages": messages,
@@ -299,9 +298,7 @@ class AsyncRequestsClient(BaseAsyncClient):
         context: BaseContext,
         **kwargs
     ) -> AsyncGenerator[AssistantMessageChunk, Any]:
-        history = getattr(context, "history", None)
-        iterable = (history.data if hasattr(history, "data") else history) if history is not None else []
-        messages = [m.to_openai_format() for m in iterable]
+        messages = OpenAIMessageAdapter.messages_from_context(context)
         request_params = {
             "model": self.model_name.data,
             "messages": messages,

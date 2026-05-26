@@ -1,0 +1,17 @@
+.env
+.idea/
+.venv/
+.venv_smoke/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+build/
+dist/
+*.egg-info/
+
+sessions/

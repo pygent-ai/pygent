@@ -777,9 +777,17 @@ class ToolClassBase:
         """获取所有工具"""
         return self.get_tool_manager().get_registered_tools()
 
+    def get_tools(self) -> List[BaseTool]:
+        """Backward-compatible alias for get_all_tools()."""
+        return self.get_all_tools()
+
     def get_openai_functions(self) -> List[Dict[str, Any]]:
         """获取 OpenAI 函数格式"""
         return self.get_tool_manager().get_openai_functions()
+
+    def get_openai_tools(self) -> List[Dict[str, Any]]:
+        """Return OpenAI tools format with type/function wrappers."""
+        return self.get_tool_manager().get_openai_tools()
 
 
 def tool_class(

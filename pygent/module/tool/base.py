@@ -471,6 +471,13 @@ class BaseTool(PygentModule):
             }
         }
     
+    def to_openai_tool(self) -> Dict[str, Any]:
+        """Return OpenAI tools format while keeping to_openai_function() intact."""
+        return {
+            "type": "function",
+            "function": self.to_openai_function(),
+        }
+
     def to_langchain_tool(self) -> Dict[str, Any]:
         """转换为LangChain工具格式"""
         return {
@@ -543,20 +550,33 @@ class BaseTool(PygentModule):
             print("警告: 未安装pydantic，无法创建LangChain参数模式")
             return None
     
-    def get_schema(self) -> Dict[str, Any]:
-        """获取完整的工具模式"""
+    def get_status(self) -> Dict[str, Any]:
+        """Return runtime status separately from the static tool schema."""
+        return {
+            "enabled": self.enabled.data,
+            "call_count": self.call_count.data,
+            "error_count": self.error_count.data,
+            "last_called": self.last_called.data,
+        }
+
+    def get_static_schema(self) -> Dict[str, Any]:
+        """Return schema/config metadata without runtime counters."""
         return {
             "metadata": self.metadata.data,
             "parameters": self.parameters.data,
             "config": self.config.data,
             "openai_function": self.to_openai_function(),
-            "status": {
-                "enabled": self.enabled.data,
-                "call_count": self.call_count.data,
-                "error_count": self.error_count.data,
-                "last_called": self.last_called.data,
-            }
         }
+
+    def get_schema(self, include_status: bool = True) -> Dict[str, Any]:
+        """Return the legacy full schema by default.
+
+        Pass include_status=False to get only stable schema/config data.
+        """
+        schema = self.get_static_schema()
+        if include_status:
+            schema["status"] = self.get_status()
+        return schema
     
     def enable(self) -> None:
         """启用工具"""

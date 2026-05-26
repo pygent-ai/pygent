@@ -127,14 +127,16 @@ Holds conversation history and optional system prompt.
 - `ToolMessage`: Tool result (tool_call_id)
 - `FunctionMessage`: Legacy function-call format
 - `ToolCall`, `FunctionCall`: Tool invocation metadata
-- `to_openai_format()`: Convert to OpenAI API format
+- `to_openai_format()`: Compatibility method that delegates to provider adapters
+- `pygent.message.adapters`: OpenAI/Ollama wire-format adapters
 
 #### LLM Clients (`pygent.llm`)
 
 - `BaseClient`: Abstract sync LLM client
 - `BaseAsyncClient`: Abstract async LLM client
-- `AsyncOpenAIClient`: OpenAI-compatible implementation (uses `openai` SDK)
-- `forward(context: BaseContext) -> BaseContext`: In-place update of context with model response
+- `AsyncRequestsClient`: OpenAI-compatible implementation using urllib
+- `AsyncOpenAIClient`: Backward-compatible alias of `AsyncRequestsClient`
+- `forward(context: BaseContext) -> AssistantMessage`: appends to context and returns the new assistant message
 
 ---
 
@@ -162,7 +164,10 @@ Extends `PygentOperator` with submodule composition:
 - `_discover_parameters()`: Infers parameters from `forward` signature
 - `validate_parameters()`: Type and constraint checking
 - `to_openai_function()`: OpenAI function-calling schema
-- `get_schema()`: Full tool description
+- `to_openai_tool()`: OpenAI tools wrapper format
+- `get_static_schema()`: Schema/config without runtime counters
+- `get_status()`: Runtime status
+- `get_schema()`: Backward-compatible full tool description, with status by default
 
 **ToolManager**:
 
@@ -234,7 +239,7 @@ PygentOperator.load(path) → load_state_dict()
 
 ## External Dependencies
 
-- **openai**: For `AsyncOpenAIClient`
+- **stdlib urllib**: For `AsyncRequestsClient`
 - **mcp**: For MCP clients (stdio, SSE) and tool adapters
 - **anyio**: For sync wrappers over async MCP SDK
 - **yaml**: For YAML save/load
@@ -256,7 +261,7 @@ pygent/
 │   └── base.py          # Message types, ToolCall
 ├── llm/
 │   ├── base.py          # BaseClient, BaseAsyncClient
-│   └── openai_client.py # AsyncOpenAIClient
+│   └── requests_client.py # AsyncRequestsClient
 ├── module/
 │   ├── base.py          # PygentModule
 │   ├── tool/
@@ -271,7 +276,7 @@ pygent/
 │   ├── skill/
 │   └── tool_search/
 └── toolkits/
-    └── terminal.py      # RestrictedTerminal (sandboxed fs)
+    └── run_terminal_cmd.py # TerminalToolkits
 ```
 
 ---

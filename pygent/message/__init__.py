@@ -17,6 +17,7 @@ from .base import (
     FunctionCall,
     MessageMetadata,
 )
+from .adapters import OpenAIMessageAdapter, OllamaMessageAdapter
 
 __all__ = [
     "MessageRole",
@@ -36,4 +37,6 @@ __all__ = [
     "ToolCallChunk",
     "FunctionCall",
     "MessageMetadata",
+    "OpenAIMessageAdapter",
+    "OllamaMessageAdapter",
 ]
