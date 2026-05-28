@@ -3,7 +3,14 @@ import inspect
 import functools
 import re
 
-from .base import BaseTool, ToolParameter, ToolMetadata, ToolCategory, ToolPermission
+from .base import (
+    BaseTool,
+    ToolParameter,
+    ToolMetadata,
+    ToolCategory,
+    ToolPermission,
+    TOOL_CALL_DESCRIPTION_PARAM,
+)
 
 
 # ==================== 工具函数 ====================
@@ -484,7 +491,11 @@ def tool(
             param_config = {
                 "name": param_name,
                 "type": _python_type_to_string(param_type),
-                "description": f"参数: {param_name}",
+                "description": (
+                    BaseTool.get_tool_call_description_parameter()["description"]
+                    if param_name == TOOL_CALL_DESCRIPTION_PARAM
+                    else f"参数: {param_name}"
+                ),
                 "required": required,
             }
             
@@ -495,6 +506,7 @@ def tool(
             # 创建参数对象
             param_obj = ToolParameter(**param_config)
             tool_instance.parameters.data[param_name] = param_obj.data
+            tool_instance._mark_parameter_forwarded(param_name)
         
         # 设置启用状态
         if not enabled:
@@ -644,14 +656,17 @@ def auto_tool(
                 if isinstance(existing_config, dict):
                     # 直接更新字典
                     existing_config.update(param_config)
+                    decorated_func.tool._mark_parameter_forwarded(param_name)
                 else:
                     # 创建新的ToolParameter
                     param_obj = ToolParameter(**param_config)
                     decorated_func.tool.parameters.data[param_name] = param_obj.data
+                    decorated_func.tool._mark_parameter_forwarded(param_name)
             else:
                 # 创建新的参数
                 param_obj = ToolParameter(**param_config)
                 decorated_func.tool.parameters.data[param_name] = param_obj.data
+                decorated_func.tool._mark_parameter_forwarded(param_name)
         
         return decorated_func
     
@@ -664,6 +679,7 @@ def _discover_parameters_from_method(method: Callable) -> Dict[str, Any]:
     """从方法签名提取参数定义，供 tool_class 生成的工具使用（避免 forward 为 *args,**kwargs 时参数为空）。"""
     sig = inspect.signature(method)
     type_hints = get_type_hints(method) if hasattr(method, "__annotations__") else {}
+    doc_info = _parse_docstring(getattr(method, "__doc__", "") or "")
     parameters = {}
     for param_name, param in sig.parameters.items():
         if param_name == "self":
@@ -672,11 +688,28 @@ def _discover_parameters_from_method(method: Callable) -> Dict[str, Any]:
             continue
         param_type = type_hints.get(param_name, str)
         required = param.default == inspect.Parameter.empty
+        parameter_kwargs: Dict[str, Any] = {}
+        if param_name in doc_info.get("enums", {}):
+            parameter_kwargs["enum"] = doc_info["enums"][param_name]
+        if param_name in doc_info.get("ranges", {}):
+            min_value, max_value = doc_info["ranges"][param_name]
+            if min_value is not None:
+                parameter_kwargs["min_value"] = min_value
+            if max_value is not None:
+                parameter_kwargs["max_value"] = max_value
+        if param_name in doc_info.get("patterns", {}):
+            parameter_kwargs["pattern"] = doc_info["patterns"][param_name]
         param_def = ToolParameter(
             name=param_name,
             type=param_type,
+            description=(
+                BaseTool.get_tool_call_description_parameter()["description"]
+                if param_name == TOOL_CALL_DESCRIPTION_PARAM
+                else doc_info.get("params", {}).get(param_name, "")
+            ),
             required=required,
             default=param.default if not required else None,
+            **parameter_kwargs,
         )
         parameters[param_name] = param_def.data
     return parameters
@@ -745,7 +778,8 @@ class ToolClassBase:
         """从 @tool_method 包装器创建工具实例"""
         if not getattr(method_wrapper, '_tool_config', None):
             return None
-        config = method_wrapper._tool_config
+        config = dict(method_wrapper._tool_config)
+        parameter_schema = config.pop("parameter_schema", None)
         original_method = getattr(method_wrapper, '_method', method_wrapper)
         tool_class_name = f"Tool_{config['name'].title().replace('_', '')}"
 
@@ -762,7 +796,50 @@ class ToolClassBase:
             },
         )
         tool = ToolClass()
-        tool.parameters.data.update(_discover_parameters_from_method(original_method))
+        method_parameters = _discover_parameters_from_method(original_method)
+        tool.parameters.data.update(method_parameters)
+        if TOOL_CALL_DESCRIPTION_PARAM in method_parameters:
+            tool._mark_parameter_forwarded(TOOL_CALL_DESCRIPTION_PARAM)
+        if isinstance(parameter_schema, dict):
+            tool.parameters.data.clear()
+            tool._ignored_parameter_names.clear()
+            required_names = set(parameter_schema.get("required") or [])
+            for param_name, prop_schema in (parameter_schema.get("properties") or {}).items():
+                if not isinstance(prop_schema, dict):
+                    continue
+                extra_schema = {
+                    key: value
+                    for key, value in prop_schema.items()
+                    if key
+                    not in {
+                        "type",
+                        "description",
+                        "default",
+                        "enum",
+                        "minimum",
+                        "maximum",
+                        "pattern",
+                    }
+                }
+                param_def = ToolParameter(
+                    name=param_name,
+                    type=prop_schema.get("type", "string"),
+                    description=prop_schema.get("description", ""),
+                    required=param_name in required_names,
+                    default=prop_schema.get("default") if "default" in prop_schema else None,
+                    enum=prop_schema.get("enum"),
+                    min_value=prop_schema.get("minimum"),
+                    max_value=prop_schema.get("maximum"),
+                    pattern=prop_schema.get("pattern"),
+                    **extra_schema,
+                )
+                tool.parameters.data[param_name] = param_def.data
+                tool._mark_parameter_forwarded(param_name)
+            tool.config.data["_parameter_schema_extras"] = {
+                key: value
+                for key, value in parameter_schema.items()
+                if key not in {"properties", "required", "type"}
+            }
         return tool
 
     def get_tool(self, tool_name: str) -> Optional[BaseTool]:

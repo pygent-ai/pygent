@@ -59,11 +59,15 @@ response = openai.chat.completions.create(
 
 ### 当前 pygent 内置实现
 
-- `run_terminal_cmd` — 执行终端命令  
+- `bash` — 使用 bash 执行命令  
+- `Glob` — 按 glob 模式查找文件
 - `grep` — 文本/正则搜索  
+- `Read` — 读取绝对路径文件（严格参数 `file_path`/`limit`/`offset`/`pages`）
 - `read_file` — 读取文件  
-- `write` — 写入文件  
+- `write` — 写入文件（兼容旧参数 `path`/`contents`）
+- `Write` — 写入绝对路径文件（严格参数 `file_path`/`content`）
 - `search_replace` — 字符串替换  
+- `Edit` — 按绝对路径精确替换文件文本（严格参数 `file_path`/`old_string`/`new_string`/`replace_all`）
 - `edit_notebook` — 编辑 Jupyter 单元格  
 - `delete_file` — 删除文件  
 - `read_lints` — 读取 linter 诊断  

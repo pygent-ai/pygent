@@ -17,7 +17,9 @@
             },
             "target_directories": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "限定搜索目录，如 ['src/']；空数组表示整个代码库"
             },
             "num_results": {
@@ -26,17 +28,23 @@
               "maximum": 25,
               "default": 25,
               "description": "返回结果数量上限"
+            },
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
             }
           },
-          "required": ["query"]
+          "required": [
+            "query"
+          ]
         }
       }
     },
     {
       "type": "function",
       "function": {
-        "name": "run_terminal_cmd",
-        "description": "在终端执行给定命令，可指定工作目录、超时与是否后台运行。",
+        "name": "bash",
+        "description": "使用 bash 执行给定命令，可指定工作目录、超时与是否后台运行；返回合并后的终端可见输出。",
         "parameters": {
           "type": "object",
           "properties": {
@@ -62,7 +70,34 @@
               "default": false
             }
           },
-          "required": ["command"]
+          "required": [
+            "command"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "Glob",
+        "description": "Find files by glob pattern under a directory and return matching file paths.",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "Directory to search. Omit this field to use the workspace root; do not pass \"undefined\" or \"null\". If provided, it must be an existing directory path.",
+              "type": "string"
+            },
+            "pattern": {
+              "description": "Glob pattern used to match file paths, for example \"*.py\" or \"**/*.ts\".",
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ]
         }
       }
     },
@@ -72,61 +107,112 @@
         "name": "grep",
         "description": "按精确文本或正则表达式在文件中搜索，支持上下文行数、文件类型、大小写等选项。",
         "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
           "type": "object",
           "properties": {
-            "pattern": {
-              "type": "string",
-              "description": "正则表达式或字面量搜索串"
-            },
-            "path": {
-              "type": "string",
-              "description": "要搜索的文件或目录路径，不传则默认为工作区根目录"
-            },
-            "glob": {
-              "type": "string",
-              "description": "文件名过滤，如 '*.js'、'**/*.ts'"
-            },
-            "output_mode": {
-              "type": "string",
-              "enum": ["content", "files_with_matches", "count"],
-              "description": "content=匹配行及上下文；files_with_matches=仅文件路径；count=匹配数量"
+            "-A": {
+              "type": "number",
+              "description": "Number of lines to show after each match (rg -A). Requires output_mode: \"content\", ignored otherwise."
             },
             "-B": {
               "type": "number",
-              "description": "匹配行之前显示的上下文行数"
-            },
-            "-A": {
-              "type": "number",
-              "description": "匹配行之后显示的上下文行数"
+              "description": "Number of lines to show before each match (rg -B). Requires output_mode: \"content\", ignored otherwise."
             },
             "-C": {
               "type": "number",
-              "description": "匹配行前后各显示的上下文行数"
+              "description": "Alias for context."
             },
             "-i": {
               "type": "boolean",
-              "description": "是否忽略大小写",
-              "default": false
+              "description": "Case insensitive search (rg -i)"
             },
-            "type": {
+            "-n": {
+              "type": "boolean",
+              "description": "Show line numbers in output (rg -n). Requires output_mode: \"content\", ignored otherwise. Defaults to true."
+            },
+            "context": {
+              "type": "number",
+              "description": "Number of lines to show before and after each match (rg -C). Requires output_mode: \"content\", ignored otherwise."
+            },
+            "glob": {
               "type": "string",
-              "description": "按文件类型过滤，如 js, py, ts"
+              "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\") - maps to rg --glob"
             },
             "head_limit": {
               "type": "number",
-              "description": "结果数量上限"
-            },
-            "offset": {
-              "type": "number",
-              "description": "跳过前 N 条结果，用于分页"
+              "description": "Limit output to first N lines/entries, equivalent to \"| head -N\". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly — large result sets waste context)."
             },
             "multiline": {
               "type": "boolean",
-              "description": "是否启用跨行匹配（. 匹配换行）",
-              "default": false
+              "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false."
+            },
+            "offset": {
+              "type": "number",
+              "description": "Skip first N lines/entries before applying head_limit, equivalent to \"| tail -n +N | head -N\". Works across all output modes. Defaults to 0."
+            },
+            "output_mode": {
+              "type": "string",
+              "enum": [
+                "content",
+                "files_with_matches",
+                "count"
+              ],
+              "description": "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"files_with_matches\"."
+            },
+            "path": {
+              "type": "string",
+              "description": "File or directory to search in (rg PATH). Defaults to current working directory."
+            },
+            "pattern": {
+              "type": "string",
+              "description": "The regular expression pattern to search for in file contents"
+            },
+            "type": {
+              "type": "string",
+              "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types."
             }
           },
-          "required": ["pattern"]
+          "required": [
+            "pattern"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "Read",
+        "description": "Read a file by absolute path, with optional line ranges for text files and page ranges for PDFs.",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "file_path": {
+              "description": "要读取的文件绝对路径。",
+              "type": "string"
+            },
+            "limit": {
+              "description": "要读取的行数；仅当文件过大、无法一次读取时提供。",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            },
+            "offset": {
+              "description": "开始读取的行号；仅当文件过大、需要分段读取时提供。",
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pages": {
+              "description": "PDF 页码范围，例如 \"1-5\"、\"3\"、\"10-20\"；仅适用于 PDF 文件，每次最多 20 页。",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_path"
+          ],
+          "type": "object"
         }
       }
     },
@@ -149,9 +235,15 @@
             "limit": {
               "type": "integer",
               "description": "最多读取的行数"
+            },
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
             }
           },
-          "required": ["path"]
+          "required": [
+            "path"
+          ]
         }
       }
     },
@@ -170,9 +262,42 @@
             "contents": {
               "type": "string",
               "description": "文件的完整内容"
+            },
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
             }
           },
-          "required": ["path", "contents"]
+          "required": [
+            "path",
+            "contents"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "Write",
+        "description": "Write text content to an absolute file path, creating parent directories and replacing existing content.",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "file_path": {
+              "description": "Absolute destination file path. Relative paths are rejected; parent directories are created when missing.",
+              "type": "string"
+            },
+            "content": {
+              "description": "Full text content to write, replacing any existing file contents.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_path",
+            "content"
+          ],
+          "type": "object"
         }
       }
     },
@@ -200,9 +325,53 @@
               "type": "boolean",
               "description": "是否替换文件中所有匹配项；默认 false 仅替换第一次",
               "default": false
+            },
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
             }
           },
-          "required": ["path", "old_string", "new_string"]
+          "required": [
+            "path",
+            "old_string",
+            "new_string"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "Edit",
+        "description": "Edit a file by replacing exact text at an absolute file path.",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "file_path": {
+              "description": "Absolute path of the file to modify. Relative paths are rejected.",
+              "type": "string"
+            },
+            "new_string": {
+              "description": "Replacement text; use a value different from old_string.",
+              "type": "string"
+            },
+            "old_string": {
+              "description": "Exact text to replace, including whitespace and indentation.",
+              "type": "string"
+            },
+            "replace_all": {
+              "default": false,
+              "description": "Replace every occurrence when true; defaults to false, which replaces only the first match.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "file_path",
+            "old_string",
+            "new_string"
+          ],
+          "type": "object"
         }
       }
     },
@@ -228,7 +397,17 @@
             },
             "cell_language": {
               "type": "string",
-              "enum": ["python", "markdown", "javascript", "typescript", "r", "sql", "shell", "raw", "other"],
+              "enum": [
+                "python",
+                "markdown",
+                "javascript",
+                "typescript",
+                "r",
+                "sql",
+                "shell",
+                "raw",
+                "other"
+              ],
               "description": "单元格语言类型"
             },
             "old_string": {
@@ -238,9 +417,20 @@
             "new_string": {
               "type": "string",
               "description": "新内容或新单元格的完整内容"
+            },
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
             }
           },
-          "required": ["target_notebook", "cell_idx", "is_new_cell", "cell_language", "old_string", "new_string"]
+          "required": [
+            "target_notebook",
+            "cell_idx",
+            "is_new_cell",
+            "cell_language",
+            "old_string",
+            "new_string"
+          ]
         }
       }
     },
@@ -255,9 +445,15 @@
             "path": {
               "type": "string",
               "description": "要删除的文件绝对路径"
+            },
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
             }
           },
-          "required": ["path"]
+          "required": [
+            "path"
+          ]
         }
       }
     },
@@ -271,8 +467,14 @@
           "properties": {
             "paths": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "要检查的文件或目录路径列表；不传则返回整个工作区诊断"
+            },
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
             }
           }
         }
@@ -293,9 +495,16 @@
             "explanation": {
               "type": "string",
               "description": "使用该搜索的一句说明（为何需要此信息）"
+            },
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
             }
           },
-          "required": ["search_term", "explanation"]
+          "required": [
+            "search_term",
+            "explanation"
+          ]
         }
       }
     },
@@ -310,9 +519,15 @@
             "url": {
               "type": "string",
               "description": "要抓取的完整有效 URL"
+            },
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
             }
           },
-          "required": ["url"]
+          "required": [
+            "url"
+          ]
         }
       }
     },
@@ -334,11 +549,15 @@
             },
             "reference_image_paths": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "参考图片的本地路径列表，用于风格或内容参考"
             }
           },
-          "required": ["description"]
+          "required": [
+            "description"
+          ]
         }
       }
     },
@@ -355,24 +574,46 @@
               "items": {
                 "type": "object",
                 "properties": {
-                  "id": { "type": "string", "description": "任务唯一标识" },
-                  "content": { "type": "string", "description": "任务描述" },
+                  "id": {
+                    "type": "string",
+                    "description": "任务唯一标识"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "任务描述"
+                  },
                   "status": {
                     "type": "string",
-                    "enum": ["pending", "in_progress", "completed", "cancelled"],
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed",
+                      "cancelled"
+                    ],
                     "description": "任务状态"
                   }
                 },
-                "required": ["id", "content", "status"]
+                "required": [
+                  "id",
+                  "content",
+                  "status"
+                ]
               },
               "description": "任务项列表"
             },
             "merge": {
               "type": "boolean",
               "description": "true=与现有 todo 按 id 合并；false=用当前列表完全替换现有 todo"
+            },
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
             }
           },
-          "required": ["todos", "merge"]
+          "required": [
+            "todos",
+            "merge"
+          ]
         }
       }
     },
@@ -394,12 +635,17 @@
             },
             "subagent_type": {
               "type": "string",
-              "enum": ["generalPurpose", "shell"],
+              "enum": [
+                "generalPurpose",
+                "shell"
+              ],
               "description": "generalPurpose=通用研究与多步执行；shell=命令与 git 等终端任务"
             },
             "model": {
               "type": "string",
-              "enum": ["fast"],
+              "enum": [
+                "fast"
+              ],
               "description": "可选模型；不传则继承父级"
             },
             "resume": {
@@ -412,7 +658,9 @@
             },
             "attachments": {
               "type": "array",
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "description": "附件文件路径，如视频等，供支持多模态的模型使用"
             },
             "run_in_background": {
@@ -420,18 +668,26 @@
               "description": "是否在后台运行，完成后可通过 output_file 等查看结果"
             }
           },
-          "required": ["description", "prompt", "subagent_type"]
+          "required": [
+            "description",
+            "prompt",
+            "subagent_type"
+          ]
         }
       }
     }
   ],
   "outputs_description": {
     "codebase_search": "匹配的代码片段列表（含文件路径、代码块、简要说明）",
-    "run_terminal_cmd": "终端标准输出/错误文本；需权限时可能包含 required_permissions",
+    "bash": "合并后的终端可见输出与退出码；需权限时可能包含 required_permissions",
+    "Glob": "Newline-separated matching file paths sorted by modification time, newest first",
     "grep": "按 output_mode 返回：匹配行（含上下文）、匹配文件列表或数量",
+    "Read": "文件内容；文本按行号格式返回，PDF 可按 pages 读取，失败时返回错误说明",
     "read_file": "文件内容，行号格式为 行号|内容；图片为二进制描述",
     "write": "无结构化返回；成功即写入完成",
+    "Write": "无结构化返回；成功即写入完成，失败时返回错误说明",
     "search_replace": "无结构化返回；成功为编辑确认，失败为错误说明",
+    "Edit": "无结构化返回；成功为编辑确认，失败时返回错误说明",
     "edit_notebook": "无结构化返回；成功即笔记本已更新",
     "delete_file": "无结构化返回；失败时返回错误信息",
     "read_lints": "诊断列表（文件、行、消息、严重程度等）",

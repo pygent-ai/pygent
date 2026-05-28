@@ -9,7 +9,7 @@ if str(_root) not in sys.path:
 
 import unittest
 
-from pygent.module.tool import ToolManager, BaseTool
+from pygent.module.tool import ToolManager, BaseTool, TOOL_CALL_DESCRIPTION_PARAM
 
 MCP_SERVER_SCRIPT = _root / "tests" / "mcp_test_server.py"
 
@@ -42,7 +42,11 @@ class TestToolManagerMCPStdio(unittest.TestCase):
         )
         tool = manager.get_tool("get_memory_statistics")
         self.assertIsNotNone(tool)
-        result = manager.call_tool("get_memory_statistics")
+        self.assertIn(TOOL_CALL_DESCRIPTION_PARAM, tool.to_openai_function()["parameters"]["properties"])
+        result = manager.call_tool(
+            "get_memory_statistics",
+            description="Read memory usage statistics",
+        )
         self.assertTrue(result.get("success"), result.get("error", result))
         self.assertIn("result", result)
 

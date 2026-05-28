@@ -4,7 +4,12 @@ Adapter that wraps an MCP server tool as a BaseTool instance.
 
 from typing import Any, Dict, List, Optional
 
-from pygent.module.tool import BaseTool, ToolMetadata, ToolCategory
+from pygent.module.tool import (
+    BaseTool,
+    ToolMetadata,
+    ToolCategory,
+    TOOL_CALL_DESCRIPTION_PARAM,
+)
 from pygent.common import PygentDict, PygentBool, PygentInt, PygentString
 
 from .base import BaseMCPClient
@@ -83,7 +88,10 @@ class MCPToolAdapter(BaseTool):
             category=ToolCategory.CUSTOM,
         )
         # Override parameters from MCP tool inputSchema (BaseTool discovers from forward, which uses **kwargs)
-        self.parameters.data.update(_json_schema_to_parameters(input_schema))
+        mcp_parameters = _json_schema_to_parameters(input_schema)
+        self.parameters.data.update(mcp_parameters)
+        if TOOL_CALL_DESCRIPTION_PARAM in mcp_parameters:
+            self._mark_parameter_forwarded(TOOL_CALL_DESCRIPTION_PARAM)
 
         self._mcp_client = client
         self._tool_name = tool_name

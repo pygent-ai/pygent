@@ -317,7 +317,10 @@ class BaseTool(PygentModule):
     last_called: PygentString
     error_count: PygentInt
 
-    def __init__(self, name, description, version="1.0.0", **kwargs)
+    def __init__(self, name, description, version="1.0.0",
+                 include_call_description_parameter=True,
+                 parameters_additional_properties=None,
+                 parameters_schema_uri=None, **kwargs)
     def forward(self, *args, **kwargs) -> Any  # override in subclass
     def __call__(self, *args, **kwargs) -> Dict[str, Any]
     def validate_parameters(self, parameters: Dict) -> Dict[str, List[str]]
@@ -486,25 +489,26 @@ The session payload stores `session_id`, `workspace_root`, `created_at`, `update
 
 **Module:** `pygent.toolkits`
 
-### TerminalToolkits
+### BashToolkits
 
-Terminal command toolkit bound to a workspace root.
+Bash command toolkit bound to a workspace root.
 
 ```python
-class TerminalToolkits:
+class BashToolkits:
     def __init__(self, session_id, workspace_root=None)
     def get_all_tools() -> List[BaseTool]
     def get_tools() -> List[BaseTool]  # compatibility alias
 ```
 
-`RestrictedTerminal(root_dir=...)` remains available as a compatibility wrapper.
+`TerminalToolkits` and `RestrictedTerminal(root_dir=...)` remain available as
+compatibility wrappers. The registered tool name is `bash`.
 
 ### Built-in Toolkits
 
 | Toolkit | Tools |
 |---------|-------|
-| `FileToolkits` | `read_file`, `write`, `search_replace`, `edit_notebook`, `delete_file`, `read_lints`, `grep` |
-| `TerminalToolkits` | `run_terminal_cmd` |
+| `FileToolkits` | `Read`, `read_file`, `write`, `Write`, `search_replace`, `Edit`, `edit_notebook`, `delete_file`, `read_lints`, `Glob`, `grep` |
+| `BashToolkits` | `bash` |
 | `WebSearchToolkits` | `web_search` |
 | `WebFetchToolkits` | `mcp_web_fetch` |
 

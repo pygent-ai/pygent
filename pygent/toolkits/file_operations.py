@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import json
+import fnmatch
 import os
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, List, Optional
 
 from pygent.common import PygentString
@@ -54,6 +55,49 @@ def _resolve_path(path: str, base: Optional[str] = None) -> Path:
     return resolved
 
 
+def _is_absolute_file_path(path: str) -> bool:
+    """Return whether a path is absolute after expanding user-home aliases."""
+    raw = str(path).strip()
+    if not raw:
+        return False
+    expanded = os.path.expanduser(raw)
+    return (
+        Path(expanded).is_absolute()
+        or PurePosixPath(expanded).is_absolute()
+        or PureWindowsPath(expanded).is_absolute()
+    )
+
+
+READ_PARAMETER_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": False,
+    "properties": {
+        "file_path": {
+            "description": "要读取的文件绝对路径。",
+            "type": "string",
+        },
+        "limit": {
+            "description": "要读取的行数；仅当文件过大、无法一次读取时提供。",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer",
+        },
+        "offset": {
+            "description": "开始读取的行号；仅当文件过大、需要分段读取时提供。",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer",
+        },
+        "pages": {
+            "description": 'PDF 页码范围，例如 "1-5"、"3"、"10-20"；仅适用于 PDF 文件，每次最多 20 页。',
+            "type": "string",
+        },
+    },
+    "required": ["file_path"],
+    "type": "object",
+}
+
+
 def _read_file_text(path: Path, offset: Optional[int], limit: Optional[int]) -> str:
     """读取文本文件内容，支持行范围。"""
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -65,6 +109,196 @@ def _read_file_text(path: Path, offset: Optional[int], limit: Optional[int]) -> 
     return "".join(f"{i + (offset or 1)}|{line}" for i, line in enumerate(lines))
 
 
+def _parse_pdf_page_range(pages: Optional[str], total_pages: int) -> tuple[Optional[List[int]], Optional[str]]:
+    """Parse a 1-based single page or page range into zero-based indices."""
+    if total_pages <= 0:
+        return [], None
+
+    if not pages:
+        end = min(total_pages, 20)
+        return list(range(end)), None
+
+    page_spec = pages.strip()
+    if not page_spec:
+        return None, "错误：pages 不能为空"
+
+    try:
+        if "-" in page_spec:
+            start_text, end_text = page_spec.split("-", 1)
+            start_page = int(start_text.strip())
+            end_page = int(end_text.strip())
+        else:
+            start_page = end_page = int(page_spec)
+    except ValueError:
+        return None, '错误：pages 必须是页码或页码范围，例如 "1-5"、"3"、"10-20"'
+
+    if start_page < 1 or end_page < 1:
+        return None, "错误：PDF 页码从 1 开始"
+    if end_page < start_page:
+        return None, "错误：pages 的结束页不能小于起始页"
+    if end_page - start_page + 1 > 20:
+        return None, "错误：PDF 每次最多读取 20 页"
+    if start_page > total_pages:
+        return None, f"错误：起始页超过 PDF 总页数 {total_pages}"
+
+    end_page = min(end_page, total_pages)
+    return list(range(start_page - 1, end_page)), None
+
+
+def _read_pdf_text(path: Path, pages: Optional[str]) -> str:
+    """Read text from a PDF when an optional PDF backend is installed."""
+    try:
+        try:
+            from pypdf import PdfReader  # type: ignore
+        except ImportError:
+            from PyPDF2 import PdfReader  # type: ignore
+    except ImportError:
+        return "错误：读取 PDF 需要安装 pypdf 或 PyPDF2"
+
+    try:
+        reader = PdfReader(str(path))
+        selected_pages, error = _parse_pdf_page_range(pages, len(reader.pages))
+        if error:
+            return error
+
+        output: List[str] = []
+        for page_index in selected_pages or []:
+            text = reader.pages[page_index].extract_text() or ""
+            output.append(f"--- page {page_index + 1} ---\n{text}".rstrip())
+        return "\n\n".join(output) if output else ""
+    except Exception as e:
+        return f"错误：无法读取 PDF {e}"
+
+
+GREP_PARAMETER_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": False,
+    "properties": {
+        "-A": {
+            "description": 'Number of lines to show after each match (rg -A). Requires output_mode: "content", ignored otherwise.',
+            "type": "number",
+        },
+        "-B": {
+            "description": 'Number of lines to show before each match (rg -B). Requires output_mode: "content", ignored otherwise.',
+            "type": "number",
+        },
+        "-C": {
+            "description": "Alias for context.",
+            "type": "number",
+        },
+        "-i": {
+            "description": "Case insensitive search (rg -i)",
+            "type": "boolean",
+        },
+        "-n": {
+            "description": 'Show line numbers in output (rg -n). Requires output_mode: "content", ignored otherwise. Defaults to true.',
+            "type": "boolean",
+        },
+        "context": {
+            "description": 'Number of lines to show before and after each match (rg -C). Requires output_mode: "content", ignored otherwise.',
+            "type": "number",
+        },
+        "glob": {
+            "description": 'Glob pattern to filter files (e.g. "*.js", "*.{ts,tsx}") - maps to rg --glob',
+            "type": "string",
+        },
+        "head_limit": {
+            "description": 'Limit output to first N lines/entries, equivalent to "| head -N". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly — large result sets waste context).',
+            "type": "number",
+        },
+        "multiline": {
+            "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false.",
+            "type": "boolean",
+        },
+        "offset": {
+            "description": 'Skip first N lines/entries before applying head_limit, equivalent to "| tail -n +N | head -N". Works across all output modes. Defaults to 0.',
+            "type": "number",
+        },
+        "output_mode": {
+            "description": 'Output mode: "content" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), "files_with_matches" shows file paths (supports head_limit), "count" shows match counts (supports head_limit). Defaults to "files_with_matches".',
+            "enum": ["content", "files_with_matches", "count"],
+            "type": "string",
+        },
+        "path": {
+            "description": "File or directory to search in (rg PATH). Defaults to current working directory.",
+            "type": "string",
+        },
+        "pattern": {
+            "description": "The regular expression pattern to search for in file contents",
+            "type": "string",
+        },
+        "type": {
+            "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types.",
+            "type": "string",
+        },
+    },
+    "required": ["pattern"],
+    "type": "object",
+}
+
+
+_GREP_TYPE_SUFFIXES = {
+    "c": {".c", ".h"},
+    "cpp": {".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"},
+    "css": {".css"},
+    "go": {".go"},
+    "html": {".htm", ".html"},
+    "java": {".java"},
+    "js": {".cjs", ".js", ".jsx", ".mjs"},
+    "json": {".json"},
+    "md": {".md", ".markdown"},
+    "py": {".py", ".pyw"},
+    "rust": {".rs"},
+    "rs": {".rs"},
+    "ts": {".ts", ".tsx"},
+    "txt": {".txt"},
+    "yaml": {".yaml", ".yml"},
+}
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _as_non_negative_int(value: Any, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _expand_brace_glob(pattern: str) -> list[str]:
+    match = re.search(r"\{([^{}]+)\}", pattern)
+    if not match:
+        return [pattern]
+    prefix = pattern[: match.start()]
+    suffix = pattern[match.end() :]
+    expanded: list[str] = []
+    for option in match.group(1).split(","):
+        expanded.extend(_expand_brace_glob(prefix + option + suffix))
+    return expanded
+
+
+def _matches_glob(path: Path, root: Path, glob_pattern: str) -> bool:
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        rel = path.name
+    patterns = _expand_brace_glob(glob_pattern.lstrip("/"))
+    return any(fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(path.name, pattern) for pattern in patterns)
+
+
+def _file_type_matches(path: Path, file_type: str) -> bool:
+    normalized = file_type.lower().lstrip(".")
+    suffixes = _GREP_TYPE_SUFFIXES.get(normalized, {"." + normalized})
+    return path.suffix.lower() in suffixes
+
+
 @tool_class(description="文件操作工具集：读取、写入、替换、删除、grep、笔记本编辑、linter 诊断。")
 class FileToolkits(ToolClassBase):
     """文件操作工具集：读取、写入、替换、删除、grep、笔记本编辑、linter 诊断。"""
@@ -73,6 +307,44 @@ class FileToolkits(ToolClassBase):
         super().__init__()
         self.session_id = PygentString(session_id)
         self.workspace_root = workspace_root or os.getcwd()
+
+    @tool_method(
+        name="Read",
+        description="Read a file by absolute path, with optional line ranges for text files and page ranges for PDFs.",
+        include_call_description_parameter=False,
+        parameters_additional_properties=False,
+        parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
+        parameter_schema=READ_PARAMETER_SCHEMA,
+    )
+    def Read(
+        self,
+        file_path: str,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        pages: Optional[str] = None,
+    ) -> str:
+        """
+        Read file contents from an absolute path.
+
+        Args:
+            file_path: Absolute path to the file to read.
+            limit: Number of lines to read. Provide only when the file is too large to read at once.
+            offset: Line number to start reading from. Provide only when the file is too large to read at once.
+            pages: Page range for PDF files, for example "1-5", "3", or "10-20". Applies only to PDF files and is limited to 20 pages per request.
+        """
+        if not _is_absolute_file_path(file_path):
+            return "错误：file_path 必须是绝对路径，不能使用相对路径"
+
+        p = _resolve_path(file_path)
+        if not p.exists():
+            return f"错误：文件不存在 {p}"
+        if not p.is_file():
+            return f"错误：路径不是文件 {p}"
+        if p.suffix.lower() == ".pdf":
+            return _read_pdf_text(p, pages)
+        if pages:
+            return "错误：pages 仅适用于 PDF 文件"
+        return self.read_file(str(p), offset=offset, limit=limit)
 
     @tool_method(
         name="read_file",
@@ -134,6 +406,35 @@ class FileToolkits(ToolClassBase):
             return f"错误：无法写入 {e}"
 
     @tool_method(
+        name="Write",
+        description="Write text content to an absolute file path, creating parent directories and replacing existing content.",
+        include_call_description_parameter=False,
+        parameters_additional_properties=False,
+        parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
+    )
+    def Write(self, file_path: str, content: str) -> str:
+        """
+        Write complete text content to a file, overwriting the file if it already exists.
+
+        Args:
+            file_path: Absolute destination file path. Relative paths are rejected; parent directories are created when missing.
+            content: Full text content to write, replacing any existing file contents.
+        """
+        if not _is_absolute_file_path(file_path):
+            return "错误：file_path 必须是绝对路径，不能使用相对路径"
+
+        p = _resolve_path(file_path)
+        if p.exists() and p.is_dir():
+            return f"错误：file_path 指向目录而不是文件 {p}"
+
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+            return "写入完成"
+        except OSError as e:
+            return f"错误：无法写入 {e}"
+
+    @tool_method(
         name="search_replace",
         description="在指定文件中做精确字符串替换，可单次或全部替换。",
     )
@@ -170,6 +471,41 @@ class FileToolkits(ToolClassBase):
             return "替换完成"
         except OSError as e:
             return f"错误：{e}"
+
+    @tool_method(
+        name="Edit",
+        description="Edit a file by replacing exact text at an absolute file path.",
+        include_call_description_parameter=False,
+        parameters_additional_properties=False,
+        parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
+    )
+    def Edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> str:
+        """
+        Replace exact text in a file.
+
+        Args:
+            file_path: Absolute path of the file to modify. Relative paths are rejected.
+            old_string: Exact text to replace, including whitespace and indentation.
+            new_string: Replacement text; use a value different from old_string.
+            replace_all: Replace every occurrence when true; defaults to false, which replaces only the first match.
+        """
+        if not _is_absolute_file_path(file_path):
+            return "错误：file_path 必须是绝对路径，不能使用相对路径"
+        if old_string == new_string:
+            return "错误：new_string 必须与 old_string 不同"
+
+        return self.search_replace(
+            file_path,
+            old_string,
+            new_string,
+            replace_all=replace_all,
+        )
 
     @tool_method(
         name="edit_notebook",
@@ -264,8 +600,59 @@ class FileToolkits(ToolClassBase):
         return "当前实现不接入 IDE linter；诊断列表通常由编辑器/语言服务提供。"
 
     @tool_method(
+        name="Glob",
+        description="Find files by glob pattern under a directory and return matching file paths.",
+        include_call_description_parameter=False,
+        parameter_schema={
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": False,
+            "properties": {
+                "path": {
+                    "description": "Directory to search. Omit this field to use the workspace root; do not pass \"undefined\" or \"null\". If provided, it must be an existing directory path.",
+                    "type": "string",
+                },
+                "pattern": {
+                    "description": "Glob pattern used to match file paths, for example \"*.py\" or \"**/*.ts\".",
+                    "type": "string",
+                },
+            },
+            "required": ["pattern"],
+            "type": "object",
+        },
+    )
+    def Glob(self, pattern: str, path: Optional[str] = None) -> str:
+        """
+        Find files whose relative paths match a glob pattern.
+
+        Args:
+            pattern: Glob pattern used to match files, for example "*.py" or "**/*.ts".
+            path: Directory to search. Omit this field to search from the workspace root; do not pass "undefined" or "null". If provided, it must be an existing directory path.
+        """
+        root = _resolve_path(path or ".", self.workspace_root)
+        if not root.exists():
+            return f"error: path does not exist {root}"
+        if not root.is_dir():
+            return f"error: path must be a directory {root}"
+
+        normalized_pattern = pattern.lstrip("/\\")
+        try:
+            matches = [p for p in root.glob(normalized_pattern) if p.is_file()]
+        except (OSError, ValueError) as e:
+            return f"error: invalid glob pattern {e}"
+
+        def sort_key(file_path: Path) -> tuple[float, str]:
+            try:
+                mtime = file_path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            return (-mtime, str(file_path))
+
+        return "\n".join(str(p) for p in sorted(matches, key=sort_key))
+
+    @tool_method(
         name="grep",
         description="按精确文本或正则表达式在文件中搜索，支持上下文行数、文件类型、大小写等选项。",
+        parameter_schema=GREP_PARAMETER_SCHEMA,
     )
     def grep(
         self,
@@ -276,11 +663,14 @@ class FileToolkits(ToolClassBase):
         context_before: Optional[int] = None,
         context_after: Optional[int] = None,
         context_both: Optional[int] = None,
+        context: Optional[int] = None,
         ignore_case: bool = False,
         file_type: Optional[str] = None,
+        type: Optional[str] = None,
         head_limit: Optional[int] = None,
         offset: Optional[int] = None,
         multiline: bool = False,
+        show_line_numbers: bool = True,
         **kwargs: Any,
     ) -> str:
         """
@@ -294,19 +684,25 @@ class FileToolkits(ToolClassBase):
             context_before: 匹配行之前显示的上下文行数（-B）。
             context_after: 匹配行之后显示的上下文行数（-A）。
             context_both: 匹配行前后各显示的上下文行数（-C）。
+            context: 匹配行前后各显示的上下文行数。
             ignore_case: 是否忽略大小写。
             file_type: 按文件类型过滤，如 js, py, ts。
+            type: 按文件类型过滤，与 schema 中的 type 参数对应。
             head_limit: 结果数量上限。
             offset: 跳过前 N 条结果，用于分页。
             multiline: 是否启用跨行匹配。
+            show_line_numbers: content 模式下是否显示行号。
         """
-        # 兼容 schema 中的 -B, -A, -C, -i, type
-        context_before = context_before or kwargs.get("-B")
-        context_after = context_after or kwargs.get("-A")
-        context_both = context_both or kwargs.get("-C")
-        ignore_case = ignore_case or kwargs.get("-i", False)
-        file_type = file_type or kwargs.get("type")
-        output_mode = output_mode or "content"
+        # 兼容 schema 中的 -B, -A, -C, -i, -n, context, type。
+        context_before = _first_present(kwargs.get("-B"), context_before)
+        context_after = _first_present(kwargs.get("-A"), context_after)
+        context_both = _first_present(kwargs.get("-C"), context_both, kwargs.get("context"), context)
+        ignore_case = bool(_first_present(kwargs.get("-i"), ignore_case))
+        show_line_numbers = bool(_first_present(kwargs.get("-n"), show_line_numbers))
+        file_type = _first_present(kwargs.get("type"), type, file_type)
+        output_mode = output_mode or "files_with_matches"
+        if output_mode not in {"content", "files_with_matches", "count"}:
+            return f"错误：不支持的 output_mode {output_mode}"
 
         root = _resolve_path(path or ".", self.workspace_root)
         if not root.exists():
@@ -314,29 +710,33 @@ class FileToolkits(ToolClassBase):
 
         flags = re.IGNORECASE if ignore_case else 0
         if multiline:
-            flags |= re.DOTALL
+            flags |= re.DOTALL | re.MULTILINE
         try:
             rx = re.compile(pattern, flags)
         except re.error:
             rx = re.compile(re.escape(pattern), re.IGNORECASE if ignore_case else 0)
 
-        before = context_before if context_before is not None else (context_both or 0)
-        after = context_after if context_after is not None else (context_both or 0)
+        before = _as_non_negative_int(_first_present(context_before, context_both), 0)
+        after = _as_non_negative_int(_first_present(context_after, context_both), 0)
+        skip = _as_non_negative_int(offset, 0)
+        limit = _as_non_negative_int(head_limit, 250) if head_limit is not None else 250
 
         if root.is_file():
             files = [root]
         else:
+            files = [f for f in root.rglob("*") if f.is_file()]
             if glob:
-                files = list(root.rglob(glob.lstrip("/")))
-                files = [f for f in files if f.is_file()]
-            else:
-                files = [f for f in root.rglob("*") if f.is_file()]
+                files = [f for f in files if _matches_glob(f, root, glob)]
             if file_type:
-                suffix = "." + file_type.lstrip(".")
-                files = [f for f in files if f.suffix.lower() == suffix.lower()]
+                files = [f for f in files if _file_type_matches(f, file_type)]
 
-        matches: list[tuple[Path, int, list[str]]] = []  # (file, line_idx, context_lines)
+        content_lines: list[str] = []
+        count_pairs: list[tuple[Path, int]] = []
         file_set: set[Path] = set()
+
+        def format_line(fp: Path, line_no: int, line: str) -> str:
+            body = f"{line_no}|{line}" if show_line_numbers else line
+            return f"{fp}:{body}"
 
         for fp in sorted(files):
             try:
@@ -344,33 +744,56 @@ class FileToolkits(ToolClassBase):
             except OSError:
                 continue
             lines = text.splitlines()
+            if multiline:
+                matches = list(rx.finditer(text))
+                if not matches:
+                    continue
+                file_set.add(fp)
+                count_pairs.append((fp, len(matches)))
+                if output_mode != "content":
+                    continue
+                for match in matches:
+                    start_line = text.count("\n", 0, match.start())
+                    end_at = max(match.start(), match.end() - 1)
+                    end_line = text.count("\n", 0, end_at)
+                    start = max(0, start_line - before)
+                    end = min(len(lines), end_line + after + 1)
+                    for j in range(start, end):
+                        content_lines.append(format_line(fp, j + 1, lines[j]))
+                continue
+
+            match_count = 0
             for i, line in enumerate(lines):
                 if not rx.search(line):
                     continue
-                if output_mode == "files_with_matches":
-                    file_set.add(fp)
-                    break
-                start = max(0, i - before)
-                end = min(len(lines), i + after + 1)
-                ctx = [f"{j+1}|{lines[j]}" for j in range(start, end)]
-                matches.append((fp, i, ctx))
-
-        skip = offset or 0
-        limit = head_limit
+                match_count += 1
+                file_set.add(fp)
+                if output_mode == "content":
+                    start = max(0, i - before)
+                    end = min(len(lines), i + after + 1)
+                    for j in range(start, end):
+                        content_lines.append(format_line(fp, j + 1, lines[j]))
+            if match_count:
+                count_pairs.append((fp, match_count))
 
         if output_mode == "count":
-            return str(len(matches))
+            if not count_pairs:
+                return "0"
+            limited_pairs = count_pairs[skip:]
+            if limit:
+                limited_pairs = limited_pairs[:limit]
+            if len(count_pairs) == 1 and skip == 0 and (limit == 0 or limit >= 1):
+                return str(count_pairs[0][1])
+            return "\n".join(f"{fp}:{count}" for fp, count in limited_pairs)
         if output_mode == "files_with_matches":
             out = sorted(str(p) for p in file_set)
             if skip:
                 out = out[skip:]
-            if limit is not None:
+            if limit:
                 out = out[:limit]
             return "\n".join(out) if out else ""
 
-        out_lines = []
-        subset = matches[skip : skip + limit] if limit else matches[skip:]
-        for fp, _i, ctx in subset:
-            for line in ctx:
-                out_lines.append(f"{fp}:{line}")
+        out_lines = content_lines[skip:]
+        if limit:
+            out_lines = out_lines[:limit]
         return "\n".join(out_lines) if out_lines else "无匹配"

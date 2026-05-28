@@ -16,7 +16,7 @@ from pygent.llm import AsyncRequestsClient
 from pygent.message import UserMessage, ToolMessage, BaseMessage, BaseMessageChunk, SystemMessage
 from pygent.module.tool import ToolManager
 from pygent.toolkits.file_operations import FileToolkits
-from pygent.toolkits.run_terminal_cmd import TerminalToolkits
+from pygent.toolkits import BashToolkits
 from pygent.toolkits.web_search import WebSearchToolkits
 from pygent.toolkits.web_fetch import WebFetchToolkits
 
@@ -68,12 +68,12 @@ class ReactAgent(BaseAgent):
         )
 
         self.tool_manager = ToolManager()
-        # 注册文件操作、终端命令与网络工具（绑定到当前 workspace）
+        # 注册文件操作、bash 与网络工具（绑定到当前 workspace）
         file_toolkits = FileToolkits(session_id="react", workspace_root=self.root_dir)
         for tool in file_toolkits.get_all_tools():
             self.tool_manager.register_tool(tool)
-        terminal_toolkits = TerminalToolkits(session_id="react", workspace_root=self.root_dir)
-        for tool in terminal_toolkits.get_all_tools():
+        bash_toolkits = BashToolkits(session_id="react", workspace_root=self.root_dir)
+        for tool in bash_toolkits.get_all_tools():
             self.tool_manager.register_tool(tool)
         web_search_toolkits = WebSearchToolkits(session_id="react", workspace_root=self.root_dir)
         for tool in web_search_toolkits.get_all_tools():
@@ -90,7 +90,7 @@ class ReactAgent(BaseAgent):
     def _normalize_tool_kwargs(self, name: str, kwargs: dict) -> dict:
         """将 LLM 常用错误参数名映射到工具实际参数名，避免调用失败。"""
         kwargs = dict(kwargs)
-        if name == "run_terminal_cmd":
+        if name in {"bash", "run_terminal_cmd"}:
             if "command" not in kwargs and "cmd" in kwargs:
                 kwargs["command"] = kwargs.pop("cmd")
             if "command" not in kwargs and "args" in kwargs:

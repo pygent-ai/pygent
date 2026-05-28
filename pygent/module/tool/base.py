@@ -16,6 +16,9 @@ from pygent.common import (
     PygentFloat,
 )
 
+TOOL_CALL_DESCRIPTION_PARAM = "description"
+TOOL_CALL_DESCRIPTION_TEXT = "Briefly describe the action this tool call will perform."
+
 
 class ToolCategory(Enum):
     """工具类别枚举"""
@@ -142,9 +145,28 @@ class ToolParameter(PygentData):
         if self.data["pattern"]:
             if self.data["type"] == "string":
                 constraints["pattern"] = self.data["pattern"]
+
+        if self.data.get("default") is not None:
+            schema["default"] = self.data["default"]
         
         if constraints:
             schema.update(constraints)
+
+        json_schema_keys = (
+            "minimum",
+            "exclusiveMinimum",
+            "maximum",
+            "exclusiveMaximum",
+            "minLength",
+            "maxLength",
+            "minItems",
+            "maxItems",
+            "items",
+            "format",
+        )
+        for key in json_schema_keys:
+            if key in self.data and self.data[key] is not None:
+                schema[key] = self.data[key]
         
         return schema
 
@@ -172,6 +194,9 @@ class BaseTool(PygentModule):
         name: str,
         description: str,
         version: str = "1.0.0",
+        include_call_description_parameter: bool = True,
+        parameters_additional_properties: Optional[bool] = None,
+        parameters_schema_uri: Optional[str] = None,
         **kwargs
     ):
         """
@@ -181,6 +206,9 @@ class BaseTool(PygentModule):
             name: 工具名称
             description: 工具描述
             version: 工具版本
+            include_call_description_parameter: 是否暴露标准调用说明参数
+            parameters_additional_properties: OpenAI 参数 schema 的 additionalProperties 值
+            parameters_schema_uri: OpenAI 参数 schema 的 $schema 值
             **kwargs: 其他元数据
         """
         super().__init__()
@@ -197,9 +225,14 @@ class BaseTool(PygentModule):
         
         # 初始化参数定义
         self.parameters = PygentDict({})
+        self._ignored_parameter_names: set[str] = set()
         
         # 初始化配置
         self.config = PygentDict({})
+        if parameters_additional_properties is not None:
+            self.config.data["parameters_additional_properties"] = parameters_additional_properties
+        if parameters_schema_uri is not None:
+            self.config.data["parameters_schema_uri"] = parameters_schema_uri
         
         # 初始化状态
         self.enabled = PygentBool(True)
@@ -209,6 +242,40 @@ class BaseTool(PygentModule):
         
         # 自动发现并注册参数
         self._discover_parameters()
+        if include_call_description_parameter:
+            self._ensure_tool_call_description_parameter()
+
+    @staticmethod
+    def get_tool_call_description_parameter() -> Dict[str, Any]:
+        """Return the shared optional parameter used to explain a tool call."""
+        return ToolParameter(
+            name=TOOL_CALL_DESCRIPTION_PARAM,
+            type=str,
+            description=TOOL_CALL_DESCRIPTION_TEXT,
+            required=False,
+            default=None,
+        ).data.copy()
+
+    def _ensure_tool_call_description_parameter(self) -> None:
+        """Expose a standard call-description argument when no real one exists."""
+        if TOOL_CALL_DESCRIPTION_PARAM in self.parameters.data:
+            return
+        self.parameters.data[TOOL_CALL_DESCRIPTION_PARAM] = self.get_tool_call_description_parameter()
+        self._ignored_parameter_names.add(TOOL_CALL_DESCRIPTION_PARAM)
+
+    def _mark_parameter_forwarded(self, param_name: str) -> None:
+        """Mark a parameter as belonging to the real tool implementation."""
+        self._ignored_parameter_names.discard(param_name)
+
+    def _prepare_forward_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove schema-only call metadata before invoking the tool implementation."""
+        if not kwargs or not self._ignored_parameter_names:
+            return kwargs
+        return {
+            key: value
+            for key, value in kwargs.items()
+            if key not in self._ignored_parameter_names
+        }
     
     def _discover_parameters(self) -> None:
         """从forward方法的类型注解自动发现参数"""
@@ -242,6 +309,11 @@ class BaseTool(PygentModule):
             param_def = ToolParameter(
                 name=param_name,
                 type=param_type,
+                description=(
+                    TOOL_CALL_DESCRIPTION_TEXT
+                    if param_name == TOOL_CALL_DESCRIPTION_PARAM
+                    else ""
+                ),
                 required=required,
                 default=param.default if not required else None
             )
@@ -330,13 +402,21 @@ class BaseTool(PygentModule):
         
         # 数值范围验证
         if expected_type in ["integer", "number"]:
-            if "min_value" in param_def and param_def["min_value"] is not None:
-                if value < param_def["min_value"]:
-                    errors.append(f"值必须大于等于 {param_def['min_value']}")
-            
-            if "max_value" in param_def and param_def["max_value"] is not None:
-                if value > param_def["max_value"]:
-                    errors.append(f"值必须小于等于 {param_def['max_value']}")
+            exclusive_minimum = param_def.get("exclusiveMinimum")
+            if exclusive_minimum is not None and value <= exclusive_minimum:
+                errors.append(f"值必须大于 {exclusive_minimum}")
+
+            minimum = param_def.get("minimum", param_def.get("min_value"))
+            if minimum is not None and value < minimum:
+                errors.append(f"值必须大于等于 {minimum}")
+
+            exclusive_maximum = param_def.get("exclusiveMaximum")
+            if exclusive_maximum is not None and value >= exclusive_maximum:
+                errors.append(f"值必须小于 {exclusive_maximum}")
+
+            maximum = param_def.get("maximum", param_def.get("max_value"))
+            if maximum is not None and value > maximum:
+                errors.append(f"值必须小于等于 {maximum}")
         
         # 字符串模式验证
         if expected_type == "string" and "pattern" in param_def and param_def["pattern"]:
@@ -388,7 +468,7 @@ class BaseTool(PygentModule):
                     return self._create_error_response("参数验证失败", details=errors)
             
             # 执行工具
-            result = self.forward(*args, **kwargs)
+            result = self.forward(*args, **self._prepare_forward_kwargs(kwargs))
             
             # 创建成功响应
             return self._create_success_response(result)
@@ -461,14 +541,24 @@ class BaseTool(PygentModule):
             if param_definition.get("required", True):
                 required_params.append(param_name)
         
+        parameters_schema = {}
+        if self.config.data.get("parameters_schema_uri"):
+            parameters_schema["$schema"] = self.config.data["parameters_schema_uri"]
+        parameters_schema.update({
+            "type": "object",
+            "properties": properties,
+            "required": required_params,
+        })
+        if "parameters_additional_properties" in self.config.data:
+            parameters_schema["additionalProperties"] = self.config.data["parameters_additional_properties"]
+        schema_extras = self.config.data.get("_parameter_schema_extras")
+        if isinstance(schema_extras, dict):
+            parameters_schema.update(schema_extras)
+
         return {
             "name": self.metadata.data["name"],
             "description": self.metadata.data["description"],
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required_params
-            }
+            "parameters": parameters_schema,
         }
     
     def to_openai_tool(self) -> Dict[str, Any]:

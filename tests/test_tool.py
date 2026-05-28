@@ -18,6 +18,8 @@ from pygent.module.tool import (
     tool,
     auto_tool,
     ToolRegistry,
+    TOOL_CALL_DESCRIPTION_PARAM,
+    TOOL_CALL_DESCRIPTION_TEXT,
 )
 
 
@@ -104,7 +106,7 @@ class TestBaseTool(unittest.TestCase):
 
     def test_call_success(self):
         echo = EchoTool()
-        out = echo(message="hello")
+        out = echo(message="hello", description="Echo the user input")
         self.assertTrue(out["success"])
         self.assertEqual(out["result"], "hello")
         self.assertEqual(echo.call_count.data, 1)
@@ -148,6 +150,12 @@ class TestBaseTool(unittest.TestCase):
         self.assertIn("parameters", func)
         self.assertIn("properties", func["parameters"])
         self.assertIn("message", func["parameters"]["properties"])
+        self.assertIn(TOOL_CALL_DESCRIPTION_PARAM, func["parameters"]["properties"])
+        self.assertEqual(
+            func["parameters"]["properties"][TOOL_CALL_DESCRIPTION_PARAM]["description"],
+            TOOL_CALL_DESCRIPTION_TEXT,
+        )
+        self.assertNotIn(TOOL_CALL_DESCRIPTION_PARAM, func["parameters"]["required"])
 
     def test_get_schema(self):
         echo = EchoTool()
@@ -281,7 +289,7 @@ class TestToolDecorator(unittest.TestCase):
         @tool(name="strict_add", description="Add two ints")
         def strict_add(a: int, b: int) -> int:
             return a + b
-        out = strict_add.tool(a=1, b=2)
+        out = strict_add.tool(a=1, b=2, description="Add the two provided integers")
         self.assertTrue(out["success"])
         self.assertEqual(out["result"], 3)
         out_bad = strict_add.tool(a=1)  # missing b

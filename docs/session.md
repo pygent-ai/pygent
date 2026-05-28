@@ -36,7 +36,7 @@
 │  - llm: AsyncRequestsClient                                          │
 │  - tool_manager: ToolManager                                         │
 │    - FileToolkits(session_id="react", workspace_root=root_dir)       │
-│    - TerminalToolkits(session_id="react", workspace_root=root_dir)   │
+│    - BashToolkits(session_id="react", workspace_root=root_dir)       │
 │    - WebSearchToolkits(session_id="react", workspace_root=root_dir)  │
 │    - WebFetchToolkits(session_id="react", workspace_root=root_dir)   │
 └─────────────────────────────────────────────────────────────────────┘
@@ -61,7 +61,7 @@
 
 ### 2.3 session_id 在 Toolkits 中的用途
 
-所有 Toolkits（`FileToolkits`, `TerminalToolkits`, `WebSearchToolkits`, `WebFetchToolkits`）在 `__init__` 中接收 `session_id` 和 `workspace_root`：
+所有 Toolkits（`FileToolkits`, `BashToolkits`, `WebSearchToolkits`, `WebFetchToolkits`）在 `__init__` 中接收 `session_id` 和 `workspace_root`：
 
 - **session_id**：用于标识并隔离同一工作空间下不同会话的：
   - 临时文件

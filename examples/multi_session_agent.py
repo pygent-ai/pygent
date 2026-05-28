@@ -19,8 +19,8 @@ from pygent.llm import AsyncRequestsClient
 from pygent.message import UserMessage, ToolMessage
 from pygent.module.tool import ToolManager
 from pygent.session import Session
+from pygent.toolkits import BashToolkits
 from pygent.toolkits.file_operations import FileToolkits
-from pygent.toolkits.run_terminal_cmd import TerminalToolkits
 from pygent.toolkits.web_search import WebSearchToolkits
 from pygent.toolkits.web_fetch import WebFetchToolkits
 
@@ -46,7 +46,7 @@ class SessionReactAgent(BaseAgent):
         self.tool_manager = ToolManager()
         for tool in FileToolkits(session_id=session_id, workspace_root=self.root_dir).get_all_tools():
             self.tool_manager.register_tool(tool)
-        for tool in TerminalToolkits(session_id=session_id, workspace_root=self.root_dir).get_all_tools():
+        for tool in BashToolkits(session_id=session_id, workspace_root=self.root_dir).get_all_tools():
             self.tool_manager.register_tool(tool)
         for tool in WebSearchToolkits(session_id=session_id, workspace_root=self.root_dir).get_all_tools():
             self.tool_manager.register_tool(tool)
@@ -59,7 +59,7 @@ class SessionReactAgent(BaseAgent):
 
     def _normalize_tool_kwargs(self, name: str, kwargs: dict) -> dict:
         kwargs = dict(kwargs)
-        if name == "run_terminal_cmd":
+        if name in {"bash", "run_terminal_cmd"}:
             if "command" not in kwargs and "cmd" in kwargs:
                 kwargs["command"] = kwargs.pop("cmd")
             if "command" not in kwargs and "args" in kwargs:

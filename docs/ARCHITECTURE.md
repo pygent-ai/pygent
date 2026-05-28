@@ -274,7 +274,8 @@ pygent/
 │   │   └── in_memory_plan.py
 └── toolkits/
     ├── file_operations.py # FileToolkits
-    ├── run_terminal_cmd.py # TerminalToolkits
+    ├── bash.py # BashToolkits
+    ├── run_terminal_cmd.py # compatibility wrapper
     ├── web_search.py # WebSearchToolkits
     └── web_fetch.py # WebFetchToolkits
 ```

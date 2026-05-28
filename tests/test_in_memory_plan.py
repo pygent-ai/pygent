@@ -13,6 +13,7 @@ from pygent.module.plan import (
     PygentStatus,
     InMemoryTodoItem,
 )
+from pygent.module.tool import TOOL_CALL_DESCRIPTION_PARAM, TOOL_CALL_DESCRIPTION_TEXT
 
 
 class TestInMemoryPlanToolsCallable(unittest.TestCase):
@@ -49,7 +50,7 @@ class TestInMemoryPlanToolsCallable(unittest.TestCase):
 
     def test_mark_current_todo_item_no_pending(self):
         mark = self.tools["mark_current_todo_item"]
-        out = mark()
+        out = mark(description="Check whether any todo can be completed")
         self.assertTrue(out["success"])
         self.assertIn("No PENDING or RUNNING", out["result"])
 
@@ -158,7 +159,15 @@ class TestInMemoryPlanToolSchemaCorrect(unittest.TestCase):
         self.assertIn("current", schema["metadata"]["description"].lower() or schema["metadata"]["description"])
         oai = tool.to_openai_function()
         self.assertEqual(oai["name"], "mark_current_todo_item")
-        self.assertEqual(oai["parameters"].get("properties"), {})
+        self.assertEqual(
+            oai["parameters"].get("properties"),
+            {
+                TOOL_CALL_DESCRIPTION_PARAM: {
+                    "type": "string",
+                    "description": TOOL_CALL_DESCRIPTION_TEXT,
+                }
+            },
+        )
         self.assertEqual(oai["parameters"].get("required"), [])
 
     def test_insert_todo_list_schema(self):

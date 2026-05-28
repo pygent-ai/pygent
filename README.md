@@ -8,7 +8,7 @@ A Python framework for building LLM-powered agents with modular state management
 - **State management** — Consistent save/load and serialization via `PygentOperator`
 - **LLM-native** — Messages and tools align with OpenAI-style APIs
 - **MCP support** — Use Model Context Protocol (SSE and stdio) tools via `ToolManager`
-- **Toolkits** — Built-in toolkits such as `TerminalToolkits` for shell access; `RestrictedTerminal` remains as a compatibility alias.
+- **Toolkits** — Built-in toolkits such as `BashToolkits` for bash shell access; `TerminalToolkits` and `RestrictedTerminal` remain as compatibility aliases.
 
 ## Requirements
 
@@ -42,7 +42,7 @@ from pygent.context import BaseContext
 from pygent.llm import AsyncRequestsClient
 from pygent.message import UserMessage
 from pygent.module.tool import ToolManager
-from pygent.toolkits import TerminalToolkits
+from pygent.toolkits import BashToolkits
 
 class MyAgent(BaseAgent):
     def __init__(self):
@@ -53,9 +53,9 @@ class MyAgent(BaseAgent):
             model_name="gpt-4",
         )
         self.tool_manager = ToolManager()
-        terminal = TerminalToolkits(session_id="quickstart", workspace_root=".")
-        self.tool_manager.add_module("terminal", terminal)
-        self.tool_manager.register_tools(terminal.get_all_tools())
+        bash = BashToolkits(session_id="quickstart", workspace_root=".")
+        self.tool_manager.add_module("bash", bash)
+        self.tool_manager.register_tools(bash.get_all_tools())
 
     async def run(self, user_input: str):
         context = BaseContext(system_prompt="You are a helpful assistant.")
@@ -68,8 +68,9 @@ See [examples/react_agent.py](examples/react_agent.py) for a ReAct-style agent w
 [examples/multi_session_agent.py](examples/multi_session_agent.py) for a session-aware variant.
 
 Compatibility note: `AsyncOpenAIClient` is still exported as an alias of
-`AsyncRequestsClient`, and `RestrictedTerminal(root_dir=...)` still delegates to
-`TerminalToolkits`.
+`AsyncRequestsClient`. `TerminalToolkits` and `RestrictedTerminal(root_dir=...)`
+still delegate to the bash toolkit for compatibility, while the registered tool
+name is `bash`.
 
 ## Project Layout
 
