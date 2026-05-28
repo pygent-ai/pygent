@@ -35,6 +35,8 @@ class OpenAIMessageAdapter:
         role = getattr(getattr(message, "role", None), "data", None)
         if role in {"function", "tool"}:
             result["role"] = role
+        if result.get("role") == "assistant" and "reasoning_content" in message_dict:
+            result["reasoning_content"] = message_dict["reasoning_content"]
         if result.get("role") == "assistant" and "tool_calls" in result:
             result["tool_calls"] = [
                 {
@@ -45,8 +47,6 @@ class OpenAIMessageAdapter:
                 for tool_call in result["tool_calls"]
                 if isinstance(tool_call, dict)
             ]
-            if result["tool_calls"] and "reasoning_content" in message_dict:
-                result["reasoning_content"] = message_dict["reasoning_content"]
         return result
 
     @classmethod

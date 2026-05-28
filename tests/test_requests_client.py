@@ -59,7 +59,7 @@ def test_parse_response_preserves_reasoning_usage_and_tool_call_details():
     assert msg.tool_calls.data[0].arguments.data == {"city": "Beijing"}
 
 
-def test_openai_adapter_keeps_reasoning_content_only_with_tool_calls():
+def test_openai_adapter_keeps_reasoning_content_with_tool_calls():
     msg = _client()._parse_response(
         {
             "choices": [
@@ -99,7 +99,7 @@ def test_openai_adapter_keeps_reasoning_content_only_with_tool_calls():
     assert payload[1]["tool_calls"][0]["function"]["name"] == "get_weather"
 
 
-def test_openai_adapter_strips_reasoning_content_without_tool_calls():
+def test_openai_adapter_keeps_reasoning_content_without_tool_calls():
     msg = _client()._parse_response(
         {
             "choices": [
@@ -120,7 +120,11 @@ def test_openai_adapter_strips_reasoning_content_without_tool_calls():
 
     payload = OpenAIMessageAdapter.messages_from_context(context)
 
-    assert payload[1] == {"role": "assistant", "content": "final answer"}
+    assert payload[1] == {
+        "role": "assistant",
+        "content": "final answer",
+        "reasoning_content": "private chain",
+    }
 
 
 def test_ollama_adapter_does_not_forward_reasoning_content():
