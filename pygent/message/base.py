@@ -115,7 +115,7 @@ class BaseMessage(PygentData):
         if self.name is not None:
             result["name"] = getattr(self.name, "data", self.name)
         if self.metadata is not None:
-            pass
+            result["metadata"] = dict(self.metadata.data)
         for key, value in self.data.items():
             if key in ("role", "content", "name", "metadata", "_content_parts"):
                 continue
@@ -153,19 +153,27 @@ class BaseMessage(PygentData):
         role = data.get("role", "user")
         content = data.get("content", "")
         name = data.get("name")
+        metadata = data.get("metadata")
 
         if role == "system":
-            return SystemMessage(content=content)
+            return SystemMessage(content=content, metadata=metadata)
         if role == "user":
-            return UserMessage(content=content, name=name)
+            return UserMessage(content=content, name=name, metadata=metadata)
         if role == "assistant":
             tool_calls_data = data.get("tool_calls", [])
             tool_calls = [ToolCall.from_dict(tc) for tc in tool_calls_data if isinstance(tc, dict)]
-            return AssistantMessage(content=content, name=name, tool_calls=tool_calls if tool_calls else None)
+            return AssistantMessage(
+                content=content,
+                name=name,
+                tool_calls=tool_calls if tool_calls else None,
+                metadata=metadata,
+                reasoning_content=data.get("reasoning_content"),
+                usage=data.get("usage"),
+            )
         if role == "tool":
-            return ToolMessage(content=content, tool_call_id=data.get("tool_call_id", ""))
+            return ToolMessage(content=content, tool_call_id=data.get("tool_call_id", ""), metadata=metadata)
         if role == "function":
-            return FunctionMessage(content=content, name=name or "")
+            return FunctionMessage(content=content, name=name or "", metadata=metadata)
         return UserMessage(content=content, name=name)
     
     def __str__(self) -> str:
@@ -347,6 +355,8 @@ class AssistantMessage(BaseMessage):
         content: Union[str, PygentString],
         name: Optional[Union[str, PygentString]] = None,
         tool_calls: Optional[List['ToolCall']] = None,
+        reasoning_content: Optional[Union[str, PygentString]] = None,
+        usage: Optional[Union[Dict, PygentDict]] = None,
         **kwargs
     ):
         super().__init__(role=MessageRole.ASSISTANT, content=content, name=name, **kwargs)
@@ -354,10 +364,22 @@ class AssistantMessage(BaseMessage):
         # 工具调用（可选）
         if tool_calls is not None:
             self.tool_calls = PygentList(tool_calls)
+        if reasoning_content is not None:
+            self.reasoning_content = (
+                reasoning_content
+                if isinstance(reasoning_content, PygentString)
+                else PygentString(reasoning_content)
+            )
+        if usage is not None:
+            self.usage = usage if isinstance(usage, PygentDict) else PygentDict(usage)
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式。tool_calls 仅在非空时写入，避免 API 报错（如 DeepSeek 要求非空数组）。"""
         result = super().to_dict()
+        if hasattr(self, "reasoning_content") and self.reasoning_content is not None:
+            result["reasoning_content"] = getattr(self.reasoning_content, "data", self.reasoning_content)
+        if hasattr(self, "usage") and self.usage is not None:
+            result["usage"] = dict(getattr(self.usage, "data", self.usage))
         if hasattr(self, "tool_calls") and self.tool_calls and self.tool_calls.data:
             result["tool_calls"] = [tc.to_dict() for tc in self.tool_calls.data]
         return result
@@ -367,6 +389,7 @@ class AssistantMessage(BaseMessage):
 class ToolCall(PygentData):
     """工具调用"""
     tool_call_id: PygentString
+    tool_type: PygentString
     tool_name: PygentString
     arguments: PygentDict
 
@@ -375,10 +398,12 @@ class ToolCall(PygentData):
         tool_call_id: Union[str, PygentString],
         tool_name: Union[str, PygentString],
         arguments: Union[Dict, str, PygentDict],
+        tool_type: Union[str, PygentString] = "function",
         **kwargs
     ):
         super().__init__({})
         self.tool_call_id = PygentString(tool_call_id) if not isinstance(tool_call_id, PygentString) else tool_call_id
+        self.tool_type = PygentString(tool_type) if not isinstance(tool_type, PygentString) else tool_type
         self.tool_name = PygentString(tool_name) if not isinstance(tool_name, PygentString) else tool_name
         if isinstance(arguments, PygentDict):
             self.arguments = arguments
@@ -398,7 +423,7 @@ class ToolCall(PygentData):
     def to_dict(self) -> Dict[str, Any]:
         result = {
             "id": self.tool_call_id.data,
-            "type": "function",
+            "type": self.tool_type.data,
             "function": {
                 "name": self.tool_name.data,
                 "arguments": json.dumps(self.arguments.data) if self.arguments.data else "{}"
@@ -413,17 +438,30 @@ class ToolCall(PygentData):
     def from_dict(cls, data: Dict[str, Any]) -> 'ToolCall':
         if "id" in data and "function" in data:
             tool_call_id = data["id"]
+            tool_type = data.get("type", "function")
             tool_name = data["function"]["name"]
-            arguments_str = data["function"]["arguments"]
-            try:
-                arguments = json.loads(arguments_str)
-            except (json.JSONDecodeError, TypeError):
-                arguments = {"raw_arguments": arguments_str}
-            return cls(tool_call_id=tool_call_id, tool_name=tool_name, arguments=arguments)
+            arguments_raw = data["function"].get("arguments", {})
+            if isinstance(arguments_raw, dict):
+                arguments = arguments_raw
+            else:
+                try:
+                    arguments = json.loads(arguments_raw)
+                except (json.JSONDecodeError, TypeError):
+                    arguments = {"raw_arguments": arguments_raw}
+            extras = {k: v for k, v in data.items() if k not in {"id", "type", "function"}}
+            return cls(
+                tool_call_id=tool_call_id,
+                tool_type=tool_type,
+                tool_name=tool_name,
+                arguments=arguments,
+                **extras,
+            )
         return cls(
             tool_call_id=data.get("tool_call_id", ""),
+            tool_type=data.get("tool_type", data.get("type", "function")),
             tool_name=data.get("tool_name", ""),
-            arguments=data.get("arguments", {})
+            arguments=data.get("arguments", {}),
+            **{k: v for k, v in data.items() if k not in {"tool_call_id", "tool_type", "type", "tool_name", "arguments"}},
         )
 
     def __str__(self) -> str:
@@ -442,11 +480,13 @@ class ToolCallChunk(PygentData):
         tool_call_id: Optional[Union[str, PygentString]] = None,
         tool_name: Optional[Union[str, PygentString]] = None,
         arguments: Optional[Union[str, PygentString]] = None,
+        tool_type: Optional[Union[str, PygentString]] = None,
         **kwargs
     ):
         super().__init__({})
         self.index = index
         self.tool_call_id = PygentString(tool_call_id) if tool_call_id is not None else None
+        self.tool_type = PygentString(tool_type) if tool_type is not None else None
         self.tool_name = PygentString(tool_name) if tool_name is not None else None
         self.arguments = PygentString(arguments) if arguments is not None else None
         for key, value in kwargs.items():
@@ -459,9 +499,10 @@ class ToolCallChunk(PygentData):
         if self.index != other.index:
             raise ValueError(f"ToolCallChunk index 不匹配: {self.index} != {other.index}")
         tool_call_id = (other.tool_call_id.data if other.tool_call_id else None) or (self.tool_call_id.data if self.tool_call_id else None) or ""
+        tool_type = (other.tool_type.data if other.tool_type else None) or (self.tool_type.data if self.tool_type else None) or "function"
         tool_name = (self.tool_name.data if self.tool_name else "") + (other.tool_name.data if other.tool_name else "")
         args_str = (self.arguments.data if self.arguments else "") + (other.arguments.data if other.arguments else "")
-        return ToolCallChunk(index=self.index, tool_call_id=tool_call_id, tool_name=tool_name, arguments=args_str)
+        return ToolCallChunk(index=self.index, tool_call_id=tool_call_id, tool_type=tool_type, tool_name=tool_name, arguments=args_str)
 
     def to_tool_call(self) -> ToolCall:
         args_str = self.arguments.data if self.arguments else "{}"
@@ -471,8 +512,10 @@ class ToolCallChunk(PygentData):
             arguments = {"raw_arguments": args_str}
         return ToolCall(
             tool_call_id=self.tool_call_id.data if self.tool_call_id else "",
+            tool_type=self.tool_type.data if self.tool_type else "function",
             tool_name=self.tool_name.data if self.tool_name else "",
-            arguments=arguments
+            arguments=arguments,
+            index=self.index,
         )
 
 
@@ -483,16 +526,31 @@ class AssistantMessageChunk(BaseMessageChunk):
         content: Union[str, PygentString] = "",
         name: Optional[Union[str, PygentString]] = None,
         tool_call_chunks: Optional[List[ToolCallChunk]] = None,
+        reasoning_content: Optional[Union[str, PygentString]] = None,
+        usage: Optional[Union[Dict, PygentDict]] = None,
         **kwargs
     ):
         super().__init__(role=MessageRole.ASSISTANT, content=content, name=name, **kwargs)
         self.tool_call_chunks = PygentList(tool_call_chunks or [])
+        if reasoning_content is not None:
+            self.reasoning_content = (
+                reasoning_content
+                if isinstance(reasoning_content, PygentString)
+                else PygentString(reasoning_content)
+            )
+        if usage is not None:
+            self.usage = usage if isinstance(usage, PygentDict) else PygentDict(usage)
 
     def _merge_chunk(self, other: 'BaseMessageChunk', swap_order: bool = False) -> 'AssistantMessageChunk':
         left, right = (other, self) if swap_order else (self, other)
         content = left._merge_content(right)
         name = right.name if right.name is not None else left.name
         metadata = left._merge_metadata(right)
+        reasoning_content = (
+            (getattr(getattr(left, "reasoning_content", None), "data", "") or "")
+            + (getattr(getattr(right, "reasoning_content", None), "data", "") or "")
+        )
+        usage = getattr(right, "usage", None) or getattr(left, "usage", None)
         chunks = list(left.tool_call_chunks.data) if hasattr(left, 'tool_call_chunks') else []
         if isinstance(right, AssistantMessageChunk) and hasattr(right, 'tool_call_chunks'):
             for rc in right.tool_call_chunks.data:
@@ -505,11 +563,23 @@ class AssistantMessageChunk(BaseMessageChunk):
                 if not found:
                     chunks.append(rc)
         chunks.sort(key=lambda x: x.index)
-        return AssistantMessageChunk(content=content, name=name, metadata=metadata, tool_call_chunks=chunks)
+        return AssistantMessageChunk(
+            content=content,
+            name=name,
+            metadata=metadata,
+            tool_call_chunks=chunks,
+            reasoning_content=reasoning_content if reasoning_content else None,
+            usage=usage,
+        )
 
     def _merge_into_message(self, msg: 'BaseMessage') -> 'AssistantMessage':
         content = (msg.content.data if msg.content else "") + (self.content.data if self.content else "")
         name = msg.name if hasattr(msg, 'name') else None
+        reasoning_content = (
+            (getattr(getattr(msg, "reasoning_content", None), "data", "") or "")
+            + (getattr(getattr(self, "reasoning_content", None), "data", "") or "")
+        )
+        usage = getattr(self, "usage", None) or getattr(msg, "usage", None)
         tool_calls = list(getattr(msg, 'tool_calls', PygentList()).data) if hasattr(msg, 'tool_calls') else []
         if hasattr(self, 'tool_call_chunks') and self.tool_call_chunks.data:
             for tc_chunk in self.tool_call_chunks.data:
@@ -522,12 +592,19 @@ class AssistantMessageChunk(BaseMessageChunk):
                     merged = ToolCallChunk(
                         index=tc_chunk.index,
                         tool_call_id=existing.tool_call_id.data,
+                        tool_type=existing.tool_type.data if hasattr(existing, "tool_type") else "function",
                         tool_name=existing.tool_name.data,
                         arguments=json.dumps(existing.arguments.data) if existing.arguments else "{}"
                     ) + tc_chunk
                     tool_calls[tc_chunk.index] = merged.to_tool_call()
             tool_calls = [tc for tc in tool_calls if tc is not None]
-        return AssistantMessage(content=content, name=name, tool_calls=tool_calls)
+        return AssistantMessage(
+            content=content,
+            name=name,
+            tool_calls=tool_calls,
+            reasoning_content=reasoning_content if reasoning_content else None,
+            usage=usage,
+        )
 
 
 class ToolMessage(BaseMessage):
