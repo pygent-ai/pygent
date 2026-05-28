@@ -184,10 +184,12 @@ class AsyncRequestsClient(BaseAsyncClient):
         """解析 API 响应为 AssistantMessage"""
         choices = data.get("choices", [])
         if not choices:
-            return AssistantMessage(content="")
+            return AssistantMessage(content="", usage=data.get("usage"))
         choice = choices[0]
         message = choice.get("message", {})
         content = message.get("content") or ""
+        reasoning_content = message.get("reasoning_content")
+        usage = data.get("usage")
         tool_calls_raw = message.get("tool_calls")
         if tool_calls_raw:
             tool_calls_list = [
@@ -196,8 +198,13 @@ class AsyncRequestsClient(BaseAsyncClient):
                 )
                 for tc in tool_calls_raw
             ]
-            return AssistantMessage(content=content, tool_calls=tool_calls_list)
-        return AssistantMessage(content=content)
+            return AssistantMessage(
+                content=content,
+                reasoning_content=reasoning_content,
+                tool_calls=tool_calls_list,
+                usage=usage,
+            )
+        return AssistantMessage(content=content, reasoning_content=reasoning_content, usage=usage)
 
     def _parse_sse_delta(self, line: str) -> Optional[AssistantMessageChunk]:
         """解析 SSE 行，提取 delta 并转为 AssistantMessageChunk"""
@@ -210,26 +217,36 @@ class AsyncRequestsClient(BaseAsyncClient):
             data = json.loads(payload)
         except json.JSONDecodeError:
             return None
+        usage = data.get("usage")
         choices = data.get("choices", [])
         if not choices:
+            if usage is not None:
+                return AssistantMessageChunk(usage=usage)
             return None
         choice = choices[0]
         delta = choice.get("delta", {})
         content = delta.get("content") or ""
+        reasoning_content = delta.get("reasoning_content") or ""
         tool_calls_delta = delta.get("tool_calls") or []
         tool_call_chunks = []
         for tc in tool_calls_delta:
             idx = tc.get("index", 0)
             tid = tc.get("id") or ""
+            tool_type = tc.get("type") or "function"
             fn = tc.get("function", {})
             name = fn.get("name") or ""
             args = fn.get("arguments") or ""
             tool_call_chunks.append(
-                ToolCallChunk(index=idx, tool_call_id=tid, tool_name=name, arguments=args)
+                ToolCallChunk(index=idx, tool_call_id=tid, tool_type=tool_type, tool_name=name, arguments=args)
             )
-        if not content and not tool_call_chunks:
+        if not content and not reasoning_content and not tool_call_chunks and usage is None:
             return None
-        return AssistantMessageChunk(content=content, tool_call_chunks=tool_call_chunks or None)
+        return AssistantMessageChunk(
+            content=content,
+            reasoning_content=reasoning_content or None,
+            tool_call_chunks=tool_call_chunks or None,
+            usage=usage,
+        )
 
     def _stream_worker_sync(self, payload: dict, queue: asyncio.Queue) -> None:
         """在后台线程中执行：同步流式请求，将 AssistantMessageChunk 放入 queue，结束时 put(None)。"""
