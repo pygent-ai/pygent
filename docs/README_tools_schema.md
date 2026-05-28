@@ -1,6 +1,6 @@
 # Cursor Agent 工具 — OpenAI Schema 说明
 
-本目录包含以 **OpenAI 标准 function calling / tools schema** 描述的 Cursor Agent 工具定义，便于在 pygent 或其它兼容 OpenAI 格式的系统中使用。
+本目录包含以 **OpenAI 标准 function calling / tools schema** 描述的 Cursor Agent 工具定义，便于在 pygent 或其它兼容 OpenAI 格式的系统中使用。注意：这些 JSON 文件是 schema 参考，不代表每个工具都已经作为 `pygent.toolkits` 内置实现。
 
 ## 文件说明
 
@@ -57,7 +57,8 @@ response = openai.chat.completions.create(
 
 ## 工具列表概览
 
-- `codebase_search` — 语义搜索代码库  
+### 当前 pygent 内置实现
+
 - `run_terminal_cmd` — 执行终端命令  
 - `grep` — 文本/正则搜索  
 - `read_file` — 读取文件  
@@ -68,6 +69,10 @@ response = openai.chat.completions.create(
 - `read_lints` — 读取 linter 诊断  
 - `web_search` — 网络搜索  
 - `mcp_web_fetch` — 抓取网页为 Markdown  
+
+### Schema-only / 外部能力占位
+
+- `codebase_search` — 语义搜索代码库
 - `generate_image` — 根据描述生成图片  
 - `todo_write` — 任务列表写入/更新  
 - `mcp_task` — 启动子代理任务  

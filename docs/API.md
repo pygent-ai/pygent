@@ -13,7 +13,8 @@ This document describes the public APIs of the Pygent framework.
 5. [Module](#5-module)
 6. [Tool](#6-tool)
 7. [MCP](#7-mcp)
-8. [Toolkits](#8-toolkits)
+8. [Session](#8-session)
+9. [Toolkits](#9-toolkits)
 
 ---
 
@@ -103,12 +104,18 @@ class BaseContext(PygentOperator):
 
     def __init__(self, system_prompt=None, *args, **kwargs)
     def add_message(self, message: BaseMessage) -> None
+    @property
+    def last_message(self) -> BaseMessage
 ```
 
 | Attribute / Method | Description |
 |--------------------|-------------|
 | `history` | List of messages in the conversation |
+| `system_prompt` | Optional prompt stored separately and also inserted as a system message when provided |
 | `add_message(message)` | Append a message to history |
+| `last_message` | Return the last message in history |
+
+Only `history` is currently part of `PygentOperator.state_dict()` because it is the only annotated `PygentData` field on `BaseContext`.
 
 ---
 
@@ -141,6 +148,8 @@ class BaseMessage(PygentData):
     def to_openai_format() -> Dict[str, Any]
     @classmethod
     def from_dict(cls, data: Dict) -> BaseMessage
+    @classmethod
+    def from_serialized_dict(cls, data: Dict) -> BaseMessage
 ```
 
 ### Message Subclasses
@@ -149,7 +158,7 @@ class BaseMessage(PygentData):
 |-------|------|------------------|
 | `SystemMessage` | system | - |
 | `UserMessage` | user | `name` |
-| `AssistantMessage` | assistant | `name`, `tool_calls` |
+| `AssistantMessage` | assistant | `name`, `tool_calls`, `reasoning_content`, `usage` |
 | `ToolMessage` | tool | `tool_call_id` |
 | `FunctionMessage` | function | `name` |
 
@@ -158,10 +167,11 @@ class BaseMessage(PygentData):
 ```python
 class ToolCall(PygentData):
     tool_call_id: PygentString
+    tool_type: PygentString
     tool_name: PygentString
     arguments: PygentDict
 
-    def __init__(self, tool_call_id, tool_name, arguments, **kwargs)
+    def __init__(self, tool_call_id, tool_name, arguments, tool_type="function", **kwargs)
     def to_dict() -> Dict[str, Any]
     @classmethod
     def from_dict(cls, data: Dict) -> ToolCall
@@ -199,6 +209,8 @@ class BaseClient(PygentOperator, ABC):
     def forward(self, context: BaseContext) -> AssistantMessage  # appends to context
 ```
 
+When `max_tokens` is omitted, the current implementation stores `2048`.
+
 ### BaseAsyncClient
 
 Same structure as `BaseClient`, with async `forward`:
@@ -213,10 +225,22 @@ async def forward(self, context: BaseContext) -> AssistantMessage
 class AsyncRequestsClient(BaseAsyncClient):
     def __init__(self, base_url, api_key, model_name, ...)
     async def forward(self, context: BaseContext, **kwargs) -> AssistantMessage
+    async def stream_forward(self, context: BaseContext, **kwargs) -> AsyncGenerator[AssistantMessageChunk, Any]
 ```
 
 `AsyncOpenAIClient` remains exported as a backward-compatible alias of
 `AsyncRequestsClient`.
+
+### OllamaAsyncClient
+
+```python
+class OllamaAsyncClient(BaseAsyncClient):
+    def __init__(self, model_name, ...)
+    async def forward(self, context: BaseContext, **kwargs) -> AssistantMessage
+    async def stream_forward(self, context: BaseContext, **kwargs) -> AsyncGenerator[AssistantMessageChunk, Any]
+```
+
+`OllamaAsyncClient` is exported, but the third-party `ollama` package is intentionally not installed by default. Install it separately only when using this client.
 
 ---
 
@@ -264,7 +288,7 @@ class ToolMetadata:
     author: str = "unknown"
     category: ToolCategory = ToolCategory.UTILITY
     permission: ToolPermission = ToolPermission.PUBLIC
-    tags: List[str] = []
+    tags: List[str] = field(default_factory=list)
     rate_limit: Optional[int] = None
     timeout: float = 30.0
     requires_auth: bool = False
@@ -332,12 +356,16 @@ class ToolManager(PygentModule):
     mcp_clients: PygentDict
 
     def __init__(self)
+    def register_tools(self, tools: List[BaseTool]) -> None
     def register_tool(self, tool: BaseTool) -> None
     def get_tool(self, name: str) -> Optional[BaseTool]
+    def get_registered_tools(self) -> List[BaseTool]
     def call_tool(self, name: str, *args, **kwargs) -> Dict[str, Any]
-    def get_all_schemas(self) -> Dict[str, Any]
+    def get_all_schemas(self, include_status=True) -> Dict[str, Any]
     def get_openai_functions(self) -> List[Dict[str, Any]]
-    def add_mcp_server_stdio(self, server_id, command, args=None, env=None,
+    def get_openai_tools(self) -> List[Dict[str, Any]]
+    def get_all_statuses(self) -> Dict[str, Any]
+    def add_mcp_server_stdio(self, server_id, command, args=None, env=None, cwd=None,
                              tool_name_prefix=None) -> List[BaseTool]
     def add_mcp_server_sse(self, server_id, url, headers=None,
                            tool_name_prefix=None) -> List[BaseTool]
@@ -427,9 +455,36 @@ class MCPToolAdapter(BaseTool):
 
 ---
 
-## 8. Toolkits
+## 8. Session
 
-**Module:** `pygent.toolkits.run_terminal_cmd`
+**Module:** `pygent.session.base`
+
+### Session
+
+```python
+class Session:
+    def __init__(self, session_id, workspace_root, system_prompt=None,
+                 metadata=None, context=None)
+    @property
+    def session_dir() -> Path
+    def save(format="json") -> str
+    @classmethod
+    def load(cls, workspace_root, session_id, format="auto") -> Session
+```
+
+Session persistence writes JSON to:
+
+```text
+{workspace_root}/sessions/{session_id}/session.json
+```
+
+The session payload stores `session_id`, `workspace_root`, `created_at`, `updated_at`, `system_prompt`, serialized `history`, and `metadata`. Message history is restored with `BaseMessage.from_serialized_dict()`.
+
+---
+
+## 9. Toolkits
+
+**Module:** `pygent.toolkits`
 
 ### TerminalToolkits
 
@@ -444,17 +499,26 @@ class TerminalToolkits:
 
 `RestrictedTerminal(root_dir=...)` remains available as a compatibility wrapper.
 
+### Built-in Toolkits
+
+| Toolkit | Tools |
+|---------|-------|
+| `FileToolkits` | `read_file`, `write`, `search_replace`, `edit_notebook`, `delete_file`, `read_lints`, `grep` |
+| `TerminalToolkits` | `run_terminal_cmd` |
+| `WebSearchToolkits` | `web_search` |
+| `WebFetchToolkits` | `mcp_web_fetch` |
+
 ---
 
 ## Agent
 
-**Module:** `pygent.agent.base_agent`
+**Module:** `pygent.agent.base`
 
 ### BaseAgent
 
 ```python
 class BaseAgent(PygentOperator):
-    pass
+    async def forward(self, user_input: str)
 ```
 
 Placeholder for future agent orchestration logic.

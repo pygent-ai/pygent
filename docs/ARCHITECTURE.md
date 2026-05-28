@@ -27,13 +27,12 @@ Pygent is a Python framework for building LLM-powered agents. It provides a modu
                                         ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              Module Layer                                    │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌────────────────────────┐ │
-│  │   Memory    │ │  Knowledge  │ │    Plan     │ │   ToolManager          │ │
-│  │   (placeholder) │ (placeholder) │ (placeholder) │  ┌──────────────────┐ │ │
-│  │             │ │             │ │             │ │  │ BaseTool(s)       │ │ │
-│  │             │ │             │ │             │ │  │ MCPToolAdapter(s) │ │ │
-│  │             │ │             │ │             │ │  └──────────────────┘ │ │
-│  └─────────────┘ └─────────────┘ └─────────────┘ └────────────────────────┘ │
+│  ┌─────────────┐ ┌─────────────┐ ┌──────────────────────────────────────┐ │
+│  │   Session   │ │    Plan     │ │             ToolManager              │ │
+│  │             │ │ InMemoryPlan│ │  ┌────────────────────────────────┐  │ │
+│  │             │ │             │ │  │ BaseTool / MCPToolAdapter      │  │ │
+│  │             │ │             │ │  └────────────────────────────────┘  │ │
+│  └─────────────┘ └─────────────┘ └──────────────────────────────────────┘ │
 │                              PygentModule                                   │
 └─────────────────────────────────────────────────────────────────────────────┘
                                         │
@@ -104,7 +103,7 @@ Base class for components that hold state. Uses type hints to auto-discover `Pyg
 
 - `state_dict()`: Export all PygentData fields
 - `load_state_dict()`: Restore state
-- `save(path, format='json'|'yaml'|'pickle')`: Persist to disk
+- `save(path, format='json'|'pickle')`: Persist to disk
 - `load(path)`: Load from disk
 - `parameters()`, `named_parameters()`: PyTorch-style parameter access
 
@@ -136,6 +135,7 @@ Holds conversation history and optional system prompt.
 - `BaseAsyncClient`: Abstract async LLM client
 - `AsyncRequestsClient`: OpenAI-compatible implementation using urllib
 - `AsyncOpenAIClient`: Backward-compatible alias of `AsyncRequestsClient`
+- `OllamaAsyncClient`: Optional Ollama backend; requires the third-party `ollama` package only when used
 - `forward(context: BaseContext) -> AssistantMessage`: appends to context and returns the new assistant message
 
 ---
@@ -188,27 +188,25 @@ Extends `PygentOperator` with submodule composition:
 
 **MCP Integration** (`pygent.module.tool.mcp`):
 
-- `BaseMCPClient`: Abstract MCP client, sync wrappers over async MCP SDK
+- `BaseMCPClient`: Abstract JSON-RPC client implemented with the Python standard library
 - `StdioMCPClient`: Spawn process, communicate over stdio
-- `SSEMCPClient`: Connect to MCP server via HTTP SSE
+- `SSEMCPClient`: Send JSON-RPC over HTTP endpoints compatible with the local test server shape
 - `MCPToolAdapter`: Wrap MCP tool as `BaseTool`, delegate to client
 
-#### Placeholder Modules
+#### Implemented and Planned Modules
 
-- `memory.base_memory`: Empty
-- `knowledge.base_knowledge`: Empty
-- `plan.base_plan`: Empty
-- `reasoning.base_reasoning`: Empty
-- `skill.base_skill`: Empty
-- `tool_search.base_tool_search`: Empty
+- `pygent.session`: JSON session persistence and recovery
+- `pygent.module.plan`: `BasePlan` and `InMemoryPlan`
+- `pygent.toolkits.base_tool_search`: Placeholder base for future toolkit search work
+- Memory, knowledge, reasoning, and skill modules are design-level extension points, not current package directories
 
 ---
 
 ### 4. Application Layer
 
-#### BaseAgent (`pygent.agent.base_agent`)
+#### BaseAgent (`pygent.agent.base`)
 
-Minimal agent stub that subclasses `PygentOperator`. Intended to compose modules (context, LLM client, tools, memory, etc.) and orchestrate the agent loop.
+Minimal agent stub that subclasses `PygentOperator`. Intended to compose context, LLM clients, tools, sessions, plans, and future extension modules.
 
 ---
 
@@ -228,7 +226,7 @@ User Input → BaseContext.add_message(UserMessage(...))
 ### State Persistence
 
 ```
-PygentOperator.state_dict() → JSON/YAML/Pickle
+PygentOperator.state_dict() → JSON/Pickle
     ↓
 File on disk
     ↓
@@ -240,9 +238,8 @@ PygentOperator.load(path) → load_state_dict()
 ## External Dependencies
 
 - **stdlib urllib**: For `AsyncRequestsClient`
-- **mcp**: For MCP clients (stdio, SSE) and tool adapters
-- **anyio**: For sync wrappers over async MCP SDK
-- **yaml**: For YAML save/load
+- **python-dotenv**: Used by examples only, available through the `examples` extra
+- **ollama**: Optional runtime dependency only when using `OllamaAsyncClient`; it is not installed by default
 
 ---
 
@@ -254,14 +251,17 @@ pygent/
 ├── common/
 │   └── base.py          # PygentData, PygentOperator
 ├── agent/
-│   └── base_agent.py    # BaseAgent
+│   └── base.py          # BaseAgent
 ├── context/
 │   └── base.py          # BaseContext
+├── session/
+│   └── base.py          # Session
 ├── message/
 │   └── base.py          # Message types, ToolCall
 ├── llm/
 │   ├── base.py          # BaseClient, BaseAsyncClient
-│   └── requests_client.py # AsyncRequestsClient
+│   ├── requests_client.py # AsyncRequestsClient
+│   └── ollama_client.py # OllamaAsyncClient
 ├── module/
 │   ├── base.py          # PygentModule
 │   ├── tool/
@@ -269,14 +269,14 @@ pygent/
 │   │   ├── tool_manager.py
 │   │   ├── utils.py     # Decorators, ToolRegistry
 │   │   └── mcp/         # MCP clients, tool adapter
-│   ├── memory/
-│   ├── knowledge/
 │   ├── plan/
-│   ├── reasoning/
-│   ├── skill/
-│   └── tool_search/
+│   │   ├── base.py
+│   │   └── in_memory_plan.py
 └── toolkits/
-    └── run_terminal_cmd.py # TerminalToolkits
+    ├── file_operations.py # FileToolkits
+    ├── run_terminal_cmd.py # TerminalToolkits
+    ├── web_search.py # WebSearchToolkits
+    └── web_fetch.py # WebFetchToolkits
 ```
 
 ---

@@ -1,8 +1,8 @@
-# Session 管理设计文档
+# Session 管理设计与实现状态
 
 ## 1. 概述
 
-本文档从架构师视角定义 pygent 框架的 **Session（会话）管理** 方案，面向需要长时对话、状态恢复、审计追溯的关键业务场景（如医疗辅助决策）。所有设计均基于 pygent 既有的持久化能力（`PygentOperator.save/load`），确保与现有模块无缝集成。
+本文档记录 pygent 框架的 **Session（会话）管理** 方案及当前实现状态，面向需要长时对话、状态恢复、审计追溯的关键业务场景（如医疗辅助决策）。当前仓库已经实现 `pygent.session.Session` 的 JSON 保存/恢复能力，并提供 `examples/multi_session_agent.py` 作为 Session 集成示例。
 
 ### 1.1 设计目标
 
@@ -10,6 +10,17 @@
 - **可恢复性**：支持 checkpoint、暂停/恢复，降低断线或异常造成的数据丢失风险
 - **可审计**：完整保留对话历史与关键元数据，满足合规与追溯需求
 - **最小侵入**：在不破坏现有 Agent/Context/Tool 架构的前提下扩展 Session 能力
+
+### 1.2 当前实现状态
+
+| 能力 | 状态 | 位置 |
+|------|------|------|
+| `Session` 类 | 已实现 | `pygent/session/base.py` |
+| `Session.save()` / `Session.load()` | 已实现，仅支持 JSON | `pygent/session/base.py` |
+| 消息历史结构化序列化与恢复 | 已实现 | `BaseMessage.from_serialized_dict()` |
+| 多 Session 示例 | 已实现 | `examples/multi_session_agent.py` |
+| `SessionManager` | 未实现 | 后续扩展 |
+| 自动 checkpoint / 审计日志导出 | 未实现 | 后续扩展 |
 
 ---
 
@@ -33,32 +44,32 @@
 
 **调用流程：**
 
-1. `agent.stream(user_input)` 或 `agent.forward(user_input)`
-2. 每次调用内部创建新的 `BaseContext(system_prompt=...)`
-3. `context.add_message(UserMessage(content=user_input))`
-4. 调用 LLM，若有 tool_calls 则循环执行工具并继续调用 LLM
-5. 返回最后一条 Assistant 消息 content
+1. `agent.forward(user_input)` 会在内部创建新的 `BaseContext(system_prompt=...)`
+2. `context.add_message(UserMessage(content=user_input))`
+3. 调用 LLM，若有 tool_calls 则循环执行工具并继续调用 LLM
+4. 返回最后一条 Assistant 消息 content
+5. `agent.stream(context, max_steps=...)` 已接收外部 context，可用于多轮流式调用
 
 ### 2.2 现有问题
 
 | 问题 | 影响 | 严重性 |
 |------|------|--------|
-| **每次请求新建 Context** | 无跨轮对话记忆，无法实现多轮问诊、上下文连续推理 | 高 |
+| **`ReactAgent.forward()` 每次请求新建 Context** | 无跨轮对话记忆，无法实现多轮问诊、上下文连续推理；`stream()` 与 `multi_session_agent` 已给出外部 context 模式 | 高 |
 | **session_id 硬编码为 "react"** | 多用户/多会话时工作空间、缓存、临时文件混用 | 高 |
-| **Context 不持久化** | 进程崩溃或重启后对话历史丢失 | 高 |
+| **普通 ReactAgent 不持久化 Context** | 进程崩溃或重启后对话历史丢失；`Session` 示例已覆盖持久化路径 | 高 |
 | **Agent 每次 main() 新建** | 无法复用已加载配置、工具状态 | 中 |
 
 ### 2.3 session_id 在 Toolkits 中的用途
 
 所有 Toolkits（`FileToolkits`, `TerminalToolkits`, `WebSearchToolkits`, `WebFetchToolkits`）在 `__init__` 中接收 `session_id` 和 `workspace_root`：
 
-- **session_id**：用于隔离同一工作空间下不同会话的：
+- **session_id**：用于标识并隔离同一工作空间下不同会话的：
   - 临时文件
   - 缓存（如搜索结果）
   - 日志与审计标识
 - **workspace_root**：工具执行的根路径，通常按项目或用户隔离
 
-当前 `session_id` 在 ReactAgent 中写死，无法实现“每 Session 一个 ID”的隔离策略。
+当前 `examples/react_agent.py` 中的 `session_id` 仍写死为 `"react"`；需要会话隔离时，应参考 `examples/multi_session_agent.py`，按 Session 创建 Agent 并传入独立 `session_id`。
 
 ---
 
@@ -71,7 +82,7 @@ pygent 中所有可持久化模块均继承 `PygentOperator`，具备：
 ```python
 state_dict() -> Dict[str, Any]   # 导出状态
 load_state_dict(state_dict)      # 恢复状态
-save(path, format='json'|'yaml'|'pickle')  # 持久化到文件
+save(path, format='json'|'pickle')  # 持久化到文件
 load(path, format='auto')        # 从文件加载
 ```
 
@@ -86,14 +97,14 @@ load(path, format='auto')        # 从文件加载
 | `BaseClient` / `BaseAsyncClient` | PygentOperator | base_url, api_key, model_name, timeout, temperature 等 | LLM 配置可保存 |
 | `ToolManager` | PygentModule | tools, tool_categories 等子模块 | 工具定义可保存 |
 | `BaseTool` | PygentModule | metadata, parameters, config, enabled 等 | 工具配置与状态可保存 |
-| `FileToolkits` 等 | ToolClassBase → PygentOperator | `session_id: PygentString`, `workspace_root: PygentString` | 可通过 save 持久化 |
+| `FileToolkits` 等 | ToolClassBase | `session_id`, `workspace_root` | 工具集本身不是 `PygentOperator`；其生成的 `BaseTool` 实例可由 `ToolManager` 管理 |
 
 ### 3.3 Context.history 序列化注意事项
 
-`BaseContext.history` 是 `PygentList[BaseMessage]`，其 `data` 是原始 Python list，元素为 `BaseMessage` 子类实例。在 `json.dumps(state_dict, default=str)` 时：
+`BaseContext.history` 是 `PygentList[BaseMessage]`，其 `data` 是原始 Python list，元素为 `BaseMessage` 子类实例。
 
-- 非 JSON 原生类型会走 `default=str`，导致 `BaseMessage` 被转成字符串，结构丢失
-- 如需可靠持久化，建议在 Session 层对 `history` 做显式序列化：每条消息调用 `msg.to_dict()` 或类似方法，存储为结构化 JSON
+- `PygentOperator.save()` 当前可用 pygent 对象标记保存消息对象
+- `Session.save()` 采用更便于人工审计的显式序列化：每条消息调用 `msg.to_dict()`，存储为结构化 JSON
 
 ---
 
@@ -163,7 +174,7 @@ load(path, format='auto')        # 从文件加载
 
 ```
 1. 创建 Session
-   session = session_manager.create(session_id="user_123_001", workspace_root="/data/workspaces/user_123")
+   session = Session(session_id="user_123_001", workspace_root="/data/workspaces/user_123")
 
 2. 注册工具时绑定 session_id
    file_toolkits = FileToolkits(session_id=session.session_id, workspace_root=session.workspace_root)
@@ -212,7 +223,7 @@ Session 的 `save()` 自动将数据保存到 **session 对应的文件夹**：
 
 ### 5.2 存储格式
 
-推荐使用 **JSON**，便于人工审计与跨语言解析。若需二进制体积优化，可选用 `pickle` 或 `yaml`。
+当前 `Session.save()` 仅支持 **JSON**，便于人工审计与跨语言解析。`PygentOperator.save()` 支持 `json` 和 `pickle`，但 Session 层没有启用 `pickle` 或 `yaml`。
 
 **示例 JSON 结构：**
 
@@ -248,11 +259,11 @@ Session 的 `save()` 自动将数据保存到 **session 对应的文件夹**：
 
 ## 6. 与 Agent 集成的最佳实践
 
-### 6.1 修改 ReactAgent 以支持 Session
+### 6.1 与 ReactAgent 集成
 
-**原逻辑**：每次 `forward/stream` 内部新建 `BaseContext`。
+**原逻辑**：`forward(user_input)` 内部新建 `BaseContext`。
 
-**推荐**：将 Context 作为参数传入，由调用方（Session）持有：
+**推荐**：将 Context 作为参数传入，由调用方（Session）持有。`examples/multi_session_agent.py` 已按该模式实现了 `SessionReactAgent`；`examples/react_agent.py` 的 `stream()` 也已经接收外部 context，但 `forward()` 仍保留旧的 `user_input -> 新建 context` 入口。
 
 ```python
 async def forward(self, context: BaseContext) -> str:
@@ -283,7 +294,7 @@ def __init__(self, session_id: str, root_dir: str = "."):
 
 ```python
 # 方案 A：每次新建 Agent（简单，适合 session_id 固定）
-agent = ReactAgent(session_id=session.session_id, root_dir=session.workspace_root)
+agent = SessionReactAgent(session_id=session.session_id, root_dir=session.workspace_root)
 
 # 方案 B：Agent 单例 + 动态更新 Toolkits 的 session_id（需 Toolkits 支持 set_session_id）
 # 更复杂，一般不推荐
@@ -296,7 +307,7 @@ agent = ReactAgent(session_id=session.session_id, root_dir=session.workspace_roo
 ```python
 session = Session(session_id="pat_001", workspace_root="/workspace/pat_001")
 session.context = BaseContext(system_prompt="你是医疗辅助助手...")
-agent = ReactAgent(session_id=session.session_id, root_dir=session.workspace_root)
+agent = SessionReactAgent(session_id=session.session_id, root_dir=session.workspace_root)
 
 # 第 1 轮
 session.context.add_message(UserMessage(content="患者男，45岁，主诉胸痛2小时"))
@@ -333,17 +344,18 @@ session.save()
 
 ---
 
-## 8. 实现路线图（建议）
+## 8. 实现状态与路线图
 
-| 阶段 | 内容 | 优先级 |
-|------|------|--------|
-| P0 | 定义 `Session` 类（位于 `pygent/session`），包含 session_id、context、workspace_root、metadata | 高 |
-| P0 | 实现 `Session.save()`（保存到对应文件夹）/ `Session.load()`，history 使用 PygentList 与 `to_dict` 序列化 | 高 |
-| P0 | 修改 `ReactAgent`：Context 由外部传入，session_id 由构造函数传入 | 高 |
-| P1 | 实现 `SessionManager`：create、get、delete、list | 中 |
-| P1 | `BaseContext` 增加 `system_prompt: PygentString` 类型注解，纳入 state_dict | 中 |
-| P2 | 自动 checkpoint（按轮次/定时） | 中 |
-| P2 | 审计日志导出 `export_audit_log()` | 中 |
+| 阶段 | 内容 | 状态 | 优先级 |
+|------|------|------|--------|
+| P0 | 定义 `Session` 类（位于 `pygent/session`），包含 session_id、context、workspace_root、metadata | 已完成 | 高 |
+| P0 | 实现 `Session.save()`（保存到对应文件夹）/ `Session.load()`，history 使用 `to_dict` 序列化 | 已完成 | 高 |
+| P0 | 提供 Context 外部传入、session_id 构造传入的 Agent 示例 | 已完成：`examples/multi_session_agent.py` | 高 |
+| P1 | 将普通 `examples/react_agent.py` 的 `forward()` 也改为外部 context 模式，或明确标记为 legacy quick demo | 未完成 | 中 |
+| P1 | 实现 `SessionManager`：create、get、delete、list | 未完成 | 中 |
+| P1 | `BaseContext` 增加 `system_prompt: PygentString` 类型注解，纳入 `state_dict` | 未完成；Session 层已单独持久化 | 中 |
+| P2 | 自动 checkpoint（按轮次/定时） | 未完成 | 中 |
+| P2 | 审计日志导出 `export_audit_log()` | 未完成 | 中 |
 
 ---
 
@@ -352,7 +364,7 @@ session.save()
 - **Session** 是管理对话生命周期、实现多轮对话与状态恢复的核心抽象。
 - **Context** 由 Session 持有，Agent 的 `forward` / `stream` 接收 Context，不再内部新建。
 - **session_id** 由 Session 生成并传入 Agent/Toolkits，实现工具侧隔离。
-- 所有 pygent 模块均支持 `save`/`load`，Session 层可组合 Context 的显式序列化与自身元数据，实现完整持久化。
+- 继承 `PygentOperator` 的 pygent 模块支持 `save`/`load`；Session 层单独组合 Context 的显式序列化与自身元数据，实现完整持久化。
 - 医疗等关键场景需特别关注：完整历史、时间戳、数据隔离与审计能力。
 
 按本设计实施后，可满足“按 Session 管理 Agent 对话”的需求，并为后续扩展（多模态、知识库、工作流）预留清晰接口。

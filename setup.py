@@ -8,12 +8,15 @@ setup(
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     author="pygent-ai",
-    url="https://github.com/your-org/pygent",
+    url="https://github.com/pygent-ai/pygent",
     license="Apache-2.0",
-    packages=find_packages(exclude=["examples*", "tests*", "MCPs*", "docs*"]),
+    packages=find_packages(exclude=["examples*", "tests*", "docs*"]),
     python_requires=">=3.11",
     install_requires=[],
     extras_require={
+        "examples": [
+            "python-dotenv>=1.0.0",
+        ],
         "dev": [
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",

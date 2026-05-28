@@ -4,7 +4,7 @@ A Python framework for building LLM-powered agents with modular state management
 
 ## Features
 
-- **Modular architecture** — Agents, context, tools, memory, and plans as composable modules
+- **Modular architecture** — Agents, sessions, context, tools, and plans as composable modules
 - **State management** — Consistent save/load and serialization via `PygentOperator`
 - **LLM-native** — Messages and tools align with OpenAI-style APIs
 - **MCP support** — Use Model Context Protocol (SSE and stdio) tools via `ToolManager`
@@ -26,6 +26,12 @@ Or with [uv](https://github.com/astral-sh/uv):
 
 ```bash
 uv pip install -e .
+```
+
+Examples that read `.env` files use `python-dotenv`:
+
+```bash
+pip install -e ".[examples]"
 ```
 
 ## Quick Start
@@ -58,7 +64,8 @@ class MyAgent(BaseAgent):
         return context
 ```
 
-See [examples/react_agent/react_agent.py](examples/react_agent/react_agent.py) for a full ReAct-style agent with tool calling.
+See [examples/react_agent.py](examples/react_agent.py) for a ReAct-style agent with tool calling, and
+[examples/multi_session_agent.py](examples/multi_session_agent.py) for a session-aware variant.
 
 Compatibility note: `AsyncOpenAIClient` is still exported as an alias of
 `AsyncRequestsClient`, and `RestrictedTerminal(root_dir=...)` still delegates to
@@ -66,10 +73,10 @@ Compatibility note: `AsyncOpenAIClient` is still exported as an alias of
 
 ## Project Layout
 
-- **pygent/** — Core package: agents, context, LLM client, messages, modules (tool, plan, memory, etc.), toolkits
+- **pygent/** — Core package: agents, sessions, context, LLM clients, messages, modules, and toolkits
 - **examples/** — Example agents (e.g. ReAct agent)
-- **MCPs/** — Example MCP servers (e.g. LocalMemoryMCP)
 - **docs/** — [Architecture](docs/ARCHITECTURE.md) and [API](docs/API.md) documentation
+- **scripts/** — Local smoke tests and utility scripts
 - **tests/** — Pytest tests
 
 ## Documentation
