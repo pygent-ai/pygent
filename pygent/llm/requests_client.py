@@ -248,7 +248,12 @@ class AsyncRequestsClient(BaseAsyncClient):
             usage=usage,
         )
 
-    def _stream_worker_sync(self, payload: dict, queue: asyncio.Queue) -> None:
+    def _stream_worker_sync(
+        self,
+        payload: dict,
+        queue: asyncio.Queue,
+        loop: Optional[asyncio.AbstractEventLoop] = None,
+    ) -> None:
         """在后台线程中执行：同步流式请求，将 AssistantMessageChunk 放入 queue，结束时 put(None)。"""
         url = self._get_chat_url()
         headers = {
@@ -258,27 +263,41 @@ class AsyncRequestsClient(BaseAsyncClient):
         payload_plain = _sanitize_for_json(payload)
         body = json.dumps(payload_plain, ensure_ascii=False).encode("utf-8")
         debug_body = body if _DEBUG_REQUEST_DIR else None
+
+        def put_item(item: Any) -> None:
+            if loop is None:
+                queue.put_nowait(item)
+            else:
+                loop.call_soon_threadsafe(queue.put_nowait, item)
+
         try:
-            status, line_iter = _http_post_stream(url, headers, body, self.timeout.data, debug_body=debug_body)
-            if status != 200:
-                queue.put_nowait(RuntimeError(f"HTTP {status}"))
-                return
-            for line in line_iter:
-                chunk = self._parse_sse_delta(line)
-                if chunk is not None:
-                    queue.put_nowait(chunk)
-        except Exception as e:
-            queue.put_nowait(e)
+            for attempt in range(self.max_retries.data + 1):
+                emitted_chunk = False
+                try:
+                    status, line_iter = _http_post_stream(url, headers, body, self.timeout.data, debug_body=debug_body)
+                    if status != 200:
+                        raise RuntimeError(f"HTTP {status}")
+                    for line in line_iter:
+                        chunk = self._parse_sse_delta(line)
+                        if chunk is not None:
+                            emitted_chunk = True
+                            put_item(chunk)
+                    return
+                except Exception as e:
+                    if emitted_chunk or attempt == self.max_retries.data:
+                        put_item(e)
+                        return
+                    time.sleep(0.5 * (attempt + 1))
         finally:
-            queue.put_nowait(None)
+            put_item(None)
 
     async def _do_request_stream(self, payload: dict) -> AsyncGenerator[AssistantMessageChunk, Any]:
         """异步流式请求：在线程中执行同步 I/O，通过 queue 产出 AssistantMessageChunk，不阻塞事件循环。"""
         queue = asyncio.Queue()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def worker():
-            self._stream_worker_sync(payload, queue)
+            self._stream_worker_sync(payload, queue, loop)
 
         future = loop.run_in_executor(None, worker)
         while True:

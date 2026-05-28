@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 from pygent.context import BaseContext
@@ -259,6 +260,82 @@ def test_usage_only_sse_chunk_is_not_dropped():
     )
 
     assert chunk.usage.data["total_tokens"] == 3
+
+
+def test_stream_request_retries_transient_error_before_first_chunk(monkeypatch):
+    client = AsyncRequestsClient(
+        base_url="https://api.deepseek.com",
+        api_key="test-key",
+        model_name="deepseek-v4-flash",
+        max_retries=1,
+    )
+    attempts = 0
+
+    def fake_http_post_stream(url, headers, body, timeout, debug_body=None):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("TLS handshake failed")
+        return 200, iter(
+            [
+                "data: "
+                + json.dumps(
+                    {
+                        "choices": [
+                            {"delta": {"content": "ok"}}
+                        ]
+                    }
+                )
+            ]
+        )
+
+    monkeypatch.setattr("pygent.llm.requests_client.time.sleep", lambda _: None)
+    monkeypatch.setattr("pygent.llm.requests_client._http_post_stream", fake_http_post_stream)
+
+    async def run():
+        return [chunk async for chunk in client._do_request_stream({"stream": True})]
+
+    chunks = asyncio.run(run())
+
+    assert attempts == 2
+    assert [chunk.content.data for chunk in chunks] == ["ok"]
+
+
+def test_stream_request_does_not_retry_after_chunk_is_emitted(monkeypatch):
+    client = AsyncRequestsClient(
+        base_url="https://api.deepseek.com",
+        api_key="test-key",
+        model_name="deepseek-v4-flash",
+        max_retries=1,
+    )
+    attempts = 0
+
+    def broken_stream():
+        yield "data: " + json.dumps({"choices": [{"delta": {"content": "partial"}}]})
+        raise RuntimeError("connection reset")
+
+    def fake_http_post_stream(url, headers, body, timeout, debug_body=None):
+        nonlocal attempts
+        attempts += 1
+        return 200, broken_stream()
+
+    monkeypatch.setattr("pygent.llm.requests_client.time.sleep", lambda _: None)
+    monkeypatch.setattr("pygent.llm.requests_client._http_post_stream", fake_http_post_stream)
+
+    async def run():
+        chunks = []
+        try:
+            async for chunk in client._do_request_stream({"stream": True}):
+                chunks.append(chunk)
+        except RuntimeError as exc:
+            return chunks, exc
+        raise AssertionError("stream error was not raised")
+
+    chunks, exc = asyncio.run(run())
+
+    assert attempts == 1
+    assert [chunk.content.data for chunk in chunks] == ["partial"]
+    assert str(exc) == "connection reset"
 
 
 def test_pygent_container_str_does_not_recurse_for_usage_debugging():
