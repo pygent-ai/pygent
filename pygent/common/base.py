@@ -297,6 +297,9 @@ class PygentList(list, PygentData[List[T]], Generic[T]):
     def __bool__(self) -> bool:
         return len(self) > 0
 
+    def __str__(self) -> str:
+        return list.__repr__(self)
+
     def filter(self, func) -> "PygentList[T]":
         return PygentList(item for item in self if func(item))
 
@@ -325,6 +328,9 @@ class PygentDict(dict, PygentData[Dict[K, V]], Generic[K, V]):
 
     def __bool__(self) -> bool:
         return len(self) > 0
+
+    def __str__(self) -> str:
+        return dict.__repr__(self)
 
     def set(self, key: K, value: V) -> None:
         self[key] = value
@@ -376,6 +382,9 @@ class PygentSet(set, PygentData[Set[Any]]):
 
     def __bool__(self) -> bool:
         return len(self) > 0
+
+    def __str__(self) -> str:
+        return set.__repr__(set(self))
 
     def union(self, *others: Union[Set, "PygentSet"]) -> "PygentSet":
         return PygentSet(set.union(self, *[_unwrap_data(x) for x in others]))
