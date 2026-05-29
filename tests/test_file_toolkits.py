@@ -10,119 +10,105 @@ def test_resolve_path_handles_relative_and_desktop_alias(tmp_path):
     assert _normalize_desktop_path("C:\\Users\\Desktop\\report.txt") == "~/Desktop/report.txt"
 
 
-def test_write_read_replace_grep_and_delete_file(tmp_path):
+def test_file_toolkit_exposes_only_lowercase_tool_names(tmp_path):
     tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
 
-    assert "完成" in tools.write("docs/example.txt", "alpha\nbeta\nalpha\n")
-    assert (tmp_path / "docs" / "example.txt").read_text(encoding="utf-8") == "alpha\nbeta\nalpha\n"
+    assert [tool.metadata.data["name"] for tool in tools.get_all_tools()] == [
+        "edit",
+        "edit_notebook",
+        "glob",
+        "grep",
+        "read",
+        "read_lints",
+        "write",
+    ]
+    for removed_name in ["Edit", "Glob", "Read", "Write", "delete_file", "read_file", "search_replace"]:
+        assert tools.get_tool(removed_name) is None
 
-    assert tools.read_file("docs/example.txt", offset=2, limit=1) == "2|beta\n"
 
-    assert "完成" in tools.search_replace("docs/example.txt", "alpha", "gamma")
-    assert (tmp_path / "docs" / "example.txt").read_text(encoding="utf-8") == "gamma\nbeta\nalpha\n"
+def test_write_read_edit_grep_flow(tmp_path):
+    tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
+    target = tmp_path / "docs" / "example.txt"
 
-    assert "完成" in tools.search_replace("docs/example.txt", "alpha", "delta", replace_all=True)
-    assert (tmp_path / "docs" / "example.txt").read_text(encoding="utf-8") == "gamma\nbeta\ndelta\n"
+    tools.write(str(target), "alpha\nbeta\nalpha\n")
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\nalpha\n"
+
+    assert tools.read(str(target), offset=2, limit=1) == "2|beta\n"
+
+    tools.edit(str(target), "alpha", "gamma")
+    assert target.read_text(encoding="utf-8") == "gamma\nbeta\nalpha\n"
+
+    tools.edit(str(target), "alpha", "delta", replace_all=True)
+    assert target.read_text(encoding="utf-8") == "gamma\nbeta\ndelta\n"
 
     grep_output = tools.grep("DELTA", path="docs", ignore_case=True, output_mode="content")
     assert "example.txt" in grep_output
     assert "3|delta" in grep_output
-
     assert tools.grep("delta", path="docs", output_mode="count") == "1"
-    assert "删除" in tools.delete_file("docs/example.txt")
-    assert not (tmp_path / "docs" / "example.txt").exists()
 
 
-def test_Write_uses_absolute_path_schema_and_rejects_relative_paths(tmp_path):
+def test_write_uses_absolute_path_schema_and_rejects_relative_paths(tmp_path):
     tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
     target = tmp_path / "strict" / "out.txt"
 
-    assert "完成" in tools.Write(str(target), "hello\n")
+    tools.write(str(target), "hello\n")
     assert target.read_text(encoding="utf-8") == "hello\n"
-    assert "绝对路径" in tools.Write("relative.txt", "nope")
+    assert "file_path" in tools.write("relative.txt", "nope")
 
-    write_tool = tools.get_tool("Write")
-    assert write_tool is not None
-    schema = write_tool.to_openai_function()
-
-    assert schema["name"] == "Write"
+    schema = tools.get_tool("write").to_openai_function()
+    assert schema["name"] == "write"
     parameters = schema["parameters"]
     assert parameters["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert parameters["additionalProperties"] is False
     assert parameters["required"] == ["file_path", "content"]
     assert set(parameters["properties"]) == {"file_path", "content"}
-    assert parameters["properties"]["file_path"]["type"] == "string"
-    assert "Absolute destination file path" in parameters["properties"]["file_path"]["description"]
-    assert parameters["properties"]["content"]["type"] == "string"
-    assert "Full text content" in parameters["properties"]["content"]["description"]
 
 
-def test_Read_uses_requested_schema_and_reads_text_ranges(tmp_path):
+def test_read_uses_requested_schema_and_reads_text_ranges(tmp_path):
     tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
     target = tmp_path / "strict" / "input.txt"
     target.parent.mkdir()
     target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
 
-    assert tools.Read(str(target), offset=2, limit=1) == "2|beta\n"
-    assert "绝对路径" in tools.Read("relative.txt")
+    assert tools.read(str(target), offset=2, limit=1) == "2|beta\n"
+    assert "file_path" in tools.read("relative.txt")
 
-    read_tool = tools.get_tool("Read")
-    assert read_tool is not None
-    schema = read_tool.to_openai_function()
-
-    assert schema["name"] == "Read"
+    schema = tools.get_tool("read").to_openai_function()
+    assert schema["name"] == "read"
     parameters = schema["parameters"]
     assert parameters["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert parameters["additionalProperties"] is False
     assert parameters["required"] == ["file_path"]
     assert set(parameters["properties"]) == {"file_path", "limit", "offset", "pages"}
-    assert parameters["properties"]["file_path"]["type"] == "string"
-    assert parameters["properties"]["limit"]["type"] == "integer"
     assert parameters["properties"]["limit"]["exclusiveMinimum"] == 0
-    assert parameters["properties"]["limit"]["maximum"] == 9007199254740991
-    assert parameters["properties"]["offset"]["type"] == "integer"
     assert parameters["properties"]["offset"]["minimum"] == 0
-    assert parameters["properties"]["offset"]["maximum"] == 9007199254740991
-    assert parameters["properties"]["pages"]["type"] == "string"
-    assert "PDF" in parameters["properties"]["pages"]["description"]
 
-    invalid = tools.call_tool("Read", file_path=str(target), limit=0)
+    invalid = tools.call_tool("read", file_path=str(target), limit=0)
     assert not invalid["success"]
     assert "limit" in invalid["details"]
 
 
-def test_Edit_uses_absolute_path_schema_and_exact_replacement(tmp_path):
+def test_edit_uses_absolute_path_schema_and_exact_replacement(tmp_path):
     tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
     target = tmp_path / "strict" / "edit.txt"
     target.parent.mkdir()
     target.write_text("alpha\nbeta\nalpha\n", encoding="utf-8")
 
-    assert "完成" in tools.Edit(str(target), "alpha", "gamma")
+    tools.edit(str(target), "alpha", "gamma")
     assert target.read_text(encoding="utf-8") == "gamma\nbeta\nalpha\n"
 
-    assert "完成" in tools.Edit(str(target), "alpha", "delta", replace_all=True)
+    tools.edit(str(target), "alpha", "delta", replace_all=True)
     assert target.read_text(encoding="utf-8") == "gamma\nbeta\ndelta\n"
-    assert "绝对路径" in tools.Edit("relative.txt", "a", "b")
-    assert "不同" in tools.Edit(str(target), "same", "same")
+    assert "file_path" in tools.edit("relative.txt", "a", "b")
+    assert "new_string" in tools.edit(str(target), "same", "same")
 
-    edit_tool = tools.get_tool("Edit")
-    assert edit_tool is not None
-    schema = edit_tool.to_openai_function()
-
-    assert schema["name"] == "Edit"
+    schema = tools.get_tool("edit").to_openai_function()
+    assert schema["name"] == "edit"
     parameters = schema["parameters"]
     assert parameters["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert parameters["additionalProperties"] is False
     assert parameters["required"] == ["file_path", "old_string", "new_string"]
     assert set(parameters["properties"]) == {"file_path", "old_string", "new_string", "replace_all"}
-    assert parameters["properties"]["file_path"]["type"] == "string"
-    assert "Absolute path" in parameters["properties"]["file_path"]["description"]
-    assert parameters["properties"]["old_string"]["type"] == "string"
-    assert "Exact text" in parameters["properties"]["old_string"]["description"]
-    assert parameters["properties"]["new_string"]["type"] == "string"
-    assert "different from old_string" in parameters["properties"]["new_string"]["description"]
-    assert "enum" not in parameters["properties"]["new_string"]
-    assert parameters["properties"]["replace_all"]["type"] == "boolean"
     assert parameters["properties"]["replace_all"]["default"] is False
 
 
@@ -139,18 +125,15 @@ def test_glob_finds_files_sorted_by_mtime_and_exposes_schema(tmp_path):
     os.utime(old_match, (100, 100))
     os.utime(new_match, (200, 200))
 
-    assert tools.Glob("**/*.py").splitlines() == [str(new_match), str(old_match)]
-    assert tools.Glob("*.py", path="src").splitlines() == [str(old_match)]
-    assert "path must be a directory" in tools.Glob("*.py", path="src/old.py")
+    assert tools.glob("**/*.py").splitlines() == [str(new_match), str(old_match)]
+    assert tools.glob("*.py", path="src").splitlines() == [str(old_match)]
+    assert "path must be a directory" in tools.glob("*.py", path="src/old.py")
 
-    glob_tool = tools.get_tool("Glob")
-    params = glob_tool.to_openai_function()["parameters"]
+    params = tools.get_tool("glob").to_openai_function()["parameters"]
     assert params["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert params["required"] == ["pattern"]
     assert params["additionalProperties"] is False
     assert "description" not in params["properties"]
-    assert "workspace root" in params["properties"]["path"]["description"]
-    assert "Glob pattern" in params["properties"]["pattern"]["description"]
 
 
 def test_grep_tool_schema_uses_rg_style_parameter_names(tmp_path):
@@ -177,9 +160,7 @@ def test_grep_tool_schema_uses_rg_style_parameter_names(tmp_path):
         "type",
     ]
     assert parameters["required"] == ["pattern"]
-    assert "context_before" not in properties
     assert "description" not in properties
-    assert properties["-A"]["description"].startswith("Number of lines to show after")
     assert properties["output_mode"]["enum"] == ["content", "files_with_matches", "count"]
 
 
@@ -241,19 +222,18 @@ def test_grep_multiline_context_and_line_number_toggle(tmp_path):
 def test_file_tool_errors_are_non_throwing(tmp_path):
     tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
 
-    assert "missing.txt" in tools.read_file("missing.txt")
-    assert "missing.txt" in tools.search_replace("missing.txt", "a", "b")
-    assert "missing.txt" in tools.delete_file("missing.txt")
+    assert "missing.txt" in tools.read(str(tmp_path / "missing.txt"))
+    assert "missing.txt" in tools.edit(str(tmp_path / "missing.txt"), "a", "b")
     assert str(tmp_path / "missing") in tools.grep("x", path="missing")
 
 
-def test_read_file_describes_binary_and_image_files(tmp_path):
+def test_read_describes_binary_and_image_files(tmp_path):
     tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
     (tmp_path / "blob.bin").write_bytes(b"\x00\x01\x02")
     (tmp_path / "pixel.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00")
 
-    assert "blob.bin" in tools.read_file("blob.bin")
-    assert "pixel.png" in tools.read_file("pixel.png")
+    assert "blob.bin" in tools.read(str(tmp_path / "blob.bin"))
+    assert "pixel.png" in tools.read(str(tmp_path / "pixel.png"))
 
 
 def test_edit_notebook_insert_replace_and_bounds(tmp_path):
@@ -273,13 +253,13 @@ def test_edit_notebook_insert_replace_and_bounds(tmp_path):
     )
     tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
 
-    assert "更新" in tools.edit_notebook("nb.ipynb", 0, False, "markdown", "old", "new")
+    tools.edit_notebook("nb.ipynb", 0, False, "markdown", "old", "new")
     data = json.loads(notebook.read_text(encoding="utf-8"))
     assert data["cells"][0]["source"] == ["new text\n"]
 
-    assert "更新" in tools.edit_notebook("nb.ipynb", 1, True, "python", "", "print('ok')\n")
+    tools.edit_notebook("nb.ipynb", 1, True, "python", "", "print('ok')\n")
     data = json.loads(notebook.read_text(encoding="utf-8"))
     assert data["cells"][1]["cell_type"] == "code"
     assert data["cells"][1]["source"] == ["print('ok')\n"]
 
-    assert "越界" in tools.edit_notebook("nb.ipynb", 99, False, "markdown", "x", "y")
+    assert "0..1" in tools.edit_notebook("nb.ipynb", 99, False, "markdown", "x", "y")

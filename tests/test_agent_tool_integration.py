@@ -13,18 +13,14 @@ from pygent.toolkits import BashToolkits, FileToolkits, WebFetchToolkits, WebSea
 
 
 DEFAULT_TOOLKIT_TOOL_NAMES = [
-    "Edit",
-    "Glob",
-    "Read",
-    "Write",
     "bash",
-    "delete_file",
+    "edit",
     "edit_notebook",
+    "glob",
     "grep",
-    "mcp_web_fetch",
-    "read_file",
+    "read",
     "read_lints",
-    "search_replace",
+    "web_fetch",
     "web_search",
     "write",
 ]
@@ -182,16 +178,15 @@ def _prepare_files(tmp_path: Path) -> None:
 
 def _case_arguments(tool_name: str, tmp_path: Path) -> dict:
     cases = {
-        "Edit": {
+        "edit": {
             "file_path": str(tmp_path / "docs" / "edit.txt"),
             "old_string": "old value",
             "new_string": "new value",
         },
-        "Glob": {"pattern": "**/*.py", "path": "docs"},
-        "Read": {"file_path": str(tmp_path / "docs" / "read.txt"), "offset": 2, "limit": 1},
-        "Write": {"file_path": str(tmp_path / "docs" / "write.txt"), "content": "strict write\n"},
+        "glob": {"pattern": "**/*.py", "path": "docs"},
+        "read": {"file_path": str(tmp_path / "docs" / "read.txt"), "offset": 2, "limit": 1},
+        "write": {"file_path": str(tmp_path / "docs" / "write.txt"), "content": "strict write\n"},
         "bash": {"command": "printf agent-bash", "timeout": 5000},
-        "delete_file": {"path": "legacy/delete.txt"},
         "edit_notebook": {
             "target_notebook": "nb.ipynb",
             "cell_idx": 0,
@@ -201,16 +196,9 @@ def _case_arguments(tool_name: str, tmp_path: Path) -> dict:
             "new_string": "new",
         },
         "grep": {"pattern": "needle", "path": "docs", "output_mode": "content"},
-        "mcp_web_fetch": {"url": "https://example.com/tool"},
-        "read_file": {"path": "legacy/read.txt"},
+        "web_fetch": {"url": "https://example.com/tool"},
         "read_lints": {},
-        "search_replace": {
-            "path": "legacy/replace.txt",
-            "old_string": "before",
-            "new_string": "after",
-        },
-        "web_search": {"search_term": "pygent", "explanation": "agent integration test"},
-        "write": {"path": "legacy/write.txt", "contents": "legacy write\n"},
+        "web_search": {"search_term": "pygent", "description": "agent integration test"},
     }
     return cases[tool_name]
 
@@ -219,38 +207,30 @@ def _assert_case_result(tool_name: str, result: dict, tmp_path: Path) -> None:
     assert result["success"], result
     value = str(result.get("result", ""))
 
-    if tool_name == "Edit":
+    if tool_name == "edit":
         assert (tmp_path / "docs" / "edit.txt").read_text(encoding="utf-8") == "new value\n"
-    elif tool_name == "Glob":
+    elif tool_name == "glob":
         assert "glob_a.py" in value
-    elif tool_name == "Read":
+    elif tool_name == "read":
         assert "2|beta" in value
-    elif tool_name == "Write":
+    elif tool_name == "write":
         assert (tmp_path / "docs" / "write.txt").read_text(encoding="utf-8") == "strict write\n"
     elif tool_name == "bash":
         if "bash executable not found" in value:
             pytest.skip(value)
         assert "agent-bash" in value
-    elif tool_name == "delete_file":
-        assert not (tmp_path / "legacy" / "delete.txt").exists()
     elif tool_name == "edit_notebook":
         data = json.loads((tmp_path / "nb.ipynb").read_text(encoding="utf-8"))
         assert data["cells"][0]["source"] == ["new text\n"]
     elif tool_name == "grep":
         assert "grep.txt" in value
         assert "2|needle" in value
-    elif tool_name == "mcp_web_fetch":
+    elif tool_name == "web_fetch":
         assert "Agent Page" in value
-    elif tool_name == "read_file":
-        assert "1|legacy read" in value
     elif tool_name == "read_lints":
         assert value
-    elif tool_name == "search_replace":
-        assert (tmp_path / "legacy" / "replace.txt").read_text(encoding="utf-8") == "after\n"
     elif tool_name == "web_search":
         assert "Fake Title" in value
-    elif tool_name == "write":
-        assert (tmp_path / "legacy" / "write.txt").read_text(encoding="utf-8") == "legacy write\n"
 
 
 def test_default_toolkits_registered_tools_are_all_covered(tmp_path):

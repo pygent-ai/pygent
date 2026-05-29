@@ -10,7 +10,6 @@ import pytest
 
 import pygent.toolkits.bash as bash_module
 from pygent.toolkits.bash import BashToolkits, _MAX_OUTPUT_BYTES, _decode_output, _find_bash_executable
-from pygent.toolkits.run_terminal_cmd import TerminalToolkits
 
 
 class PythonCommandToolkits(BashToolkits):
@@ -164,14 +163,6 @@ def test_bash_ut_find_bash_skips_nonfunctional_path_bash(monkeypatch):
     monkeypatch.setattr(bash_module, "_is_functional_bash", lambda executable: executable == "git-bash")
 
     assert _find_bash_executable() == "git-bash"
-
-
-def test_bash_ut_legacy_terminal_class_delegates_to_bash_tool(tmp_path):
-    tools = TerminalToolkits(session_id="s", workspace_root=str(tmp_path))
-
-    assert isinstance(tools, BashToolkits)
-    assert tools.get_tool("bash") is not None
-    assert hasattr(tools, "run_terminal_cmd")
 
 
 def test_bash_ut_executes_in_requested_working_directory(tmp_path):

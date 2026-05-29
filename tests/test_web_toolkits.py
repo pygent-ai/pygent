@@ -33,10 +33,10 @@ def test_simple_html_to_markdown_preserves_headings_links_and_lists():
 def test_web_fetch_rejects_empty_non_http_and_private_urls():
     tools = WebFetchToolkits(session_id="s")
 
-    assert "url" in tools.mcp_web_fetch("")
-    assert "http/https" in tools.mcp_web_fetch("ftp://example.com")
-    assert "127.0.0.1" not in tools.mcp_web_fetch("http://127.0.0.1:8000")
-    assert "10.0.0.1" not in tools.mcp_web_fetch("http://10.0.0.1")
+    assert "url" in tools.web_fetch("")
+    assert "http/https" in tools.web_fetch("ftp://example.com")
+    assert "127.0.0.1" not in tools.web_fetch("http://127.0.0.1:8000")
+    assert "10.0.0.1" not in tools.web_fetch("http://10.0.0.1")
 
 
 def test_web_fetch_converts_public_html(monkeypatch):
@@ -46,7 +46,7 @@ def test_web_fetch_converts_public_html(monkeypatch):
         return _FakeResponse("<html><body><h2>News</h2><p>Body</p></body></html>".encode())
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    output = WebFetchToolkits(session_id="s").mcp_web_fetch("https://example.com/page")
+    output = WebFetchToolkits(session_id="s").web_fetch("https://example.com/page")
 
     assert "## News" in output
     assert "Body" in output
@@ -58,7 +58,7 @@ def test_web_fetch_rejects_unsupported_content_type(monkeypatch):
         lambda request, timeout: _FakeResponse(b"\x00\x01", "application/octet-stream"),
     )
 
-    assert "application/octet-stream" in WebFetchToolkits(session_id="s").mcp_web_fetch("https://example.com/file")
+    assert "application/octet-stream" in WebFetchToolkits(session_id="s").web_fetch("https://example.com/file")
 
 
 def test_duckduckgo_parser_extracts_real_result_urls_and_skips_ads():

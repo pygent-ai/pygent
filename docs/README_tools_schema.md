@@ -1,84 +1,28 @@
-# Cursor Agent 工具 — OpenAI Schema 说明
+# Pygent Tools OpenAI Schema
 
-本目录包含以 **OpenAI 标准 function calling / tools schema** 描述的 Cursor Agent 工具定义，便于在 pygent 或其它兼容 OpenAI 格式的系统中使用。注意：这些 JSON 文件是 schema 参考，不代表每个工具都已经作为 `pygent.toolkits` 内置实现。
+This directory contains OpenAI-compatible tool definitions for the built-in
+Pygent toolkits.
 
-## 文件说明
+## Files
 
-| 文件 | 说明 |
-|------|------|
-| `tools_openai_schema.json` | 完整 schema：工具名、描述、入参（含参数名与描述）、出参说明（`outputs_description`） |
-| `tools_openai_api.json` | 仅工具数组，可直接作为 `tools` 传入 OpenAI Chat Completions API |
-| `README_tools_schema.md` | 本说明文档 |
+| File | Description |
+|------|-------------|
+| `tools_openai_schema.json` | Full schema with tool definitions and `outputs_description`. |
+| `tools_openai_api.json` | The tool array that can be passed directly as an OpenAI `tools` value. |
+| `README_tools_schema.md` | This document. |
 
-## OpenAI 工具格式
+## Built-In Tools
 
-每个工具均符合 OpenAI 的 tool 定义：
+- `bash` - run a bash command.
+- `read` - read an absolute file path.
+- `write` - write complete content to an absolute file path.
+- `edit` - replace exact text in an absolute file path.
+- `edit_notebook` - edit or insert Jupyter notebook cells.
+- `read_lints` - read linter diagnostics or the current placeholder result.
+- `glob` - find files by glob pattern.
+- `grep` - search file contents.
+- `web_search` - search the web. The call purpose parameter is `description`.
+- `web_fetch` - fetch a public web page and convert it to Markdown.
 
-```json
-{
-  "type": "function",
-  "function": {
-    "name": "工具名称",
-    "description": "工具描述",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "参数名": {
-          "type": "类型",
-          "description": "参数描述",
-          "enum": ["可选枚举值"]
-        }
-      },
-      "required": ["必填参数名"]
-    }
-  }
-}
-```
-
-- **入参**：由 `parameters` 的 `properties` + `required` 定义。
-- **出参**：OpenAI API 不规定工具调用的返回结构；本仓库在 `tools_openai_schema.json` 的 `outputs_description` 中对各工具返回值做了文字说明，供实现参考。
-
-## 使用示例（OpenAI API）
-
-```python
-import openai
-
-tools = ...  # 从 tools_openai_api.json 加载
-
-response = openai.chat.completions.create(
-    model="gpt-4",
-    messages=[{"role": "user", "content": "在 src 下搜索登录逻辑"}],
-    tools=tools,
-    tool_choice="auto"
-)
-```
-
-从 `tools_openai_schema.json` 使用时，取顶层 `tools` 数组即可；若需严格兼容 OpenAI 请求体，请使用 `tools_openai_api.json` 中的数组。
-
-## 工具列表概览
-
-### 当前 pygent 内置实现
-
-- `bash` — 使用 bash 执行命令  
-- `Glob` — 按 glob 模式查找文件
-- `grep` — 文本/正则搜索  
-- `Read` — 读取绝对路径文件（严格参数 `file_path`/`limit`/`offset`/`pages`）
-- `read_file` — 读取文件  
-- `write` — 写入文件（兼容旧参数 `path`/`contents`）
-- `Write` — 写入绝对路径文件（严格参数 `file_path`/`content`）
-- `search_replace` — 字符串替换  
-- `Edit` — 按绝对路径精确替换文件文本（严格参数 `file_path`/`old_string`/`new_string`/`replace_all`）
-- `edit_notebook` — 编辑 Jupyter 单元格  
-- `delete_file` — 删除文件  
-- `read_lints` — 读取 linter 诊断  
-- `web_search` — 网络搜索  
-- `mcp_web_fetch` — 抓取网页为 Markdown  
-
-### Schema-only / 外部能力占位
-
-- `codebase_search` — 语义搜索代码库
-- `generate_image` — 根据描述生成图片  
-- `todo_write` — 任务列表写入/更新  
-- `mcp_task` — 启动子代理任务  
-
-详细入参与出参以 `tools_openai_schema.json` 为准。
+Tool names are intentionally lowercase. Deprecated compatibility names are not
+included in the current schema.

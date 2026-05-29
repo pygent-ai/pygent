@@ -59,22 +59,12 @@ class SessionReactAgent(BaseAgent):
 
     def _normalize_tool_kwargs(self, name: str, kwargs: dict) -> dict:
         kwargs = dict(kwargs)
-        if name in {"bash", "run_terminal_cmd"}:
+        if name == "bash":
             if "command" not in kwargs and "cmd" in kwargs:
                 kwargs["command"] = kwargs.pop("cmd")
             if "command" not in kwargs and "args" in kwargs:
                 args_val = kwargs.pop("args")
                 kwargs["command"] = args_val if isinstance(args_val, str) else " ".join(str(x) for x in args_val)
-        elif name == "read_file":
-            if "path" not in kwargs and "file_path" in kwargs:
-                kwargs["path"] = kwargs.pop("file_path")
-        elif name == "write":
-            if "path" not in kwargs and "file_path" in kwargs:
-                kwargs["path"] = kwargs.pop("file_path")
-            if "contents" not in kwargs and "content" in kwargs:
-                kwargs["contents"] = kwargs.pop("content")
-            if "contents" not in kwargs and "text" in kwargs:
-                kwargs["contents"] = kwargs.pop("text")
         return kwargs
 
     async def forward(self, context: BaseContext):
@@ -116,7 +106,7 @@ async def main():
     agent_a = SessionReactAgent(session_id=session_a.session_id, root_dir=root_dir)
     agent_b = SessionReactAgent(session_id=session_b.session_id, root_dir=root_dir)
 
-    # Session A：使用 read_file 工具，验证 session 会存储 tool_calls 和 ToolMessage
+    # Session A：使用 read 工具，验证 session 会存储 tool_calls 和 ToolMessage
     session_a.context.add_message(UserMessage(content="读取项目根目录的 README.md 文件，告诉我前 100 个字。"))
     await agent_a.forward(session_a.context)
     session_a.save()

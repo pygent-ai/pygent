@@ -107,14 +107,14 @@ class WebSearchToolkits(ToolClassBase):
         name="web_search",
         description="在网络上搜索实时信息，用于获取最新资讯或验证事实。",
     )
-    def web_search(self, search_term: str, explanation: str) -> str:
+    def web_search(self, search_term: str, description: str) -> str:
         """
         使用公共搜索引擎查询给定关键词，并返回若干条结果摘要。
         仅使用 Python 标准库，不依赖第三方包。
 
         Args:
             search_term: 搜索关键词或完整查询。
-            explanation: 使用该搜索的一句说明（仅用于可读性，不参与搜索逻辑）。
+            description: 使用该搜索的一句说明（仅用于可读性，不参与搜索逻辑）。
         """
         query = (search_term or "").strip()
         if not query:
@@ -131,7 +131,7 @@ class WebSearchToolkits(ToolClassBase):
 
             lines: List[str] = [
                 f"搜索词：{query}",
-                f"说明：{(explanation or '').strip()}",
+                f"说明：{(description or '').strip()}",
                 "",
                 f"前 {len(results)} 条结果：",
             ]

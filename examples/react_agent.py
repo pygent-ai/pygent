@@ -90,22 +90,12 @@ class ReactAgent(BaseAgent):
     def _normalize_tool_kwargs(self, name: str, kwargs: dict) -> dict:
         """将 LLM 常用错误参数名映射到工具实际参数名，避免调用失败。"""
         kwargs = dict(kwargs)
-        if name in {"bash", "run_terminal_cmd"}:
+        if name == "bash":
             if "command" not in kwargs and "cmd" in kwargs:
                 kwargs["command"] = kwargs.pop("cmd")
             if "command" not in kwargs and "args" in kwargs:
                 args_val = kwargs.pop("args")
                 kwargs["command"] = args_val if isinstance(args_val, str) else " ".join(str(x) for x in args_val)
-        elif name == "read_file":
-            if "path" not in kwargs and "file_path" in kwargs:
-                kwargs["path"] = kwargs.pop("file_path")
-        elif name == "write":
-            if "path" not in kwargs and "file_path" in kwargs:
-                kwargs["path"] = kwargs.pop("file_path")
-            if "contents" not in kwargs and "content" in kwargs:
-                kwargs["contents"] = kwargs.pop("content")
-            if "contents" not in kwargs and "text" in kwargs:
-                kwargs["contents"] = kwargs.pop("text")
         return kwargs
 
     async def forward(self, user_input: str):

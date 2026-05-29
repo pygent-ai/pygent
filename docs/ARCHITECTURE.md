@@ -275,7 +275,6 @@ pygent/
 └── toolkits/
     ├── file_operations.py # FileToolkits
     ├── bash.py # BashToolkits
-    ├── run_terminal_cmd.py # compatibility wrapper
     ├── web_search.py # WebSearchToolkits
     └── web_fetch.py # WebFetchToolkits
 ```

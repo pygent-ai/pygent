@@ -8,7 +8,7 @@ A Python framework for building LLM-powered agents with modular state management
 - **State management** — Consistent save/load and serialization via `PygentOperator`
 - **LLM-native** — Messages and tools align with OpenAI-style APIs
 - **MCP support** — Use Model Context Protocol (SSE and stdio) tools via `ToolManager`
-- **Toolkits** — Built-in toolkits such as `BashToolkits` for bash shell access; `TerminalToolkits` and `RestrictedTerminal` remain as compatibility aliases.
+- **Toolkits** — Built-in toolkits for bash, file operations, grep/glob, and web search/fetch.
 
 ## Requirements
 
@@ -68,9 +68,9 @@ See [examples/react_agent.py](examples/react_agent.py) for a ReAct-style agent w
 [examples/multi_session_agent.py](examples/multi_session_agent.py) for a session-aware variant.
 
 Compatibility note: `AsyncOpenAIClient` is still exported as an alias of
-`AsyncRequestsClient`. `TerminalToolkits` and `RestrictedTerminal(root_dir=...)`
-still delegate to the bash toolkit for compatibility, while the registered tool
-name is `bash`.
+`AsyncRequestsClient`. Built-in tool names are lowercase: `bash`, `read`,
+`write`, `edit`, `edit_notebook`, `read_lints`, `glob`, `grep`, `web_search`,
+and `web_fetch`.
 
 ## Project Layout
 

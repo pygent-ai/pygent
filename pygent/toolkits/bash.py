@@ -239,6 +239,7 @@ class BashToolkits(ToolClassBase):
         workspace_root: Optional[str] = None,
         bash_executable: Optional[str] = None,
     ):
+        super().__init__()
         self.session_id = PygentString(session_id)
         self.workspace_root = str(Path(workspace_root or os.getcwd()).expanduser().resolve())
         self.bash_executable = bash_executable or _find_bash_executable()
@@ -428,29 +429,8 @@ class BashToolkits(ToolClassBase):
             proc.kill()
 
 
-class TerminalToolkits(BashToolkits):
-    """Backward-compatible class name for callers that imported TerminalToolkits."""
-
-    def run_terminal_cmd(
-        self,
-        command: str,
-        working_directory: Optional[str] = None,
-        timeout: Optional[float] = None,
-        description: Optional[str] = None,
-        is_background: bool = False,
-    ) -> str:
-        return self.bash(
-            command=command,
-            working_directory=working_directory,
-            timeout=timeout,
-            description=description,
-            is_background=is_background,
-        )
-
-
 __all__ = [
     "BashToolkits",
-    "TerminalToolkits",
     "_DEFAULT_TIMEOUT_MS",
     "_MAX_OUTPUT_BYTES",
     "_MAX_TIMEOUT_MS",

@@ -74,10 +74,10 @@ class WebFetchToolkits(ToolClassBase):
         self.workspace_root = PygentString(workspace_root) or PygentString("")
 
     @tool_method(
-        name="mcp_web_fetch",
+        name="web_fetch",
         description="根据 URL 抓取网页内容并转换为可读的 Markdown；不支持需认证或本地/私有地址。",
     )
-    def mcp_web_fetch(self, url: str) -> str:
+    def web_fetch(self, url: str) -> str:
         """
         抓取网页并转为 Markdown 文本。
 

@@ -500,17 +500,16 @@ class BashToolkits:
     def get_tools() -> List[BaseTool]  # compatibility alias
 ```
 
-`TerminalToolkits` and `RestrictedTerminal(root_dir=...)` remain available as
-compatibility wrappers. The registered tool name is `bash`.
+The registered tool name is `bash`.
 
 ### Built-in Toolkits
 
 | Toolkit | Tools |
 |---------|-------|
-| `FileToolkits` | `Read`, `read_file`, `write`, `Write`, `search_replace`, `Edit`, `edit_notebook`, `delete_file`, `read_lints`, `Glob`, `grep` |
+| `FileToolkits` | `read`, `write`, `edit`, `edit_notebook`, `read_lints`, `glob`, `grep` |
 | `BashToolkits` | `bash` |
 | `WebSearchToolkits` | `web_search` |
-| `WebFetchToolkits` | `mcp_web_fetch` |
+| `WebFetchToolkits` | `web_fetch` |
 
 ---
 

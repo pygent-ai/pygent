@@ -309,14 +309,14 @@ class FileToolkits(ToolClassBase):
         self.workspace_root = workspace_root or os.getcwd()
 
     @tool_method(
-        name="Read",
+        name="read",
         description="Read a file by absolute path, with optional line ranges for text files and page ranges for PDFs.",
         include_call_description_parameter=False,
         parameters_additional_properties=False,
         parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
         parameter_schema=READ_PARAMETER_SCHEMA,
     )
-    def Read(
+    def read(
         self,
         file_path: str,
         limit: Optional[int] = None,
@@ -344,13 +344,9 @@ class FileToolkits(ToolClassBase):
             return _read_pdf_text(p, pages)
         if pages:
             return "错误：pages 仅适用于 PDF 文件"
-        return self.read_file(str(p), offset=offset, limit=limit)
+        return self._read_file(str(p), offset=offset, limit=limit)
 
-    @tool_method(
-        name="read_file",
-        description="从本地读取文件内容，支持按行范围读取；也可读取图片等二进制文件的描述。",
-    )
-    def read_file(
+    def _read_file(
         self,
         path: str,
         offset: Optional[int] = None,
@@ -387,32 +383,12 @@ class FileToolkits(ToolClassBase):
 
     @tool_method(
         name="write",
-        description="将内容写入指定路径；若文件已存在则完整覆盖。保存到桌面请用 ~/Desktop/文件名（如 ~/Desktop/总结.txt），跨平台正确。",
-    )
-    def write(self, path: str, contents: str) -> str:
-        """
-        将完整内容写入文件，已存在则覆盖。
-
-        Args:
-            path: 文件路径。保存到桌面必须用 ~/Desktop/文件名；也支持绝对路径或相对工作区的路径。
-            contents: 文件的完整内容。
-        """
-        p = _resolve_path(path, self.workspace_root)
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(contents, encoding="utf-8")
-            return "写入完成"
-        except OSError as e:
-            return f"错误：无法写入 {e}"
-
-    @tool_method(
-        name="Write",
         description="Write text content to an absolute file path, creating parent directories and replacing existing content.",
         include_call_description_parameter=False,
         parameters_additional_properties=False,
         parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
     )
-    def Write(self, file_path: str, content: str) -> str:
+    def write(self, file_path: str, content: str) -> str:
         """
         Write complete text content to a file, overwriting the file if it already exists.
 
@@ -434,11 +410,7 @@ class FileToolkits(ToolClassBase):
         except OSError as e:
             return f"错误：无法写入 {e}"
 
-    @tool_method(
-        name="search_replace",
-        description="在指定文件中做精确字符串替换，可单次或全部替换。",
-    )
-    def search_replace(
+    def _search_replace(
         self,
         path: str,
         old_string: str,
@@ -473,13 +445,13 @@ class FileToolkits(ToolClassBase):
             return f"错误：{e}"
 
     @tool_method(
-        name="Edit",
+        name="edit",
         description="Edit a file by replacing exact text at an absolute file path.",
         include_call_description_parameter=False,
         parameters_additional_properties=False,
         parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
     )
-    def Edit(
+    def edit(
         self,
         file_path: str,
         old_string: str,
@@ -500,7 +472,7 @@ class FileToolkits(ToolClassBase):
         if old_string == new_string:
             return "错误：new_string 必须与 old_string 不同"
 
-        return self.search_replace(
+        return self._search_replace(
             file_path,
             old_string,
             new_string,
@@ -562,11 +534,7 @@ class FileToolkits(ToolClassBase):
         except (json.JSONDecodeError, OSError) as e:
             return f"错误：{e}"
 
-    @tool_method(
-        name="delete_file",
-        description="删除指定路径的文件；若文件不存在或无权限则报错。",
-    )
-    def delete_file(self, path: str) -> str:
+    def _delete_file(self, path: str) -> str:
         """
         删除指定路径的文件。
 
@@ -600,7 +568,7 @@ class FileToolkits(ToolClassBase):
         return "当前实现不接入 IDE linter；诊断列表通常由编辑器/语言服务提供。"
 
     @tool_method(
-        name="Glob",
+        name="glob",
         description="Find files by glob pattern under a directory and return matching file paths.",
         include_call_description_parameter=False,
         parameter_schema={
@@ -620,7 +588,7 @@ class FileToolkits(ToolClassBase):
             "type": "object",
         },
     )
-    def Glob(self, pattern: str, path: Optional[str] = None) -> str:
+    def glob(self, pattern: str, path: Optional[str] = None) -> str:
         """
         Find files whose relative paths match a glob pattern.
 

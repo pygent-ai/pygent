@@ -1,72 +1,32 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Cursor Agent Tools (OpenAI-compatible schema)",
-  "description": "工具名称、描述及入参/出参的 OpenAI 标准 schema",
   "tools": [
     {
       "type": "function",
       "function": {
-        "name": "codebase_search",
-        "description": "按语义在代码库中搜索，用于理解逻辑、查找实现位置。适合「如何/在哪里/是什么」类问题，不适合精确符号或单次查找。",
+        "name": "bash",
+        "description": "Run a command with bash. Output is the combined terminal-visible stdout/stderr stream.",
         "parameters": {
           "type": "object",
           "properties": {
-            "query": {
-              "type": "string",
-              "description": "完整的搜索问题，如：Where is user authentication handled? / 登录后如何保存 token？"
-            },
-            "target_directories": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "限定搜索目录，如 ['src/']；空数组表示整个代码库"
-            },
-            "num_results": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 25,
-              "default": 25,
-              "description": "返回结果数量上限"
-            },
             "description": {
               "type": "string",
               "description": "Briefly describe the action this tool call will perform."
-            }
-          },
-          "required": [
-            "query"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "bash",
-        "description": "使用 bash 执行给定命令，可指定工作目录、超时与是否后台运行；返回合并后的终端可见输出。",
-        "parameters": {
-          "type": "object",
-          "properties": {
+            },
             "command": {
               "type": "string",
-              "description": "要执行的完整命令字符串"
+              "description": "Complete bash command string to run."
             },
             "working_directory": {
               "type": "string",
-              "description": "执行命令的工作目录绝对路径，不传则使用当前目录"
+              "description": "Directory for the command. Relative paths are resolved from workspace_root."
             },
             "timeout": {
               "type": "number",
-              "description": "超时时间（毫秒），不传默认 30000"
-            },
-            "description": {
-              "type": "string",
-              "description": "命令的简短描述（约 5–10 个词）"
+              "description": "Timeout in milliseconds. Defaults to 30000 and is capped at 600000."
             },
             "is_background": {
               "type": "boolean",
-              "description": "是否在后台运行该命令",
+              "description": "If true, start the command in the background and do not capture output.",
               "default": false
             }
           },
@@ -79,25 +39,193 @@
     {
       "type": "function",
       "function": {
-        "name": "Glob",
-        "description": "Find files by glob pattern under a directory and return matching file paths.",
+        "name": "read",
+        "description": "Read a file by absolute path, with optional line ranges for text files and page ranges for PDFs.",
         "parameters": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "object",
-          "additionalProperties": false,
+          "properties": {
+            "file_path": {
+              "type": "string",
+              "description": "要读取的文件绝对路径。"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "要读取的行数；仅当文件过大、无法一次读取时提供。",
+              "maximum": 9007199254740991,
+              "exclusiveMinimum": 0
+            },
+            "offset": {
+              "type": "integer",
+              "description": "开始读取的行号；仅当文件过大、需要分段读取时提供。",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "pages": {
+              "type": "string",
+              "description": "PDF 页码范围，例如 \"1-5\"、\"3\"、\"10-20\"；仅适用于 PDF 文件，每次最多 20 页。"
+            }
+          },
+          "required": [
+            "file_path"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write",
+        "description": "Write text content to an absolute file path, creating parent directories and replacing existing content.",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "file_path": {
+              "type": "string",
+              "description": "Absolute destination file path. Relative paths are rejected; parent directories are created when missing."
+            },
+            "content": {
+              "type": "string",
+              "description": "Full text content to write, replacing any existing file contents."
+            }
+          },
+          "required": [
+            "file_path",
+            "content"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "edit",
+        "description": "Edit a file by replacing exact text at an absolute file path.",
+        "parameters": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {
+            "file_path": {
+              "type": "string",
+              "description": "Absolute path of the file to modify. Relative paths are rejected."
+            },
+            "old_string": {
+              "type": "string",
+              "description": "Exact text to replace, including whitespace and indentation."
+            },
+            "new_string": {
+              "type": "string",
+              "description": "Replacement text; use a value different from old_string."
+            },
+            "replace_all": {
+              "type": "boolean",
+              "description": "Replace every occurrence when true; defaults to false, which replaces only the first match.",
+              "default": false
+            }
+          },
+          "required": [
+            "file_path",
+            "old_string",
+            "new_string"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "edit_notebook",
+        "description": "编辑 Jupyter 笔记本的单元格：修改已有单元格或插入新单元格。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
+            },
+            "target_notebook": {
+              "type": "string",
+              "description": "文件路径。支持绝对路径、~/Desktop/xxx、或相对于工作区的相对路径。"
+            },
+            "cell_idx": {
+              "type": "integer",
+              "description": "要编辑或插入位置的单元格索引（从 0 开始）。"
+            },
+            "is_new_cell": {
+              "type": "boolean",
+              "description": "true=新建单元格；false=编辑已有单元格。"
+            },
+            "cell_language": {
+              "type": "string",
+              "description": "单元格语言类型。"
+            },
+            "old_string": {
+              "type": "string",
+              "description": "要替换的单元格内容；新建单元格时传空字符串。"
+            },
+            "new_string": {
+              "type": "string",
+              "description": "新内容或新单元格的完整内容。"
+            }
+          },
+          "required": [
+            "target_notebook",
+            "cell_idx",
+            "is_new_cell",
+            "cell_language",
+            "old_string",
+            "new_string"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_lints",
+        "description": "读取工作区或指定文件/目录的 linter 诊断信息。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "Briefly describe the action this tool call will perform."
+            },
+            "paths": {
+              "type": "array",
+              "description": "要检查的文件或目录路径列表；不传则返回整个工作区诊断（本实现返回说明）。"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "glob",
+        "description": "Find files by glob pattern under a directory and return matching file paths.",
+        "parameters": {
+          "type": "object",
           "properties": {
             "path": {
-              "description": "Directory to search. Omit this field to use the workspace root; do not pass \"undefined\" or \"null\". If provided, it must be an existing directory path.",
-              "type": "string"
+              "type": "string",
+              "description": "Directory to search. Omit this field to use the workspace root; do not pass \"undefined\" or \"null\". If provided, it must be an existing directory path."
             },
             "pattern": {
-              "description": "Glob pattern used to match file paths, for example \"*.py\" or \"**/*.ts\".",
-              "type": "string"
+              "type": "string",
+              "description": "Glob pattern used to match file paths, for example \"*.py\" or \"**/*.ts\"."
             }
           },
           "required": [
             "pattern"
-          ]
+          ],
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false
         }
       }
     },
@@ -107,8 +235,6 @@
         "name": "grep",
         "description": "按精确文本或正则表达式在文件中搜索，支持上下文行数、文件类型、大小写等选项。",
         "parameters": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "additionalProperties": false,
           "type": "object",
           "properties": {
             "-A": {
@@ -153,12 +279,12 @@
             },
             "output_mode": {
               "type": "string",
+              "description": "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"files_with_matches\".",
               "enum": [
                 "content",
                 "files_with_matches",
                 "count"
-              ],
-              "description": "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"files_with_matches\"."
+              ]
             },
             "path": {
               "type": "string",
@@ -175,308 +301,9 @@
           },
           "required": [
             "pattern"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "Read",
-        "description": "Read a file by absolute path, with optional line ranges for text files and page ranges for PDFs.",
-        "parameters": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "additionalProperties": false,
-          "properties": {
-            "file_path": {
-              "description": "要读取的文件绝对路径。",
-              "type": "string"
-            },
-            "limit": {
-              "description": "要读取的行数；仅当文件过大、无法一次读取时提供。",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
-              "type": "integer"
-            },
-            "offset": {
-              "description": "开始读取的行号；仅当文件过大、需要分段读取时提供。",
-              "maximum": 9007199254740991,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "pages": {
-              "description": "PDF 页码范围，例如 \"1-5\"、\"3\"、\"10-20\"；仅适用于 PDF 文件，每次最多 20 页。",
-              "type": "string"
-            }
-          },
-          "required": [
-            "file_path"
           ],
-          "type": "object"
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "read_file",
-        "description": "从本地读取文件内容，支持按行范围读取；也可读取图片等二进制文件的描述。",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string",
-              "description": "文件的绝对路径或相对工作区的路径"
-            },
-            "offset": {
-              "type": "integer",
-              "description": "起始行号（从 1 开始）"
-            },
-            "limit": {
-              "type": "integer",
-              "description": "最多读取的行数"
-            },
-            "description": {
-              "type": "string",
-              "description": "Briefly describe the action this tool call will perform."
-            }
-          },
-          "required": [
-            "path"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "write",
-        "description": "将内容写入指定路径；若文件已存在则完整覆盖。",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string",
-              "description": "要写入的文件路径"
-            },
-            "contents": {
-              "type": "string",
-              "description": "文件的完整内容"
-            },
-            "description": {
-              "type": "string",
-              "description": "Briefly describe the action this tool call will perform."
-            }
-          },
-          "required": [
-            "path",
-            "contents"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "Write",
-        "description": "Write text content to an absolute file path, creating parent directories and replacing existing content.",
-        "parameters": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "additionalProperties": false,
-          "properties": {
-            "file_path": {
-              "description": "Absolute destination file path. Relative paths are rejected; parent directories are created when missing.",
-              "type": "string"
-            },
-            "content": {
-              "description": "Full text content to write, replacing any existing file contents.",
-              "type": "string"
-            }
-          },
-          "required": [
-            "file_path",
-            "content"
-          ],
-          "type": "object"
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "search_replace",
-        "description": "在指定文件中做精确字符串替换，可单次或全部替换。",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string",
-              "description": "要修改的文件绝对路径"
-            },
-            "old_string": {
-              "type": "string",
-              "description": "被替换的字符串，需与文件内容精确匹配（含空格与缩进）"
-            },
-            "new_string": {
-              "type": "string",
-              "description": "替换后的新字符串"
-            },
-            "replace_all": {
-              "type": "boolean",
-              "description": "是否替换文件中所有匹配项；默认 false 仅替换第一次",
-              "default": false
-            },
-            "description": {
-              "type": "string",
-              "description": "Briefly describe the action this tool call will perform."
-            }
-          },
-          "required": [
-            "path",
-            "old_string",
-            "new_string"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "Edit",
-        "description": "Edit a file by replacing exact text at an absolute file path.",
-        "parameters": {
-          "$schema": "https://json-schema.org/draft/2020-12/schema",
-          "additionalProperties": false,
-          "properties": {
-            "file_path": {
-              "description": "Absolute path of the file to modify. Relative paths are rejected.",
-              "type": "string"
-            },
-            "new_string": {
-              "description": "Replacement text; use a value different from old_string.",
-              "type": "string"
-            },
-            "old_string": {
-              "description": "Exact text to replace, including whitespace and indentation.",
-              "type": "string"
-            },
-            "replace_all": {
-              "default": false,
-              "description": "Replace every occurrence when true; defaults to false, which replaces only the first match.",
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "file_path",
-            "old_string",
-            "new_string"
-          ],
-          "type": "object"
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "edit_notebook",
-        "description": "编辑 Jupyter 笔记本的单元格：修改已有单元格或插入新单元格。",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "target_notebook": {
-              "type": "string",
-              "description": "笔记本文件路径（相对或绝对）"
-            },
-            "cell_idx": {
-              "type": "integer",
-              "description": "要编辑或插入位置的单元格索引（从 0 开始）"
-            },
-            "is_new_cell": {
-              "type": "boolean",
-              "description": "true=新建单元格；false=编辑已有单元格"
-            },
-            "cell_language": {
-              "type": "string",
-              "enum": [
-                "python",
-                "markdown",
-                "javascript",
-                "typescript",
-                "r",
-                "sql",
-                "shell",
-                "raw",
-                "other"
-              ],
-              "description": "单元格语言类型"
-            },
-            "old_string": {
-              "type": "string",
-              "description": "要替换的单元格内容；新建单元格时传空字符串"
-            },
-            "new_string": {
-              "type": "string",
-              "description": "新内容或新单元格的完整内容"
-            },
-            "description": {
-              "type": "string",
-              "description": "Briefly describe the action this tool call will perform."
-            }
-          },
-          "required": [
-            "target_notebook",
-            "cell_idx",
-            "is_new_cell",
-            "cell_language",
-            "old_string",
-            "new_string"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "delete_file",
-        "description": "删除指定路径的文件；若文件不存在或无权限则报错。",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string",
-              "description": "要删除的文件绝对路径"
-            },
-            "description": {
-              "type": "string",
-              "description": "Briefly describe the action this tool call will perform."
-            }
-          },
-          "required": [
-            "path"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "read_lints",
-        "description": "读取工作区或指定文件/目录的 linter 诊断信息。",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "paths": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "要检查的文件或目录路径列表；不传则返回整个工作区诊断"
-            },
-            "description": {
-              "type": "string",
-              "description": "Briefly describe the action this tool call will perform."
-            }
-          }
+          "additionalProperties": false
         }
       }
     },
@@ -488,22 +315,18 @@
         "parameters": {
           "type": "object",
           "properties": {
-            "search_term": {
-              "type": "string",
-              "description": "搜索关键词或完整查询"
-            },
-            "explanation": {
-              "type": "string",
-              "description": "使用该搜索的一句说明（为何需要此信息）"
-            },
             "description": {
               "type": "string",
               "description": "Briefly describe the action this tool call will perform."
+            },
+            "search_term": {
+              "type": "string",
+              "description": "搜索关键词或完整查询。"
             }
           },
           "required": [
-            "search_term",
-            "explanation"
+            "description",
+            "search_term"
           ]
         }
       }
@@ -511,18 +334,18 @@
     {
       "type": "function",
       "function": {
-        "name": "mcp_web_fetch",
+        "name": "web_fetch",
         "description": "根据 URL 抓取网页内容并转换为可读的 Markdown；不支持需认证或本地/私有地址。",
         "parameters": {
           "type": "object",
           "properties": {
-            "url": {
-              "type": "string",
-              "description": "要抓取的完整有效 URL"
-            },
             "description": {
               "type": "string",
               "description": "Briefly describe the action this tool call will perform."
+            },
+            "url": {
+              "type": "string",
+              "description": "要抓取的完整有效 URL，仅支持 http/https 公网地址。"
             }
           },
           "required": [
@@ -530,171 +353,18 @@
           ]
         }
       }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "generate_image",
-        "description": "根据文字描述生成图片文件。仅在用户明确要求生成图片时使用；不用于图表、表格等数据可视化。",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "description": {
-              "type": "string",
-              "description": "图片的详细描述：主体、布局、风格、颜色、文字等"
-            },
-            "filename": {
-              "type": "string",
-              "description": "保存的文件名（不含路径），不传则自动生成"
-            },
-            "reference_image_paths": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "参考图片的本地路径列表，用于风格或内容参考"
-            }
-          },
-          "required": [
-            "description"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "todo_write",
-        "description": "创建或更新任务列表，用于多步骤任务的规划与进度跟踪。",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "todos": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "type": "string",
-                    "description": "任务唯一标识"
-                  },
-                  "content": {
-                    "type": "string",
-                    "description": "任务描述"
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "pending",
-                      "in_progress",
-                      "completed",
-                      "cancelled"
-                    ],
-                    "description": "任务状态"
-                  }
-                },
-                "required": [
-                  "id",
-                  "content",
-                  "status"
-                ]
-              },
-              "description": "任务项列表"
-            },
-            "merge": {
-              "type": "boolean",
-              "description": "true=与现有 todo 按 id 合并；false=用当前列表完全替换现有 todo"
-            },
-            "description": {
-              "type": "string",
-              "description": "Briefly describe the action this tool call will perform."
-            }
-          },
-          "required": [
-            "todos",
-            "merge"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "mcp_task",
-        "description": "启动子代理处理复杂、多步骤任务；可指定类型（generalPurpose/shell）、模型、是否只读或后台运行。",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "description": {
-              "type": "string",
-              "description": "任务的简短描述（3–5 个词）"
-            },
-            "prompt": {
-              "type": "string",
-              "description": "发给子代理的完整任务说明与上下文"
-            },
-            "subagent_type": {
-              "type": "string",
-              "enum": [
-                "generalPurpose",
-                "shell"
-              ],
-              "description": "generalPurpose=通用研究与多步执行；shell=命令与 git 等终端任务"
-            },
-            "model": {
-              "type": "string",
-              "enum": [
-                "fast"
-              ],
-              "description": "可选模型；不传则继承父级"
-            },
-            "resume": {
-              "type": "string",
-              "description": "要恢复的子代理 ID，用于在完成一轮后继续对话"
-            },
-            "readonly": {
-              "type": "boolean",
-              "description": "是否以只读（Ask）模式运行，限制写操作与 MCP"
-            },
-            "attachments": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "description": "附件文件路径，如视频等，供支持多模态的模型使用"
-            },
-            "run_in_background": {
-              "type": "boolean",
-              "description": "是否在后台运行，完成后可通过 output_file 等查看结果"
-            }
-          },
-          "required": [
-            "description",
-            "prompt",
-            "subagent_type"
-          ]
-        }
-      }
     }
   ],
   "outputs_description": {
-    "codebase_search": "匹配的代码片段列表（含文件路径、代码块、简要说明）",
-    "bash": "合并后的终端可见输出与退出码；需权限时可能包含 required_permissions",
-    "Glob": "Newline-separated matching file paths sorted by modification time, newest first",
-    "grep": "按 output_mode 返回：匹配行（含上下文）、匹配文件列表或数量",
-    "Read": "文件内容；文本按行号格式返回，PDF 可按 pages 读取，失败时返回错误说明",
-    "read_file": "文件内容，行号格式为 行号|内容；图片为二进制描述",
-    "write": "无结构化返回；成功即写入完成",
-    "Write": "无结构化返回；成功即写入完成，失败时返回错误说明",
-    "search_replace": "无结构化返回；成功为编辑确认，失败为错误说明",
-    "Edit": "无结构化返回；成功为编辑确认，失败时返回错误说明",
-    "edit_notebook": "无结构化返回；成功即笔记本已更新",
-    "delete_file": "无结构化返回；失败时返回错误信息",
-    "read_lints": "诊断列表（文件、行、消息、严重程度等）",
-    "web_search": "搜索结果摘要（标题、片段、URL 等）",
-    "mcp_web_fetch": "页面内容转成的 Markdown 文本；失败为错误信息",
-    "generate_image": "生成图片的路径或展示信息",
-    "todo_write": "无独立返回；用于更新内部任务状态",
-    "mcp_task": "子代理的最终回复文本；后台运行时可能含 output_file 等"
+    "bash": "Terminal-visible combined stdout/stderr text with an exit_code header, or background PID information.",
+    "read": "File contents. Text files include line numbers; PDFs can be limited with pages; binary files return a short description.",
+    "write": "Plain success or error text after writing complete content to an absolute file path.",
+    "edit": "Plain success or error text after replacing exact text in an absolute file path.",
+    "edit_notebook": "Plain success or error text after editing or inserting a notebook cell.",
+    "read_lints": "Linter diagnostics or a placeholder message when no linter integration is available.",
+    "glob": "Newline-separated matching file paths sorted by modification time, newest first.",
+    "grep": "Matching file paths, matching content lines, or counts depending on output_mode.",
+    "web_search": "Search result summaries with titles, URLs, and snippets, or a fallback search URL.",
+    "web_fetch": "Public web page content converted to Markdown, or an error message."
   }
 }

@@ -1,4 +1,4 @@
-"""Backward-compatible public API entry points."""
+"""Public API entry points."""
 
 import sys
 from pathlib import Path
@@ -8,18 +8,15 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 from pygent.llm import AsyncOpenAIClient, AsyncRequestsClient
-from pygent.toolkits import BashToolkits, RestrictedTerminal, TerminalToolkits
+from pygent.toolkits import BashToolkits, FileToolkits, WebFetchToolkits, WebSearchToolkits
 
 
 def test_async_openai_client_alias():
     assert AsyncOpenAIClient is AsyncRequestsClient
 
 
-def test_restricted_terminal_compat_shape(tmp_path):
-    terminal = RestrictedTerminal(root_dir=str(tmp_path))
-    assert isinstance(terminal, TerminalToolkits)
-    assert isinstance(terminal, BashToolkits)
-    assert terminal.workspace_root == str(tmp_path)
-    assert terminal.get_tools() == terminal.get_all_tools()
-    assert terminal.get_tool("bash") is not None
-    assert terminal.get_tool("run_terminal_cmd") is None
+def test_toolkit_exports_are_current_public_api():
+    assert BashToolkits is not None
+    assert FileToolkits is not None
+    assert WebFetchToolkits is not None
+    assert WebSearchToolkits is not None
