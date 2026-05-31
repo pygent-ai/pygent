@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from pygent.common import PygentString
+from pygent.module.tool import ToolErrorResult
 from pygent.module.tool.utils import ToolClassBase, tool_class, tool_method
 from pygent.toolkits.path_utils import normalize_tool_path
 
@@ -230,6 +231,21 @@ def _format_result(
     return result
 
 
+def _tool_error(
+    message: str,
+    error_type: str = "ToolExecutionError",
+    **details: Any,
+) -> ToolErrorResult:
+    input_path = details.pop("input_path", details.pop("input", None))
+    path = details.pop("path", details.pop("resolved_path", None))
+    normalized_details = dict(details)
+    if input_path is not None:
+        normalized_details["input_path"] = str(input_path)
+    if path is not None:
+        normalized_details["path"] = str(path)
+    return ToolErrorResult(message, error_type=error_type, details=normalized_details or None)
+
+
 @tool_class(description="Bash command toolkit with timeout, cwd, encoding, and large-output handling.")
 class BashToolkits(ToolClassBase):
     """Run commands with bash in the configured workspace."""
@@ -275,7 +291,8 @@ class BashToolkits(ToolClassBase):
         try:
             cwd = self._resolve_working_directory(working_directory)
         except ValueError as exc:
-            return f"error: {exc}"
+            details = getattr(exc, "details", {})
+            return _tool_error(f"error: {exc}", "NotADirectoryError", **details)
 
         if is_background:
             return self._run_background(command, cwd)
@@ -284,12 +301,19 @@ class BashToolkits(ToolClassBase):
     def _resolve_working_directory(self, working_directory: Optional[str]) -> str:
         if working_directory is None or not str(working_directory).strip():
             path = Path(self.workspace_root)
+            input_path = None
         else:
-            path = normalize_tool_path(str(working_directory).strip(), self.workspace_root)
+            input_path = str(working_directory).strip()
+            path = normalize_tool_path(input_path, self.workspace_root)
 
         resolved = path.resolve()
         if not resolved.is_dir():
-            raise ValueError(f"working directory does not exist or is not a directory: {resolved}")
+            exc = ValueError(f"working directory does not exist or is not a directory: {resolved}")
+            exc.details = {
+                "input_path": input_path or self.workspace_root,
+                "path": str(resolved),
+            }
+            raise exc
         return str(resolved)
 
     def _bash_args(self, command: str) -> list[str]:

@@ -14,9 +14,12 @@ from pygent.module.tool import (
     ToolMetadata,
     ToolCategory,
     ToolPermission,
+    ToolErrorResult,
     ToolManager,
     tool,
     auto_tool,
+    is_tool_error,
+    tool_error_to_message,
     ToolRegistry,
     TOOL_CALL_DESCRIPTION_PARAM,
     TOOL_CALL_DESCRIPTION_TEXT,
@@ -209,6 +212,18 @@ class TestBaseTool(unittest.TestCase):
         self.assertFalse(out["success"])
         self.assertIn("bad", out["error"])
         self.assertEqual(t.error_count.data, 1)
+
+    def test_tool_error_result_helpers(self):
+        error = ToolErrorResult(
+            "missing file",
+            error_type="FileNotFoundError",
+            details={"path": "missing.txt"},
+        )
+
+        self.assertTrue(is_tool_error(error))
+        self.assertFalse(is_tool_error("missing file"))
+        self.assertEqual(tool_error_to_message(error), "missing file")
+        self.assertEqual(tool_error_to_message("plain"), "plain")
 
 
 class TestToolManager(unittest.TestCase):

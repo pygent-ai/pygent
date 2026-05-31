@@ -225,6 +225,19 @@ def test_bash_ut_rejects_missing_working_directory(tmp_path):
     assert str(tmp_path / "missing") in output
 
 
+def test_bash_ut_missing_working_directory_is_structured_tool_error(tmp_path):
+    tools = PythonCommandToolkits(session_id="s", workspace_root=str(tmp_path))
+
+    result = tools.call_tool("bash", command="print('hi')", working_directory="missing")
+
+    assert result["success"] is False
+    assert result["error_type"] == "NotADirectoryError"
+    assert "working directory" in result["error"]
+    assert result["details"]["input_path"] == "missing"
+    assert result["details"]["path"] == str(tmp_path / "missing")
+    assert "result" not in result
+
+
 def test_bash_ut_times_out_and_preserves_partial_terminal_output(tmp_path):
     tools = PythonCommandToolkits(session_id="s", workspace_root=str(tmp_path))
 

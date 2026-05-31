@@ -23,10 +23,21 @@ TOOL_CALL_DESCRIPTION_TEXT = "Briefly describe the action this tool call will pe
 class ToolErrorResult(str):
     """String-compatible result that BaseTool turns into a structured error."""
 
-    def __new__(cls, message: str, details: Any = None):
+    def __new__(cls, message: str, error_type: str = "ToolExecutionError", details: Any = None):
         obj = str.__new__(cls, message)
+        obj.error_type = error_type
         obj.details = details
         return obj
+
+
+def is_tool_error(result: Any) -> bool:
+    """Return whether a tool result represents a tool-level execution error."""
+    return isinstance(result, ToolErrorResult)
+
+
+def tool_error_to_message(result: Any) -> str:
+    """Convert a structured tool error or plain result to a user-facing message."""
+    return str(result)
 
 
 class ToolCategory(Enum):
@@ -480,7 +491,11 @@ class BaseTool(PygentModule):
             result = self.forward(*args, **self._prepare_forward_kwargs(kwargs))
             if isinstance(result, ToolErrorResult):
                 self.error_count.data += 1
-                return self._create_error_response(str(result), details=result.details)
+                return self._create_error_response(
+                    str(result),
+                    details=result.details,
+                    error_type=result.error_type,
+                )
             
             # 创建成功响应
             return self._create_success_response(result)
@@ -511,7 +526,13 @@ class BaseTool(PygentModule):
             }
         }
     
-    def _create_error_response(self, error: str, details: Any = None, exception: Exception = None) -> Dict[str, Any]:
+    def _create_error_response(
+        self,
+        error: str,
+        details: Any = None,
+        exception: Exception = None,
+        error_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """创建错误响应"""
         response = {
             "success": False,
@@ -528,6 +549,8 @@ class BaseTool(PygentModule):
                 "enabled": self.enabled.data,
             }
         }
+        if error_type:
+            response["error_type"] = error_type
         
         if details:
             response["details"] = details

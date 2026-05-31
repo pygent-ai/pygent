@@ -87,8 +87,41 @@ def test_file_tool_path_errors_are_structured_through_call_tool(tmp_path):
     result = tools.call_tool("read", file_path=str(missing))
 
     assert result["success"] is False
+    assert result["error_type"] == "FileNotFoundError"
     assert "missing.txt" in result["error"]
+    assert result["details"]["input_path"] == str(missing)
+    assert result["details"]["path"] == str(missing)
     assert "result" not in result
+
+
+def test_glob_grep_and_edit_path_errors_include_structured_error_type(tmp_path):
+    tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
+    missing_dir = tmp_path / "missing-dir"
+    missing_file = tmp_path / "missing.txt"
+
+    glob_result = tools.call_tool("glob", pattern="*.md", path=str(missing_dir))
+    assert glob_result["success"] is False
+    assert glob_result["error_type"] == "FileNotFoundError"
+    assert glob_result["details"]["input_path"] == str(missing_dir)
+    assert glob_result["details"]["path"] == str(missing_dir)
+
+    grep_result = tools.call_tool("grep", pattern="x", path=str(missing_dir))
+    assert grep_result["success"] is False
+    assert grep_result["error_type"] == "FileNotFoundError"
+    assert grep_result["details"]["input_path"] == str(missing_dir)
+    assert grep_result["details"]["path"] == str(missing_dir)
+
+    edit_result = tools.call_tool(
+        "edit",
+        file_path=str(missing_file),
+        old_string="x",
+        new_string="y",
+    )
+    assert edit_result["success"] is False
+    assert edit_result["error_type"] == "FileNotFoundError"
+    assert edit_result["details"]["input_path"] == str(missing_file)
+    assert edit_result["details"]["path"] == str(missing_file)
+    assert not missing_file.exists()
 
 
 def test_write_uses_absolute_path_schema_and_rejects_relative_paths(tmp_path):

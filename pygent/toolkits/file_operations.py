@@ -63,8 +63,19 @@ def _is_absolute_file_path(path: str) -> bool:
     return is_absolute_tool_path(raw)
 
 
-def _tool_error(message: str, **details: Any) -> ToolErrorResult:
-    return ToolErrorResult(message, details or None)
+def _tool_error(
+    message: str,
+    error_type: str = "ToolExecutionError",
+    **details: Any,
+) -> ToolErrorResult:
+    input_path = details.pop("input_path", details.pop("input", None))
+    path = details.pop("path", details.pop("resolved_path", None))
+    normalized_details = dict(details)
+    if input_path is not None:
+        normalized_details["input_path"] = str(input_path)
+    if path is not None:
+        normalized_details["path"] = str(path)
+    return ToolErrorResult(message, error_type=error_type, details=normalized_details or None)
 
 
 READ_PARAMETER_SCHEMA = {
@@ -332,17 +343,17 @@ class FileToolkits(ToolClassBase):
             pages: Page range for PDF files, for example "1-5", "3", or "10-20". Applies only to PDF files and is limited to 20 pages per request.
         """
         if not _is_absolute_file_path(file_path):
-            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", input=file_path)
+            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", "ValueError", input=file_path)
 
         p = _resolve_path(file_path)
         if not p.exists():
-            return _tool_error(f"错误：文件不存在 {p}", input=file_path, resolved_path=str(p))
+            return _tool_error(f"错误：文件不存在 {p}", "FileNotFoundError", input=file_path, resolved_path=str(p))
         if not p.is_file():
-            return _tool_error(f"错误：路径不是文件 {p}", input=file_path, resolved_path=str(p))
+            return _tool_error(f"错误：路径不是文件 {p}", "IsADirectoryError", input=file_path, resolved_path=str(p))
         if p.suffix.lower() == ".pdf":
             return _read_pdf_text(p, pages)
         if pages:
-            return _tool_error("错误：pages 仅适用于 PDF 文件", input=file_path, resolved_path=str(p))
+            return _tool_error("错误：pages 仅适用于 PDF 文件", "ValueError", input=file_path, resolved_path=str(p))
         return self._read_file(str(p), offset=offset, limit=limit)
 
     def _read_file(
@@ -361,9 +372,9 @@ class FileToolkits(ToolClassBase):
         """
         p = _resolve_path(path, self.workspace_root)
         if not p.exists():
-            return _tool_error(f"错误：文件不存在 {p}", input=path, resolved_path=str(p))
+            return _tool_error(f"错误：文件不存在 {p}", "FileNotFoundError", input=path, resolved_path=str(p))
         if not p.is_file():
-            return _tool_error(f"错误：路径不是文件 {p}", input=path, resolved_path=str(p))
+            return _tool_error(f"错误：路径不是文件 {p}", "IsADirectoryError", input=path, resolved_path=str(p))
         try:
             # 尝试按文本读取
             with open(p, "rb") as f:
@@ -378,7 +389,7 @@ class FileToolkits(ToolClassBase):
                 return f"[图片文件 {p.name}, 大小 {len(raw)} 字节]"
             return f"[二进制文件 {p.name}, 大小 {len(raw)} 字节]"
         except OSError as e:
-            return _tool_error(f"错误：无法读取文件 {e}", input=path, resolved_path=str(p))
+            return _tool_error(f"错误：无法读取文件 {e}", "OSError", input=path, resolved_path=str(p))
 
     @tool_method(
         name="write",
@@ -396,18 +407,18 @@ class FileToolkits(ToolClassBase):
             content: Full text content to write, replacing any existing file contents.
         """
         if not _is_absolute_file_path(file_path):
-            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", input=file_path)
+            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", "ValueError", input=file_path)
 
         p = _resolve_path(file_path)
         if p.exists() and p.is_dir():
-            return _tool_error(f"错误：file_path 指向目录而不是文件 {p}", input=file_path, resolved_path=str(p))
+            return _tool_error(f"错误：file_path 指向目录而不是文件 {p}", "IsADirectoryError", input=file_path, resolved_path=str(p))
 
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content, encoding="utf-8")
             return "写入完成"
         except OSError as e:
-            return _tool_error(f"错误：无法写入 {e}", input=file_path, resolved_path=str(p))
+            return _tool_error(f"错误：无法写入 {e}", "OSError", input=file_path, resolved_path=str(p))
 
     def _search_replace(
         self,
@@ -427,21 +438,21 @@ class FileToolkits(ToolClassBase):
         """
         p = _resolve_path(path, self.workspace_root)
         if not p.exists() or not p.is_file():
-            return _tool_error(f"错误：文件不存在或不是文件 {p}", input=path, resolved_path=str(p))
+            return _tool_error(f"错误：文件不存在或不是文件 {p}", "FileNotFoundError", input=path, resolved_path=str(p))
         try:
             text = p.read_text(encoding="utf-8")
             if replace_all:
                 if old_string not in text:
-                    return _tool_error("错误：未找到匹配内容", input=path, resolved_path=str(p))
+                    return _tool_error("错误：未找到匹配内容", "ValueError", input=path, resolved_path=str(p))
                 new_text = text.replace(old_string, new_string)
             else:
                 if old_string not in text:
-                    return _tool_error("错误：未找到匹配内容", input=path, resolved_path=str(p))
+                    return _tool_error("错误：未找到匹配内容", "ValueError", input=path, resolved_path=str(p))
                 new_text = text.replace(old_string, new_string, 1)
             p.write_text(new_text, encoding="utf-8")
             return "替换完成"
         except OSError as e:
-            return _tool_error(f"错误：{e}", input=path, resolved_path=str(p))
+            return _tool_error(f"错误：{e}", "OSError", input=path, resolved_path=str(p))
 
     @tool_method(
         name="edit",
@@ -467,9 +478,9 @@ class FileToolkits(ToolClassBase):
             replace_all: Replace every occurrence when true; defaults to false, which replaces only the first match.
         """
         if not _is_absolute_file_path(file_path):
-            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", input=file_path)
+            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", "ValueError", input=file_path)
         if old_string == new_string:
-            return _tool_error("错误：new_string 必须与 old_string 不同", input=file_path)
+            return _tool_error("错误：new_string 必须与 old_string 不同", "ValueError", input=file_path)
 
         return self._search_replace(
             file_path,
@@ -597,15 +608,15 @@ class FileToolkits(ToolClassBase):
         """
         root = _resolve_path(path or ".", self.workspace_root)
         if not root.exists():
-            return _tool_error(f"error: path does not exist {root}", input=path or ".", resolved_path=str(root))
+            return _tool_error(f"error: path does not exist {root}", "FileNotFoundError", input=path or ".", resolved_path=str(root))
         if not root.is_dir():
-            return _tool_error(f"error: path must be a directory {root}", input=path or ".", resolved_path=str(root))
+            return _tool_error(f"error: path must be a directory {root}", "NotADirectoryError", input=path or ".", resolved_path=str(root))
 
         normalized_pattern = pattern.lstrip("/\\")
         try:
             matches = [p for p in root.glob(normalized_pattern) if p.is_file()]
         except (OSError, ValueError) as e:
-            return _tool_error(f"error: invalid glob pattern {e}", input=path or ".", resolved_path=str(root))
+            return _tool_error(f"error: invalid glob pattern {e}", "ValueError", input=path or ".", resolved_path=str(root))
 
         def sort_key(file_path: Path) -> tuple[float, str]:
             try:
@@ -669,11 +680,11 @@ class FileToolkits(ToolClassBase):
         file_type = _first_present(kwargs.get("type"), type, file_type)
         output_mode = output_mode or "files_with_matches"
         if output_mode not in {"content", "files_with_matches", "count"}:
-            return _tool_error(f"错误：不支持的 output_mode {output_mode}")
+            return _tool_error(f"错误：不支持的 output_mode {output_mode}", "ValueError")
 
         root = _resolve_path(path or ".", self.workspace_root)
         if not root.exists():
-            return _tool_error(f"错误：路径不存在 {root}", input=path or ".", resolved_path=str(root))
+            return _tool_error(f"错误：路径不存在 {root}", "FileNotFoundError", input=path or ".", resolved_path=str(root))
 
         flags = re.IGNORECASE if ignore_case else 0
         if multiline:
