@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from pygent.common import PygentString
 from pygent.module.tool.utils import ToolClassBase, tool_class, tool_method
+from pygent.toolkits.path_utils import normalize_tool_path
 
 
 _DEFAULT_TIMEOUT_MS = 30000
@@ -247,7 +248,7 @@ class BashToolkits(ToolClassBase):
 
     @tool_method(
         name="bash",
-        description="Run a command with bash. Output is the combined terminal-visible stdout/stderr stream.",
+        description="Run a command with bash. Output is the combined terminal-visible stdout/stderr stream. working_directory accepts Windows, Windows slash, Git Bash/MSYS drive paths on Windows, and relative paths resolved from workspace_root.",
     )
     def bash(
         self,
@@ -262,7 +263,7 @@ class BashToolkits(ToolClassBase):
 
         Args:
             command: Complete bash command string to run.
-            working_directory: Directory for the command. Relative paths are resolved from workspace_root.
+            working_directory: Directory for the command. Accepts Windows paths such as E:\\Projects\\repo, Windows slash paths such as E:/Projects/repo, and on Windows Git Bash/MSYS drive paths such as /e/Projects/repo. Relative paths are resolved from workspace_root.
             timeout: Timeout in milliseconds. Defaults to 30000 and is capped at 600000.
             description: Optional human-readable command description for callers.
             is_background: If true, start the command in the background and do not capture output.
@@ -284,9 +285,7 @@ class BashToolkits(ToolClassBase):
         if working_directory is None or not str(working_directory).strip():
             path = Path(self.workspace_root)
         else:
-            path = Path(str(working_directory).strip()).expanduser()
-            if not path.is_absolute():
-                path = Path(self.workspace_root) / path
+            path = normalize_tool_path(str(working_directory).strip(), self.workspace_root)
 
         resolved = path.resolve()
         if not resolved.is_dir():

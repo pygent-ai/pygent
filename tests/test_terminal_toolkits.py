@@ -72,6 +72,13 @@ def _prepare_bash_workspace(path):
     (path / "sub" / "note.md").write_text("note", encoding="utf-8")
 
 
+def _to_msys_path(path: Path) -> str:
+    resolved = path.resolve()
+    drive = resolved.drive.rstrip(":").lower()
+    rest = resolved.as_posix()[3:]
+    return f"/{drive}/{rest}"
+
+
 def _npm_available(executable: str) -> bool:
     proc = subprocess.run(
         [executable, "-lc", "command -v npm >/dev/null 2>&1 && npm --version >/dev/null"],
@@ -173,6 +180,25 @@ def test_bash_ut_executes_in_requested_working_directory(tmp_path):
     output = tools.bash(
         "import pathlib; print(pathlib.Path.cwd().name)",
         working_directory="nested",
+        timeout=5000,
+    )
+
+    exit_code, terminal_output = _parse_result(output)
+    assert exit_code == "0"
+    assert terminal_output == f"nested{os.linesep}"
+
+
+def test_bash_ut_accepts_git_bash_msys_working_directory_on_windows(tmp_path):
+    if os.name != "nt":
+        pytest.skip("MSYS drive path compatibility is Windows-specific")
+
+    tools = PythonCommandToolkits(session_id="s", workspace_root=str(tmp_path))
+    nested = tmp_path / "nested"
+    nested.mkdir()
+
+    output = tools.bash(
+        "import pathlib; print(pathlib.Path.cwd().name)",
+        working_directory=_to_msys_path(nested),
         timeout=5000,
     )
 

@@ -7,12 +7,17 @@ import json
 import fnmatch
 import os
 import re
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any, List, Optional
 
 from pygent.common import PygentString
-from pygent.module.tool import BaseTool
+from pygent.module.tool import BaseTool, ToolErrorResult
 from pygent.module.tool.utils import ToolClassBase, tool_method, tool_class
+from pygent.toolkits.path_utils import (
+    is_absolute_tool_path,
+    normalize_desktop_path,
+    normalize_tool_path,
+)
 
 
 def _normalize_desktop_path(path: str) -> str:
@@ -40,12 +45,7 @@ def _resolve_path(path: str, base: Optional[str] = None) -> Path:
     - 绝对路径（/xxx 或 C:\\xxx）直接使用
     - 相对路径相对于 base 解析；base 为空时相对于当前工作目录
     """
-    path_str = _normalize_desktop_path(path)
-    path_str = os.path.expanduser(path_str)
-    p = Path(path_str)
-    if not p.is_absolute() and base:
-        p = Path(base) / p
-    resolved = p.resolve()
+    resolved = normalize_tool_path(path, base)
     # Windows：若父目录 C:\Users\Desktop 不存在（真实桌面是 C:\Users\<用户名>\Desktop），则使用用户桌面
     if os.name == "nt" and not resolved.parent.exists():
         parent_parts = Path(resolved.parent).parts
@@ -60,12 +60,11 @@ def _is_absolute_file_path(path: str) -> bool:
     raw = str(path).strip()
     if not raw:
         return False
-    expanded = os.path.expanduser(raw)
-    return (
-        Path(expanded).is_absolute()
-        or PurePosixPath(expanded).is_absolute()
-        or PureWindowsPath(expanded).is_absolute()
-    )
+    return is_absolute_tool_path(raw)
+
+
+def _tool_error(message: str, **details: Any) -> ToolErrorResult:
+    return ToolErrorResult(message, details or None)
 
 
 READ_PARAMETER_SCHEMA = {
@@ -73,7 +72,7 @@ READ_PARAMETER_SCHEMA = {
     "additionalProperties": False,
     "properties": {
         "file_path": {
-            "description": "要读取的文件绝对路径。",
+            "description": "Absolute file path to read. Accepts Windows paths such as E:\\Projects\\repo\\file.txt, Windows slash paths such as E:/Projects/repo/file.txt, and on Windows Git Bash/MSYS drive paths such as /e/Projects/repo/file.txt. Relative paths are rejected.",
             "type": "string",
         },
         "limit": {
@@ -220,7 +219,7 @@ GREP_PARAMETER_SCHEMA = {
             "type": "string",
         },
         "path": {
-            "description": "File or directory to search in (rg PATH). Defaults to current working directory.",
+            "description": "File or directory to search. Omit to use workspace_root. Accepts Windows paths such as E:\\Projects\\repo, Windows slash paths such as E:/Projects/repo, Git Bash/MSYS drive paths on Windows such as /e/Projects/repo, and relative paths such as . or docs resolved from workspace_root.",
             "type": "string",
         },
         "pattern": {
@@ -310,7 +309,7 @@ class FileToolkits(ToolClassBase):
 
     @tool_method(
         name="read",
-        description="Read a file by absolute path, with optional line ranges for text files and page ranges for PDFs.",
+        description="Read a file by absolute path. Accepts Windows, Windows slash, and on Windows Git Bash/MSYS drive paths; relative paths are rejected.",
         include_call_description_parameter=False,
         parameters_additional_properties=False,
         parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
@@ -333,17 +332,17 @@ class FileToolkits(ToolClassBase):
             pages: Page range for PDF files, for example "1-5", "3", or "10-20". Applies only to PDF files and is limited to 20 pages per request.
         """
         if not _is_absolute_file_path(file_path):
-            return "错误：file_path 必须是绝对路径，不能使用相对路径"
+            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", input=file_path)
 
         p = _resolve_path(file_path)
         if not p.exists():
-            return f"错误：文件不存在 {p}"
+            return _tool_error(f"错误：文件不存在 {p}", input=file_path, resolved_path=str(p))
         if not p.is_file():
-            return f"错误：路径不是文件 {p}"
+            return _tool_error(f"错误：路径不是文件 {p}", input=file_path, resolved_path=str(p))
         if p.suffix.lower() == ".pdf":
             return _read_pdf_text(p, pages)
         if pages:
-            return "错误：pages 仅适用于 PDF 文件"
+            return _tool_error("错误：pages 仅适用于 PDF 文件", input=file_path, resolved_path=str(p))
         return self._read_file(str(p), offset=offset, limit=limit)
 
     def _read_file(
@@ -362,9 +361,9 @@ class FileToolkits(ToolClassBase):
         """
         p = _resolve_path(path, self.workspace_root)
         if not p.exists():
-            return f"错误：文件不存在 {p}"
+            return _tool_error(f"错误：文件不存在 {p}", input=path, resolved_path=str(p))
         if not p.is_file():
-            return f"错误：路径不是文件 {p}"
+            return _tool_error(f"错误：路径不是文件 {p}", input=path, resolved_path=str(p))
         try:
             # 尝试按文本读取
             with open(p, "rb") as f:
@@ -379,11 +378,11 @@ class FileToolkits(ToolClassBase):
                 return f"[图片文件 {p.name}, 大小 {len(raw)} 字节]"
             return f"[二进制文件 {p.name}, 大小 {len(raw)} 字节]"
         except OSError as e:
-            return f"错误：无法读取文件 {e}"
+            return _tool_error(f"错误：无法读取文件 {e}", input=path, resolved_path=str(p))
 
     @tool_method(
         name="write",
-        description="Write text content to an absolute file path, creating parent directories and replacing existing content.",
+        description="Write text content to an absolute file path. Accepts Windows, Windows slash, and on Windows Git Bash/MSYS drive paths; relative paths are rejected.",
         include_call_description_parameter=False,
         parameters_additional_properties=False,
         parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
@@ -393,22 +392,22 @@ class FileToolkits(ToolClassBase):
         Write complete text content to a file, overwriting the file if it already exists.
 
         Args:
-            file_path: Absolute destination file path. Relative paths are rejected; parent directories are created when missing.
+            file_path: Absolute destination file path. Accepts Windows paths such as E:\\Projects\\repo\\file.txt, Windows slash paths such as E:/Projects/repo/file.txt, and on Windows Git Bash/MSYS drive paths such as /e/Projects/repo/file.txt. Relative paths are rejected; parent directories are created when missing.
             content: Full text content to write, replacing any existing file contents.
         """
         if not _is_absolute_file_path(file_path):
-            return "错误：file_path 必须是绝对路径，不能使用相对路径"
+            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", input=file_path)
 
         p = _resolve_path(file_path)
         if p.exists() and p.is_dir():
-            return f"错误：file_path 指向目录而不是文件 {p}"
+            return _tool_error(f"错误：file_path 指向目录而不是文件 {p}", input=file_path, resolved_path=str(p))
 
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content, encoding="utf-8")
             return "写入完成"
         except OSError as e:
-            return f"错误：无法写入 {e}"
+            return _tool_error(f"错误：无法写入 {e}", input=file_path, resolved_path=str(p))
 
     def _search_replace(
         self,
@@ -428,25 +427,25 @@ class FileToolkits(ToolClassBase):
         """
         p = _resolve_path(path, self.workspace_root)
         if not p.exists() or not p.is_file():
-            return f"错误：文件不存在或不是文件 {p}"
+            return _tool_error(f"错误：文件不存在或不是文件 {p}", input=path, resolved_path=str(p))
         try:
             text = p.read_text(encoding="utf-8")
             if replace_all:
                 if old_string not in text:
-                    return f"错误：未找到匹配内容"
+                    return _tool_error("错误：未找到匹配内容", input=path, resolved_path=str(p))
                 new_text = text.replace(old_string, new_string)
             else:
                 if old_string not in text:
-                    return f"错误：未找到匹配内容"
+                    return _tool_error("错误：未找到匹配内容", input=path, resolved_path=str(p))
                 new_text = text.replace(old_string, new_string, 1)
             p.write_text(new_text, encoding="utf-8")
             return "替换完成"
         except OSError as e:
-            return f"错误：{e}"
+            return _tool_error(f"错误：{e}", input=path, resolved_path=str(p))
 
     @tool_method(
         name="edit",
-        description="Edit a file by replacing exact text at an absolute file path.",
+        description="Edit a file by replacing exact text at an absolute file path. Accepts Windows, Windows slash, and on Windows Git Bash/MSYS drive paths; relative paths are rejected.",
         include_call_description_parameter=False,
         parameters_additional_properties=False,
         parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
@@ -462,15 +461,15 @@ class FileToolkits(ToolClassBase):
         Replace exact text in a file.
 
         Args:
-            file_path: Absolute path of the file to modify. Relative paths are rejected.
+            file_path: Absolute path of the file to modify. Accepts Windows paths such as E:\\Projects\\repo\\file.txt, Windows slash paths such as E:/Projects/repo/file.txt, and on Windows Git Bash/MSYS drive paths such as /e/Projects/repo/file.txt. Relative paths are rejected.
             old_string: Exact text to replace, including whitespace and indentation.
             new_string: Replacement text; use a value different from old_string.
             replace_all: Replace every occurrence when true; defaults to false, which replaces only the first match.
         """
         if not _is_absolute_file_path(file_path):
-            return "错误：file_path 必须是绝对路径，不能使用相对路径"
+            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", input=file_path)
         if old_string == new_string:
-            return "错误：new_string 必须与 old_string 不同"
+            return _tool_error("错误：new_string 必须与 old_string 不同", input=file_path)
 
         return self._search_replace(
             file_path,
@@ -576,7 +575,7 @@ class FileToolkits(ToolClassBase):
             "additionalProperties": False,
             "properties": {
                 "path": {
-                    "description": "Directory to search. Omit this field to use the workspace root; do not pass \"undefined\" or \"null\". If provided, it must be an existing directory path.",
+                    "description": "Directory to search. Omit this field to use workspace_root. Accepts Windows paths such as E:\\Projects\\repo, Windows slash paths such as E:/Projects/repo, Git Bash/MSYS drive paths on Windows such as /e/Projects/repo, and relative paths such as . or docs resolved from workspace_root.",
                     "type": "string",
                 },
                 "pattern": {
@@ -598,15 +597,15 @@ class FileToolkits(ToolClassBase):
         """
         root = _resolve_path(path or ".", self.workspace_root)
         if not root.exists():
-            return f"error: path does not exist {root}"
+            return _tool_error(f"error: path does not exist {root}", input=path or ".", resolved_path=str(root))
         if not root.is_dir():
-            return f"error: path must be a directory {root}"
+            return _tool_error(f"error: path must be a directory {root}", input=path or ".", resolved_path=str(root))
 
         normalized_pattern = pattern.lstrip("/\\")
         try:
             matches = [p for p in root.glob(normalized_pattern) if p.is_file()]
         except (OSError, ValueError) as e:
-            return f"error: invalid glob pattern {e}"
+            return _tool_error(f"error: invalid glob pattern {e}", input=path or ".", resolved_path=str(root))
 
         def sort_key(file_path: Path) -> tuple[float, str]:
             try:
@@ -670,11 +669,11 @@ class FileToolkits(ToolClassBase):
         file_type = _first_present(kwargs.get("type"), type, file_type)
         output_mode = output_mode or "files_with_matches"
         if output_mode not in {"content", "files_with_matches", "count"}:
-            return f"错误：不支持的 output_mode {output_mode}"
+            return _tool_error(f"错误：不支持的 output_mode {output_mode}")
 
         root = _resolve_path(path or ".", self.workspace_root)
         if not root.exists():
-            return f"错误：路径不存在 {root}"
+            return _tool_error(f"错误：路径不存在 {root}", input=path or ".", resolved_path=str(root))
 
         flags = re.IGNORECASE if ignore_case else 0
         if multiline:

@@ -1,7 +1,17 @@
 import json
 import os
+from pathlib import Path
+
+import pytest
 
 from pygent.toolkits.file_operations import FileToolkits, _normalize_desktop_path, _resolve_path
+
+
+def _to_msys_path(path: Path) -> str:
+    resolved = path.resolve()
+    drive = resolved.drive.rstrip(":").lower()
+    rest = resolved.as_posix()[3:]
+    return f"/{drive}/{rest}"
 
 
 def test_resolve_path_handles_relative_and_desktop_alias(tmp_path):
@@ -45,6 +55,40 @@ def test_write_read_edit_grep_flow(tmp_path):
     assert "example.txt" in grep_output
     assert "3|delta" in grep_output
     assert tools.grep("delta", path="docs", output_mode="count") == "1"
+
+
+def test_file_tools_accept_git_bash_msys_paths_on_windows(tmp_path):
+    if os.name != "nt":
+        pytest.skip("MSYS drive path compatibility is Windows-specific")
+
+    tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
+    target = tmp_path / "docs" / "example.txt"
+    msys_target = _to_msys_path(target)
+    msys_root = _to_msys_path(tmp_path)
+
+    assert tools.write(msys_target, "alpha\nbeta\n") == "写入完成"
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
+
+    assert tools.read(msys_target, offset=1, limit=1) == "1|alpha\n"
+
+    assert tools.glob("**/*.txt", path=msys_root).splitlines() == [str(target)]
+
+    grep_output = tools.grep("beta", path=msys_root, output_mode="content")
+    assert f"{target}:2|beta" in grep_output
+
+    assert tools.edit(msys_target, "beta", "gamma") == "替换完成"
+    assert target.read_text(encoding="utf-8") == "alpha\ngamma\n"
+
+
+def test_file_tool_path_errors_are_structured_through_call_tool(tmp_path):
+    tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
+    missing = tmp_path / "missing.txt"
+
+    result = tools.call_tool("read", file_path=str(missing))
+
+    assert result["success"] is False
+    assert "missing.txt" in result["error"]
+    assert "result" not in result
 
 
 def test_write_uses_absolute_path_schema_and_rejects_relative_paths(tmp_path):

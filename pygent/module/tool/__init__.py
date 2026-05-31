@@ -1,5 +1,6 @@
 from .base import (
     BaseTool,
+    ToolErrorResult,
     ToolMetadata,
     ToolParameter,
     ToolCategory,
@@ -13,6 +14,7 @@ from . import mcp
 
 __all__ = [
     "BaseTool",
+    "ToolErrorResult",
     "ToolMetadata",
     "ToolParameter",
     "ToolCategory",

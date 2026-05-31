@@ -20,6 +20,15 @@ TOOL_CALL_DESCRIPTION_PARAM = "description"
 TOOL_CALL_DESCRIPTION_TEXT = "Briefly describe the action this tool call will perform."
 
 
+class ToolErrorResult(str):
+    """String-compatible result that BaseTool turns into a structured error."""
+
+    def __new__(cls, message: str, details: Any = None):
+        obj = str.__new__(cls, message)
+        obj.details = details
+        return obj
+
+
 class ToolCategory(Enum):
     """工具类别枚举"""
     SEARCH = "search"
@@ -469,6 +478,9 @@ class BaseTool(PygentModule):
             
             # 执行工具
             result = self.forward(*args, **self._prepare_forward_kwargs(kwargs))
+            if isinstance(result, ToolErrorResult):
+                self.error_count.data += 1
+                return self._create_error_response(str(result), details=result.details)
             
             # 创建成功响应
             return self._create_success_response(result)
