@@ -2,11 +2,57 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Optional
 
 
 _MSYS_DRIVE_PATH_RE = re.compile(r"^/([a-zA-Z])(?:/(.*))?$")
+
+
+class ToolPathError(ValueError):
+    """Structured path resolution error raised before a tool touches the file system."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str = "InvalidPathError",
+        input_path: Optional[str] = None,
+        path: Optional[Path] = None,
+        workspace_root: Optional[Path] = None,
+    ):
+        super().__init__(message)
+        self.error_type = error_type
+        self.details = {
+            key: str(value)
+            for key, value in {
+                "input_path": input_path,
+                "path": path,
+                "workspace_root": workspace_root,
+            }.items()
+            if value is not None
+        }
+
+
+@dataclass(frozen=True)
+class ToolPathContext:
+    """Path resolution settings shared by workspace-scoped tools."""
+
+    workspace_root: Path
+    restrict_to_workspace: bool = True
+
+    @classmethod
+    def from_workspace_root(
+        cls,
+        workspace_root: str | Path,
+        *,
+        restrict_to_workspace: bool = True,
+    ) -> "ToolPathContext":
+        return cls(
+            workspace_root=Path(workspace_root).expanduser().resolve(),
+            restrict_to_workspace=restrict_to_workspace,
+        )
 
 
 def normalize_desktop_path(path: str) -> str:
@@ -53,3 +99,56 @@ def is_absolute_tool_path(path: str) -> bool:
         return False
     normalized = normalize_msys_drive_path(os.path.expanduser(raw))
     return Path(normalized).is_absolute() or PureWindowsPath(normalized).is_absolute()
+
+
+def _is_within_workspace(path: Path, workspace_root: Path) -> bool:
+    try:
+        path.relative_to(workspace_root)
+        return True
+    except ValueError:
+        return False
+
+
+def resolve_tool_path(
+    path: Optional[str],
+    context: ToolPathContext,
+    *,
+    default: Optional[str] = None,
+) -> Path:
+    """Resolve a tool path against workspace_root and enforce workspace bounds."""
+    if path is None or not str(path).strip():
+        if default is None:
+            raise ToolPathError(
+                "path must not be empty",
+                input_path=path,
+                workspace_root=context.workspace_root,
+            )
+        input_path = default
+    else:
+        input_path = str(path).strip()
+
+    resolved = normalize_tool_path(input_path, str(context.workspace_root))
+    if context.restrict_to_workspace and not _is_within_workspace(resolved, context.workspace_root):
+        raise ToolPathError(
+            f"path is outside workspace_root: {resolved}",
+            error_type="PathOutsideWorkspaceError",
+            input_path=input_path,
+            path=resolved,
+            workspace_root=context.workspace_root,
+        )
+    return resolved
+
+
+def resolve_file_path(path: str, context: ToolPathContext) -> Path:
+    """Resolve a file path. Existence and file-kind checks are left to callers."""
+    return resolve_tool_path(path, context, default=None)
+
+
+def resolve_dir_path(
+    path: Optional[str],
+    context: ToolPathContext,
+    *,
+    default: str = ".",
+) -> Path:
+    """Resolve a directory path. Existence and directory-kind checks are left to callers."""
+    return resolve_tool_path(path, context, default=default)

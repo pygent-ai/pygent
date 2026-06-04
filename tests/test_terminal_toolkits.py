@@ -188,6 +188,42 @@ def test_bash_ut_executes_in_requested_working_directory(tmp_path):
     assert terminal_output == f"nested{os.linesep}"
 
 
+def test_bash_ut_restricts_working_directory_to_workspace_by_default(tmp_path):
+    outside = tmp_path.parent
+    tools = PythonCommandToolkits(session_id="s", workspace_root=str(tmp_path))
+
+    result = tools.call_tool(
+        "bash",
+        command="print('hi')",
+        working_directory=str(outside),
+    )
+
+    assert result["success"] is False
+    assert result["error_type"] == "PathOutsideWorkspaceError"
+    assert result["details"]["input_path"] == str(outside)
+    assert result["details"]["path"] == str(outside.resolve())
+    assert result["details"]["workspace_root"] == str(tmp_path.resolve())
+
+
+def test_bash_ut_can_disable_workspace_restriction(tmp_path):
+    outside = tmp_path.parent
+    tools = PythonCommandToolkits(
+        session_id="s",
+        workspace_root=str(tmp_path),
+        restrict_to_workspace=False,
+    )
+
+    output = tools.bash(
+        "import pathlib; print(pathlib.Path.cwd())",
+        working_directory=str(outside),
+        timeout=5000,
+    )
+
+    exit_code, terminal_output = _parse_result(output)
+    assert exit_code == "0"
+    assert terminal_output.strip() == str(outside.resolve())
+
+
 def test_bash_ut_accepts_git_bash_msys_working_directory_on_windows(tmp_path):
     if os.name != "nt":
         pytest.skip("MSYS drive path compatibility is Windows-specific")

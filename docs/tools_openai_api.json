@@ -3,7 +3,7 @@
     "type": "function",
     "function": {
       "name": "bash",
-      "description": "Run a command with bash. Output is the combined terminal-visible stdout/stderr stream.",
+      "description": "Run a command with bash. Output is the combined terminal-visible stdout/stderr stream. working_directory is resolved from workspace_root and, by default, must stay inside workspace_root.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -17,7 +17,7 @@
           },
           "working_directory": {
             "type": "string",
-            "description": "Directory for the command. Relative paths are resolved from workspace_root."
+            "description": "Directory for the command. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root. Accepts Windows paths, Windows slash paths, ~/ paths, and on Windows Git Bash/MSYS drive paths."
           },
           "timeout": {
             "type": "number",
@@ -39,14 +39,14 @@
     "type": "function",
     "function": {
       "name": "read",
-      "description": "Read a file by absolute path, with optional line ranges for text files and page ranges for PDFs.",
+      "description": "Read a file path resolved from workspace_root, with optional line ranges for text files and page ranges for PDFs.",
       "parameters": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "file_path": {
             "type": "string",
-            "description": "要读取的文件绝对路径。"
+            "description": "File path to read. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root. Accepts Windows paths, Windows slash paths, ~/ paths, and on Windows Git Bash/MSYS drive paths."
           },
           "limit": {
             "type": "integer",
@@ -76,14 +76,14 @@
     "type": "function",
     "function": {
       "name": "write",
-      "description": "Write text content to an absolute file path, creating parent directories and replacing existing content.",
+      "description": "Write text content to a file path resolved from workspace_root, creating parent directories and replacing existing content.",
       "parameters": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "file_path": {
             "type": "string",
-            "description": "Absolute destination file path. Relative paths are rejected; parent directories are created when missing."
+            "description": "Destination file path. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root. Parent directories are created when missing."
           },
           "content": {
             "type": "string",
@@ -102,14 +102,14 @@
     "type": "function",
     "function": {
       "name": "edit",
-      "description": "Edit a file by replacing exact text at an absolute file path.",
+      "description": "Edit a file path resolved from workspace_root by replacing exact text.",
       "parameters": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
           "file_path": {
             "type": "string",
-            "description": "Absolute path of the file to modify. Relative paths are rejected."
+            "description": "File path to modify. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root."
           },
           "old_string": {
             "type": "string",
@@ -148,7 +148,7 @@
           },
           "target_notebook": {
             "type": "string",
-            "description": "文件路径。支持绝对路径、~/Desktop/xxx、或相对于工作区的相对路径。"
+            "description": "Notebook path to edit. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root."
           },
           "cell_idx": {
             "type": "integer",
@@ -213,7 +213,7 @@
         "properties": {
           "path": {
             "type": "string",
-            "description": "Directory to search. Omit this field to use the workspace root; do not pass \"undefined\" or \"null\". If provided, it must be an existing directory path."
+            "description": "Directory to search. Omit this field to use workspace_root. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root. Accepts Windows paths, Windows slash paths, ~/ paths, and on Windows Git Bash/MSYS drive paths."
           },
           "pattern": {
             "type": "string",
@@ -287,7 +287,7 @@
           },
           "path": {
             "type": "string",
-            "description": "File or directory to search in (rg PATH). Defaults to current working directory."
+            "description": "File or directory to search. Omit to use workspace_root. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root. Accepts Windows paths, Windows slash paths, ~/ paths, and on Windows Git Bash/MSYS drive paths."
           },
           "pattern": {
             "type": "string",

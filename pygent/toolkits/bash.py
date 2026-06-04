@@ -12,7 +12,7 @@ from typing import Any, Optional
 from pygent.common import PygentString
 from pygent.module.tool import ToolErrorResult
 from pygent.module.tool.utils import ToolClassBase, tool_class, tool_method
-from pygent.toolkits.path_utils import normalize_tool_path
+from pygent.toolkits.path_utils import ToolPathContext, ToolPathError, resolve_dir_path
 
 
 _DEFAULT_TIMEOUT_MS = 30000
@@ -246,6 +246,10 @@ def _tool_error(
     return ToolErrorResult(message, error_type=error_type, details=normalized_details or None)
 
 
+def _tool_path_error(exc: ToolPathError) -> ToolErrorResult:
+    return ToolErrorResult(str(exc), error_type=exc.error_type, details=exc.details)
+
+
 @tool_class(description="Bash command toolkit with timeout, cwd, encoding, and large-output handling.")
 class BashToolkits(ToolClassBase):
     """Run commands with bash in the configured workspace."""
@@ -255,16 +259,21 @@ class BashToolkits(ToolClassBase):
         session_id: str,
         workspace_root: Optional[str] = None,
         bash_executable: Optional[str] = None,
+        restrict_to_workspace: bool = True,
     ):
         super().__init__()
         self.session_id = PygentString(session_id)
-        self.workspace_root = str(Path(workspace_root or os.getcwd()).expanduser().resolve())
+        self.path_context = ToolPathContext.from_workspace_root(
+            workspace_root or os.getcwd(),
+            restrict_to_workspace=restrict_to_workspace,
+        )
+        self.workspace_root = str(self.path_context.workspace_root)
         self.bash_executable = bash_executable or _find_bash_executable()
         self._is_windows = sys.platform == "win32"
 
     @tool_method(
         name="bash",
-        description="Run a command with bash. Output is the combined terminal-visible stdout/stderr stream. working_directory accepts Windows, Windows slash, Git Bash/MSYS drive paths on Windows, and relative paths resolved from workspace_root.",
+        description="Run a command with bash. Output is the combined terminal-visible stdout/stderr stream. working_directory is resolved from workspace_root and, by default, must stay inside workspace_root.",
     )
     def bash(
         self,
@@ -279,7 +288,7 @@ class BashToolkits(ToolClassBase):
 
         Args:
             command: Complete bash command string to run.
-            working_directory: Directory for the command. Accepts Windows paths such as E:\\Projects\\repo, Windows slash paths such as E:/Projects/repo, and on Windows Git Bash/MSYS drive paths such as /e/Projects/repo. Relative paths are resolved from workspace_root.
+            working_directory: Directory for the command. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root. Accepts Windows paths, Windows slash paths, ~/ paths, and on Windows Git Bash/MSYS drive paths.
             timeout: Timeout in milliseconds. Defaults to 30000 and is capped at 600000.
             description: Optional human-readable command description for callers.
             is_background: If true, start the command in the background and do not capture output.
@@ -288,32 +297,28 @@ class BashToolkits(ToolClassBase):
         command = "" if command is None else str(command)
         timeout_sec = _normalize_timeout_seconds(timeout)
 
-        try:
-            cwd = self._resolve_working_directory(working_directory)
-        except ValueError as exc:
-            details = getattr(exc, "details", {})
-            return _tool_error(f"error: {exc}", "NotADirectoryError", **details)
+        cwd = self._resolve_working_directory(working_directory)
+        if isinstance(cwd, ToolErrorResult):
+            return cwd
 
         if is_background:
             return self._run_background(command, cwd)
         return self._run_foreground(command, cwd, timeout_sec)
 
-    def _resolve_working_directory(self, working_directory: Optional[str]) -> str:
-        if working_directory is None or not str(working_directory).strip():
-            path = Path(self.workspace_root)
-            input_path = None
-        else:
-            input_path = str(working_directory).strip()
-            path = normalize_tool_path(input_path, self.workspace_root)
-
-        resolved = path.resolve()
+    def _resolve_working_directory(self, working_directory: Optional[str]) -> str | ToolErrorResult:
+        input_path = working_directory if working_directory is not None and str(working_directory).strip() else self.workspace_root
+        try:
+            resolved = resolve_dir_path(working_directory, self.path_context, default=".")
+        except ToolPathError as exc:
+            return _tool_path_error(exc)
         if not resolved.is_dir():
-            exc = ValueError(f"working directory does not exist or is not a directory: {resolved}")
-            exc.details = {
-                "input_path": input_path or self.workspace_root,
-                "path": str(resolved),
-            }
-            raise exc
+            return _tool_error(
+                f"error: working directory does not exist or is not a directory: {resolved}",
+                "NotADirectoryError",
+                input=input_path,
+                resolved_path=str(resolved),
+                workspace_root=self.workspace_root,
+            )
         return str(resolved)
 
     def _bash_args(self, command: str) -> list[str]:

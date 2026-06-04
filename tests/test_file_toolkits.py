@@ -57,6 +57,45 @@ def test_write_read_edit_grep_flow(tmp_path):
     assert tools.grep("delta", path="docs", output_mode="count") == "1"
 
 
+def test_file_tools_resolve_relative_paths_from_workspace_root(tmp_path):
+    tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
+    target = tmp_path / "docs" / "relative.txt"
+
+    assert tools.write("docs/relative.txt", "alpha\nbeta\n") == "写入完成"
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
+
+    assert tools.read("docs/relative.txt", offset=2, limit=1) == "2|beta\n"
+
+    assert tools.edit("docs/relative.txt", "beta", "gamma") == "替换完成"
+    assert target.read_text(encoding="utf-8") == "alpha\ngamma\n"
+
+
+def test_file_tools_restrict_paths_to_workspace_by_default(tmp_path):
+    tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
+    outside = tmp_path.parent / "outside-pygent-path.txt"
+    outside.write_text("secret\n", encoding="utf-8")
+
+    result = tools.call_tool("read", file_path=str(outside))
+
+    assert result["success"] is False
+    assert result["error_type"] == "PathOutsideWorkspaceError"
+    assert result["details"]["input_path"] == str(outside)
+    assert result["details"]["path"] == str(outside.resolve())
+    assert result["details"]["workspace_root"] == str(tmp_path.resolve())
+
+
+def test_file_tools_can_disable_workspace_restriction(tmp_path):
+    outside = tmp_path.parent / "outside-pygent-unrestricted.txt"
+    outside.write_text("alpha\n", encoding="utf-8")
+    tools = FileToolkits(
+        session_id="s",
+        workspace_root=str(tmp_path),
+        restrict_to_workspace=False,
+    )
+
+    assert tools.read(str(outside)) == "1|alpha\n"
+
+
 def test_file_tools_accept_git_bash_msys_paths_on_windows(tmp_path):
     if os.name != "nt":
         pytest.skip("MSYS drive path compatibility is Windows-specific")
@@ -124,13 +163,12 @@ def test_glob_grep_and_edit_path_errors_include_structured_error_type(tmp_path):
     assert not missing_file.exists()
 
 
-def test_write_uses_absolute_path_schema_and_rejects_relative_paths(tmp_path):
+def test_write_uses_workspace_path_schema_and_resolves_relative_paths(tmp_path):
     tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
     target = tmp_path / "strict" / "out.txt"
 
-    tools.write(str(target), "hello\n")
+    tools.write("strict/out.txt", "hello\n")
     assert target.read_text(encoding="utf-8") == "hello\n"
-    assert "file_path" in tools.write("relative.txt", "nope")
 
     schema = tools.get_tool("write").to_openai_function()
     assert schema["name"] == "write"
@@ -139,6 +177,7 @@ def test_write_uses_absolute_path_schema_and_rejects_relative_paths(tmp_path):
     assert parameters["additionalProperties"] is False
     assert parameters["required"] == ["file_path", "content"]
     assert set(parameters["properties"]) == {"file_path", "content"}
+    assert "Relative paths are rejected" not in parameters["properties"]["file_path"]["description"]
 
 
 def test_read_uses_requested_schema_and_reads_text_ranges(tmp_path):
@@ -148,7 +187,7 @@ def test_read_uses_requested_schema_and_reads_text_ranges(tmp_path):
     target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
 
     assert tools.read(str(target), offset=2, limit=1) == "2|beta\n"
-    assert "file_path" in tools.read("relative.txt")
+    assert tools.read("strict/input.txt", offset=1, limit=1) == "1|alpha\n"
 
     schema = tools.get_tool("read").to_openai_function()
     assert schema["name"] == "read"
@@ -157,6 +196,7 @@ def test_read_uses_requested_schema_and_reads_text_ranges(tmp_path):
     assert parameters["additionalProperties"] is False
     assert parameters["required"] == ["file_path"]
     assert set(parameters["properties"]) == {"file_path", "limit", "offset", "pages"}
+    assert "Relative paths are rejected" not in parameters["properties"]["file_path"]["description"]
     assert parameters["properties"]["limit"]["exclusiveMinimum"] == 0
     assert parameters["properties"]["offset"]["minimum"] == 0
 
@@ -165,7 +205,7 @@ def test_read_uses_requested_schema_and_reads_text_ranges(tmp_path):
     assert "limit" in invalid["details"]
 
 
-def test_edit_uses_absolute_path_schema_and_exact_replacement(tmp_path):
+def test_edit_uses_workspace_path_schema_and_exact_replacement(tmp_path):
     tools = FileToolkits(session_id="s", workspace_root=str(tmp_path))
     target = tmp_path / "strict" / "edit.txt"
     target.parent.mkdir()
@@ -176,7 +216,8 @@ def test_edit_uses_absolute_path_schema_and_exact_replacement(tmp_path):
 
     tools.edit(str(target), "alpha", "delta", replace_all=True)
     assert target.read_text(encoding="utf-8") == "gamma\nbeta\ndelta\n"
-    assert "file_path" in tools.edit("relative.txt", "a", "b")
+    tools.edit("strict/edit.txt", "delta", "epsilon")
+    assert target.read_text(encoding="utf-8") == "gamma\nbeta\nepsilon\n"
     assert "new_string" in tools.edit(str(target), "same", "same")
 
     schema = tools.get_tool("edit").to_openai_function()
@@ -186,6 +227,7 @@ def test_edit_uses_absolute_path_schema_and_exact_replacement(tmp_path):
     assert parameters["additionalProperties"] is False
     assert parameters["required"] == ["file_path", "old_string", "new_string"]
     assert set(parameters["properties"]) == {"file_path", "old_string", "new_string", "replace_all"}
+    assert "Relative paths are rejected" not in parameters["properties"]["file_path"]["description"]
     assert parameters["properties"]["replace_all"]["default"] is False
 
 

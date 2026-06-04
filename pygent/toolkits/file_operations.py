@@ -14,9 +14,13 @@ from pygent.common import PygentString
 from pygent.module.tool import BaseTool, ToolErrorResult
 from pygent.module.tool.utils import ToolClassBase, tool_method, tool_class
 from pygent.toolkits.path_utils import (
-    is_absolute_tool_path,
+    ToolPathContext,
+    ToolPathError,
     normalize_desktop_path,
+    resolve_dir_path,
+    resolve_file_path,
     normalize_tool_path,
+    resolve_tool_path,
 )
 
 
@@ -55,14 +59,6 @@ def _resolve_path(path: str, base: Optional[str] = None) -> Path:
     return resolved
 
 
-def _is_absolute_file_path(path: str) -> bool:
-    """Return whether a path is absolute after expanding user-home aliases."""
-    raw = str(path).strip()
-    if not raw:
-        return False
-    return is_absolute_tool_path(raw)
-
-
 def _tool_error(
     message: str,
     error_type: str = "ToolExecutionError",
@@ -78,12 +74,16 @@ def _tool_error(
     return ToolErrorResult(message, error_type=error_type, details=normalized_details or None)
 
 
+def _tool_path_error(exc: ToolPathError) -> ToolErrorResult:
+    return ToolErrorResult(str(exc), error_type=exc.error_type, details=exc.details)
+
+
 READ_PARAMETER_SCHEMA = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": False,
     "properties": {
         "file_path": {
-            "description": "Absolute file path to read. Accepts Windows paths such as E:\\Projects\\repo\\file.txt, Windows slash paths such as E:/Projects/repo/file.txt, and on Windows Git Bash/MSYS drive paths such as /e/Projects/repo/file.txt. Relative paths are rejected.",
+            "description": "File path to read. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root. Accepts Windows paths, Windows slash paths, ~/ paths, and on Windows Git Bash/MSYS drive paths.",
             "type": "string",
         },
         "limit": {
@@ -230,7 +230,7 @@ GREP_PARAMETER_SCHEMA = {
             "type": "string",
         },
         "path": {
-            "description": "File or directory to search. Omit to use workspace_root. Accepts Windows paths such as E:\\Projects\\repo, Windows slash paths such as E:/Projects/repo, Git Bash/MSYS drive paths on Windows such as /e/Projects/repo, and relative paths such as . or docs resolved from workspace_root.",
+            "description": "File or directory to search. Omit to use workspace_root. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root. Accepts Windows paths, Windows slash paths, ~/ paths, and on Windows Git Bash/MSYS drive paths.",
             "type": "string",
         },
         "pattern": {
@@ -313,14 +313,41 @@ def _file_type_matches(path: Path, file_type: str) -> bool:
 class FileToolkits(ToolClassBase):
     """文件操作工具集：读取、写入、替换、删除、grep、笔记本编辑、linter 诊断。"""
 
-    def __init__(self, session_id: str, workspace_root: Optional[str] = None):
+    def __init__(
+        self,
+        session_id: str,
+        workspace_root: Optional[str] = None,
+        restrict_to_workspace: bool = True,
+    ):
         super().__init__()
         self.session_id = PygentString(session_id)
-        self.workspace_root = workspace_root or os.getcwd()
+        self.path_context = ToolPathContext.from_workspace_root(
+            workspace_root or os.getcwd(),
+            restrict_to_workspace=restrict_to_workspace,
+        )
+        self.workspace_root = str(self.path_context.workspace_root)
+
+    def _resolve_file_path(self, file_path: str) -> Path | ToolErrorResult:
+        try:
+            return resolve_file_path(file_path, self.path_context)
+        except ToolPathError as exc:
+            return _tool_path_error(exc)
+
+    def _resolve_path(self, path: Optional[str], default: Optional[str] = None) -> Path | ToolErrorResult:
+        try:
+            return resolve_tool_path(path, self.path_context, default=default)
+        except ToolPathError as exc:
+            return _tool_path_error(exc)
+
+    def _resolve_dir_path(self, path: Optional[str], default: str = ".") -> Path | ToolErrorResult:
+        try:
+            return resolve_dir_path(path, self.path_context, default=default)
+        except ToolPathError as exc:
+            return _tool_path_error(exc)
 
     @tool_method(
         name="read",
-        description="Read a file by absolute path. Accepts Windows, Windows slash, and on Windows Git Bash/MSYS drive paths; relative paths are rejected.",
+        description="Read a file path resolved from workspace_root. By default, paths must stay inside workspace_root.",
         include_call_description_parameter=False,
         parameters_additional_properties=False,
         parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
@@ -334,18 +361,17 @@ class FileToolkits(ToolClassBase):
         pages: Optional[str] = None,
     ) -> str:
         """
-        Read file contents from an absolute path.
+        Read file contents from a workspace-resolved path.
 
         Args:
-            file_path: Absolute path to the file to read.
+            file_path: File path to read. Relative paths are resolved from workspace_root.
             limit: Number of lines to read. Provide only when the file is too large to read at once.
             offset: Line number to start reading from. Provide only when the file is too large to read at once.
             pages: Page range for PDF files, for example "1-5", "3", or "10-20". Applies only to PDF files and is limited to 20 pages per request.
         """
-        if not _is_absolute_file_path(file_path):
-            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", "ValueError", input=file_path)
-
-        p = _resolve_path(file_path)
+        p = self._resolve_file_path(file_path)
+        if isinstance(p, ToolErrorResult):
+            return p
         if not p.exists():
             return _tool_error(f"错误：文件不存在 {p}", "FileNotFoundError", input=file_path, resolved_path=str(p))
         if not p.is_file():
@@ -370,7 +396,9 @@ class FileToolkits(ToolClassBase):
             offset: 起始行号（从 1 开始）。
             limit: 最多读取的行数。
         """
-        p = _resolve_path(path, self.workspace_root)
+        p = self._resolve_file_path(path)
+        if isinstance(p, ToolErrorResult):
+            return p
         if not p.exists():
             return _tool_error(f"错误：文件不存在 {p}", "FileNotFoundError", input=path, resolved_path=str(p))
         if not p.is_file():
@@ -393,7 +421,7 @@ class FileToolkits(ToolClassBase):
 
     @tool_method(
         name="write",
-        description="Write text content to an absolute file path. Accepts Windows, Windows slash, and on Windows Git Bash/MSYS drive paths; relative paths are rejected.",
+        description="Write text content to a file path resolved from workspace_root. By default, paths must stay inside workspace_root.",
         include_call_description_parameter=False,
         parameters_additional_properties=False,
         parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
@@ -403,13 +431,12 @@ class FileToolkits(ToolClassBase):
         Write complete text content to a file, overwriting the file if it already exists.
 
         Args:
-            file_path: Absolute destination file path. Accepts Windows paths such as E:\\Projects\\repo\\file.txt, Windows slash paths such as E:/Projects/repo/file.txt, and on Windows Git Bash/MSYS drive paths such as /e/Projects/repo/file.txt. Relative paths are rejected; parent directories are created when missing.
+            file_path: Destination file path. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root. Parent directories are created when missing.
             content: Full text content to write, replacing any existing file contents.
         """
-        if not _is_absolute_file_path(file_path):
-            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", "ValueError", input=file_path)
-
-        p = _resolve_path(file_path)
+        p = self._resolve_file_path(file_path)
+        if isinstance(p, ToolErrorResult):
+            return p
         if p.exists() and p.is_dir():
             return _tool_error(f"错误：file_path 指向目录而不是文件 {p}", "IsADirectoryError", input=file_path, resolved_path=str(p))
 
@@ -436,7 +463,9 @@ class FileToolkits(ToolClassBase):
             new_string: 替换后的新字符串。
             replace_all: 是否替换文件中所有匹配项；默认 false 仅替换第一次。
         """
-        p = _resolve_path(path, self.workspace_root)
+        p = self._resolve_file_path(path)
+        if isinstance(p, ToolErrorResult):
+            return p
         if not p.exists() or not p.is_file():
             return _tool_error(f"错误：文件不存在或不是文件 {p}", "FileNotFoundError", input=path, resolved_path=str(p))
         try:
@@ -456,7 +485,7 @@ class FileToolkits(ToolClassBase):
 
     @tool_method(
         name="edit",
-        description="Edit a file by replacing exact text at an absolute file path. Accepts Windows, Windows slash, and on Windows Git Bash/MSYS drive paths; relative paths are rejected.",
+        description="Edit a file path resolved from workspace_root by replacing exact text. By default, paths must stay inside workspace_root.",
         include_call_description_parameter=False,
         parameters_additional_properties=False,
         parameters_schema_uri="https://json-schema.org/draft/2020-12/schema",
@@ -472,13 +501,11 @@ class FileToolkits(ToolClassBase):
         Replace exact text in a file.
 
         Args:
-            file_path: Absolute path of the file to modify. Accepts Windows paths such as E:\\Projects\\repo\\file.txt, Windows slash paths such as E:/Projects/repo/file.txt, and on Windows Git Bash/MSYS drive paths such as /e/Projects/repo/file.txt. Relative paths are rejected.
+            file_path: File path to modify. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root.
             old_string: Exact text to replace, including whitespace and indentation.
             new_string: Replacement text; use a value different from old_string.
             replace_all: Replace every occurrence when true; defaults to false, which replaces only the first match.
         """
-        if not _is_absolute_file_path(file_path):
-            return _tool_error("错误：file_path 必须是绝对路径，不能使用相对路径", "ValueError", input=file_path)
         if old_string == new_string:
             return _tool_error("错误：new_string 必须与 old_string 不同", "ValueError", input=file_path)
 
@@ -513,7 +540,9 @@ class FileToolkits(ToolClassBase):
             old_string: 要替换的单元格内容；新建单元格时传空字符串。
             new_string: 新内容或新单元格的完整内容。
         """
-        p = _resolve_path(target_notebook, self.workspace_root)
+        p = self._resolve_file_path(target_notebook)
+        if isinstance(p, ToolErrorResult):
+            return p
         if not p.exists() or not p.is_file():
             return f"错误：笔记本不存在 {p}"
         try:
@@ -551,7 +580,9 @@ class FileToolkits(ToolClassBase):
         Args:
             path: 文件路径。支持绝对路径、~/Desktop/xxx、或相对于工作区的相对路径。
         """
-        p = _resolve_path(path, self.workspace_root)
+        p = self._resolve_file_path(path)
+        if isinstance(p, ToolErrorResult):
+            return p
         if not p.exists():
             return f"错误：文件不存在 {p}"
         if not p.is_file():
@@ -586,7 +617,7 @@ class FileToolkits(ToolClassBase):
             "additionalProperties": False,
             "properties": {
                 "path": {
-                    "description": "Directory to search. Omit this field to use workspace_root. Accepts Windows paths such as E:\\Projects\\repo, Windows slash paths such as E:/Projects/repo, Git Bash/MSYS drive paths on Windows such as /e/Projects/repo, and relative paths such as . or docs resolved from workspace_root.",
+                    "description": "Directory to search. Omit this field to use workspace_root. Relative paths are resolved from workspace_root. By default, resolved paths must stay inside workspace_root. Accepts Windows paths, Windows slash paths, ~/ paths, and on Windows Git Bash/MSYS drive paths.",
                     "type": "string",
                 },
                 "pattern": {
@@ -606,7 +637,9 @@ class FileToolkits(ToolClassBase):
             pattern: Glob pattern used to match files, for example "*.py" or "**/*.ts".
             path: Directory to search. Omit this field to search from the workspace root; do not pass "undefined" or "null". If provided, it must be an existing directory path.
         """
-        root = _resolve_path(path or ".", self.workspace_root)
+        root = self._resolve_dir_path(path, default=".")
+        if isinstance(root, ToolErrorResult):
+            return root
         if not root.exists():
             return _tool_error(f"error: path does not exist {root}", "FileNotFoundError", input=path or ".", resolved_path=str(root))
         if not root.is_dir():
@@ -682,7 +715,9 @@ class FileToolkits(ToolClassBase):
         if output_mode not in {"content", "files_with_matches", "count"}:
             return _tool_error(f"错误：不支持的 output_mode {output_mode}", "ValueError")
 
-        root = _resolve_path(path or ".", self.workspace_root)
+        root = self._resolve_path(path, default=".")
+        if isinstance(root, ToolErrorResult):
+            return root
         if not root.exists():
             return _tool_error(f"错误：路径不存在 {root}", "FileNotFoundError", input=path or ".", resolved_path=str(root))
 

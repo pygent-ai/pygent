@@ -13,10 +13,10 @@ Pygent toolkits.
 
 ## Built-In Tools
 
-- `bash` - run a bash command.
-- `read` - read an absolute file path.
-- `write` - write complete content to an absolute file path.
-- `edit` - replace exact text in an absolute file path.
+- `bash` - run a bash command in a workspace-resolved directory.
+- `read` - read a workspace-resolved file path.
+- `write` - write complete content to a workspace-resolved file path.
+- `edit` - replace exact text in a workspace-resolved file path.
 - `edit_notebook` - edit or insert Jupyter notebook cells.
 - `read_lints` - read linter diagnostics or the current placeholder result.
 - `glob` - find files by glob pattern.
@@ -26,3 +26,7 @@ Pygent toolkits.
 
 Tool names are intentionally lowercase. Deprecated compatibility names are not
 included in the current schema.
+
+Path parameters accept absolute paths and paths relative to `workspace_root`.
+By default, resolved paths must stay inside `workspace_root`; toolkits can be
+initialized with `restrict_to_workspace=False` to allow paths outside it.
