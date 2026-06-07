@@ -131,6 +131,26 @@ def test_missing_ollama_dependency_raises_clear_error(monkeypatch):
         client._get_ollama_module()
 
 
+def test_forward_omits_temperature_option_when_not_provided(monkeypatch):
+    captured = {}
+
+    def fake_chat(**kwargs):
+        captured["kwargs"] = kwargs
+        return {"message": {"role": "assistant", "content": "ok", "tool_calls": []}}
+
+    monkeypatch.setitem(sys.modules, "ollama", SimpleNamespace(chat=fake_chat))
+
+    context = BaseContext()
+    context.add_message(UserMessage("hello"))
+    client = OllamaAsyncClient(model_name="qwen2.5", temperature=None)
+
+    msg = asyncio.run(client.forward(context))
+
+    assert msg.content.data == "ok"
+    assert client.temperature.data is None
+    assert "options" not in captured["kwargs"]
+
+
 def test_real_model_tripolskypetr_qwen35_works():
     """真实模型连通性测试（依赖本地 Ollama 服务与已拉取模型）。"""
     pytest.importorskip("ollama")

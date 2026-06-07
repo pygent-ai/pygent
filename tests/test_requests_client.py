@@ -266,6 +266,71 @@ def test_usage_only_sse_chunk_is_not_dropped():
     assert chunk.usage.data["total_tokens"] == 3
 
 
+def test_forward_omits_max_tokens_when_not_provided():
+    client = _client()
+    captured = {}
+
+    def fake_do_request(payload):
+        captured["payload"] = payload
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "ok",
+                    }
+                }
+            ]
+        }
+
+    client._do_request = fake_do_request
+
+    async def run():
+        context = BaseContext()
+        context.add_message(UserMessage("hello"))
+        await client.forward(context)
+
+    asyncio.run(run())
+
+    assert client.max_tokens.data is None
+    assert "max_tokens" not in captured["payload"]
+
+
+def test_forward_omits_temperature_when_not_provided():
+    client = AsyncRequestsClient(
+        base_url="https://api.deepseek.com",
+        api_key="test-key",
+        model_name="deepseek-v4-flash",
+        temperature=None,
+    )
+    captured = {}
+
+    def fake_do_request(payload):
+        captured["payload"] = payload
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "ok",
+                    }
+                }
+            ]
+        }
+
+    client._do_request = fake_do_request
+
+    async def run():
+        context = BaseContext()
+        context.add_message(UserMessage("hello"))
+        await client.forward(context)
+
+    asyncio.run(run())
+
+    assert client.temperature.data is None
+    assert "temperature" not in captured["payload"]
+
+
 def test_stream_request_retries_transient_error_before_first_chunk(monkeypatch):
     client = AsyncRequestsClient(
         base_url="https://api.deepseek.com",

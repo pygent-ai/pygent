@@ -92,7 +92,7 @@ class OllamaAsyncClient(BaseAsyncClient):
         }
         if "think" not in request_params:
             request_params["think"] = False
-        if "options" not in request_params:
+        if "options" not in request_params and self.temperature.data is not None:
             request_params["options"] = {"temperature": self.temperature.data}
 
         response = ollama.chat(**request_params)
@@ -118,7 +118,7 @@ class OllamaAsyncClient(BaseAsyncClient):
         }
         if "think" not in request_params:
             request_params["think"] = False
-        if "options" not in request_params:
+        if "options" not in request_params and self.temperature.data is not None:
             request_params["options"] = {"temperature": self.temperature.data}
 
         accumulated = None

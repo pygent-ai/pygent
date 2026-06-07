@@ -318,10 +318,11 @@ class AsyncRequestsClient(BaseAsyncClient):
         request_params = {
             "model": self.model_name.data,
             "messages": messages,
-            "temperature": self.temperature.data,
             **kwargs
         }
-        if self.max_tokens.data:
+        if self.temperature.data is not None:
+            request_params["temperature"] = self.temperature.data
+        if self.max_tokens.data is not None:
             request_params["max_tokens"] = self.max_tokens.data
         request_params["stream"] = False
         data = await asyncio.to_thread(self._do_request, request_params)
@@ -338,10 +339,11 @@ class AsyncRequestsClient(BaseAsyncClient):
         request_params = {
             "model": self.model_name.data,
             "messages": messages,
-            "temperature": self.temperature.data,
             **kwargs
         }
-        if self.max_tokens.data:
+        if self.temperature.data is not None:
+            request_params["temperature"] = self.temperature.data
+        if self.max_tokens.data is not None:
             request_params["max_tokens"] = self.max_tokens.data
         request_params["stream"] = True
 

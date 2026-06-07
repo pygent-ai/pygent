@@ -1,7 +1,16 @@
 from typing import Any, Dict, List, Optional, Union, Iterator
 from abc import ABC, abstractmethod
 
-from pygent.common import PygentData, PygentOperator, PygentString, PygentDict, PygentInt, PygentFloat, PygentBool
+from pygent.common import (
+    PygentData,
+    PygentOperator,
+    PygentString,
+    PygentDict,
+    PygentInt,
+    PygentFloat,
+    PygentBool,
+    create_pygent_data,
+)
 from pygent.context import BaseContext
 from pygent.message import AssistantMessage
 
@@ -15,8 +24,8 @@ class BaseClient(PygentOperator, ABC):
     model_name: PygentString
     timeout: PygentInt
     max_retries: PygentInt
-    temperature: PygentFloat
-    max_tokens: PygentInt
+    temperature: PygentData
+    max_tokens: PygentData
     stream: PygentBool
     
     def __init__(
@@ -53,8 +62,8 @@ class BaseClient(PygentOperator, ABC):
         self.model_name = PygentString(model_name)
         self.timeout = PygentInt(timeout)
         self.max_retries = PygentInt(max_retries)
-        self.temperature = PygentFloat(temperature)
-        self.max_tokens = PygentInt(max_tokens or 2048)
+        self.temperature = create_pygent_data(temperature)
+        self.max_tokens = create_pygent_data(max_tokens)
         self.stream = PygentBool(stream)
         
         # 设置额外配置
@@ -85,8 +94,8 @@ class BaseAsyncClient(PygentOperator, ABC):
     model_name: PygentString
     timeout: PygentFloat
     max_retries: PygentInt
-    temperature: PygentFloat
-    max_tokens: PygentInt
+    temperature: PygentData
+    max_tokens: PygentData
     stream: PygentBool
 
     def __init__(
@@ -123,8 +132,8 @@ class BaseAsyncClient(PygentOperator, ABC):
         self.model_name = PygentString(model_name)
         self.timeout = PygentFloat(timeout)
         self.max_retries = PygentInt(max_retries)
-        self.temperature = PygentFloat(temperature)
-        self.max_tokens = PygentInt(max_tokens or 2048)
+        self.temperature = create_pygent_data(temperature)
+        self.max_tokens = create_pygent_data(max_tokens)
         self.stream = PygentBool(stream)
 
         # 设置额外配置
