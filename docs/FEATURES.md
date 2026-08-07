@@ -1,0 +1,22 @@
+# Pygent 0.2 第一原则
+
+> 0.2 执行原则：每次业务调用只有一个 Execution Owner。`start()` 创建执行，`invoke()` 固定投影为 `start() + result()`，`stream()` 固定投影为 owned `start() + subscribe()`；结果、事件和控制面不能各自重复运行 `forward()`、模型 Provider 或工具 Executor。统一事件信封、Span、ModelExecution、ToolExecution、EffectOutcome 与 Worker 转发契约见 [Execution contract](EXECUTION.md)。
+
+模型 attempt 必须串行且取消清理有界；无法确认上一请求已退出时的 `OUTCOME_UNKNOWN`、禁止 retry/fallback 与 client 隔离语义同样由 [Execution contract](EXECUTION.md) 统一定义。
+
+本文是 Pygent 0.2 的最高契约。一经确认，只能澄清表述，不能改变语义；任何文档、测试或实现与本文冲突时，均以本文为准。
+
+1. **Binding 是可选的部署域，不是 Agent 身份**：直接执行不创建 Binding；只有接入托管 Runtime 时，Binding 才表示一组 Module/Agent 共同使用的部署策略与资源治理域。托管执行中的结构化父子 Agent 默认继承当前 Binding，只有需要独立治理边界时才创建不同 Binding，包括容量、资源、权限、安全、SLA、服务、部署策略或生命周期隔离。
+2. **统一抽象**：Agent、Layer 与用户组合都只是 Module；内置能力不享有特权。
+3. **统一传递**：Module 只表达 `(message, context) -> (message, context)`；Message 是 Module 间传递的类型化当前增量，不等同于聊天文本；Context 是显式传递的当前有效上下文快照。
+4. **PyTorch-like**：用户通过声明子 Module 和实现一个 `forward()` 表达计算与层级关系。
+5. **无状态**：Module 不持有单次运行或业务状态。业务、会话与领域持久状态由框架外部管理；支持 durable recovery 的 Runtime 可以保存执行元数据、checkpoint 与重放记录，但这些数据不得成为第二个业务状态源。
+6. **执行同源且结果统一**：直接或托管的 `invoke()` 与 `stream()` 都运行同一个 `forward()` Module 图；流式只是观察方式，不是另一套实现。普通调用与 `stream().final_result()` 统一返回最终 `(message, context)`，运行身份、状态、usage 与可重连订阅属于独立的高级 Execution 控制面，不改变业务结果形状。
+7. **执行分层**：未绑定 Module 的 `invoke()`/`stream()` 使用框架内部的本地 direct execution scope，调用方无需创建 Runtime；该模式不提供框架级容量治理、远程 placement、持久恢复或跨 Execution 调度，Root 并发由调用方管理。`bind()` 把同一 Module 图接入托管 Runtime/Binding；资源、并发、调度、结构化取消、placement 与生命周期才由 Runtime 按声明能力统一负责。两种模式中的用户 `forward()` 与 Child 直接调用保持不变，用户不直接操作 ExecutionScope。
+8. **执行位置无关，恢复边界可验证**：Module 的输入输出语义不依赖实例、进程或节点；本地、分布式与弹性 Runtime 不改变 `forward()` 的调用与最终结果契约。普通 `forward()` 的活跃 coroutine 不保证跨进程恢复；持久化 Runtime 只能依据自身声明的可验证边界重放或恢复，并必须遵守对应的幂等、副作用和版本兼容约束。
+9. **可恢复执行只属于托管 Runtime**：Runtime 可以按部署策略记录执行进度，并在运行中断或 Worker 故障后从可验证的执行边界重建和继续 Execution；direct execution 不获得该能力。恢复不改变 `forward(message, context)` 契约，也不要求普通业务代码显式声明恢复点。具体记录粒度、恢复方式、兼容检查和副作用处理由 Runtime capability 与部署策略决定；可恢复执行不等同于序列化任意 Python coroutine，也不自动保证外部副作用 exactly-once。
+10. **定义可共享**：Module 图允许同一 Module 被多条属性路径引用；定义身份可以共享，每次调用身份必须独立。direct execution 不提供框架级共享容量治理，调用方自行管理并发与本地资源；托管执行按 Runtime 解析的资源身份共享物理资源容量。
+11. **控制语义可组合**：handoff、审批请求和领域终止条件可以由用户定义的 Message 与 Module 表达；普通 Module 不因此获得跨进程持久挂起或恢复 Python 调用栈的隐式能力。
+12. **公开值可移植**：Message、Context、ToolDefinition、ToolSpec、ToolTask、ToolResult 与 ExecutionEvent 的公开扩展数据必须是严格、有限且递归冻结的 JSON 值，不得携带连接、锁、协程、handler 或任意 Python 对象。
+
+可恢复执行的能力分级与故障边界见 [Runtime Durability](runtime/DURABILITY.md)，参考实现的内部记录与重放方案见 [透明恢复与确定性重放](runtime/REPLAY.md)。

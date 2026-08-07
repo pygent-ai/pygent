@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pygent-ai"
+version = "0.2.2"
+description = "A PyTorch-like Module framework for building stateless LLM agents."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aiosqlite>=0.20",
+    "griffe>=2.0",
+    "httpx>=0.27",
+    "httpx-sse>=0.4",
+    "jsonschema>=4.23",
+    "mcp>=1.0",
+    "pydantic>=2.8",
+    "starlette>=0.38",
+    "typing-extensions>=4.12",
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+performance = [
+    "psutil>=6.0",
+]
+dev = [
+    "build>=1.2",
+    "mypy>=1.11",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.6",
+    "twine>=5.1",
+    "types-jsonschema>=4.23",
+]
+
+[dependency-groups]
+dev = [
+    "build>=1.2",
+    "mypy>=1.11",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.6",
+    "twine>=5.1",
+    "types-jsonschema>=4.23",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+markers = [
+    "spec(section, *acceptance_ids): maps a public contract test to normative sections and stable acceptance IDs",
+    "stress: executions required high-volume Pygent 0.2.x lifecycle correctness scenarios",
+    "component: verifies one production subsystem with fake external boundaries",
+    "integration: verifies contracts spanning two or more public Pygent modules",
+    "security: verifies hostile inputs, redaction, and bounded-data guarantees",
+    "release: verifies built and installed distribution artifacts from outside the source tree",
+    "live_llm: opt-in tests against externally configured OpenAI-compatible model APIs",
+    "performance: verifies the native benchmark harness without running long campaigns",
+    "contract_02: verifies the breaking Pygent 0.2.x contract documented under docs",
+    "contract_meta: validates 0.2.x contract traceability",
+]
+
+[tool.mypy]
+mypy_path = "src"

@@ -1,0 +1,22 @@
+.env
+.idea/
+.venv/
+.venv_smoke/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.benchmarks/
+
+build/
+dist/
+*.egg-info/
+
+sessions/
+.doc_project_maintainer/
+
+# JiuwenSwarm runtime file operation logs
+.agent_history/

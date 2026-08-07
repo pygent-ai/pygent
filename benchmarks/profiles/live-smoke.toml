@@ -1,0 +1,31 @@
+[profile]
+name = "live-smoke"
+backend = "live"
+scenarios = [
+  "direct-invoke", "direct-stream", "local-invoke", "local-stream",
+  "dynamic-model-invoke", "dynamic-model-stream",
+  "react-tool-invoke", "react-tool-stream",
+  "sqlite-durable-invoke", "sqlite-durable-stream",
+  "http-worker-invoke", "http-worker-stream",
+]
+concurrency = [1]
+closed_duration_seconds = 0.01
+open_multipliers = []
+open_duration_seconds = 0.0
+warmup_seconds = 0.0
+cooldown_seconds = 0.0
+repetitions = 1
+max_inflight = 2
+request_deadline_seconds = 400.0
+seed = 1729
+
+[model]
+latency_ms = 0.0
+jitter_ms = 0.0
+ttft_ms = 0.0
+chunks = 1
+tool_latency_ms = 2.0
+retry_max_attempts = 2
+retry_on = ["timeout", "unavailable"]
+retry_backoff_seconds = 1.0
+attempt_timeout_seconds = 90.0

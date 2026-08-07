@@ -1,0 +1,565 @@
+"""Immutable, provider-neutral declarations for model calls."""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Literal, Protocol, cast, runtime_checkable
+
+from pygent.core import (
+    ExecutionFailure,
+    ExecutionFailureError,
+    JsonObjectInput,
+    freeze_json_object,
+)
+
+
+class ModelErrorKind(str, Enum):
+    TIMEOUT = "timeout"
+    OUTCOME_UNKNOWN = "outcome_unknown"
+    RATE_LIMIT = "rate_limit"
+    UNAVAILABLE = "unavailable"
+    AUTHENTICATION = "authentication"
+    INVALID_REQUEST = "invalid_request"
+    INVALID_RESPONSE = "invalid_response"
+    UNKNOWN = "unknown"
+
+
+class ModelGroupResolution(str, Enum):
+    CONCRETE = "concrete"
+    DEFERRED = "deferred"
+
+
+class ModelResourceOwnership(str, Enum):
+    BORROWED = "borrowed"
+    OWNED = "owned"
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRoute:
+    route_id: str
+    provider: str
+    model: str
+
+    def __post_init__(self) -> None:
+        for name in ("route_id", "provider", "model"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string")
+
+
+@dataclass(frozen=True, slots=True)
+class FallbackPolicy:
+    order: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        order = tuple(self.order)
+        if any(not isinstance(item, str) or not item for item in order):
+            raise ValueError("fallback order must contain non-empty route IDs")
+        if len(order) != len(set(order)):
+            raise ValueError("fallback order contains duplicate route IDs")
+        object.__setattr__(self, "order", order)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelGroupConfig:
+    name: str
+    routes: tuple[ModelRoute, ...]
+    fallback: FallbackPolicy
+    max_concurrency: int | None = None
+    capacity_key: str | None = None
+    resolution: ModelGroupResolution = ModelGroupResolution.CONCRETE
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("model group name must be a non-empty string")
+        if not isinstance(self.resolution, ModelGroupResolution):
+            raise TypeError("resolution must be a ModelGroupResolution")
+        routes = tuple(self.routes)
+        if self.resolution is ModelGroupResolution.CONCRETE and not routes:
+            raise ValueError("concrete model group routes must be non-empty")
+        if self.resolution is ModelGroupResolution.DEFERRED and routes:
+            raise ValueError("deferred model group routes must be empty")
+        if any(not isinstance(route, ModelRoute) for route in routes):
+            raise TypeError("model group routes must contain ModelRoute values")
+        route_ids = tuple(route.route_id for route in routes)
+        if len(route_ids) != len(set(route_ids)):
+            raise ValueError("model group route IDs must be unique")
+        unknown = set(self.fallback.order) - set(route_ids)
+        if unknown:
+            raise ValueError("fallback order references an unknown route")
+        if self.max_concurrency is not None and (
+            not isinstance(self.max_concurrency, int)
+            or isinstance(self.max_concurrency, bool)
+            or self.max_concurrency <= 0
+        ):
+            raise ValueError("max_concurrency must be greater than zero")
+        if self.capacity_key is not None and (
+            not isinstance(self.capacity_key, str) or not self.capacity_key
+        ):
+            raise ValueError("capacity_key must be non-empty when provided")
+        object.__setattr__(self, "routes", routes)
+
+    @classmethod
+    def deferred(
+        cls,
+        *,
+        name: str,
+        max_concurrency: int | None = None,
+        capacity_key: str | None = None,
+    ) -> ModelGroupConfig:
+        return cls(
+            name=name,
+            routes=(),
+            fallback=FallbackPolicy(()),
+            max_concurrency=max_concurrency,
+            capacity_key=capacity_key,
+            resolution=ModelGroupResolution.DEFERRED,
+        )
+
+    @property
+    def is_deferred(self) -> bool:
+        return self.resolution is ModelGroupResolution.DEFERRED
+
+
+_OVERRIDABLE_GENERATION_FIELDS = frozenset(
+    {"temperature", "max_output_tokens"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCallPolicy:
+    allow_profile_override: bool = False
+    overridable_generation: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.allow_profile_override, bool):
+            raise TypeError("allow_profile_override must be a bool")
+        values = frozenset(self.overridable_generation)
+        if any(not isinstance(value, str) or not value for value in values):
+            raise ValueError("overridable_generation must contain non-empty strings")
+        unknown = values - _OVERRIDABLE_GENERATION_FIELDS
+        if unknown:
+            raise ValueError(
+                "unsupported generation override fields: "
+                + ", ".join(sorted(unknown))
+            )
+        object.__setattr__(self, "overridable_generation", values)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCallOptions:
+    profile: str | None = None
+    temperature: float | None = None
+    max_output_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.profile is not None and (
+            not isinstance(self.profile, str) or not self.profile
+        ):
+            raise ValueError("profile must be non-empty when provided")
+        GenerationConfig(
+            temperature=self.temperature,
+            max_output_tokens=self.max_output_tokens,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "profile": self.profile,
+            "temperature": self.temperature,
+            "max_output_tokens": self.max_output_tokens,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> ModelCallOptions:
+        unknown = set(value) - {"profile", "temperature", "max_output_tokens"}
+        if unknown:
+            raise ValueError(
+                "unknown model call option fields: " + ", ".join(sorted(unknown))
+            )
+        return cls(
+            profile=cast(str | None, value.get("profile")),
+            temperature=cast(float | None, value.get("temperature")),
+            max_output_tokens=cast(int | None, value.get("max_output_tokens")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ModelResourceRef:
+    resolver_id: str
+    resource_id: str
+    revision: str
+    capacity_owner_id: str
+    coordinator_domain: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "resolver_id",
+            "resource_id",
+            "revision",
+            "capacity_owner_id",
+            "coordinator_domain",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string")
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "resolver_id": self.resolver_id,
+            "resource_id": self.resource_id,
+            "revision": self.revision,
+            "capacity_owner_id": self.capacity_owner_id,
+            "coordinator_domain": self.coordinator_domain,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ModelResourceBundle:
+    resolver_id: str
+    route_resources: tuple[tuple[str, ModelResourceRef], ...]
+    capacity_owner_id: str
+    coordinator_domain: str
+
+    def __post_init__(self) -> None:
+        for name in ("resolver_id", "capacity_owner_id", "coordinator_domain"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string")
+        items = tuple(self.route_resources)
+        route_ids = tuple(route_id for route_id, _ in items)
+        if not items or len(route_ids) != len(set(route_ids)):
+            raise ValueError("route_resources must contain unique route IDs")
+        for route_id, ref in items:
+            if not isinstance(route_id, str) or not route_id:
+                raise ValueError("route resource IDs must be non-empty")
+            if not isinstance(ref, ModelResourceRef):
+                raise TypeError("route resources must contain ModelResourceRef values")
+            if ref.resolver_id != self.resolver_id:
+                raise ValueError("all route resources must use the bundle resolver")
+            if (
+                ref.capacity_owner_id != self.capacity_owner_id
+                or ref.coordinator_domain != self.coordinator_domain
+            ):
+                raise ValueError("route resources must share the bundle capacity owner")
+        object.__setattr__(self, "route_resources", items)
+
+    @classmethod
+    def shared(
+        cls, routes: tuple[ModelRoute, ...], ref: ModelResourceRef
+    ) -> ModelResourceBundle:
+        return cls(
+            resolver_id=ref.resolver_id,
+            route_resources=tuple((route.route_id, ref) for route in routes),
+            capacity_owner_id=ref.capacity_owner_id,
+            coordinator_domain=ref.coordinator_domain,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "resolver_id": self.resolver_id,
+            "route_resources": [
+                {"route_id": route_id, "resource": ref.to_dict()}
+                for route_id, ref in self.route_resources
+            ],
+            "capacity_owner_id": self.capacity_owner_id,
+            "coordinator_domain": self.coordinator_domain,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ModelProfileSnapshot:
+    deployment_scope_id: str
+    group_name: str
+    profile: str
+    snapshot_id: str
+    digest: str
+    resource_bundle_digest: str | None
+    model_group: ModelGroupConfig
+    resources: ModelResourceBundle | None = None
+
+    def __post_init__(self) -> None:
+        for name in (
+            "deployment_scope_id",
+            "group_name",
+            "profile",
+            "snapshot_id",
+            "digest",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string")
+        if self.resource_bundle_digest is not None and (
+            not isinstance(self.resource_bundle_digest, str)
+            or not self.resource_bundle_digest
+        ):
+            raise ValueError("resource_bundle_digest must be non-empty when provided")
+        if self.model_group.is_deferred:
+            raise ValueError("profile snapshots require a concrete model group")
+        if self.model_group.name != self.group_name:
+            raise ValueError("profile snapshot group name does not match model group")
+        if (self.resources is None) != (self.resource_bundle_digest is None):
+            raise ValueError("resource bundle and digest must be present together")
+
+
+@runtime_checkable
+class ModelResourceResolver(Protocol):
+    resolver_id: str
+
+    async def validate(
+        self, model_group: ModelGroupConfig, resources: ModelResourceBundle
+    ) -> None: ...
+
+    def acquire(
+        self, model_group: ModelGroupConfig, resources: ModelResourceBundle
+    ) -> Any: ...
+
+
+class ModelGroupError(RuntimeError):
+    """Base class for dynamic model-group control-plane failures."""
+
+
+class ModelGroupConfigurationError(ModelGroupError):
+    pass
+
+
+class ModelProfileSelectionError(ModelGroupError):
+    pass
+
+
+class ModelDeploymentUnavailableError(ModelGroupError):
+    pass
+
+
+class ModelDeploymentConflictError(ModelGroupError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class ExponentialBackoff:
+    initial: float = 0.0
+    maximum: float = 0.0
+    multiplier: float = 2.0
+
+    def __post_init__(self) -> None:
+        if not all(
+            isinstance(value, (int, float)) and math.isfinite(value)
+            for value in (self.initial, self.maximum, self.multiplier)
+        ):
+            raise ValueError("backoff values must be finite numbers")
+        if self.initial < 0 or self.maximum < self.initial:
+            raise ValueError("backoff requires 0 <= initial <= maximum")
+        if self.multiplier < 1:
+            raise ValueError("backoff multiplier must be at least one")
+
+    def delay(self, retry_index: int) -> float:
+        if retry_index < 0:
+            raise ValueError("retry_index must be non-negative")
+        return min(self.maximum, self.initial * self.multiplier**retry_index)
+
+
+@dataclass(frozen=True, slots=True)
+class RetryPolicy:
+    max_attempts_per_route: int = 1
+    retry_on: tuple[ModelErrorKind, ...] = (
+        ModelErrorKind.TIMEOUT,
+        ModelErrorKind.RATE_LIMIT,
+        ModelErrorKind.UNAVAILABLE,
+    )
+    backoff: ExponentialBackoff = ExponentialBackoff()
+    attempt_timeout_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.max_attempts_per_route, int)
+            or isinstance(self.max_attempts_per_route, bool)
+            or self.max_attempts_per_route < 1
+        ):
+            raise ValueError("max_attempts_per_route must be at least one")
+        retry_on = tuple(self.retry_on)
+        if any(not isinstance(kind, ModelErrorKind) for kind in retry_on):
+            raise TypeError("retry_on must contain ModelErrorKind values")
+        if len(retry_on) != len(set(retry_on)):
+            raise ValueError("retry_on contains duplicates")
+        if self.attempt_timeout_seconds is not None and (
+            not isinstance(self.attempt_timeout_seconds, (int, float))
+            or isinstance(self.attempt_timeout_seconds, bool)
+            or not math.isfinite(self.attempt_timeout_seconds)
+            or self.attempt_timeout_seconds <= 0
+        ):
+            raise ValueError("attempt_timeout_seconds must be finite and positive")
+        object.__setattr__(self, "retry_on", retry_on)
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationConfig:
+    temperature: float | None = None
+    max_output_tokens: int | None = None
+    response_schema: JsonObjectInput | None = None
+    response_schema_name: str = "response"
+    tool_choice: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.temperature is not None and (
+            not isinstance(self.temperature, (int, float))
+            or isinstance(self.temperature, bool)
+            or not math.isfinite(self.temperature)
+            or self.temperature < 0
+        ):
+            raise ValueError("temperature must be a finite non-negative number")
+        if self.max_output_tokens is not None and (
+            not isinstance(self.max_output_tokens, int)
+            or isinstance(self.max_output_tokens, bool)
+            or self.max_output_tokens <= 0
+        ):
+            raise ValueError("max_output_tokens must be greater than zero")
+        if not isinstance(self.response_schema_name, str) or not self.response_schema_name:
+            raise ValueError("response_schema_name must be a non-empty string")
+        if self.tool_choice is not None and (
+            not isinstance(self.tool_choice, str) or not self.tool_choice
+        ):
+            raise ValueError("tool_choice must be non-empty when provided")
+        if self.response_schema is not None:
+            object.__setattr__(
+                self, "response_schema", freeze_json_object(self.response_schema)
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ModelAttempt:
+    route_id: str
+    status: Literal["succeeded", "failed", "cancelled"]
+    error_kind: ModelErrorKind | None = None
+    attempt: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.route_id, str) or not self.route_id:
+            raise ValueError("attempt route_id must be non-empty")
+        if self.status not in ("succeeded", "failed", "cancelled"):
+            raise ValueError("invalid model attempt status")
+        if (
+            not isinstance(self.attempt, int)
+            or isinstance(self.attempt, bool)
+            or self.attempt < 1
+        ):
+            raise ValueError("attempt number must be at least one")
+        if self.error_kind is not None and not isinstance(
+            self.error_kind, ModelErrorKind
+        ):
+            raise TypeError("error_kind must be a ModelErrorKind or None")
+
+
+class ModelCallError(ExecutionFailureError):
+    """Sanitized terminal model failure after retry/fallback is exhausted."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: ModelErrorKind = ModelErrorKind.UNKNOWN,
+        attempts: tuple[ModelAttempt, ...] = (),
+        partial_output: bool = False,
+    ) -> None:
+        if not isinstance(partial_output, bool):
+            raise TypeError("partial_output must be a bool")
+        if not isinstance(kind, ModelErrorKind):
+            raise TypeError("kind must be a ModelErrorKind")
+        self.kind = kind
+        self.attempts = tuple(attempts)
+        self.partial_output = partial_output
+        super().__init__(
+            ExecutionFailure(
+                domain="model",
+                kind=kind.value,
+                message=message,
+                retryable=kind
+                in {
+                    ModelErrorKind.TIMEOUT,
+                    ModelErrorKind.RATE_LIMIT,
+                    ModelErrorKind.UNAVAILABLE,
+                },
+                outcome_unknown=kind is ModelErrorKind.OUTCOME_UNKNOWN,
+                partial_output=partial_output,
+                details={
+                    "attempts": [
+                        {
+                            "route_id": attempt.route_id,
+                            "status": attempt.status,
+                            "error_kind": (
+                                None
+                                if attempt.error_kind is None
+                                else attempt.error_kind.value
+                            ),
+                            "attempt": attempt.attempt,
+                        }
+                        for attempt in self.attempts
+                    ]
+                },
+            )
+        )
+
+    @classmethod
+    def from_failure(cls, failure: ExecutionFailure) -> ModelCallError:
+        if failure.domain != "model":
+            raise ValueError("execution failure is not a model failure")
+        raw_attempts = cast(Mapping[str, Any], failure.details).get("attempts", ())
+        if not isinstance(raw_attempts, (list, tuple)):
+            raise TypeError("model failure attempts must be an array")
+        attempts: list[ModelAttempt] = []
+        for item in raw_attempts:
+            if not isinstance(item, Mapping):
+                raise TypeError("model failure attempt must be an object")
+            raw_kind = item.get("error_kind")
+            attempts.append(
+                ModelAttempt(
+                    route_id=cast(str, item.get("route_id")),
+                    status=cast(Any, item.get("status")),
+                    error_kind=(
+                        None if raw_kind is None else ModelErrorKind(cast(str, raw_kind))
+                    ),
+                    attempt=cast(int, item.get("attempt", 1)),
+                )
+            )
+        return cls(
+            failure.message,
+            kind=ModelErrorKind(failure.kind),
+            attempts=tuple(attempts),
+            partial_output=failure.partial_output,
+        )
+
+
+class ModelProviderError(RuntimeError):
+    """Sanitized adapter failure with a normalized kind."""
+
+    def __init__(self, kind: ModelErrorKind, message: str = "model provider failed") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+__all__ = [
+    "ExponentialBackoff",
+    "FallbackPolicy",
+    "GenerationConfig",
+    "ModelAttempt",
+    "ModelCallError",
+    "ModelCallOptions",
+    "ModelCallPolicy",
+    "ModelDeploymentConflictError",
+    "ModelDeploymentUnavailableError",
+    "ModelErrorKind",
+    "ModelGroupConfig",
+    "ModelGroupConfigurationError",
+    "ModelGroupError",
+    "ModelGroupResolution",
+    "ModelProfileSelectionError",
+    "ModelProfileSnapshot",
+    "ModelProviderError",
+    "ModelResourceBundle",
+    "ModelResourceOwnership",
+    "ModelResourceRef",
+    "ModelResourceResolver",
+    "ModelRoute",
+    "RetryPolicy",
+]

@@ -1,0 +1,30 @@
+[profile]
+name = "synthetic-smoke"
+backend = "synthetic"
+scenarios = [
+  "direct-invoke", "direct-stream", "local-invoke", "local-stream",
+  "dynamic-model-invoke", "dynamic-model-stream",
+  "react-tool-invoke", "react-tool-stream",
+  "sqlite-durable-invoke", "sqlite-durable-stream",
+  "http-worker-invoke", "http-worker-stream",
+]
+concurrency = [1, 2]
+closed_duration_seconds = 0.15
+open_multipliers = [0.5, 1.1]
+open_duration_seconds = 0.15
+warmup_seconds = 0.02
+cooldown_seconds = 0.0
+repetitions = 1
+max_inflight = 8
+# This smoke profile verifies execution invariants across every path. Keep its
+# deadline tolerant of shared CI host scheduling; latency regressions are
+# enforced separately by the base/head performance workflow.
+request_deadline_seconds = 60.0
+seed = 1729
+
+[model]
+latency_ms = 5.0
+jitter_ms = 0.0
+ttft_ms = 1.0
+chunks = 2
+tool_latency_ms = 1.0

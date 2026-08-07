@@ -1,0 +1,187 @@
+name: Performance
+
+on:
+  pull_request:
+  schedule:
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+    inputs:
+      run_live:
+        description: Run the full live GLM scenario matrix
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  base-head-regression:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Detect comparable base benchmark
+        id: base-benchmark
+        shell: bash
+        run: |
+          if test -f base/benchmarks/__main__.py && grep -q '^performance = ' base/pyproject.toml; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Base revision predates the native performance harness; head smoke remains required."
+          fi
+      - name: Benchmark base three times
+        if: steps.base-benchmark.outputs.available == 'true'
+        working-directory: base
+        run: |
+          uv run --extra performance python -m benchmarks run synthetic-smoke --output ../results/base-1
+          uv run --extra performance python -m benchmarks run synthetic-smoke --output ../results/base-2
+          uv run --extra performance python -m benchmarks run synthetic-smoke --output ../results/base-3
+      - name: Benchmark head three times
+        working-directory: head
+        run: |
+          uv run --extra performance python -m benchmarks run synthetic-smoke --output ../results/head-1
+          uv run --extra performance python -m benchmarks run synthetic-smoke --output ../results/head-2
+          uv run --extra performance python -m benchmarks run synthetic-smoke --output ../results/head-3
+      - name: Combine repetitions and compare
+        if: steps.base-benchmark.outputs.available == 'true'
+        working-directory: head
+        shell: bash
+        run: |
+          uv run python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("../results")
+          for side in ("base", "head"):
+              stages = []
+              metadata = None
+              for result in sorted(root.glob(f"{side}-*/*/summary.json")):
+                  report = json.loads(result.read_text())
+                  metadata = report if metadata is None else metadata
+                  stages.extend(report["stages"])
+              metadata["stages"] = stages
+              (root / f"{side}.json").write_text(json.dumps(metadata))
+          PY
+          uv run python -m benchmarks compare ../results/base.json ../results/head.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pygent-base-head-performance
+          path: results
+
+  nightly-synthetic:
+    if: github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - direct-invoke
+          - direct-stream
+          - local-invoke
+          - local-stream
+          - react-tool-invoke
+          - react-tool-stream
+          - sqlite-durable-invoke
+          - sqlite-durable-stream
+          - http-worker-invoke
+          - http-worker-stream
+          - lifecycle-cancel-deadline
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+      - run: >-
+          uv run --extra performance python -m benchmarks run synthetic-full
+          --scenario ${{ matrix.scenario }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pygent-nightly-${{ matrix.scenario }}
+          path: .benchmarks/results
+
+  nightly-soak:
+    if: github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: synthetic-soak
+            scenario: react-tool-invoke
+          - profile: synthetic-soak
+            scenario: sqlite-durable-invoke
+          - profile: synthetic-soak
+            scenario: http-worker-invoke
+          - profile: lifecycle-stress
+            scenario: lifecycle-cancel-deadline
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+      - run: >-
+          uv run --extra performance python -m benchmarks run ${{ matrix.profile }}
+          --scenario ${{ matrix.scenario }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pygent-soak-${{ matrix.scenario }}
+          path: .benchmarks/results
+
+  live-glm:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - direct-invoke
+          - direct-stream
+          - local-invoke
+          - local-stream
+          - react-tool-invoke
+          - react-tool-stream
+          - sqlite-durable-invoke
+          - sqlite-durable-stream
+          - http-worker-invoke
+          - http-worker-stream
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+      - run: >-
+          uv run --extra performance python -m benchmarks run
+          live-long-${{ matrix.scenario }} --confirm-live
+        env:
+          GLM_API_BASE: ${{ secrets.GLM_API_BASE }}
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          GLM_MODEL_NAME: ${{ secrets.GLM_MODEL_NAME }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pygent-live-${{ matrix.scenario }}
+          path: .benchmarks/results

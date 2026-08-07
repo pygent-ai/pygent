@@ -1,0 +1,24 @@
+[profile]
+name = "synthetic-soak"
+backend = "synthetic"
+scenarios = [
+  "dynamic-model-invoke", "react-tool-invoke",
+  "sqlite-durable-invoke", "http-worker-invoke",
+]
+concurrency = [32]
+closed_duration_seconds = 1800.0
+open_multipliers = []
+open_duration_seconds = 0.0
+warmup_seconds = 30.0
+cooldown_seconds = 5.0
+repetitions = 1
+max_inflight = 128
+request_deadline_seconds = 60.0
+seed = 1729
+
+[model]
+latency_ms = 25.0
+jitter_ms = 3.0
+ttft_ms = 5.0
+chunks = 3
+tool_latency_ms = 2.0

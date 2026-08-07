@@ -1,0 +1,21 @@
+[profile]
+name = "lifecycle-stress"
+backend = "synthetic"
+scenarios = ["lifecycle-cancel-deadline"]
+concurrency = [8]
+closed_duration_seconds = 1800.0
+open_multipliers = []
+open_duration_seconds = 0.0
+warmup_seconds = 5.0
+cooldown_seconds = 2.0
+repetitions = 1
+max_inflight = 32
+request_deadline_seconds = 2.0
+seed = 1729
+
+[model]
+latency_ms = 0.0
+jitter_ms = 0.0
+ttft_ms = 0.0
+chunks = 1
+tool_latency_ms = 0.0
