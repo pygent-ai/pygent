@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import locale
 import os
 import shlex
 import shutil
@@ -153,7 +154,8 @@ def _prepare_npm_workspace(path: Path) -> None:
     (path / "README.md").write_text("# npm probe\n", encoding="utf-8")
 
 
-def test_bash_ut_decode_output_truncates_and_handles_common_encodings():
+def test_bash_ut_decode_output_truncates_and_handles_common_encodings(monkeypatch):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
     assert _decode_output(b"hello") == "hello"
     assert _decode_output("中文".encode("cp936")) == "中文"
     assert _decode_output("hello".encode("utf-16-le")) == "hello"

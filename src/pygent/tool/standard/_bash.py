@@ -112,10 +112,14 @@ def _decode_output(data: bytes, max_bytes: int = _MAX_OUTPUT_BYTES) -> str:
         *utf16_candidates,
         "utf-8-sig",
         "utf-8",
-        locale.getpreferredencoding(False),
-        getattr(sys.stdout, "encoding", None),
+        # Try the common multibyte Windows encoding before locale-dependent
+        # single-byte codecs.  Code pages such as cp1252 accept every byte, so
+        # placing the host locale first can silently turn cp936 output into
+        # mojibake on an English Windows runner.
         "gb18030",
         "cp936",
+        locale.getpreferredencoding(False),
+        getattr(sys.stdout, "encoding", None),
         "cp1252",
         "latin-1",
     ):
