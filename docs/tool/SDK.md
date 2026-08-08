@@ -170,16 +170,22 @@ class WeatherService:
 
 service = WeatherService(client)
 toolkit = ToolKit(service.current)
-tool_layer = ToolCallLayer(
-    tools=toolkit.specs,
+
+
+def executor_factory(spec, handler):
+    # 由部署选择真正实施 spec.sandbox_profile 的 executor。
+    return DeploymentExecutor(spec, handler)
+
+
+tool_layer = toolkit.managed_layer(
+    runtime,
+    executor_factory=executor_factory,
     authorization=WeatherAuthorization(),
 )
-
-runtime.attach_executor_registry(toolkit.build_registry())
 bound_tools = tool_layer.bind(runtime, binding=binding)
 ```
 
-绑定实例、client 和 handler 只存在于 Worker/Runtime 启动侧；managed 图与 ExecutionPlan 只携带 `toolkit.specs`。已有 Registry 可以用 `toolkit.register_into(registry)` 安装；重复身份默认拒绝，只有部署代码显式传入 `replace_existing=True` 才替换 executor。detach、远程 executor、MCP 与自定义 ToolTaskManager 继续使用下文的低层显式组装接口。
+绑定实例、client 和 handler 只存在于 Worker/Runtime 启动侧；managed 图与 ExecutionPlan 只携带 `toolkit.specs`。`managed_layer()` 会先用部署提供的 `executor_factory(spec, handler)` 构造整套 executor，再由 Runtime 原子校验并注册每个精确 `(tool_id, version)`；任何一个 sandbox profile 不匹配都不会留下半套注册。Runtime 在首次注册时会创建部署 Registry，也仍允许应用预先 `attach_executor_registry()`。已有 direct Registry 可以用 `toolkit.register_into(registry)` 安装，但不能用 `build_registry()` 生成的裸 `LocalToolExecutor` 冒充 managed 沙箱能力。重复身份默认拒绝，只有部署代码显式传入 `replace_existing=True` 才替换 executor。detach、远程 executor、MCP 与自定义 ToolTaskManager 继续使用下文的低层显式组装接口。
 
 ## ToolDefinition 与 ToolSpec
 

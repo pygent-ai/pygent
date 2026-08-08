@@ -13,7 +13,7 @@ from .executors import (
     ToolTaskAdmission,
     ToolTaskManager,
 )
-from .functional import ToolKit, tool
+from .functional import ToolExecutorFactory, ToolKit, tool
 from .layer import ToolCallLayer, TrustedAuthorizationAdapter
 from .standard import (
     BashTools,
@@ -55,6 +55,7 @@ __all__ = [
     "ToolExecutionContext",
     "ToolExecutionError",
     "ToolExecutor",
+    "ToolExecutorFactory",
     "ToolKit",
     "ToolResult",
     "ToolRunner",

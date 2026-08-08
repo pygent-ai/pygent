@@ -22,7 +22,7 @@ from pygent.runtime import (
     LocalRuntime,
     compile_execution_plan,
 )
-from pygent.tool import ExecutorRegistry
+from pygent.tool import ExecutorRegistry, LocalToolExecutor, SandboxExecutorSupport
 
 
 def allow(request, _context):
@@ -237,6 +237,62 @@ def test_registry_build_and_registration_are_explicit() -> None:
     with pytest.raises(ValueError, match="already registered"):
         toolkit.register_into(target)
     toolkit.register_into(target, replace_existing=True)
+
+
+def test_managed_registration_is_atomic_when_sandbox_support_is_missing() -> None:
+    @tool(
+        tool_id="workspace.first",
+        version="1",
+        side_effect=ToolSideEffect.READ,
+        sandbox_profile="workspace",
+    )
+    def first() -> str:
+        """Return the first value."""
+
+        return "first"
+
+    @tool(
+        tool_id="workspace.second",
+        version="1",
+        side_effect=ToolSideEffect.READ,
+        sandbox_profile="workspace",
+    )
+    def second() -> str:
+        """Return the second value."""
+
+        return "second"
+
+    class WorkspaceExecutor:
+        sandbox_support = SandboxExecutorSupport(profiles=("workspace",))
+
+        def __init__(self, handler):
+            self._local = LocalToolExecutor(handler)
+
+        async def execute(self, spec, call, context):
+            return await self._local.execute(spec, call, context)
+
+    runtime = LocalRuntime()
+    registry = ExecutorRegistry()
+    runtime.attach_executor_registry(registry)
+    created = 0
+
+    def factory(spec, handler):
+        nonlocal created
+        created += 1
+        if created == 1:
+            return WorkspaceExecutor(handler)
+        return LocalToolExecutor(handler)
+
+    with pytest.raises(ValueError, match="tool.sandbox.workspace"):
+        ToolKit(first, second).register_into_runtime(
+            runtime,
+            executor_factory=factory,
+        )
+
+    with pytest.raises(LookupError):
+        registry.resolve("workspace.first", "1")
+    with pytest.raises(LookupError):
+        registry.resolve("workspace.second", "1")
 
 
 def test_make_visible_in_is_immutable_idempotent_and_conflict_safe() -> None:

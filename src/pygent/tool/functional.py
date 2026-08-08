@@ -14,6 +14,7 @@ from typing import (
     Any,
     NotRequired,
     ParamSpec,
+    Protocol,
     Required,
     TypeVar,
     cast,
@@ -29,7 +30,12 @@ from typing_extensions import TypedDict
 
 from pygent.core import Context, FrozenJsonObject, JsonValue, Module, thaw_json
 
-from .executors import ExecutorRegistry, LocalToolExecutor
+from .executors import (
+    ExecutorRegistry,
+    LocalToolExecutor,
+    ToolExecutor,
+    ToolHandler,
+)
 from .layer import ToolCallLayer, TrustedAuthorizationAdapter
 from .types import (
     IdempotencyPolicy,
@@ -43,6 +49,17 @@ from .types import (
 P = ParamSpec("P")
 R = TypeVar("R")
 _DECLARATION_ATTRIBUTE = "__pygent_tool_declaration__"
+
+ToolExecutorFactory = Callable[[ToolSpec, ToolHandler], ToolExecutor]
+
+
+class _ManagedToolRuntime(Protocol):
+    def register_tools(
+        self,
+        registrations: tuple[tuple[ToolSpec, ToolExecutor], ...],
+        *,
+        replace_existing: bool = False,
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +250,57 @@ class ToolKit:
             authorization=authorization,
             authorization_adapter=authorization_adapter,
             executor_registry=self.build_registry(),
+            max_concurrency=max_concurrency,
+        )
+
+    def register_into_runtime(
+        self,
+        runtime: _ManagedToolRuntime,
+        *,
+        executor_factory: ToolExecutorFactory,
+        replace_existing: bool = False,
+    ) -> _ManagedToolRuntime:
+        """Install deployment executors after Runtime sandbox validation."""
+
+        register_tools = getattr(runtime, "register_tools", None)
+        if not callable(register_tools):
+            raise TypeError("runtime must expose register_tools()")
+        if not callable(executor_factory):
+            raise TypeError("executor_factory must be callable")
+        registrations = tuple(
+            (item.spec, executor_factory(item.spec, item.invoke))
+            for item in self._compiled
+        )
+        register_tools(
+            registrations,
+            replace_existing=replace_existing,
+        )
+        return runtime
+
+    def managed_layer(
+        self,
+        runtime: _ManagedToolRuntime,
+        *,
+        executor_factory: ToolExecutorFactory,
+        authorization: Module[
+            ToolAuthorizationRequest, ToolAuthorizationDecision
+        ]
+        | None = None,
+        authorization_adapter: TrustedAuthorizationAdapter | None = None,
+        max_concurrency: int | None = None,
+        replace_existing: bool = False,
+    ) -> ToolCallLayer:
+        """Build a managed layer backed by Runtime-validated executors."""
+
+        self.register_into_runtime(
+            runtime,
+            executor_factory=executor_factory,
+            replace_existing=replace_existing,
+        )
+        return ToolCallLayer(
+            tools=self.specs,
+            authorization=authorization,
+            authorization_adapter=authorization_adapter,
             max_concurrency=max_concurrency,
         )
 

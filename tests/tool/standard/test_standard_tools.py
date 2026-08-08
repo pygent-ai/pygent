@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import inspect
 import json
 
 import pytest
 
 from pygent import AIMessage, Context, ToolCall
+from pygent.runtime import LocalRuntime
+from pygent.tool import LocalToolExecutor, SandboxExecutorSupport
 from pygent.tool.standard import StandardTools
 
 from ._helpers import allow
@@ -133,6 +136,58 @@ async def test_every_standard_tool_runs_through_02_tool_call_layer(tmp_path, too
     assert result.status == "succeeded", result
     assert result.name == tool_name
     assert result.tool_id.startswith("standard.")
+
+
+@pytest.mark.asyncio
+async def test_workspace_tools_run_through_managed_runtime_executor_factory(tmp_path):
+    _prepare_files(tmp_path)
+    suite = _suite(tmp_path)
+
+    class WorkspaceExecutor:
+        sandbox_support = SandboxExecutorSupport(profiles=("workspace",))
+
+        def __init__(self, handler):
+            self._handler = handler
+
+        async def execute(self, spec, call, context):
+            value = self._handler(call.arguments)
+            return await value if inspect.isawaitable(value) else value
+
+    def executor_factory(spec, handler):
+        if spec.sandbox_profile == "workspace":
+            return WorkspaceExecutor(handler)
+        return LocalToolExecutor(handler)
+
+    runtime = LocalRuntime()
+    layer = suite.toolkit.managed_layer(
+        runtime,
+        executor_factory=executor_factory,
+        authorization_adapter=allow,
+    )
+    bound = runtime.bind(layer)
+    context = suite.toolkit.make_visible_in(Context())
+    message, returned_context = await bound.invoke(
+        AIMessage(
+            tool_calls=tuple(
+                ToolCall(
+                    call_id=f"managed-{name}",
+                    name=name,
+                    arguments=_arguments(name),
+                )
+                for name in ("read", "grep", "glob")
+            )
+        ),
+        context,
+    )
+
+    assert returned_context is context
+    assert [result.status for result in message.results] == [
+        "succeeded",
+        "succeeded",
+        "succeeded",
+    ]
+    assert bound.durability.detached_tool_gaps == ()
+    await runtime.close()
 
 
 def test_standard_tools_are_deployment_local_and_not_portable_state(tmp_path):

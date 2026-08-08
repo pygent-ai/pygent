@@ -25,3 +25,6 @@ def test_tool_sdk_pins_the_minimal_external_sandbox_adapter() -> None:
     assert "ToolSpec 不得为 Runtime 自动授予 `tool.sandbox.<profile>`" in sdk
     assert "error_code: missing_sandbox_capability" in sdk
     assert "并发调用不依赖全局“当前沙箱”" in sdk
+    assert "toolkit.managed_layer(" in sdk
+    assert "executor_factory=executor_factory" in sdk
+    assert "任何一个 sandbox profile 不匹配都不会留下半套注册" in sdk

@@ -30,6 +30,8 @@ ToolSpec 不保存 handler、client、credential、secret、连接、线程池�
 
 `@tool` 与 `ToolKit` 是 Python 函数工具的构建及部署辅助器，不增加第四层公开工具值。decorator 从函数签名和 docstring 生成现有 ToolDefinition/ToolSpec，ToolKit 显式收集这些声明并可在部署侧建立本地 ExecutorRegistry。ToolKit、Python handler、Pydantic adapter 与应用 client 都是非可移植对象，不得进入 Message、Context、ToolSpec、Module 定义状态或 ExecutionPlan；进入模型与执行图的仍只有 `ToolKit.definitions` 和 `ToolKit.specs`。
 
+`ToolKit.local_layer()` 与 `build_registry()` 只组装 caller-owned direct executor，不证明任何沙箱能力。managed 部署使用 `ToolKit.managed_layer(runtime, executor_factory=...)`：部署工厂把每个 handler 包装成实际执行隔离的 `ToolExecutor`，Runtime 对整套精确工具身份及 sandbox profile 原子校验后注册。框架不得根据 `ToolSpec` 或“标准工具”身份自动为裸 `LocalToolExecutor` 伪造 capability。
+
 ToolTask 是通过 schema 校验与可信授权后被接纳的单次执行实例，其公开快照至少包含 `task_id`、`call_id`、`tool_id`、`version` 和 `state`，但不暴露 handler、credential 或活连接。ToolResult 表示调用结果；它可以是已接纳 ToolTask 的终态值，也可以是 admission 之前的 rejected 结果。
 
 ## 执行边界

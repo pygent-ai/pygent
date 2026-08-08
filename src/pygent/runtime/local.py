@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, TypeVar
 
@@ -358,7 +358,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
         module._freeze_definition()
         if isinstance(binding, RuntimeBinding):
             if binding.runtime is not self:
-                raise ValueError("managed Binding belongs to another executiontime")
+                raise ValueError("managed Binding belongs to another Runtime")
             binding = binding.policy
         if binding is None:
             binding = Binding(
@@ -621,26 +621,57 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
     ) -> None:
         """Register an exact ToolSpec/executor pair and derive sandbox capability."""
 
-        if not isinstance(spec, ToolSpec):
-            raise TypeError("spec must be a ToolSpec")
-        if not isinstance(executor, ToolExecutor):
-            raise TypeError("executor must implement ToolExecutor")
-        registry = self._tool_registry
-        if registry is None:
-            raise RuntimeError("attach an ExecutorRegistry before register_tool()")
-        if not isinstance(registry, ExecutorRegistry):  # pragma: no cover - attach invariant
-            raise TypeError("attached registry must be an ExecutorRegistry")
-        if spec.sandbox_profile is not None:
-            try:
-                validate_executor_sandbox(spec, executor)
-            except Exception as exc:
-                raise ValueError(str(exc)) from exc
-        registry.register(
-            spec.tool_id,
-            spec.version,
-            executor,
+        self.register_tools(
+            ((spec, executor),),
             replace_existing=replace_existing,
         )
+
+    def register_tools(
+        self,
+        registrations: Iterable[tuple[ToolSpec, ToolExecutor]],
+        *,
+        replace_existing: bool = False,
+    ) -> None:
+        """Atomically validate and register exact ToolSpec/executor pairs."""
+
+        items = tuple(registrations)
+        identities: list[tuple[str, str]] = []
+        for spec, executor in items:
+            if not isinstance(spec, ToolSpec):
+                raise TypeError("spec must be a ToolSpec")
+            if not isinstance(executor, ToolExecutor):
+                raise TypeError("executor must implement ToolExecutor")
+            identity = (spec.tool_id, spec.version)
+            if identity in identities:
+                raise ValueError(
+                    f"duplicate Tool registration for {spec.tool_id}@{spec.version}"
+                )
+            identities.append(identity)
+            if spec.sandbox_profile is not None:
+                try:
+                    validate_executor_sandbox(spec, executor)
+                except Exception as exc:
+                    raise ValueError(str(exc)) from exc
+
+        registry = self._tool_registry
+        if registry is None:
+            registry = ExecutorRegistry()
+        if not isinstance(registry, ExecutorRegistry):  # pragma: no cover - attach invariant
+            raise TypeError("attached registry must be an ExecutorRegistry")
+        if not replace_existing:
+            for tool_id, version in identities:
+                if registry.contains(tool_id, version):
+                    raise ValueError(
+                        f"executor already registered for {tool_id}@{version}"
+                    )
+        for (spec, executor) in items:
+            registry.register(
+                spec.tool_id,
+                spec.version,
+                executor,
+                replace_existing=replace_existing,
+            )
+        self._tool_registry = registry
 
 
 # Preserve the historical facade identity for public and test-visible classes.

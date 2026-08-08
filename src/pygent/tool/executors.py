@@ -431,6 +431,11 @@ class ExecutorRegistry:
     def unregister(self, tool_id: str, version: str) -> None:
         self._executors.pop((tool_id, version), None)
 
+    def contains(self, tool_id: str, version: str) -> bool:
+        """Return whether an exact Tool executor identity is registered."""
+
+        return (tool_id, version) in self._executors
+
     def resolve(self, tool_id: str, version: str) -> ToolExecutor:
         try:
             return self._executors[(tool_id, version)]
