@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -101,15 +102,9 @@ async def test_write_read_edit_grep_flow(tmp_path):
         tools.grep,
         pattern="DELTA",
         path="docs",
-        ignore_case=True,
-        output_mode="content",
+        ignoreCase=True,
     )
-    assert "example.txt" in grep_output
-    assert "3|delta" in grep_output
-    assert (
-        await succeeded(tools.grep, pattern="delta", path="docs", output_mode="count")
-        == "1"
-    )
+    assert grep_output == "example.txt:3: delta"
 
 
 @pytest.mark.asyncio
@@ -252,11 +247,11 @@ async def test_file_tools_accept_git_bash_msys_paths_on_windows(tmp_path):
     )
     assert (
         await succeeded(tools.glob, pattern="**/*.txt", path=msys_root)
-    ).splitlines() == [str(target)]
+    ).splitlines() == ["docs/example.txt"]
     grep_output = await succeeded(
-        tools.grep, pattern="beta", path=msys_root, output_mode="content"
+        tools.grep, pattern="beta", path=msys_root
     )
-    assert f"{target}:2|beta" in grep_output
+    assert grep_output == "docs/example.txt:2: beta"
     await succeeded(
         tools.edit,
         file_path=msys_target,
@@ -393,7 +388,7 @@ async def test_edit_uses_workspace_path_schema_and_exact_replacement(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_glob_finds_files_sorted_by_mtime_and_exposes_schema(tmp_path):
+async def test_glob_finds_relative_files_and_exposes_pi_schema(tmp_path):
     tools = FileTools(workspace_root=tmp_path)
     (tmp_path / "src").mkdir()
     (tmp_path / "tests").mkdir()
@@ -406,12 +401,12 @@ async def test_glob_finds_files_sorted_by_mtime_and_exposes_schema(tmp_path):
     os.utime(old_match, (100, 100))
     os.utime(new_match, (200, 200))
 
-    assert (await succeeded(tools.glob, pattern="**/*.py")).splitlines() == [
-        str(new_match),
-        str(old_match),
-    ]
+    assert set((await succeeded(tools.glob, pattern="**/*.py")).splitlines()) == {
+        "src/old.py",
+        "tests/new.py",
+    }
     assert (await succeeded(tools.glob, pattern="*.py", path="src")).splitlines() == [
-        str(old_match)
+        "old.py"
     ]
     not_directory = await invoke_tool(
         tools.glob, {"pattern": "*.py", "path": "src/old.py"}
@@ -421,10 +416,12 @@ async def test_glob_finds_files_sorted_by_mtime_and_exposes_schema(tmp_path):
     parameters = _parameters(tools.glob)
     assert parameters["required"] == ["pattern"]
     assert parameters["additionalProperties"] is False
-    assert set(parameters["properties"]) == {"pattern", "path"}
+    assert set(parameters["properties"]) == {"pattern", "path", "limit"}
+    assert parameters["properties"]["path"]["type"] == "string"
+    assert parameters["properties"]["limit"]["default"] == 1000
 
 
-def test_grep_tool_schema_uses_02_python_parameter_names(tmp_path):
+def test_grep_tool_exposes_pi_input_schema(tmp_path):
     tools = FileTools(workspace_root=tmp_path)
     parameters = _parameters(tools.grep)
     properties = parameters["properties"]
@@ -434,23 +431,22 @@ def test_grep_tool_schema_uses_02_python_parameter_names(tmp_path):
         "pattern",
         "path",
         "glob",
-        "output_mode",
-        "context_before",
-        "context_after",
+        "ignoreCase",
+        "literal",
         "context",
-        "ignore_case",
-        "file_type",
-        "head_limit",
-        "offset",
-        "multiline",
-        "show_line_numbers",
+        "limit",
     }
     assert parameters["required"] == ["pattern"]
-    assert not {"-A", "-B", "-C", "-i", "-n", "type"}.intersection(properties)
+    assert properties["path"]["type"] == "string"
+    assert properties["glob"]["type"] == "string"
+    assert properties["ignoreCase"]["default"] is False
+    assert properties["literal"]["default"] is False
+    assert properties["context"]["default"] == 0
+    assert properties["limit"]["default"] == 100
 
 
 @pytest.mark.asyncio
-async def test_grep_schema_arguments_work_through_tool_call_layer(tmp_path):
+async def test_grep_pi_arguments_work_through_tool_call_layer(tmp_path):
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "a.py").write_text("before\nAlpha\nAfter\n", encoding="utf-8")
@@ -462,21 +458,18 @@ async def test_grep_schema_arguments_work_through_tool_call_layer(tmp_path):
         tools.grep,
         pattern="alpha",
         path="docs",
-        output_mode="content",
-        ignore_case=True,
-        context_before=1,
-        context_after=1,
-        file_type="py",
-        head_limit=0,
+        ignoreCase=True,
+        context=1,
+        glob="*.py",
     )
-    assert "a.py" in output
-    assert "1|before" in output
-    assert "2|Alpha" in output
+    assert "a.py-1- before" in output
+    assert "a.py:2: Alpha" in output
+    assert "a.py-3- After" in output
     assert "b.rs" not in output
 
     default_output = await succeeded(tools.grep, pattern="Alpha", path="docs")
-    assert "a.py" in default_output
-    assert "1|Alpha" not in default_output
+    assert "a.py:2: Alpha" in default_output
+    assert "b.rs:1: Alpha rust" in default_output
 
     brace_glob = await succeeded(
         tools.grep, pattern="Alpha", path="docs", glob="*.{py,rs}"
@@ -487,28 +480,123 @@ async def test_grep_schema_arguments_work_through_tool_call_layer(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_grep_multiline_context_and_line_number_toggle(tmp_path):
-    (tmp_path / "notes.txt").write_text(
-        "one\nstart\nmiddle\nend\nlast\n", encoding="utf-8"
-    )
+async def test_grep_literal_limit_and_no_match_messages(tmp_path):
+    (tmp_path / "notes.txt").write_text("a.b\naxb\na.b\n", encoding="utf-8")
     tools = FileTools(workspace_root=tmp_path)
 
     output = await succeeded(
         tools.grep,
-        pattern="start.*end",
+        pattern="a.b",
         path="notes.txt",
-        output_mode="content",
-        multiline=True,
-        context=1,
-        show_line_numbers=False,
+        literal=True,
+        limit=1,
     )
+    assert output.startswith("notes.txt:1: a.b")
+    assert "1 matches limit reached" in output
+    assert await succeeded(tools.grep, pattern="missing") == "No matches found"
 
-    assert "notes.txt:one" in output
-    assert "notes.txt:start" in output
-    assert "notes.txt:middle" in output
-    assert "notes.txt:end" in output
-    assert "notes.txt:last" in output
-    assert "2|start" not in output
+
+@pytest.mark.asyncio
+async def test_glob_and_grep_respect_gitignore_but_include_unignored_hidden_files(
+    tmp_path,
+):
+    (tmp_path / ".gitignore").write_text(".venv/\n", encoding="utf-8")
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "ignored.py").write_text("needle\n", encoding="utf-8")
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / ".hidden" / "visible.py").write_text("needle\n", encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    glob_output = await succeeded(tools.glob, pattern="**/*.py")
+    grep_output = await succeeded(tools.grep, pattern="needle", glob="*.py")
+
+    assert ".hidden/visible.py" in glob_output
+    assert ".venv/ignored.py" not in glob_output
+    assert ".hidden/visible.py:1: needle" in grep_output
+    assert ".venv/ignored.py" not in grep_output
+
+
+@pytest.mark.asyncio
+async def test_glob_supports_directory_prefixed_patterns_and_limits_results(tmp_path):
+    target = tmp_path / "src" / "nested" / "example.spec.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("pass\n", encoding="utf-8")
+    (tmp_path / "src" / "direct.spec.py").write_text("pass\n", encoding="utf-8")
+    (tmp_path / "other.py").write_text("pass\n", encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    assert set(
+        (await succeeded(tools.glob, pattern="src/**/*.spec.py")).splitlines()
+    ) == {"src/direct.spec.py", "src/nested/example.spec.py"}
+    assert await succeeded(tools.glob, pattern="src/*.spec.py") == (
+        "src/direct.spec.py"
+    )
+    assert "other.py" in await succeeded(tools.glob, pattern="**/*.py")
+    limited = await succeeded(tools.glob, pattern="**/*.py", limit=1)
+    assert "1 results limit reached" in limited
+
+
+@pytest.mark.asyncio
+async def test_nested_gitignore_rules_do_not_leak_into_siblings(tmp_path):
+    for directory in (tmp_path / "a", tmp_path / "b"):
+        directory.mkdir()
+        (directory / "ignored.txt").write_text("needle\n", encoding="utf-8")
+        (directory / "kept.txt").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "a" / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    paths = set((await succeeded(tools.glob, pattern="**/*.txt")).splitlines())
+    grep_output = await succeeded(tools.grep, pattern="needle", glob="*.txt")
+
+    assert paths == {"a/kept.txt", "b/ignored.txt", "b/kept.txt"}
+    assert "a/ignored.txt" not in grep_output
+    assert "b/ignored.txt:1: needle" in grep_output
+
+
+@pytest.mark.asyncio
+async def test_grep_invalid_regex_is_a_failed_tool_result(tmp_path):
+    (tmp_path / "example.txt").write_text("text\n", encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(tools.grep, {"pattern": "["})
+
+    assert result.status == "failed"
+    assert result.error_code == "search_backend_failed"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_grep_terminates_its_owned_process(tmp_path, monkeypatch):
+    (tmp_path / "example.txt").write_text("text\n", encoding="utf-8")
+    started: list[asyncio.subprocess.Process] = []
+
+    async def start_slow_process(*_args, **_kwargs):
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            "import time; time.sleep(30)",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(
+        FileTools, "_start_search_process", staticmethod(start_slow_process)
+    )
+    tools = FileTools(workspace_root=tmp_path)
+    invocation = asyncio.create_task(tools.grep("text"))
+    for _ in range(100):
+        if started:
+            break
+        await asyncio.sleep(0.01)
+    assert started
+
+    invocation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await invocation
+
+    assert started[0].returncode is not None
 
 
 @pytest.mark.asyncio
@@ -617,6 +705,8 @@ def test_file_tools_publish_explicit_02_side_effect_and_permission_policies(tmp_
     assert specs["read"].side_effect is ToolSideEffect.READ
     assert specs["glob"].side_effect is ToolSideEffect.READ
     assert specs["grep"].side_effect is ToolSideEffect.READ
+    assert specs["glob"].version == "3.0.0"
+    assert specs["grep"].version == "3.0.0"
     assert specs["read_lints"].side_effect is ToolSideEffect.READ
     assert specs["write"].side_effect is ToolSideEffect.WRITE
     assert specs["edit"].side_effect is ToolSideEffect.WRITE

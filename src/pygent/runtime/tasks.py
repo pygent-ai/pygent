@@ -12,6 +12,7 @@ from pygent.tool import (
     ExecutorRegistry,
     IdempotencyPolicy,
     ToolCall,
+    ToolExecutionContext,
     ToolResult,
     ToolSideEffect,
     ToolSpec,
@@ -186,6 +187,7 @@ class DurableToolTaskManager:
                 call,
                 execution,
                 attempt=stored.attempt + (stored.status == JobState.RUNNING.value),
+                recovery=True,
             )
         return await self.get_job(stored.job_id) or self._job_snapshot(stored)
 
@@ -234,7 +236,14 @@ class DurableToolTaskManager:
                     "durable Job requires a validated Runtime execution path"
                 )
             spec, call = _request_from_dict(job.request)
-            await self._launch_job(job, spec, call, execution, attempt=job.attempt)
+            await self._launch_job(
+                job,
+                spec,
+                call,
+                execution,
+                attempt=job.attempt,
+                recovery=False,
+            )
             return
         stored = await self.history.get_task(task_id)
         if stored is None or stored.kind != "tool_task":
@@ -250,13 +259,21 @@ class DurableToolTaskManager:
         execution: ToolTaskExecution,
         *,
         attempt: int,
+        recovery: bool,
     ) -> None:
         async with self._lock:
             existing = self._tasks.get(stored.task_id)
             if existing is not None and not existing.done():
                 return
             self._tasks[stored.task_id] = asyncio.create_task(
-                self._run_job(stored, spec, call, execution, attempt=attempt),
+                self._run_job(
+                    stored,
+                    spec,
+                    call,
+                    execution,
+                    attempt=attempt,
+                    recovery=recovery,
+                ),
                 name=f"pygent-{stored.job_id}",
             )
 
@@ -268,16 +285,25 @@ class DurableToolTaskManager:
         execution: ToolTaskExecution,
         *,
         attempt: int,
+        recovery: bool,
     ) -> None:
         await self.history.update_tool_job(
             stored.job_id, status=JobState.RUNNING.value, attempt=attempt
         )
         try:
             if spec.timeout is None:
-                output = await execution(spec, call)
+                output = await execution(
+                    spec,
+                    call,
+                    ToolExecutionContext(task_id=stored.task_id, recovery=recovery),
+                )
             else:
                 async with asyncio.timeout(spec.timeout):
-                    output = await execution(spec, call)
+                    output = await execution(
+                        spec,
+                        call,
+                        ToolExecutionContext(task_id=stored.task_id, recovery=recovery),
+                    )
             result = ToolResult(
                 call_id=call.call_id,
                 name=call.name,
@@ -361,7 +387,11 @@ class DurableToolTaskManager:
         )
         try:
             output = await _execute_with_timeout(
-                self.registry, spec, call, execution=execution
+                self.registry,
+                spec,
+                call,
+                execution=execution,
+                context=ToolExecutionContext(task_id=task_id),
             )
             snapshot = self._snapshot(
                 task_id, spec, call, ToolTaskState.SUCCEEDED

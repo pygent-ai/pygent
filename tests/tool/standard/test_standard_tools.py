@@ -90,7 +90,7 @@ def _arguments(name: str) -> dict[str, object]:
             "new_string": "new",
         },
         "glob": {"pattern": "**/*.py", "path": "docs"},
-        "grep": {"pattern": "needle", "path": "docs", "output_mode": "content"},
+        "grep": {"pattern": "needle", "path": "docs"},
         "read": {"file_path": "docs/read.txt", "offset": 2, "limit": 1},
         "read_lints": {"paths": ["docs/glob_a.py"]},
         "web_fetch": {"url": "https://example.com/tool"},

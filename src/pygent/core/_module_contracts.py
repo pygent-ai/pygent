@@ -146,6 +146,9 @@ class Infrastructure(Protocol):
     @property
     def deadline(self) -> float | None: ...
 
+    @property
+    def managed_execution_id(self) -> str | None: ...
+
     def model_permit(
         self,
         resource_key: str | None = None,

@@ -243,6 +243,7 @@ class ToolResult:
     side_effect_committed: bool | None = None
     tool_id: str | None = None
     tool_version: str | None = None
+    missing_capabilities: tuple[str, ...] = ()
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         raise TypeError("ToolResult cannot be subclassed")
@@ -275,6 +276,12 @@ class ToolResult:
             self.side_effect_committed, bool
         ):
             raise TypeError("side_effect_committed must be a bool or None")
+        capabilities = tuple(self.missing_capabilities)
+        if any(not isinstance(value, str) or not value for value in capabilities):
+            raise ValueError("missing_capabilities must contain non-empty strings")
+        if len(capabilities) != len(set(capabilities)):
+            raise ValueError("missing_capabilities must be unique")
+        object.__setattr__(self, "missing_capabilities", capabilities)
         object.__setattr__(self, "output", freeze_json(self.output))
 
 

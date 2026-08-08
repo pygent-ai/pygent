@@ -240,6 +240,7 @@ def _tool_result_to_dict(value: ToolResult) -> dict[str, object]:
         "side_effect_committed": value.side_effect_committed,
         "tool_id": value.tool_id,
         "tool_version": value.tool_version,
+        "missing_capabilities": list(value.missing_capabilities),
     }
 
 
@@ -248,6 +249,7 @@ def _tool_result_from_dict(value: object) -> ToolResult:
     fields = {
         "call_id", "name", "status", "task", "output", "error", "error_kind",
         "error_code", "retryable", "side_effect_committed", "tool_id", "tool_version",
+        "missing_capabilities",
     }
     _only(data, fields, "ToolResult")
     try:
@@ -264,6 +266,7 @@ def _tool_result_from_dict(value: object) -> ToolResult:
             side_effect_committed=data.get("side_effect_committed"),
             tool_id=data.get("tool_id"),
             tool_version=data.get("tool_version"),
+            missing_capabilities=tuple(data.get("missing_capabilities", ())),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise WireCodecError("invalid ToolResult") from exc

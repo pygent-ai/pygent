@@ -5,7 +5,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from pygent.tool import ToolResult, ToolTask, ToolTaskManager
+from pygent.tool import ToolExecutionError, ToolResult, ToolTask, ToolTaskManager
+from pygent.tool.executors import validate_executor_sandbox
 
 from .._history_types import StoredJob
 from ..api import ExecutionAdmissionError, JobSnapshot
@@ -88,11 +89,19 @@ class _ToolJobsMixin:
         resolve = getattr(registry, "resolve", None)
         if callable(resolve):
             try:
-                resolve(spec.tool_id, spec.version)
+                executor = resolve(spec.tool_id, spec.version)
+                validate_executor_sandbox(
+                    spec,
+                    executor,
+                    durable=spec.sandbox_profile is not None,
+                    required_capabilities=stored.required_capabilities,
+                )
             except LookupError as exc:
                 raise ExecutionAdmissionError(
                     "durable Job tool version is not registered"
                 ) from exc
+            except ToolExecutionError as exc:
+                raise ExecutionAdmissionError(str(exc)) from exc
 
     async def cancel_tool_task(self, task_id: str) -> bool:
         return await self._task_manager().cancel(task_id)

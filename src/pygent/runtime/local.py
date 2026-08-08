@@ -20,7 +20,15 @@ from pygent.llm import (
     ModelProfileSnapshot,
     ModelResourceOwnership,
 )
-from pygent.tool import ToolCall, ToolExecutionContext, ToolSpec, ToolTaskManager
+from pygent.tool import (
+    ExecutorRegistry,
+    ToolCall,
+    ToolExecutionContext,
+    ToolExecutor,
+    ToolSpec,
+    ToolTaskManager,
+)
+from pygent.tool.executors import validate_executor_sandbox
 
 from ._history_store import SQLiteHistoryStore
 from ._local.capacity import (
@@ -61,7 +69,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
     """Process-local asyncio Runtime with bounded admission and execution handles."""
 
     _closed: bool
-    capabilities: frozenset[str]
+    _base_capabilities: frozenset[str]
 
     def __init__(
         self,
@@ -119,8 +127,18 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
         built_in = {"runtime.asyncio", "runtime.local", "external.wait"}
         if history is not None:
             built_in.add("durability.sqlite")
+        if any(value.startswith("tool.sandbox.") for value in capabilities):
+            raise ValueError(
+                "sandbox capabilities are derived from registered executors; "
+                "use runtime.register_tool()"
+            )
         built_in.update(capabilities)
-        self.capabilities = frozenset(built_in)
+        self._base_capabilities = frozenset(built_in)
+
+    @property
+    def capabilities(self) -> frozenset[str]:
+        sandbox = getattr(self._tool_registry, "sandbox_capabilities", ())
+        return self._base_capabilities | frozenset(sandbox)
 
     def create_binding(
         self,
@@ -255,8 +273,10 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
 
     def _detached_tool_execution(
         self, binding_state: _BindingState, registry: Any
-    ) -> Callable[[ToolSpec, ToolCall], Awaitable[object]]:
-        async def execute(spec: ToolSpec, call: ToolCall) -> object:
+    ) -> Callable[[ToolSpec, ToolCall, ToolExecutionContext], Awaitable[object]]:
+        async def execute(
+            spec: ToolSpec, call: ToolCall, context: ToolExecutionContext
+        ) -> object:
             # A Job/ToolTask is independent from the former Parent's runnable
             # lease, but it must re-enter the admitting Binding's Tool plane.
             gates = self._tool_gates(binding_state, spec.resource_key)
@@ -274,7 +294,15 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
                 )
                 token = _capacity_permit.set(permit)
                 try:
-                    return await registry.execute(spec, call, ToolExecutionContext())
+                    managed_context = ToolExecutionContext(
+                        deadline=context.deadline,
+                        emit=context.emit,
+                        execution_id=context.execution_id
+                        or f"detached:{context.task_id or call.call_id}",
+                        task_id=context.task_id,
+                        recovery=context.recovery,
+                    )
+                    return await registry.execute(spec, call, managed_context)
                 finally:
                     _capacity_permit.reset(token)
 
@@ -367,7 +395,13 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
                 "Runtime does not provide required capabilities: "
                 + ", ".join(hard_missing)
             )
-        durability_report = self._durability_report(binding, durability_required, plan)
+        sandbox_gaps = self._sandbox_binding_gaps(module)
+        durability_report = self._durability_report(
+            binding,
+            durability_required,
+            plan,
+            sandbox_gaps=sandbox_gaps,
+        )
         if binding.durability.mode is DurabilityMode.DISABLED and durability_required:
             raise ExecutionAdmissionError(
                 "Binding disables durability required by the ExecutionPlan: "
@@ -412,6 +446,8 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
         binding: Binding,
         plan_requirements: set[str],
         plan: ExecutionPlan,
+        *,
+        sandbox_gaps: tuple[str, ...] = (),
     ) -> DurabilityReport:
         mode = binding.durability.mode
         recovery_undeclared = tuple(
@@ -437,6 +473,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
                 capacity_scope=binding.execution_capacity.scope,
                 recovery_undeclared_modules=recovery_undeclared,
                 effect_unverified_modules=effect_unverified,
+                detached_tool_gaps=sandbox_gaps,
             )
 
         requested = {"durability.sqlite", *plan_requirements}
@@ -475,7 +512,56 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
             degraded_reasons=degraded_reasons,
             recovery_undeclared_modules=recovery_undeclared,
             effect_unverified_modules=effect_unverified,
+            detached_tool_gaps=sandbox_gaps,
         )
+
+    def _sandbox_binding_gaps(self, module: Module[Any, Any]) -> tuple[str, ...]:
+        """Report sandbox wiring gaps without rejecting sync-only bindings."""
+
+        gaps: list[str] = []
+        for path, item in _collect_graph(module).items():
+            layer_registry = getattr(item, "executor_registry", None)
+            registry = layer_registry or self._tool_registry
+            specs = getattr(item, "tools", ())
+            if not isinstance(specs, tuple):
+                continue
+            for spec in specs:
+                if not isinstance(spec, ToolSpec) or spec.sandbox_profile is None:
+                    continue
+                capability = f"tool.sandbox.{spec.sandbox_profile}"
+                try:
+                    if registry is None:
+                        raise LookupError
+                    executor = registry.resolve(spec.tool_id, spec.version)
+                    validate_executor_sandbox(spec, executor)
+                except Exception as exc:  # report-only preflight
+                    if isinstance(exc, LookupError) or getattr(exc, "code", None) == (
+                        "missing_sandbox_capability"
+                    ):
+                        gaps.append(
+                            f"{path}:{spec.tool_id}@{spec.version} missing {capability}"
+                        )
+                    else:
+                        raise
+                if self._tool_registry is not registry:
+                    try:
+                        if self._tool_registry is None:
+                            raise LookupError
+                        detached_executor = self._tool_registry.resolve(
+                            spec.tool_id, spec.version
+                        )
+                        validate_executor_sandbox(spec, detached_executor)
+                    except Exception as exc:  # report-only detached preflight
+                        if isinstance(exc, LookupError) or getattr(exc, "code", None) == (
+                            "missing_sandbox_capability"
+                        ):
+                            gaps.append(
+                                f"{path}:{spec.tool_id}@{spec.version} detached missing "
+                                f"{capability}"
+                            )
+                        else:
+                            raise
+        return tuple(dict.fromkeys(gaps))
 
     def register_remote(
         self, binding_ref: str, bound: _LocalBoundModule[Any, Any]
@@ -522,9 +608,39 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
 
         if self._tool_registry is not None:
             raise RuntimeError("an ExecutorRegistry is already attached")
-        if not callable(getattr(registry, "execute", None)):
-            raise TypeError("executor registry must expose execute()")
+        if not isinstance(registry, ExecutorRegistry):
+            raise TypeError("registry must be an ExecutorRegistry")
         self._tool_registry = registry
+
+    def register_tool(
+        self,
+        spec: ToolSpec,
+        executor: ToolExecutor,
+        *,
+        replace_existing: bool = False,
+    ) -> None:
+        """Register an exact ToolSpec/executor pair and derive sandbox capability."""
+
+        if not isinstance(spec, ToolSpec):
+            raise TypeError("spec must be a ToolSpec")
+        if not isinstance(executor, ToolExecutor):
+            raise TypeError("executor must implement ToolExecutor")
+        registry = self._tool_registry
+        if registry is None:
+            raise RuntimeError("attach an ExecutorRegistry before register_tool()")
+        if not isinstance(registry, ExecutorRegistry):  # pragma: no cover - attach invariant
+            raise TypeError("attached registry must be an ExecutorRegistry")
+        if spec.sandbox_profile is not None:
+            try:
+                validate_executor_sandbox(spec, executor)
+            except Exception as exc:
+                raise ValueError(str(exc)) from exc
+        registry.register(
+            spec.tool_id,
+            spec.version,
+            executor,
+            replace_existing=replace_existing,
+        )
 
 
 # Preserve the historical facade identity for public and test-visible classes.

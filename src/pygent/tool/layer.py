@@ -38,6 +38,7 @@ from .executors import (
     ExecutorRegistry,
     ToolExecutionContext,
     ToolRunner,
+    ToolTaskAdmission,
     ToolTaskManager,
     result_from_exception,
 )
@@ -347,6 +348,10 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                             context=ToolExecutionContext(
                                 deadline=infrastructure.deadline,
                                 emit=emit_tool_event,
+                                execution_id=getattr(
+                                    infrastructure, "managed_execution_id", None
+                                ),
+                                task_id=task.task_id,
                             ),
                             task=task,
                         ).result()
@@ -473,26 +478,47 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
         infrastructure = current_infrastructure()
         runtime_submit = getattr(infrastructure, "submit_tool_task", None)
         task = None
+        admission: ToolTaskAdmission | None = None
         # asyncio Tasks inherit ContextVars. Clear the Parent execution scope
         # while task admission creates its owner Task so a detached Agent-backed
         # executor cannot accidentally re-enter the former structured tree.
         with independent_execution():
             if callable(runtime_submit):
-                task = cast(ToolTask | None, await runtime_submit(spec, call))
-            if task is None and self.task_manager is not None:
+                submitted = await runtime_submit(spec, call)
+                if isinstance(submitted, ToolTaskAdmission):
+                    admission = submitted
+                    task = submitted.task
+                else:
+                    task = cast(ToolTask | None, submitted)
+            if task is None and admission is None and self.task_manager is not None:
                 task = await self.task_manager.submit(spec, call)
         if task is None:
             return ToolResult(
                 call_id=call.call_id,
                 name=call.name,
                 status="rejected",
-                error="detach requires a managed executiontime or explicit task facility",
-                error_kind="capability_error",
-                error_code="detach_unavailable",
+                error=(
+                    admission.error
+                    if admission is not None
+                    else "detach requires a managed execution or explicit task facility"
+                ),
+                error_kind=(
+                    admission.error_kind
+                    if admission is not None
+                    else "capability_error"
+                ),
+                error_code=(
+                    admission.error_code
+                    if admission is not None
+                    else "detach_unavailable"
+                ),
                 retryable=False,
                 side_effect_committed=False,
                 tool_id=spec.tool_id,
                 tool_version=spec.version,
+                missing_capabilities=(
+                    admission.missing_capabilities if admission is not None else ()
+                ),
             )
         return ToolResult(
             call_id=call.call_id,
@@ -545,6 +571,7 @@ def _result_effect_value(result: ToolResult) -> dict[str, object]:
         "error_code": result.error_code,
         "retryable": result.retryable,
         "side_effect_committed": result.side_effect_committed,
+        "missing_capabilities": list(result.missing_capabilities),
     }
 
 
@@ -562,6 +589,7 @@ def _result_from_effect(
     error_code = value.get("error_code")
     retryable = value.get("retryable")
     committed = value.get("side_effect_committed")
+    missing_capabilities = value.get("missing_capabilities", ())
     if error is not None and not isinstance(error, str):
         raise TypeError("replayed tool error must be a string or null")
     if error_kind is not None and not isinstance(error_kind, str):
@@ -572,6 +600,10 @@ def _result_from_effect(
         raise TypeError("replayed tool retryable must be a bool")
     if committed is not None and not isinstance(committed, bool):
         raise TypeError("replayed side_effect_committed must be a bool or null")
+    if not isinstance(missing_capabilities, (list, tuple)) or any(
+        not isinstance(item, str) or not item for item in missing_capabilities
+    ):
+        raise TypeError("replayed missing_capabilities must contain strings")
     state = ToolTaskState.UNKNOWN if status == "unknown" else ToolTaskState.FAILED
     return ToolResult(
         call_id=call.call_id,
@@ -585,6 +617,7 @@ def _result_from_effect(
         side_effect_committed=committed,
         tool_id=spec.tool_id,
         tool_version=spec.version,
+        missing_capabilities=tuple(missing_capabilities),
     )
 
 

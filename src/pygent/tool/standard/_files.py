@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import json
 import os
 import re
+import shutil
 import tempfile
 import threading
 from contextlib import suppress
 from itertools import islice
-from pathlib import Path
-from typing import Annotated, Any, Literal
+from pathlib import Path, PurePosixPath
+from typing import Annotated, Any, Never
 
 from pydantic import Field
 
@@ -29,23 +29,8 @@ from ._paths import (
 )
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
-_GREP_TYPE_SUFFIXES = {
-    "c": {".c", ".h"},
-    "cpp": {".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"},
-    "css": {".css"},
-    "go": {".go"},
-    "html": {".htm", ".html"},
-    "java": {".java"},
-    "js": {".cjs", ".js", ".jsx", ".mjs"},
-    "json": {".json"},
-    "md": {".md", ".markdown"},
-    "py": {".py", ".pyw"},
-    "rust": {".rs"},
-    "rs": {".rs"},
-    "ts": {".ts", ".tsx"},
-    "txt": {".txt"},
-    "yaml": {".yaml", ".yml"},
-}
+_SEARCH_MAX_BYTES = 50 * 1024
+_GREP_MAX_LINE_LENGTH = 500
 
 
 def _fail(
@@ -54,7 +39,7 @@ def _fail(
     *,
     committed: bool | None = False,
     retryable: bool = False,
-) -> None:
+) -> Never:
     raise ToolExecutionError(
         message,
         kind="filesystem_error",
@@ -125,34 +110,78 @@ def _read_pdf_text(path: Path, pages: str | None) -> str:
         ) from exc
 
 
-def _expand_brace_glob(pattern: str) -> list[str]:
+def _truncate_search_line(line: str) -> tuple[str, bool]:
+    if len(line) <= _GREP_MAX_LINE_LENGTH:
+        return line, False
+    return f"{line[:_GREP_MAX_LINE_LENGTH]}... [truncated]", True
+
+
+def _expand_search_glob(pattern: str) -> list[str]:
     match = re.search(r"\{([^{}]+)\}", pattern)
     if match is None:
         return [pattern]
     prefix, suffix = pattern[: match.start()], pattern[match.end() :]
     expanded: list[str] = []
     for option in match.group(1).split(","):
-        expanded.extend(_expand_brace_glob(prefix + option + suffix))
+        expanded.extend(_expand_search_glob(prefix + option + suffix))
     return expanded
 
 
-def _matches_glob(path: Path, root: Path, glob_pattern: str) -> bool:
+def _matches_search_glob(relative_path: str, pattern: str) -> bool:
+    candidates: set[str] = set()
+    pending = _expand_search_glob(pattern.replace("\\", "/").lstrip("/"))
+    while pending:
+        candidate = pending.pop()
+        if candidate in candidates:
+            continue
+        candidates.add(candidate)
+        marker = candidate.find("**/")
+        if marker >= 0:
+            pending.append(candidate[:marker] + candidate[marker + 3 :])
+    path = PurePosixPath(relative_path)
+    return any(path.match(candidate) for candidate in candidates)
+
+
+def _truncate_search_output(lines: list[str]) -> tuple[str, bool]:
+    selected: list[str] = []
+    size = 0
+    for line in lines:
+        encoded_size = len(line.encode("utf-8")) + (1 if selected else 0)
+        if size + encoded_size > _SEARCH_MAX_BYTES:
+            return "\n".join(selected), True
+        selected.append(line)
+        size += encoded_size
+    return "\n".join(selected), False
+
+
+def _search_executable(*names: str) -> str | None:
+    for name in names:
+        executable = shutil.which(name)
+        if executable:
+            return executable
+    return None
+
+
+def _inside_git_tree(path: Path) -> bool:
+    return any((parent / ".git").exists() for parent in (path, *path.parents))
+
+
+async def _terminate_process(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is None:
+        process.kill()
+    with suppress(ProcessLookupError):
+        await process.wait()
+
+
+def _relative_search_path(candidate: Path, root: Path) -> str:
     try:
-        relative = path.relative_to(root).as_posix()
+        relative = candidate.relative_to(root)
     except ValueError:
-        relative = path.name
-    patterns = _expand_brace_glob(glob_pattern.lstrip("/"))
-    return any(
-        fnmatch.fnmatch(relative, pattern) or fnmatch.fnmatch(path.name, pattern)
-        for pattern in patterns
-    )
-
-
-def _file_type_matches(path: Path, file_type: str) -> bool:
-    normalized = file_type.lower().lstrip(".")
-    return path.suffix.lower() in _GREP_TYPE_SUFFIXES.get(
-        normalized, {"." + normalized}
-    )
+        relative = Path(os.path.relpath(candidate, root))
+    value = relative.as_posix()
+    if candidate.is_dir() and not value.endswith("/"):
+        value += "/"
+    return value
 
 
 async def _run_owned_thread(function, *args):
@@ -557,24 +586,38 @@ class FileTools:
 
     @tool(
         tool_id="standard.files.glob",
-        version="2.0.0",
+        version="3.0.0",
         side_effect=ToolSideEffect.READ,
         timeout=30,
         resource_key="filesystem",
         sandbox_profile="workspace",
         required_permissions=("filesystem:read",),
     )
-    async def glob(self, pattern: str, path: str | None = None) -> str:
-        """Find files by glob pattern, newest first.
+    async def glob(
+        self,
+        pattern: Annotated[
+            str,
+            Field(
+                description=(
+                    "Glob pattern to match files, e.g. '*.ts', '**/*.json', "
+                    "or 'src/**/*.spec.ts'"
+                )
+            ),
+        ],
+        path: Annotated[
+            str,
+            Field(description="Directory to search in (default: current directory)"),
+        ] = "",
+        limit: Annotated[
+            int,
+            Field(gt=0, description="Maximum number of results (default: 1000)"),
+        ] = 1000,
+    ) -> str:
+        """Search for files by glob pattern while respecting ignore files."""
 
-        Args:
-            pattern: Glob pattern such as ``*.py`` or ``**/*.ts``.
-            path: Directory resolved from workspace_root; defaults to the workspace.
-        """
+        return await self._glob(pattern, path, limit)
 
-        return await asyncio.to_thread(self._glob, pattern, path)
-
-    def _glob(self, pattern: str, path: str | None) -> str:
+    async def _glob(self, pattern: str, path: str | None, limit: int) -> str:
         root = resolve_dir_path(path, self.path_context)
         if not root.exists():
             _fail(f"path does not exist: {root}", "file_not_found")
@@ -586,34 +629,94 @@ class FileTools:
                 "glob pattern must stay within workspace_root",
                 "path_outside_workspace",
             )
+
+        effective_limit = min(limit, self.max_search_files)
+        executable = _search_executable("fd", "fdfind")
+        process_cwd: Path | None = None
+        if executable:
+            arguments = ["--glob", "--color=never", "--hidden"]
+            if not _inside_git_tree(root):
+                arguments.append("--no-require-git")
+            arguments.extend(("--max-results", str(effective_limit)))
+            effective_pattern = pattern
+            if "/" in pattern:
+                arguments.append("--full-path")
+                if (
+                    not pattern.startswith("/")
+                    and not pattern.startswith("**/")
+                    and pattern != "**"
+                ):
+                    effective_pattern = f"**/{pattern}"
+                if os.name == "nt":
+                    effective_pattern = effective_pattern.replace("/", "[/\\\\]")
+            arguments.extend(("--", effective_pattern, str(root)))
+        else:
+            executable = _search_executable("rg")
+            if executable is None:
+                _fail(
+                    "file search requires fd or ripgrep (rg)",
+                    "search_backend_missing",
+                )
+            arguments = [
+                "--files",
+                "--hidden",
+            ]
+            if not _inside_git_tree(root):
+                arguments.append("--no-require-git")
+            arguments.extend(("--", "."))
+            process_cwd = root
+
+        process = await self._start_search_process(
+            executable, arguments, cwd=process_cwd
+        )
+        assert process.stderr is not None
+        stderr_task = asyncio.create_task(process.stderr.read())
+        lines: list[str] = []
+        reached_limit = False
         try:
-            matches = []
-            for candidate in root.glob(pattern.lstrip("/\\")):
-                resolved = resolve_file_path(str(candidate), self.path_context)
-                if resolved.is_file():
-                    matches.append(resolved)
-                if len(matches) >= self.max_search_files:
+            assert process.stdout is not None
+            while raw_line := await process.stdout.readline():
+                value = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not value:
+                    continue
+                candidate = Path(value)
+                if not candidate.is_absolute():
+                    candidate = root / candidate
+                candidate = resolve_tool_path(str(candidate), self.path_context)
+                relative = _relative_search_path(candidate, root)
+                if not _matches_search_glob(relative.rstrip("/"), pattern):
+                    continue
+                lines.append(relative)
+                if len(lines) >= effective_limit:
+                    reached_limit = True
+                    await _terminate_process(process)
                     break
-        except (OSError, ValueError) as exc:
-            raise ToolExecutionError(
-                "invalid glob pattern",
-                kind="filesystem_error",
-                code="invalid_glob",
-                side_effect_committed=False,
-            ) from exc
+            stderr = await stderr_task
+            code = await process.wait()
+        except BaseException:
+            await _terminate_process(process)
+            with suppress(asyncio.CancelledError):
+                await stderr_task
+            raise
 
-        def sort_key(candidate: Path) -> tuple[float, str]:
-            try:
-                modified = candidate.stat().st_mtime
-            except OSError:
-                modified = 0.0
-            return -modified, str(candidate)
-
-        return "\n".join(str(item) for item in sorted(matches, key=sort_key))
+        if not reached_limit and code not in (0, 1):
+            self._raise_search_failure(stderr, code, "file search backend")
+        if not lines:
+            return "No files found matching pattern"
+        output, bytes_truncated = _truncate_search_output(lines)
+        notices = []
+        if reached_limit:
+            notices.append(
+                f"{effective_limit} results limit reached. Use limit="
+                f"{effective_limit * 2} for more, or refine pattern"
+            )
+        if bytes_truncated:
+            notices.append("50KB limit reached")
+        return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
 
     @tool(
         tool_id="standard.files.grep",
-        version="2.0.0",
+        version="3.0.0",
         side_effect=ToolSideEffect.READ,
         timeout=30,
         resource_key="filesystem",
@@ -622,159 +725,204 @@ class FileTools:
     )
     async def grep(
         self,
-        pattern: str,
-        path: str | None = None,
-        glob: str | None = None,
-        output_mode: Literal["content", "files_with_matches", "count"] | None = None,
-        context_before: Annotated[int | None, Field(ge=0)] = None,
-        context_after: Annotated[int | None, Field(ge=0)] = None,
-        context: Annotated[int | None, Field(ge=0)] = None,
-        ignore_case: bool = False,
-        file_type: str | None = None,
-        head_limit: Annotated[int | None, Field(ge=0)] = None,
-        offset: Annotated[int | None, Field(ge=0)] = None,
-        multiline: bool = False,
-        show_line_numbers: bool = True,
+        pattern: Annotated[
+            str, Field(description="Search pattern (regex or literal string)")
+        ],
+        path: Annotated[
+            str,
+            Field(description="Directory or file to search (default: current directory)"),
+        ] = "",
+        glob: Annotated[
+            str,
+            Field(
+                description="Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'"
+            ),
+        ] = "",
+        ignoreCase: Annotated[
+            bool, Field(description="Case-insensitive search (default: false)")
+        ] = False,
+        literal: Annotated[
+            bool,
+            Field(
+                description="Treat pattern as literal string instead of regex (default: false)"
+            ),
+        ] = False,
+        context: Annotated[
+            int,
+            Field(
+                ge=0,
+                description="Number of lines to show before and after each match (default: 0)",
+            ),
+        ] = 0,
+        limit: Annotated[
+            int,
+            Field(gt=0, description="Maximum number of matches to return (default: 100)"),
+        ] = 100,
     ) -> str:
-        """Search file text using a regular expression and bounded result modes."""
+        """Search file contents with ripgrep while respecting ignore files."""
 
-        return await asyncio.to_thread(
-            self._grep,
-            pattern,
-            path,
-            glob,
-            output_mode,
-            context_before,
-            context_after,
-            context,
-            ignore_case,
-            file_type,
-            head_limit,
-            offset,
-            multiline,
-            show_line_numbers,
-        )
+        return await self._grep(pattern, path, glob, ignoreCase, literal, context, limit)
 
-    def _grep(
+    async def _grep(
         self,
         pattern: str,
         path: str | None,
         glob: str | None,
-        output_mode: str | None,
-        context_before: int | None,
-        context_after: int | None,
-        context: int | None,
         ignore_case: bool,
-        file_type: str | None,
-        head_limit: int | None,
-        offset: int | None,
-        multiline: bool,
-        show_line_numbers: bool,
+        literal: bool,
+        context: int,
+        limit: int,
     ) -> str:
-        mode = output_mode or "files_with_matches"
         root = resolve_tool_path(path, self.path_context, default=".")
         if not root.exists():
             _fail(f"path does not exist: {root}", "file_not_found")
-        flags = re.IGNORECASE if ignore_case else 0
-        if multiline:
-            flags |= re.DOTALL | re.MULTILINE
+        executable = _search_executable("rg")
+        if executable is None:
+            _fail("content search requires ripgrep (rg)", "search_backend_missing")
+        effective_limit = min(limit, self.max_search_files)
+        arguments = ["--json", "--line-number", "--color=never", "--hidden"]
+        if ignore_case:
+            arguments.append("--ignore-case")
+        if literal:
+            arguments.append("--fixed-strings")
+        if not _inside_git_tree(root if root.is_dir() else root.parent):
+            arguments.append("--no-require-git")
+        process_cwd = root if root.is_dir() else root.parent
+        search_target = "." if root.is_dir() else root.name
+        arguments.extend(("--", pattern, search_target))
+
+        process = await self._start_search_process(
+            executable, arguments, cwd=process_cwd
+        )
+        assert process.stderr is not None
+        stderr_task = asyncio.create_task(process.stderr.read())
+        matches: list[tuple[Path, int, str]] = []
+        reached_limit = False
         try:
-            expression = re.compile(pattern, flags)
-        except re.error:
-            expression = re.compile(
-                re.escape(pattern), re.IGNORECASE if ignore_case else 0
-            )
-        before = context_before if context_before is not None else context or 0
-        after = context_after if context_after is not None else context or 0
-        skip = offset or 0
-        limit = 250 if head_limit is None else head_limit
-
-        if root.is_file():
-            files = [root]
-        else:
-            files = list(
-                islice(
-                    (item for item in root.rglob("*") if item.is_file()),
-                    self.max_search_files,
+            assert process.stdout is not None
+            while raw_line := await process.stdout.readline():
+                try:
+                    event = json.loads(raw_line)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if event.get("type") != "match":
+                    continue
+                data = event.get("data", {})
+                raw_path = data.get("path", {}).get("text")
+                line_number = data.get("line_number")
+                line_text = data.get("lines", {}).get("text")
+                if not isinstance(raw_path, str) or not isinstance(line_number, int):
+                    continue
+                candidate = Path(raw_path)
+                if not candidate.is_absolute():
+                    candidate = root.parent / candidate if root.is_file() else root / candidate
+                candidate = resolve_file_path(str(candidate), self.path_context)
+                search_root = root if root.is_dir() else root.parent
+                relative = _relative_search_path(candidate, search_root)
+                if glob and not _matches_search_glob(relative, glob):
+                    continue
+                matches.append(
+                    (candidate, line_number, line_text if isinstance(line_text, str) else "")
                 )
+                if len(matches) >= effective_limit:
+                    reached_limit = True
+                    await _terminate_process(process)
+                    break
+            stderr = await stderr_task
+            code = await process.wait()
+        except BaseException:
+            await _terminate_process(process)
+            with suppress(asyncio.CancelledError):
+                await stderr_task
+            raise
+
+        if not reached_limit and code not in (0, 1):
+            self._raise_search_failure(stderr, code, "ripgrep")
+        if not matches:
+            return "No matches found"
+
+        file_cache: dict[Path, list[str]] = {}
+        output_lines: list[str] = []
+        lines_truncated = False
+        search_root = root if root.is_dir() else root.parent
+        for file_path, line_number, matched_text in matches:
+            relative = _relative_search_path(file_path, search_root)
+            if context == 0:
+                value = matched_text.replace("\r\n", "\n").replace("\r", "")
+                value = value.removesuffix("\n")
+                value, truncated = _truncate_search_line(value)
+                lines_truncated |= truncated
+                output_lines.append(f"{relative}:{line_number}: {value}")
+                continue
+            lines = file_cache.get(file_path)
+            if lines is None:
+                try:
+                    text = file_path.read_text(encoding="utf-8", errors="replace")
+                    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+                except OSError:
+                    lines = []
+                file_cache[file_path] = lines
+            if not lines:
+                output_lines.append(f"{relative}:{line_number}: (unable to read file)")
+                continue
+            start = max(1, line_number - context)
+            end = min(len(lines), line_number + context)
+            for current in range(start, end + 1):
+                value, truncated = _truncate_search_line(lines[current - 1])
+                lines_truncated |= truncated
+                separator = ":" if current == line_number else "-"
+                output_lines.append(f"{relative}{separator}{current}{separator} {value}")
+
+        output, bytes_truncated = _truncate_search_output(output_lines)
+        notices = []
+        if reached_limit:
+            notices.append(
+                f"{effective_limit} matches limit reached. Use limit="
+                f"{effective_limit * 2} for more, or refine pattern"
             )
-            if glob:
-                files = [item for item in files if _matches_glob(item, root, glob)]
-            if file_type:
-                files = [item for item in files if _file_type_matches(item, file_type)]
+        if bytes_truncated:
+            notices.append("50KB limit reached")
+        if lines_truncated:
+            notices.append(
+                "Some lines truncated to 500 chars. Use read tool to see full lines"
+            )
+        return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
 
-        content_lines: list[str] = []
-        count_pairs: list[tuple[Path, int]] = []
-        matched_files: set[Path] = set()
-        hard_output_lines = 10_000
+    @staticmethod
+    async def _start_search_process(
+        executable: str,
+        arguments: list[str],
+        *,
+        cwd: Path | None = None,
+    ) -> asyncio.subprocess.Process:
+        try:
+            return await asyncio.create_subprocess_exec(
+                executable,
+                *arguments,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+            )
+        except OSError as exc:
+            raise ToolExecutionError(
+                "could not start search backend",
+                kind="filesystem_error",
+                code="search_backend_failed",
+                retryable=True,
+                side_effect_committed=False,
+            ) from exc
 
-        def format_line(file_path: Path, line_no: int, line: str) -> str:
-            body = f"{line_no}|{line}" if show_line_numbers else line
-            return f"{file_path}:{body}"
-
-        for file_path in sorted(files):
-            try:
-                raw = file_path.read_bytes()[: self.max_read_bytes]
-                text = raw.decode("utf-8", errors="replace")
-            except OSError:
-                continue
-            lines = text.splitlines()
-            if multiline:
-                matches = list(expression.finditer(text))
-                if not matches:
-                    continue
-                matched_files.add(file_path)
-                count_pairs.append((file_path, len(matches)))
-                if mode == "content":
-                    for match in matches:
-                        start_line = text.count("\n", 0, match.start())
-                        end_at = max(match.start(), match.end() - 1)
-                        end_line = text.count("\n", 0, end_at)
-                        start = max(0, start_line - before)
-                        end = min(len(lines), end_line + after + 1)
-                        remaining = hard_output_lines - len(content_lines)
-                        if remaining > 0:
-                            content_lines.extend(
-                                format_line(file_path, index + 1, lines[index])
-                                for index in range(start, min(end, start + remaining))
-                            )
-                continue
-            match_count = 0
-            for index, line in enumerate(lines):
-                if expression.search(line) is None:
-                    continue
-                match_count += 1
-                matched_files.add(file_path)
-                if mode == "content":
-                    start = max(0, index - before)
-                    end = min(len(lines), index + after + 1)
-                    remaining = hard_output_lines - len(content_lines)
-                    if remaining > 0:
-                        content_lines.extend(
-                            format_line(file_path, line_index + 1, lines[line_index])
-                            for line_index in range(start, min(end, start + remaining))
-                        )
-            if match_count:
-                count_pairs.append((file_path, match_count))
-
-        if mode == "count":
-            if not count_pairs:
-                return "0"
-            selected = count_pairs[skip:]
-            if limit:
-                selected = selected[:limit]
-            if len(count_pairs) == 1 and skip == 0 and (limit == 0 or limit >= 1):
-                return str(count_pairs[0][1])
-            return "\n".join(f"{file_path}:{count}" for file_path, count in selected)
-        if mode == "files_with_matches":
-            selected_paths = sorted(str(item) for item in matched_files)[skip:]
-            if limit:
-                selected_paths = selected_paths[:limit]
-            return "\n".join(selected_paths)
-        selected_lines = content_lines[skip:]
-        if limit:
-            selected_lines = selected_lines[:limit]
-        return "\n".join(selected_lines) if selected_lines else "无匹配"
+    @staticmethod
+    def _raise_search_failure(stderr: bytes, code: int, backend: str) -> None:
+        message = stderr.decode("utf-8", errors="replace").strip()
+        raise ToolExecutionError(
+            message or f"{backend} exited with code {code}",
+            kind="filesystem_error",
+            code="search_backend_failed",
+            retryable=True,
+            side_effect_committed=False,
+        )
 
 
 __all__ = ["FileTools"]

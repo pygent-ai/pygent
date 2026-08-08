@@ -27,7 +27,14 @@ from pygent.core import (
 )
 from pygent.core._direct_execution import _validate_result
 from pygent.core._module_contracts import ExecutionScope, _capacity_permit
-from pygent.tool import ToolCall, ToolSpec, ToolTask
+from pygent.tool import (
+    SandboxExecutorSupport,
+    ToolCall,
+    ToolExecutionError,
+    ToolSpec,
+    ToolTaskAdmission,
+)
+from pygent.tool.executors import validate_executor_sandbox
 
 from ..api import (
     CapacityPolicy,
@@ -54,6 +61,10 @@ class _ManagedScope(ExecutionScope):
     @property
     def deadline(self) -> float | None:
         return self.record.deadline
+
+    @property
+    def managed_execution_id(self) -> str:
+        return self.record.execution_id
 
     def _path_for(self, module: object) -> str:
         return self._paths.get(
@@ -583,7 +594,7 @@ class _ManagedScope(ExecutionScope):
         occurrence = frame.module_occurrence if frame is not None else 0
         return f"{self.record.execution_id}:{module_path}:{occurrence}:{call_id}"
 
-    async def submit_tool_task(self, spec: ToolSpec, call: ToolCall) -> ToolTask | None:
+    async def submit_tool_task(self, spec: ToolSpec, call: ToolCall) -> ToolTaskAdmission:
         """Submit a detached ToolTask through the active deployment Runtime."""
 
         frame = _execution_frame.get()
@@ -592,14 +603,30 @@ class _ManagedScope(ExecutionScope):
         manager = frame.runtime._tool_tasks
         registry = frame.runtime._tool_registry
         if manager is None or registry is None:
-            return None
+            return ToolTaskAdmission(
+                error="detach requires a managed ToolTaskManager and ExecutorRegistry",
+                error_kind="capability_error",
+                error_code="detach_unavailable",
+            )
         binding_state = frame.binding_state
-        resolve = getattr(registry, "resolve", None)
-        if callable(resolve):
-            try:
-                resolve(spec.tool_id, spec.version)
-            except LookupError:
-                return None
+        try:
+            executor = registry.resolve(spec.tool_id, spec.version)
+            support = validate_executor_sandbox(
+                spec, executor, durable=self.record.history is not None
+            )
+        except ToolExecutionError as exc:
+            return ToolTaskAdmission(
+                error=str(exc),
+                error_kind=exc.kind,
+                error_code=exc.code,
+                missing_capabilities=exc.missing_capabilities,
+            )
+        except LookupError:
+            return ToolTaskAdmission(
+                error=f"no executor registered for {spec.tool_id}@{spec.version}",
+                error_kind="capability_error",
+                error_code="executor_unavailable",
+            )
         execute = frame.runtime._detached_tool_execution(binding_state, registry)
         if self.record.history is not None:
             prepare_job = getattr(manager, "prepare_job", None)
@@ -607,13 +634,27 @@ class _ManagedScope(ExecutionScope):
                 not callable(prepare_job)
                 or getattr(manager, "history", None) is not self.record.history
             ):
-                return None
+                return ToolTaskAdmission(
+                    error="durable detach requires a matching durable ToolTaskManager",
+                    error_kind="capability_error",
+                    error_code="durability_unavailable",
+                )
             capabilities = ["durability.sqlite"]
             if spec.sandbox_profile is not None:
                 capabilities.append(f"tool.sandbox.{spec.sandbox_profile}")
+                if isinstance(support, SandboxExecutorSupport):
+                    fingerprint = support.capability_for_fingerprint()
+                    if fingerprint is not None:
+                        capabilities.append(fingerprint)
             required_capabilities = tuple(capabilities)
             if not set(required_capabilities) <= frame.runtime.capabilities:
-                return None
+                missing = tuple(sorted(set(required_capabilities) - frame.runtime.capabilities))
+                return ToolTaskAdmission(
+                    error="durable detach is missing required capabilities",
+                    error_kind="capability_error",
+                    error_code="missing_sandbox_capability",
+                    missing_capabilities=missing,
+                )
             stack = _module_stack.get()
             module_path = stack[-1] if stack else self.record.plan.root
             frame = _execution_frame.get()
@@ -647,7 +688,7 @@ class _ManagedScope(ExecutionScope):
         else:
             task = await manager.prepare(spec, call, execution=execute)
         self.record.deferred_tool_tasks.append((manager, task.task_id))
-        return task
+        return ToolTaskAdmission(task=task)
 
     @asynccontextmanager
     async def _resource_permits(

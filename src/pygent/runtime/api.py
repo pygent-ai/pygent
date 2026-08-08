@@ -143,6 +143,7 @@ class DurabilityReport:
     external_side_effect_guarantee: str = "at_least_once"
     arbitrary_coroutine_recovery: bool = False
     exactly_once_external_side_effects: bool = False
+    detached_tool_gaps: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.requested_mode, DurabilityMode):
@@ -153,6 +154,7 @@ class DurabilityReport:
             "degraded_reasons",
             "recovery_undeclared_modules",
             "effect_unverified_modules",
+            "detached_tool_gaps",
         ):
             values = tuple(getattr(self, name))
             if any(not isinstance(value, str) or not value for value in values):

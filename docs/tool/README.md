@@ -44,6 +44,8 @@ Manager、grant、permit、lease 和 Pool 是 Runtime 内部协议。文件、Sh
 
 同一 `FileTools` 部署实例内的标准文件变更按规范化目标路径串行，并通过同目录原子替换提交；取消在所属阻塞写操作退出后才返回。跨实例、跨进程并发仍由调用方或 Runtime 的 resource capacity 治理。默认 Web fetcher 把通过公网校验的地址绑定到实际 socket 连接，并在每次重定向重新解析和校验，避免“校验一次、连接时再次解析”的 DNS 重绑定窗口。Bash 内部超时作为副作用未知的 `unknown` 结果返回，而不是把超时文本包装成成功输出。
 
+标准 `glob`/`grep` 使用 Pi coding agent 风格的最小输入面。两者的调用状态只存在于单次子进程和局部变量中，不写入 portable Tool 值或共享可变搜索状态；并发调用分别拥有自己的 `fd`/`rg` 进程。搜索默认包含未被 ignore 的隐藏路径，同时遵守分层 `.gitignore`，模型传入的 glob 只缩小候选集，不得把已忽略路径重新加入结果。
+
 ## 同步与 detach 生命周期
 
 普通工具与 Agent-backed Tool 使用同一生命周期契约。direct execution 只直接支持同步本地调用，独立后台生命周期由调用方自己的任务设施承载。managed 同步调用中，ToolTask 属于当前 Execution；Agent-backed Tool 可以作为结构化 Child 执行，并随 Parent 取消、join 和收敛。

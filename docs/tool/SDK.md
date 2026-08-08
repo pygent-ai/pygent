@@ -97,6 +97,21 @@ files = FileTools(workspace_root="./workspace")
 read_only_tools = ToolKit(files.read, files.glob, files.grep, files.read_lints)
 ```
 
+`glob` 与 `grep` 保留 Pygent 的工具名，并采用 Pi coding agent 的精简模型接口：
+
+```text
+glob(pattern, path?, limit=1000)
+grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=100)
+```
+
+`glob` 返回相对于搜索目录的路径；`grep` 返回
+`path:line: content`，并在 `context > 0` 时使用 `-` 标记上下文行。两者都会搜索
+未被忽略的隐藏文件并遵守分层 `.gitignore`；没有匹配时分别返回
+`No files found matching pattern` 与 `No matches found`。本地实现优先使用 `fd`
+执行 glob，并以 `rg --files` 作为兼容后端；grep 使用 `rg --json`。部署环境至少需要
+`rg`，如需完全采用 fd 的文件发现顺序和行为，应同时安装 `fd`（部分 Linux
+发行版的命令名为 `fdfind`）。include glob 在 Pygent 内过滤，不能覆盖 ignore 规则。
+
 标准集合提供以下模型可见名称与策略：
 
 | 工具 | ToolSideEffect / 幂等 | 权限 | 关键边界 |
@@ -107,7 +122,7 @@ read_only_tools = ToolKit(files.read, files.glob, files.grep, files.read_lints)
 | `edit`, `edit_notebook` | `WRITE / NOT_IDEMPOTENT` | `filesystem:write` | 同一实例内串行 read-modify-write 并原子提交；取消在所属写线程退出后返回；不确定失败不谎报未提交 |
 | `web_search`, `web_fetch` | `READ / INHERENT` | `web:search`, `web:fetch` | 公开 HTTP(S)；限制响应大小；默认 fetcher 连接已验证 IP、保留 Host/SNI，并逐跳重新验证重定向 |
 
-所有标准工具的 `sandbox_profile` 为 `workspace`（Web 工具除外，它们通过 URL/DNS 边界限制访问）。在 managed/durable 部署中，Runtime 仍必须声明相应 sandbox capability；Direct 模式不会因为工具名是“标准工具”而自动获得沙箱、授权或跨 Root 容量治理。
+所有标准工具的 `sandbox_profile` 为 `workspace`（Web 工具除外，它们通过 URL/DNS 边界限制访问）。该字段只是隔离需求，不是标准工具或 Runtime 已经实施宿主机沙箱的证明。在 managed/durable 部署中，应用必须为精确工具版本注册实际支持 `workspace` 的 sandbox-aware executor，Runtime 据此派生并验证 capability；应用不得通过重复 ToolSpec 声明或手工添加 capability 绕过该验证。Direct 模式不会因为工具名是“标准工具”而自动获得沙箱、授权或跨 Root 容量治理。
 
 `bash(is_background=True)` 是显式外部进程启动：返回 PID 后，该进程不再属于当前同步 ToolTask，调用方负责自己的进程监督与关闭策略。需要 Runtime 管理的独立生命周期时，应使用授权决定选择的 managed detach/Job，而不是把后台进程误当作 durable ToolTask。
 
@@ -195,6 +210,90 @@ Python DSL 中的 dict、list、tuple 和 Enum 在构造时必须被防御性复
 
 ToolDefinition、ToolSpec、ToolCall、ToolTask 与 ToolResult 是封闭的 portable value 类型，不支持 Python 子类追加字段。领域扩展放入已有的严格 JSON schema、arguments、metadata 或 output 槽位；codec 对未知 subtype fail-closed，不能静默丢弃 handler 或自定义字段。
 
+## 外部沙箱 executor
+
+E2B、Daytona、Modal、自托管容器或任意其他外部沙箱不形成第二套 Tool API。开发者只需把 provider SDK 包装为现有 `ToolExecutor`；Pygent 不要求 provider 实现统一的模板、快照、PTY、文件系统或生命周期对象。框架只标准化工具执行入口、沙箱能力证明和 managed admission。以下最小公共装配面是 0.2 Tool SDK 契约，provider adapter 可以拥有更多私有能力，但不能把它们加入 portable Tool 值：
+
+> 参考实现已经提供 `SandboxExecutorSupport`、`runtime.register_tool()`、sandbox bind preflight、managed invocation 复核与结构化 admission reason。手工传入 `tool.sandbox.*` capability 会被拒绝；沙箱能力只能从当前注册的兼容 executor 派生。
+
+```python
+from pygent.tool import (
+    SandboxExecutorSupport,
+    ToolExecutionContext,
+    ToolExecutionError,
+)
+
+
+class E2BWorkspaceExecutor:
+    sandbox_support = SandboxExecutorSupport(
+        profiles=("workspace-write",),
+        durable_reconnect=True,
+        deployment_fingerprint="e2b:python-template-v3",
+    )
+
+    def __init__(self, sandboxes):
+        self._sandboxes = sandboxes  # 部署本地 client/pool，不可移植
+
+    async def execute(self, spec, call, context: ToolExecutionContext):
+        sandbox = await self._sandboxes.acquire(
+            execution_id=context.execution_id,
+            task_id=context.task_id,
+            recovery=context.recovery,
+        )
+        result = await sandbox.commands.run(
+            call.arguments["command"],
+            timeout=spec.timeout,
+        )
+        if result.exit_code != 0:
+            raise ToolExecutionError(
+                f"sandbox command exited with {result.exit_code}",
+                kind="command_error",
+                code="nonzero_exit",
+                side_effect_committed=True,
+            )
+        return {
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.exit_code,
+        }
+```
+
+`SandboxExecutorSupport` 是 executor 的受信部署声明，不是第四层工具值。`profiles` 表示该 adapter 实际实施的 profile；`durable_reconnect` 表示进程重启后能否使用稳定 ToolTask 身份重新取得 provider session；`deployment_fingerprint` 是不含 secret 的稳定部署修订，用于防止恢复时把同名 profile 解析到不兼容环境。provider session 的共享方式、外部状态存储与清理策略仍由 adapter 负责。
+
+managed 部署使用一个原子装配助手把 ToolSpec 与 executor 注册为精确配对：
+
+```python
+spec = ToolSpec(
+    tool_id="shell.command",
+    version="1",
+    definition=shell_definition,
+    sandbox_profile="workspace-write",
+    timeout=30.0,
+)
+
+registry = ExecutorRegistry()
+runtime.attach_executor_registry(registry)
+runtime.register_tool(spec, E2BWorkspaceExecutor(e2b_sandboxes))
+runtime.attach_tool_task_manager(DurableToolTaskManager(history, registry))
+```
+
+`runtime.register_tool(spec, executor)` 是部署装配助手，不进入 Module 图，也不改变 `ToolSpec + ToolExecutor + ExecutorRegistry` 三者已有职责。它必须先验证 executor 实现 `ToolExecutor`，再核对 `spec.sandbox_profile` 与 `executor.sandbox_support.profiles`，成功后才注册 executor 并为该精确工具身份提供对应 sandbox capability。ToolSpec 不得为 Runtime 自动授予 `tool.sandbox.<profile>`；单独向 Runtime 传入同名字符串也不能代替兼容 executor。普通无 sandbox profile 的 `LocalToolExecutor`、`HttpToolExecutor`、`AgentToolExecutor` 和 MCP executor 保持原装配语义。
+
+应用仍可直接操作 `ExecutorRegistry`，但不能借此绕过 managed invocation 验证。bind/compile 会预检图中每个 sandbox ToolSpec 是否存在精确 executor、该 executor 是否支持所需 profile，并通过 `bound.durability.detached_tool_gaps` 报告具体缺口；为了不阻塞只使用同步沙箱的应用，该报告本身不会拒绝 Binding。每次 managed invocation 都会重新核对基础 profile。只有真正申请 durable detach 时才要求 `durable_reconnect=True` 与稳定 `deployment_fingerprint`；首次 detach admission 和恢复还会重新验证，以覆盖注册表替换、Worker 漂移、provider session 过期与部署修订变化。
+
+验证失败必须保留可判定原因。例如缺少 `workspace-write` 时，结果或 admission error 至少包含：
+
+```text
+error_kind: capability_error
+error_code: missing_sandbox_capability
+missing_capabilities: [tool.sandbox.workspace-write]
+message: shell.command@1 requires tool.sandbox.workspace-write
+```
+
+不得把 executor 缺失、profile 不匹配、durable reconnect 不可用或 provider session 过期都折叠为 `detach_unavailable`。`ToolExecutionContext` 只增加 Runtime 提供的稳定 `execution_id`、可选 `task_id` 与 `recovery` 事实；它不携带 provider client 或活 session。外部 adapter 可以据此在自己的并发安全存储中解析 session，因此并发调用不依赖全局“当前沙箱”，Pygent Module 仍保持无状态。
+
+Direct execution 可以继续显式传入同一个外部 executor，但没有 managed capability 派生、跨 Root 容量或 durable recovery。调用方必须确保 adapter 真正实施所声明的隔离，并负责 provider session 的拥有、取消、join 和关闭。框架可以提供基于 command/file 最小接口的标准工具便捷 adapter，但该 helper 必须建立在 `ToolExecutor` 之上，不能成为接入外部沙箱的强制协议。
+
 ## 自定义授权 Module
 
 授权 Module 接收包含 ToolCall、已解析 ToolSpec 与请求事实的不可变 `ToolAuthorizationRequest`，返回 `ToolAuthorizationDecision`。决定至少包含原 `call_id`、`allowed`、稳定 `reason_code` 与由应用选择的 `lifecycle`（`"sync"` 或 `"detach"`）。模型提供的 ToolCall 参数不得设置或覆盖 lifecycle。
@@ -266,7 +365,7 @@ recovered = await runtime.recover_tool_jobs(bound_detached_tools)
 
 `recover_tool_jobs()` 在启动 executor 前重新验证 Binding identity、ExecutionPlan identity、ToolSpec version、resource identity 与 required capabilities，并重新进入该 Binding 的共享 Tool capacity/resource gates。任一身份或 capability 不匹配都拒绝恢复，不得回落为直接调用 registry。`RUNNING` 的非幂等副作用在崩溃后变为 `unknown`；固有幂等，或携带稳定 idempotency key 的调用，才允许创建新的 Job attempt。
 
-`ToolSpec.sandbox_profile="restricted"` 对应必需 capability `tool.sandbox.restricted`；其他 profile 使用同样的 `tool.sandbox.<profile>` 稳定命名。Runtime 未声明该 capability 时，durable detach admission 与恢复都必须 fail closed。
+`ToolSpec.sandbox_profile="restricted"` 对应必需 capability `tool.sandbox.restricted`；其他 profile 使用同样的 `tool.sandbox.<profile>` 稳定命名。该 capability 只能由为精确工具身份注册的兼容 sandbox-aware executor 提供，不能由 ToolSpec 自证或由应用手工字符串替代。bind/compile 负责预检和报告；managed invocation、durable detach admission 与恢复发现 executor、profile、durable reconnect 或部署修订不兼容时必须 fail closed，并报告具体缺失能力。
 
 部署执行注册表按 `(tool_id, version)` 解析 executor。普通 executor 与 Agent-backed executor 可以有不同内部适配器，但必须共享上述 ToolCall、ToolTask、ToolResult、sync/detach 与授权契约；ToolSpec 不携带 executor 或 Agent 对象。
 

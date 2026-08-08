@@ -129,6 +129,10 @@ class _DirectExecutionScope:
     def deadline(self) -> None:
         return None
 
+    @property
+    def managed_execution_id(self) -> None:
+        return None
+
     async def invoke_module(
         self,
         module: ModuleDependency[Any, Any],

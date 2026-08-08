@@ -43,7 +43,24 @@ from pygent.runtime import (
 )
 from pygent.runtime.codec import invocation_to_dict
 from pygent.runtime.tasks import DurableToolTaskManager
-from pygent.tool import ExecutorRegistry, IdempotencyPolicy, LocalToolExecutor
+from pygent.tool import (
+    ExecutorRegistry,
+    IdempotencyPolicy,
+    LocalToolExecutor,
+    SandboxExecutorSupport,
+)
+
+
+def _sandbox_executor(
+    profile: str = "restricted", *, fingerprint: str = "sandbox:test"
+) -> LocalToolExecutor:
+    executor = LocalToolExecutor(lambda arguments: arguments)
+    executor.sandbox_support = SandboxExecutorSupport(  # type: ignore[attr-defined]
+        profiles=(profile,),
+        durable_reconnect=True,
+        deployment_fingerprint=fingerprint,
+    )
+    return executor
 
 
 def _spec(
@@ -517,13 +534,9 @@ async def test_recovery_rejects_plan_capability_and_tool_version_mismatch(tmp_pa
     path = tmp_path / "mismatch.sqlite3"
     spec = _spec(sandbox_profile="restricted")
     registry = ExecutorRegistry()
-    registry.register(
-        spec.tool_id, spec.version, LocalToolExecutor(lambda arguments: arguments)
-    )
+    registry.register(spec.tool_id, spec.version, _sandbox_executor())
     async with SQLiteHistoryStore(path) as history:
-        seed_runtime = LocalRuntime(
-            history=history, capabilities=("tool.sandbox.restricted",)
-        )
+        seed_runtime = LocalRuntime(history=history)
         manager = _attach(seed_runtime, history, registry)
         bound = _binding(seed_runtime, spec, name="mismatch-jobs")
         await _prepare_job(
@@ -536,35 +549,35 @@ async def test_recovery_rejects_plan_capability_and_tool_version_mismatch(tmp_pa
 
     async with SQLiteHistoryStore(path) as history:
         missing_runtime = LocalRuntime(history=history)
-        _attach(missing_runtime, history, registry)
+        unsupported_registry = ExecutorRegistry()
+        unsupported_registry.register(
+            spec.tool_id,
+            spec.version,
+            LocalToolExecutor(lambda arguments: arguments),
+        )
+        _attach(missing_runtime, history, unsupported_registry)
         missing_bound = _binding(missing_runtime, spec, name="mismatch-jobs")
         with pytest.raises(ExecutionAdmissionError, match="missing required capabilities"):
             await missing_runtime.recover_tool_jobs(missing_bound)
         await missing_runtime.close()
 
     async with SQLiteHistoryStore(path) as history:
-        missing_version_runtime = LocalRuntime(
-            history=history, capabilities=("tool.sandbox.restricted",)
-        )
+        missing_version_runtime = LocalRuntime(history=history)
         empty_registry = ExecutorRegistry()
         _attach(missing_version_runtime, history, empty_registry)
         matching_bound = _binding(
             missing_version_runtime, spec, name="mismatch-jobs"
         )
-        with pytest.raises(ExecutionAdmissionError, match="tool version"):
+        with pytest.raises(ExecutionAdmissionError, match="missing required capabilities"):
             await missing_version_runtime.recover_tool_jobs(matching_bound)
         await missing_version_runtime.close()
 
     async with SQLiteHistoryStore(path) as history:
-        changed_runtime = LocalRuntime(
-            history=history, capabilities=("tool.sandbox.restricted",)
-        )
+        changed_runtime = LocalRuntime(history=history)
         changed_registry = ExecutorRegistry()
         changed_spec = _spec(version="2", sandbox_profile="restricted")
         changed_registry.register(
-            changed_spec.tool_id,
-            changed_spec.version,
-            LocalToolExecutor(lambda arguments: arguments),
+            changed_spec.tool_id, changed_spec.version, _sandbox_executor()
         )
         _attach(changed_runtime, history, changed_registry)
         changed_bound = _binding(

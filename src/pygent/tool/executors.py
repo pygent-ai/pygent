@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -34,7 +35,9 @@ from .types import (
 )
 
 ToolHandler: TypeAlias = Callable[[Mapping[str, JsonValue]], object | Awaitable[object]]
-ToolTaskExecution: TypeAlias = Callable[["ToolSpec", "ToolCall"], Awaitable[object]]
+ToolTaskExecution: TypeAlias = Callable[
+    ["ToolSpec", "ToolCall", "ToolExecutionContext"], Awaitable[object]
+]
 AgentToolRequestBuilder: TypeAlias = Callable[
     ["ToolSpec", "ToolCall"], tuple[Message, Context]
 ]
@@ -50,6 +53,74 @@ class ToolExecutionContext:
 
     deadline: float | None = None
     emit: ToolEventEmitter | None = None
+    execution_id: str | None = None
+    task_id: str | None = None
+    recovery: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("execution_id", "task_id"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"{name} must be a non-empty string or None")
+        if not isinstance(self.recovery, bool):
+            raise TypeError("recovery must be a bool")
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxExecutorSupport:
+    """Deployment proof advertised by an external-sandbox ToolExecutor."""
+
+    profiles: tuple[str, ...]
+    durable_reconnect: bool = False
+    deployment_fingerprint: str | None = None
+
+    def __post_init__(self) -> None:
+        profiles = tuple(self.profiles)
+        if not profiles or any(not isinstance(item, str) or not item for item in profiles):
+            raise ValueError("profiles must contain non-empty strings")
+        if len(profiles) != len(set(profiles)):
+            raise ValueError("profiles must be unique")
+        if not isinstance(self.durable_reconnect, bool):
+            raise TypeError("durable_reconnect must be a bool")
+        if self.deployment_fingerprint is not None and (
+            not isinstance(self.deployment_fingerprint, str)
+            or not self.deployment_fingerprint
+        ):
+            raise ValueError("deployment_fingerprint must be non-empty or None")
+        if self.durable_reconnect and self.deployment_fingerprint is None:
+            raise ValueError(
+                "durable_reconnect requires a stable deployment_fingerprint"
+            )
+        object.__setattr__(self, "profiles", profiles)
+
+    def capability_for_fingerprint(self) -> str | None:
+        if self.deployment_fingerprint is None:
+            return None
+        digest = hashlib.sha256(self.deployment_fingerprint.encode()).hexdigest()
+        return f"tool.sandbox.deployment.{digest}"
+
+
+@dataclass(frozen=True, slots=True)
+class ToolTaskAdmission:
+    """Structured outcome of managed detached ToolTask admission."""
+
+    task: ToolTask | None = None
+    error: str | None = None
+    error_kind: str | None = None
+    error_code: str | None = None
+    missing_capabilities: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if (self.task is None) == (self.error_code is None):
+            raise ValueError("admission must contain exactly one of task or error_code")
+        for name in ("error", "error_kind", "error_code"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"{name} must be a non-empty string or None")
+        capabilities = tuple(self.missing_capabilities)
+        if any(not isinstance(item, str) or not item for item in capabilities):
+            raise ValueError("missing_capabilities must contain non-empty strings")
+        object.__setattr__(self, "missing_capabilities", capabilities)
 
 
 class ToolExecution:
@@ -100,12 +171,67 @@ class ToolExecutionError(RuntimeError):
         code: str | None = None,
         retryable: bool = False,
         side_effect_committed: bool | None = None,
+        missing_capabilities: tuple[str, ...] = (),
     ) -> None:
         super().__init__(message)
         self.kind = kind
         self.code = code
         self.retryable = retryable
         self.side_effect_committed = side_effect_committed
+        self.missing_capabilities = tuple(missing_capabilities)
+
+
+def validate_executor_sandbox(
+    spec: ToolSpec,
+    executor: ToolExecutor,
+    *,
+    durable: bool = False,
+    required_capabilities: tuple[str, ...] = (),
+) -> SandboxExecutorSupport | None:
+    """Validate the exact executor selected for a sandboxed managed call."""
+
+    profile = spec.sandbox_profile
+    if profile is None:
+        return None
+    capability = f"tool.sandbox.{profile}"
+    support = getattr(executor, "sandbox_support", None)
+    if not isinstance(support, SandboxExecutorSupport) or profile not in support.profiles:
+        raise ToolExecutionError(
+            f"{spec.tool_id}@{spec.version} requires {capability}",
+            kind="capability_error",
+            code="missing_sandbox_capability",
+            retryable=False,
+            side_effect_committed=False,
+            missing_capabilities=(capability,),
+        )
+    if durable and not support.durable_reconnect:
+        raise ToolExecutionError(
+            f"{spec.tool_id}@{spec.version} sandbox does not support durable reconnect",
+            kind="capability_error",
+            code="sandbox_reconnect_unavailable",
+            retryable=False,
+            side_effect_committed=False,
+            missing_capabilities=(f"{capability}.durable-reconnect",),
+        )
+    fingerprint_capability = support.capability_for_fingerprint()
+    expected = next(
+        (
+            item
+            for item in required_capabilities
+            if item.startswith("tool.sandbox.deployment.")
+        ),
+        None,
+    )
+    if durable and expected is not None and fingerprint_capability != expected:
+        raise ToolExecutionError(
+            f"{spec.tool_id}@{spec.version} sandbox deployment fingerprint changed",
+            kind="capability_error",
+            code="sandbox_deployment_changed",
+            retryable=False,
+            side_effect_committed=False,
+            missing_capabilities=(expected,),
+        )
+    return support
 
 
 @runtime_checkable
@@ -313,13 +439,29 @@ class ExecutorRegistry:
                 f"no executor registered for {tool_id}@{version}"
             ) from exc
 
+    @property
+    def sandbox_capabilities(self) -> frozenset[str]:
+        capabilities: set[str] = set()
+        for executor in self._executors.values():
+            support = getattr(executor, "sandbox_support", None)
+            if not isinstance(support, SandboxExecutorSupport):
+                continue
+            capabilities.update(f"tool.sandbox.{item}" for item in support.profiles)
+            fingerprint = support.capability_for_fingerprint()
+            if fingerprint is not None:
+                capabilities.add(fingerprint)
+        return frozenset(capabilities)
+
     async def execute(
         self,
         spec: ToolSpec,
         call: ToolCall,
         context: ToolExecutionContext,
     ) -> object:
-        return await self.resolve(spec.tool_id, spec.version).execute(spec, call, context)
+        executor = self.resolve(spec.tool_id, spec.version)
+        if context.execution_id is not None:
+            validate_executor_sandbox(spec, executor)
+        return await executor.execute(spec, call, context)
 
 
 class ToolRunner:
@@ -365,7 +507,7 @@ class ToolRunner:
         try:
             async def invoke() -> object:
                 if operation is not None:
-                    return await operation(spec, call)
+                    return await operation(spec, call, context)
                 return await registry.execute(spec, call, context)
 
             deadlines = [value for value in (context.deadline,) if value is not None]
@@ -524,7 +666,11 @@ class InMemoryToolTaskManager:
             self._snapshots[snapshot.task_id] = running
         try:
             value = await _execute_with_timeout(
-                self._registry, spec, call, execution=execution
+                self._registry,
+                spec,
+                call,
+                execution=execution,
+                context=ToolExecutionContext(task_id=snapshot.task_id),
             )
             result = ToolResult(
                 call_id=call.call_id,
@@ -620,11 +766,13 @@ async def _execute_with_timeout(
     call: ToolCall,
     *,
     execution: ToolTaskExecution | None = None,
+    context: ToolExecutionContext | None = None,
 ) -> object:
     result = await ToolRunner().execute(
         spec,
         call,
         registry,
+        context=context,
         operation=execution,
     ).result()
     if result.status == "succeeded":
@@ -635,6 +783,7 @@ async def _execute_with_timeout(
         code=result.error_code,
         retryable=result.retryable,
         side_effect_committed=result.side_effect_committed,
+        missing_capabilities=result.missing_capabilities,
     )
 
 
@@ -662,6 +811,7 @@ def result_from_exception(
             error_code=exc.code,
             retryable=exc.retryable,
             side_effect_committed=committed,
+            missing_capabilities=exc.missing_capabilities,
             tool_id=spec.tool_id,
             tool_version=spec.version,
         )
@@ -694,13 +844,16 @@ __all__ = [
     "HttpToolExecutor",
     "InMemoryToolTaskManager",
     "LocalToolExecutor",
+    "SandboxExecutorSupport",
     "ToolExecution",
     "ToolExecutionContext",
     "ToolExecutionError",
     "ToolExecutor",
     "ToolHandler",
     "ToolRunner",
+    "ToolTaskAdmission",
     "ToolTaskExecution",
     "ToolTaskManager",
     "result_from_exception",
+    "validate_executor_sandbox",
 ]
