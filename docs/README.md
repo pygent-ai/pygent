@@ -57,6 +57,8 @@
 
 移动这些导入是 0.2 breaking contract 的一部分。自动补全中出现的顶层名称应代表普通用户可以直接理解和构造的对象，不能以 re-export 把 Deployment API 与 Runtime SPI 重新摊平。
 
+旧的顶层基础设施导入不提供别名、警告桥接或懒加载，必须直接从上述规范子包导入；例如 `from pygent import Runtime` 会失败，应改为 `from pygent.runtime import Runtime`。
+
 ## Core：直接执行
 
 ```python

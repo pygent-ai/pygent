@@ -10,7 +10,6 @@ from pygent import (
     ModelCallLayer,
     ModelCallPolicy,
     ModelGroupConfig,
-    ModelInvoker,
     ModelRoute,
     Module,
     ReActLayer,
@@ -22,6 +21,7 @@ from pygent import (
     UserMessage,
     tool,
 )
+from pygent.llm.spi import ModelInvoker
 
 TUTORIAL_MODEL_GROUP = "tutorial-assistant"
 TUTORIAL_PERMISSION = "calculator:use"

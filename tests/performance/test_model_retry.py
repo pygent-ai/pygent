@@ -172,7 +172,7 @@ async def test_benchmark_attempt_timeout_fails_closed_when_cleanup_is_unknown(
             yield freeze_json_object({"done": True})
 
     monkeypatch.setattr(
-        "pygent.llm.adapter._CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02
+        "pygent.llm.invoker._CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02
     )
     provider = StuckClient()
     tracked = TrackedClient(provider)

@@ -1,19 +1,16 @@
 """Minimal Pygent 0.2 public surface used by the examples."""
 
+import importlib
 import re
+import subprocess
+import sys
+
+import pytest
 
 import pygent
 from pygent import (
     AIMessage,
-    Binding,
-    BoundModule,
-    CapacityPolicy,
-    CapacityScope,
-    CodeArtifactSpec,
     Context,
-    ExecutionCapacityPolicy,
-    ExecutionOptions,
-    ExecutionPlan,
     ExponentialBackoff,
     FallbackPolicy,
     FrozenJsonObject,
@@ -24,14 +21,10 @@ from pygent import (
     ModelCallLayer,
     ModelErrorKind,
     ModelGroupConfig,
-    ModelInvoker,
-    ModelProviderAdapter,
     ModelRoute,
     Module,
-    ModuleSpec,
     ReActLayer,
     RetryPolicy,
-    Runtime,
     ToolAuthorizationDecision,
     ToolAuthorizationRequest,
     ToolCallLayer,
@@ -42,6 +35,56 @@ from pygent import (
     UserMessage,
     tool,
 )
+from pygent.llm.spi import ModelInvoker, ModelProviderAdapter
+from pygent.runtime import (
+    Binding,
+    BoundModule,
+    CapacityPolicy,
+    CapacityScope,
+    ExecutionCapacityPolicy,
+    ExecutionOptions,
+    Runtime,
+)
+from pygent.runtime.plan import CodeArtifactSpec, ExecutionPlan, ModuleSpec
+
+EXPECTED_TOP_LEVEL_API = {
+    "AIMessage",
+    "Agent",
+    "Context",
+    "ExponentialBackoff",
+    "FallbackPolicy",
+    "FrozenJsonObject",
+    "GenerationConfig",
+    "IdempotencyPolicy",
+    "JsonValueError",
+    "Message",
+    "ModelCallError",
+    "ModelCallLayer",
+    "ModelCallOptions",
+    "ModelCallPolicy",
+    "ModelErrorKind",
+    "ModelGroupConfig",
+    "ModelRoute",
+    "Module",
+    "ReActBudgetExceeded",
+    "ReActLayer",
+    "RetryPolicy",
+    "ToolAuthorizationDecision",
+    "ToolAuthorizationRequest",
+    "ToolCall",
+    "ToolCallLayer",
+    "ToolDefinition",
+    "ToolKit",
+    "ToolMessage",
+    "ToolResult",
+    "ToolSideEffect",
+    "ToolSpec",
+    "UserMessage",
+    "freeze_json",
+    "freeze_json_object",
+    "thaw_json",
+    "tool",
+}
 
 
 def test_minimal_example_surface_is_exported():
@@ -87,6 +130,48 @@ def test_minimal_example_surface_is_exported():
             tool,
         )
     )
+
+
+def test_top_level_api_is_an_exact_application_allowlist() -> None:
+    assert set(pygent.__all__) == EXPECTED_TOP_LEVEL_API
+    assert set(dir(pygent)) == EXPECTED_TOP_LEVEL_API
+    assert "__getattr__" not in pygent.__dict__
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LocalRuntime",
+        "ModelInvoker",
+        "SQLiteHistoryStore",
+        "WorkerInvocation",
+    ],
+)
+def test_legacy_infrastructure_exports_are_unavailable(name: str) -> None:
+    assert name not in pygent.__dict__
+    assert not hasattr(pygent, name)
+    completed = subprocess.run(
+        [sys.executable, "-c", f"from pygent import {name}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0
+    assert "ImportError" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "module_path",
+    [
+        "pygent.core.module",
+        "pygent.llm.adapter",
+        "pygent.runtime.history",
+        "pygent.runtime.worker",
+    ],
+)
+def test_legacy_aggregation_modules_are_removed(module_path: str) -> None:
+    with pytest.raises(ModuleNotFoundError, match=module_path):
+        importlib.import_module(module_path)
 
 
 def test_execution_options_separate_transport_and_business_identities():

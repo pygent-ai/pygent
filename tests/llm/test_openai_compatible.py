@@ -5,7 +5,11 @@ import asyncio
 import httpx
 import pytest
 
-from pygent import Context, ToolDefinition, UserMessage
+from pygent import (
+    Context,
+    ToolDefinition,
+    UserMessage,
+)
 from pygent.core import freeze_json_object
 from pygent.llm import (
     GenerationConfig,

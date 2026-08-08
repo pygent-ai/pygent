@@ -10,9 +10,6 @@ import pytest
 
 from pygent import (
     AIMessage,
-    CodeArtifactSpec,
-    ExecutionPlan,
-    ExecutionRequirements,
     ExponentialBackoff,
     FallbackPolicy,
     GenerationConfig,
@@ -22,20 +19,27 @@ from pygent import (
     ModelGroupConfig,
     ModelRoute,
     Module,
-    ModuleSpec,
-    PlacementPolicy,
-    PlanIntegrityError,
-    PlanValidationError,
-    PlanVersionError,
     ReActLayer,
-    RemoteModule,
     RetryPolicy,
     ToolCallLayer,
     ToolDefinition,
     ToolSideEffect,
     ToolSpec,
     UserMessage,
-    compile_execution_plan,
+)
+from pygent.core import (
+    ExecutionRequirements,
+    PlacementPolicy,
+    RemoteModule,
+)
+from pygent.runtime import compile_execution_plan
+from pygent.runtime.plan import (
+    CodeArtifactSpec,
+    ExecutionPlan,
+    ModuleSpec,
+    PlanIntegrityError,
+    PlanValidationError,
+    PlanVersionError,
 )
 from pygent.tool import ExecutorRegistry
 

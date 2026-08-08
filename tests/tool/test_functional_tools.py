@@ -10,15 +10,17 @@ from pygent import (
     AIMessage,
     Context,
     IdempotencyPolicy,
-    LocalRuntime,
     ToolAuthorizationDecision,
     ToolCall,
     ToolCallLayer,
     ToolDefinition,
     ToolKit,
     ToolSideEffect,
-    compile_execution_plan,
     tool,
+)
+from pygent.runtime import (
+    LocalRuntime,
+    compile_execution_plan,
 )
 from pygent.tool import ExecutorRegistry
 

@@ -1,8 +1,6 @@
-from .adapter import (
-    DefaultModelInvoker,
+from ._adapter_contracts import (
     EventSink,
     ModelEventKind,
-    ModelExecution,
     ModelInvoker,
     ModelProviderAdapter,
     ModelProviderCapabilities,
@@ -12,12 +10,16 @@ from .adapter import (
     ModelProviderStreamKind,
     ModelProviderStreamPart,
     ModelStreamEvent,
+)
+from ._model_execution import ModelExecution
+from .catalog import ModelCatalog, ModelInfo
+from .invoker import DefaultModelInvoker
+from .layer import ModelCallLayer
+from .openai_compatible import (
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
     openai_compatible_adapters,
 )
-from .catalog import ModelCatalog, ModelInfo
-from .layer import ModelCallLayer
 from .types import (
     ExponentialBackoff,
     FallbackPolicy,

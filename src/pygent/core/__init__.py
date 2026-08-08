@@ -1,3 +1,28 @@
+from ._module_contracts import (
+    CapacityPermit,
+    EffectIdempotency,
+    EffectRecoveryUnknown,
+    EffectRetryPolicy,
+    EffectSafety,
+    EffectSideEffect,
+    EffectSpec,
+    ExecutionRequirements,
+    ExecutionScope,
+    Infrastructure,
+    ModuleDependency,
+    RecoverySafety,
+    active_infrastructure,
+    current_capacity_permit,
+    current_infrastructure,
+    independent_execution,
+)
+from ._module_definition import (
+    Agent,
+    Module,
+    PlacementMode,
+    PlacementPolicy,
+    RemoteModule,
+)
 from .execution import (
     EXECUTION_EVENT_SCHEMA_VERSION,
     EffectDisposition,
@@ -17,29 +42,6 @@ from .json_values import (
     freeze_json,
     freeze_json_object,
     thaw_json,
-)
-from .module import (
-    Agent,
-    CapacityPermit,
-    EffectIdempotency,
-    EffectRecoveryUnknown,
-    EffectRetryPolicy,
-    EffectSafety,
-    EffectSideEffect,
-    EffectSpec,
-    ExecutionRequirements,
-    ExecutionScope,
-    Infrastructure,
-    Module,
-    ModuleDependency,
-    PlacementMode,
-    PlacementPolicy,
-    RecoverySafety,
-    RemoteModule,
-    active_infrastructure,
-    current_capacity_permit,
-    current_infrastructure,
-    independent_execution,
 )
 from .values import AIMessage, Context, Message, ToolMessage, UserMessage
 

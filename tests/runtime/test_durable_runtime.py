@@ -7,25 +7,27 @@ import pytest
 from pygent import (
     AIMessage,
     Context,
-    EffectSafety,
-    ExecutionAdmissionError,
-    ExecutionOptions,
-    ExecutionRequirements,
-    LocalRuntime,
     Module,
-    RecoverySafety,
     UserMessage,
 )
 from pygent.core import (
     EffectIdempotency,
     EffectRetryPolicy,
+    EffectSafety,
     EffectSideEffect,
     EffectSpec,
+    ExecutionRequirements,
+    RecoverySafety,
 )
-from pygent.core.module import _execution_scope
-from pygent.runtime import SQLiteHistoryStore
+from pygent.core._module_contracts import _execution_scope
+from pygent.runtime import (
+    ExecutionAdmissionError,
+    ExecutionOptions,
+    HistoryConflictError,
+    LocalRuntime,
+    SQLiteHistoryStore,
+)
 from pygent.runtime.codec import invocation_to_dict
-from pygent.runtime.history import HistoryConflictError
 
 
 class _Counter:

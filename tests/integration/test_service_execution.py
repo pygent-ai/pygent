@@ -11,7 +11,7 @@ from examples.service.domain import (
     InMemoryConversationStore,
 )
 from examples.service.main import DemoModelInvoker
-from pygent import LocalRuntime
+from pygent.runtime import LocalRuntime
 
 
 @pytest.mark.asyncio

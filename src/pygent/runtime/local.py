@@ -14,7 +14,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, TypeVar
 
 from pygent.core import CapacityPermit, JsonValue, Message, Module
-from pygent.core.module import _capacity_permit
+from pygent.core._module_contracts import _capacity_permit
 from pygent.llm import (
     ModelDeploymentUnavailableError,
     ModelProfileSnapshot,
@@ -22,6 +22,7 @@ from pygent.llm import (
 )
 from pygent.tool import ToolCall, ToolExecutionContext, ToolSpec, ToolTaskManager
 
+from ._history_store import SQLiteHistoryStore
 from ._local.capacity import (
     InMemoryCapacityCoordinator,
     _BindingState,
@@ -49,7 +50,6 @@ from .api import (
     RuntimeClosedError,
 )
 from .compiler import compile_execution_plan
-from .history import SQLiteHistoryStore
 from .model_deployment import InMemoryModelDeploymentStore, ModelDeploymentStore
 from .plan import CodeArtifactSpec, ExecutionPlan
 

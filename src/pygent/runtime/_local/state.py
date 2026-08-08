@@ -21,8 +21,8 @@ from pygent.core import (
 )
 from pygent.tool import ToolTaskManager
 
+from .._history_store import SQLiteHistoryStore
 from ..api import ExecutionEvent, ExecutionStatus
-from ..history import SQLiteHistoryStore
 from ..plan import ExecutionPlan
 from .capacity import _BindingState
 

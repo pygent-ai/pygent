@@ -8,15 +8,7 @@ import pytest
 
 from pygent import (
     AIMessage,
-    CapacityPolicy,
-    CapacityScope,
     Context,
-    ExecutionAdmissionError,
-    ExecutionCapacityPolicy,
-    ExecutionOptions,
-    ExecutionStatus,
-    ExternalWaitRejected,
-    LocalRuntime,
     Module,
     ToolAuthorizationDecision,
     ToolCall,
@@ -26,6 +18,16 @@ from pygent import (
     UserMessage,
 )
 from pygent.core import FrozenJsonObject
+from pygent.runtime import (
+    CapacityPolicy,
+    CapacityScope,
+    ExecutionAdmissionError,
+    ExecutionCapacityPolicy,
+    ExecutionOptions,
+    ExecutionStatus,
+    ExternalWaitRejected,
+    LocalRuntime,
+)
 from pygent.tool import ExecutorRegistry, LocalToolExecutor
 
 

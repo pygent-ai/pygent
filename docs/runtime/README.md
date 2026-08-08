@@ -10,6 +10,8 @@
 
 Runtime 把不可变 Module 图和 Binding 接入一个有界托管执行域。它负责 admission、并发、排队、父子执行、取消、deadline、事件和关闭；它不拥有 Agent、LLM、Tool 或业务状态的具体逻辑。普通 Module 可以不绑定 Runtime 而直接 `invoke()`/`stream()`；direct execution 的 Root 并发和资源生命周期由调用方管理，不获得本文件的托管保证。
 
+Worker 的协议/registry、远程 handle、服务端、客户端和 Module target 分属独立源码模块；旧的 `runtime.worker` 聚合模块已删除。SQLite history 仍由 `_history_store.SQLiteHistoryStore`、一个连接和同一写锁维护事务边界，execution、Job、effect/checkpoint/event 方法簇分属独立模块；旧的 `runtime.history` 聚合模块同样不再存在。
+
 Module 定义图可以共享节点；一次 Execution 中实际发生的每次调用仍形成独立的临时执行节点。因此同一 Module 被 Agent 直接调用、被 ReActLayer 调用或被重复调用时，分别拥有独立调用身份、结果、事件和取消状态。
 
 ## Binding 是可选的托管部署域

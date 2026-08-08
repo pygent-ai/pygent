@@ -17,9 +17,9 @@ from pygent.core import (
     thaw_json,
 )
 
+from .._history_types import StoredExecution
 from ..api import ExecutionAdmissionError, ExecutionEvent, ExecutionStatus
 from ..codec import invocation_from_dict
-from ..history import StoredExecution
 from .handles import _LocalBoundModule, _LocalExecutionHandle
 from .policies import _finite_deadline_requirement
 from .state import _ExecutionRecord

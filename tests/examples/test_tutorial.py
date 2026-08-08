@@ -9,7 +9,12 @@ from examples.tutorial import (
     run_managed_demo,
 )
 from examples.tutorial.runner import close_invoker
-from pygent import AIMessage, FrozenJsonObject, ToolMessage, UserMessage
+from pygent import (
+    AIMessage,
+    FrozenJsonObject,
+    ToolMessage,
+    UserMessage,
+)
 
 
 @pytest.mark.asyncio

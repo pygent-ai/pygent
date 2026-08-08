@@ -27,7 +27,12 @@ Pygent 的 Agent 开发可以先缩减成三个概念：
 最小 Agent 完全不需要模型服务：
 
 ```python
-from pygent import AIMessage, Context, Module, UserMessage
+from pygent import (
+    AIMessage,
+    Context,
+    Module,
+    UserMessage,
+)
 
 
 class EchoAgent(Module[UserMessage, AIMessage]):

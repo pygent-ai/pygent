@@ -11,7 +11,7 @@ from types import TracebackType
 from typing import Any, Self, TypeVar
 
 from pygent.core import Context, JsonValue, Message, Module, freeze_json_object
-from pygent.core.module import _execution_scope
+from pygent.core._module_contracts import _execution_scope
 from pygent.llm import ModelCallLayer, ModelCallOptions, ModelProfileSelectionError
 
 from ..api import (

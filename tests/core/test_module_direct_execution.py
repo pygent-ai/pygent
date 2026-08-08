@@ -4,7 +4,8 @@ import asyncio
 
 import pytest
 
-from pygent.core.module import Module, RemoteModule, _execution_scope
+from pygent.core import Module, RemoteModule
+from pygent.core._module_contracts import _execution_scope
 from pygent.core.values import AIMessage, Context, UserMessage
 from pygent.runtime import LocalRuntime
 

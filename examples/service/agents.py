@@ -6,11 +6,11 @@ from pygent import (
     AIMessage,
     Context,
     ModelCallLayer,
-    ModelInvoker,
     Module,
     ReActLayer,
     UserMessage,
 )
+from pygent.llm.spi import ModelInvoker
 from pygent.tool import ExecutorRegistry, ToolTaskManager
 
 from .models import build_assistant_model, build_reviewer_model

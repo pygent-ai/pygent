@@ -1,0 +1,78 @@
+"""Client-side remote execution handle and event subscription."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Self
+
+from pygent.core import (
+    ExecutionEvent,
+    ExecutionStatus,
+    FrozenJsonObject,
+    JsonValue,
+    PlacementMode,
+)
+
+from ._worker_protocol import WorkerTarget
+
+if TYPE_CHECKING:
+    from .worker_client import HTTPWorkerClient
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteExecutionHandle:
+    """Client-side control plane for one remotely owned execution."""
+
+    client: HTTPWorkerClient = field(repr=False, compare=False)
+    execution_id: str
+    target: WorkerTarget
+    binding_ref: str = ""
+    input: FrozenJsonObject | None = None
+    request_id: str = ""
+    required_capabilities: tuple[str, ...] = ()
+    idempotency_key: str | None = None
+    trace_id: str | None = None
+    parent_execution_id: str | None = None
+    parent_span_id: str | None = None
+    attempt: int = 1
+    attempted_target_ids: tuple[str, ...] = ()
+    plan_id: str = ""
+    graph_hash: str = ""
+    placement_mode: PlacementMode = PlacementMode.ADAPTIVE
+    pinned_target_id: str | None = None
+    model_calls: FrozenJsonObject = field(default_factory=FrozenJsonObject)
+    model_admission_ref: str | None = None
+    model_store_namespace: str | None = None
+
+    @property
+    def status(self) -> ExecutionStatus:
+        return ExecutionStatus.RUNNING
+
+    async def result(self, *, deadline: float | None = None) -> JsonValue:
+        return await self.client.result(self, deadline=deadline)
+
+    async def cancel(self) -> bool:
+        return await self.client.cancel(self)
+
+    def subscribe(self, *, after: int | None = None) -> _RemoteExecutionSubscription:
+        return _RemoteExecutionSubscription(self, -1 if after is None else after)
+
+
+class _RemoteExecutionSubscription:
+    def __init__(self, handle: RemoteExecutionHandle, after: int) -> None:
+        self._handle = handle
+        self._after = after
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        return None
+
+    def __aiter__(self) -> AsyncIterator[ExecutionEvent]:
+        return self._handle.client.events(
+            self._handle.target,
+            self._handle.execution_id,
+            after=self._after,
+        )

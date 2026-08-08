@@ -24,6 +24,8 @@ from pygent.tool.executors import (
     result_from_exception,
 )
 
+from ._history_store import SQLiteHistoryStore
+from ._history_types import StoredJob
 from .api import JobSnapshot, JobState
 from .codec import (
     tool_definition_from_dict,
@@ -31,7 +33,6 @@ from .codec import (
     tool_result_from_dict,
     tool_result_to_dict,
 )
-from .history import SQLiteHistoryStore, StoredJob
 
 
 def _request_to_dict(spec: ToolSpec, call: ToolCall) -> dict[str, object]:

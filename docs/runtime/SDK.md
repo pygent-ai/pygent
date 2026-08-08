@@ -256,7 +256,11 @@ deployment_registry.publish(
 编译器不能通过“看不懂就忽略”生成稳定 identity。direct freeze 与 compiler 共用 Core validator：除已声明依赖、callable 和 Module 在 `trusted_live_resource_attributes` 中逐项声明的 opaque 部署资源外，public/private stored state 都必须是严格不可变可移植值，或者由 `execution_plan_config()` 显式投影为严格 JSON snapshot。mutable dict/list、未知对象和不安全 frozen dataclass 字段在 direct 或 bind 前失败；裸 mutable container 也不能伪装成 live resource。hook snapshot、声明 capability、恢复/effect safety 和 Binding 策略都参与最终 identity。Runtime 在每个 Execution 启动前保留 drift 检查，防止绕过 Module 冻结后以旧 `graph_hash` 执行新语义。opaque adapter 是部署信任边界，其内部生命周期状态不会进入 identity，也不得承载请求或业务状态。
 
 ```python
-from pygent import CodeArtifactSpec, ExecutionPlan, ModuleSpec
+from pygent.runtime.plan import (
+    CodeArtifactSpec,
+    ExecutionPlan,
+    ModuleSpec,
+)
 
 plan = ExecutionPlan(
     root="agent",

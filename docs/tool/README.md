@@ -40,6 +40,10 @@ ToolCallLayer 的并发值只限制本次 Layer 调用中的工具 fan-out。dir
 
 Manager、grant、permit、lease 和 Pool 是 Runtime 内部协议。文件、Shell、浏览器、MCP 或远程工具只是不同 adapter，不能建立第二套公开接口。
 
+`pygent.tool.standard` 提供的 Bash、工作区文件和公开 Web 工具遵守同一规则：它们由普通 `@tool` 绑定方法构成，通过 `ToolKit` 显式组装，不拥有隐式授权、全局注册表或 Runtime 特权。工具实例保存 workspace、进程路径和网络 adapter 等部署本地对象；进入 Context、Module 图和 ExecutionPlan 的仍然只有 `ToolDefinition` 与 `ToolSpec`。标准工具的组装、权限和安全边界见 [标准工具 SDK](SDK.md#标准工具)。
+
+同一 `FileTools` 部署实例内的标准文件变更按规范化目标路径串行，并通过同目录原子替换提交；取消在所属阻塞写操作退出后才返回。跨实例、跨进程并发仍由调用方或 Runtime 的 resource capacity 治理。默认 Web fetcher 把通过公网校验的地址绑定到实际 socket 连接，并在每次重定向重新解析和校验，避免“校验一次、连接时再次解析”的 DNS 重绑定窗口。Bash 内部超时作为副作用未知的 `unknown` 结果返回，而不是把超时文本包装成成功输出。
+
 ## 同步与 detach 生命周期
 
 普通工具与 Agent-backed Tool 使用同一生命周期契约。direct execution 只直接支持同步本地调用，独立后台生命周期由调用方自己的任务设施承载。managed 同步调用中，ToolTask 属于当前 Execution；Agent-backed Tool 可以作为结构化 Child 执行，并随 Parent 取消、join 和收敛。

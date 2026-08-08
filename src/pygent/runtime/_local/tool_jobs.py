@@ -7,8 +7,8 @@ from typing import Any, cast
 
 from pygent.tool import ToolResult, ToolTask, ToolTaskManager
 
+from .._history_types import StoredJob
 from ..api import ExecutionAdmissionError, JobSnapshot
-from ..history import StoredJob
 from .handles import _LocalBoundModule
 from .policies import _apply_binding_policy
 

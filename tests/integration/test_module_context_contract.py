@@ -11,7 +11,6 @@ import pytest
 from pygent import (
     AIMessage,
     Context,
-    LocalRuntime,
     Message,
     Module,
     ToolCall,
@@ -20,6 +19,7 @@ from pygent import (
     ToolResult,
     UserMessage,
 )
+from pygent.runtime import LocalRuntime
 
 
 def test_first_principles_freeze_the_module_state_transition():

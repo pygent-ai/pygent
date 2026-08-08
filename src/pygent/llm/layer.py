@@ -30,7 +30,7 @@ from pygent.core import (
 )
 from pygent.tool import ToolCall, ToolDefinition
 
-from .adapter import ModelInvoker
+from ._adapter_contracts import ModelInvoker
 from .types import (
     GenerationConfig,
     ModelCallError,

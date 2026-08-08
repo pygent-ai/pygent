@@ -18,13 +18,13 @@ from pygent import (
     ModelCallPolicy,
     ModelErrorKind,
     ModelGroupConfig,
-    ModelInvoker,
     ModelRoute,
     Module,
     RetryPolicy,
-    ExecutionOptions,
     UserMessage,
 )
+from pygent.llm.spi import ModelInvoker
+from pygent.runtime import ExecutionOptions
 
 
 def build_model(invoker: ModelInvoker | None = None) -> ModelCallLayer:

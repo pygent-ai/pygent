@@ -9,18 +9,22 @@ from typing import cast
 
 from pygent import (
     AIMessage,
-    DefaultModelInvoker,
     FrozenJsonObject,
-    ModelEventKind,
-    ModelExecution,
     ModelGroupConfig,
-    ModelInvoker,
-    ModelProviderResponse,
-    OpenAICompatibleAdapter,
-    OpenAICompatibleClient,
     ToolCall,
     ToolMessage,
     freeze_json_object,
+)
+from pygent.llm import (
+    DefaultModelInvoker,
+    ModelEventKind,
+    ModelExecution,
+    OpenAICompatibleAdapter,
+    OpenAICompatibleClient,
+)
+from pygent.llm.spi import (
+    ModelInvoker,
+    ModelProviderResponse,
 )
 
 

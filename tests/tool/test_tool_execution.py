@@ -6,14 +6,20 @@ import pytest
 from pygent import (
     AIMessage,
     Context,
-    EffectDisposition,
-    EffectOutcome,
-    LocalRuntime,
     Module,
     UserMessage,
 )
-from pygent.core.module import _execution_scope
-from pygent.runtime import CapacityPolicy, CapacityScope, ExecutionCapacityPolicy
+from pygent.core import (
+    EffectDisposition,
+    EffectOutcome,
+)
+from pygent.core._module_contracts import _execution_scope
+from pygent.runtime import (
+    CapacityPolicy,
+    CapacityScope,
+    ExecutionCapacityPolicy,
+    LocalRuntime,
+)
 from pygent.tool import (
     AgentToolExecutor,
     ExecutorRegistry,

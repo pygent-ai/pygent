@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from pygent import AIMessage, Context, Module, UserMessage, freeze_json_object
+from pygent import (
+    AIMessage,
+    Context,
+    Module,
+    UserMessage,
+    freeze_json_object,
+)
 from pygent.runtime import ExecutionAdmissionError, LocalRuntime
 
 

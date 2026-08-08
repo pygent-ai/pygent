@@ -8,7 +8,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from pygent.core import Context, Message, Module
-from pygent.core.module import _execution_scope
+from pygent.core._module_contracts import _execution_scope
 from pygent.llm import ModelGroupConfig
 
 from ..api import (

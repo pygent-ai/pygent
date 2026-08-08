@@ -6,20 +6,22 @@ import pytest
 
 from pygent import (
     Context,
-    ExecutionOptions,
     FallbackPolicy,
     GenerationConfig,
-    LocalRuntime,
     ModelCallError,
     ModelCallLayer,
     ModelErrorKind,
-    ModelExecution,
     ModelGroupConfig,
     ModelRoute,
     RetryPolicy,
     UserMessage,
 )
-from pygent.runtime import SQLiteHistoryStore
+from pygent.llm import ModelExecution
+from pygent.runtime import (
+    ExecutionOptions,
+    LocalRuntime,
+    SQLiteHistoryStore,
+)
 
 
 class FailingInvoker:

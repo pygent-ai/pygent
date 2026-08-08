@@ -8,36 +8,33 @@ import httpx
 import pytest
 
 from pygent import (
-    CapacityPolicy,
-    CapacityScope,
-    ExecutionCapacityPolicy,
-    ExecutionEvent,
-    ExecutionStatus,
-    ModelAttempt,
     ModelCallError,
     ModelErrorKind,
-    PlacementPolicy,
 )
 from pygent.core import (
     AIMessage,
     Context,
     Message,
     Module,
+    PlacementPolicy,
     RemoteModule,
     UserMessage,
     thaw_json,
 )
+from pygent.llm import ModelAttempt
 from pygent.runtime import (
+    CapacityPolicy,
+    CapacityScope,
     CodeArtifactSpec,
+    ExecutionCapacityPolicy,
+    ExecutionEvent,
     ExecutionOptions,
+    ExecutionStatus,
     LocalRuntime,
     SQLiteHistoryStore,
 )
-from pygent.runtime.worker import (
-    HTTPRemoteModuleTarget,
-    HTTPWorkerApp,
-    HTTPWorkerClient,
-    RemoteExecutionHandle,
+from pygent.runtime._worker_handle import RemoteExecutionHandle
+from pygent.runtime._worker_protocol import (
     WorkerDeploymentManifest,
     WorkerOutcomeUnknownError,
     WorkerProtocolError,
@@ -45,6 +42,11 @@ from pygent.runtime.worker import (
     WorkerRemoteError,
     WorkerTarget,
     WorkerUnavailableError,
+)
+from pygent.runtime.worker_client import HTTPWorkerClient
+from pygent.runtime.worker_server import HTTPWorkerApp
+from pygent.runtime.worker_target import (
+    HTTPRemoteModuleTarget,
     bound_module_worker_handler,
 )
 

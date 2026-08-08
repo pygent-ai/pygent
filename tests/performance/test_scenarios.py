@@ -16,13 +16,15 @@ from benchmarks.scenarios import (
     _model_trace,
 )
 from pygent import (
-    ExecutionFailure,
-    ExecutionFailureError,
-    ModelAttempt,
     ModelCallError,
     ModelErrorKind,
-    WorkerRemoteError,
 )
+from pygent.core import (
+    ExecutionFailure,
+    ExecutionFailureError,
+)
+from pygent.llm import ModelAttempt
+from pygent.runtime import WorkerRemoteError
 
 
 def _profile():

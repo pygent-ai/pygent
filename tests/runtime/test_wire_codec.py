@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from pygent import AIMessage, Context, Message, ToolMessage, UserMessage
+from pygent import (
+    AIMessage,
+    Context,
+    Message,
+    ToolMessage,
+    UserMessage,
+)
 from pygent.runtime.codec import (
     WireCodecError,
     context_from_dict,

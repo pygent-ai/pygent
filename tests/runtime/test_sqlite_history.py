@@ -6,7 +6,7 @@ import sqlite3
 import pytest
 
 from pygent.core import thaw_json
-from pygent.runtime.history import (
+from pygent.runtime import (
     HistoryConflictError,
     HistoryStoreError,
     NonDeterministicReplayError,

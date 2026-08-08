@@ -7,11 +7,11 @@ from pygent import (
     ModelCallLayer,
     ModelErrorKind,
     ModelGroupConfig,
-    ModelInvoker,
     ModelRoute,
     RetryPolicy,
     ToolDefinition,
 )
+from pygent.llm.spi import ModelInvoker
 
 
 def build_assistant_model(

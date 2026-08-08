@@ -6,18 +6,20 @@ from dataclasses import dataclass
 from time import monotonic
 
 from pygent import (
-    CapacityPolicy,
-    CapacityScope,
     Context,
-    ExecutionCapacityPolicy,
-    ExecutionOptions,
     FallbackPolicy,
-    LocalRuntime,
     ModelCallOptions,
-    ModelInvoker,
-    ModelResourceOwnership,
     ModelRoute,
     UserMessage,
+)
+from pygent.llm import ModelResourceOwnership
+from pygent.llm.spi import ModelInvoker
+from pygent.runtime import (
+    CapacityPolicy,
+    CapacityScope,
+    ExecutionCapacityPolicy,
+    ExecutionOptions,
+    LocalRuntime,
 )
 
 from .agent import (

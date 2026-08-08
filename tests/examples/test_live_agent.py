@@ -16,7 +16,8 @@ from examples.live_agent.agent import (
     build_live_resources,
 )
 from examples.live_agent.benchmark import execute_benchmark
-from pygent import Context, ExecutionEvent
+from pygent import Context
+from pygent.runtime import ExecutionEvent
 
 
 def test_live_config_is_validated_and_never_repr_leaks_secrets():

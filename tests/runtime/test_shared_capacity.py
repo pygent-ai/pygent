@@ -8,25 +8,14 @@ import pytest
 
 from pygent import (
     AIMessage,
-    CapacityPolicy,
-    CapacityScope,
     Context,
-    ExecutionAdmissionError,
-    ExecutionCapacityPolicy,
-    ExecutionOptions,
-    ExecutionStatus,
-    ExternalWaitRejected,
     FallbackPolicy,
     GenerationConfig,
-    InMemoryCapacityCoordinator,
-    LocalRuntime,
     ModelCallLayer,
     ModelGroupConfig,
-    ModelProviderResponse,
     ModelRoute,
     Module,
     RetryPolicy,
-    SQLiteCapacityCoordinator,
     ToolAuthorizationDecision,
     ToolCall,
     ToolCallLayer,
@@ -34,7 +23,20 @@ from pygent import (
     ToolSpec,
     UserMessage,
 )
-from pygent.core.module import _execution_scope
+from pygent.core._module_contracts import _execution_scope
+from pygent.llm.spi import ModelProviderResponse
+from pygent.runtime import (
+    CapacityPolicy,
+    CapacityScope,
+    ExecutionAdmissionError,
+    ExecutionCapacityPolicy,
+    ExecutionOptions,
+    ExecutionStatus,
+    ExternalWaitRejected,
+    InMemoryCapacityCoordinator,
+    LocalRuntime,
+    SQLiteCapacityCoordinator,
+)
 from pygent.tool import ExecutorRegistry, InMemoryToolTaskManager, LocalToolExecutor
 
 
@@ -566,7 +568,7 @@ class BlockingInvoker:
         self.release = asyncio.Event()
 
     def execute(self, **kwargs):
-        from pygent import ModelExecution
+        from pygent.llm import ModelExecution
 
         async def operation(emit):
             self.entered.set()

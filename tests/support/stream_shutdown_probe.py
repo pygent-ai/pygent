@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 
-from pygent import Context, UserMessage
+from pygent import (
+    Context,
+    UserMessage,
+)
 from pygent.core import freeze_json_object
 from pygent.llm import (
     DefaultModelInvoker,
@@ -17,7 +20,7 @@ from pygent.llm import (
     OpenAICompatibleAdapter,
     RetryPolicy,
 )
-from pygent.llm import adapter as adapter_module
+from pygent.llm import invoker as invoker_module
 
 
 class NestedCancellationResistantClient:
@@ -58,7 +61,7 @@ class NestedCancellationResistantClient:
 
 
 async def main() -> None:
-    adapter_module._CANCELLATION_CLEANUP_GRACE_SECONDS = 0.01
+    invoker_module._CANCELLATION_CLEANUP_GRACE_SECONDS = 0.01
     client = NestedCancellationResistantClient()
     invoker = DefaultModelInvoker(
         adapters={"openai": OpenAICompatibleAdapter()},

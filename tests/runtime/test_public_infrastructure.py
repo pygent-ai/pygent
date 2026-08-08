@@ -6,28 +6,30 @@ import pytest
 
 from pygent import (
     AIMessage,
-    CapacityPolicy,
-    CapacityScope,
     Context,
-    EffectSafety,
-    ExecutionCapacityPolicy,
-    ExecutionRequirements,
-    LocalRuntime,
     Module,
-    RecoverySafety,
-    SQLiteCapacityCoordinator,
-    SQLiteHistoryStore,
     UserMessage,
 )
 from pygent.core import (
     EffectIdempotency,
     EffectRecoveryUnknown,
     EffectRetryPolicy,
+    EffectSafety,
     EffectSideEffect,
     EffectSpec,
+    ExecutionRequirements,
+    RecoverySafety,
     active_infrastructure,
     current_capacity_permit,
     current_infrastructure,
+)
+from pygent.runtime import (
+    CapacityPolicy,
+    CapacityScope,
+    ExecutionCapacityPolicy,
+    LocalRuntime,
+    SQLiteCapacityCoordinator,
+    SQLiteHistoryStore,
 )
 from pygent.runtime.codec import invocation_to_dict
 

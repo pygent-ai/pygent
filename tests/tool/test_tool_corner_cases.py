@@ -5,7 +5,11 @@ import asyncio
 import pytest
 from jsonschema import SchemaError
 
-from pygent import AIMessage, Context, thaw_json
+from pygent import (
+    AIMessage,
+    Context,
+    thaw_json,
+)
 from pygent.tool import (
     ExecutorRegistry,
     InMemoryToolTaskManager,

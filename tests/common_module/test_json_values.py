@@ -5,7 +5,6 @@ import math
 import pytest
 
 from pygent import (
-    ExecutionEvent,
     FrozenJsonObject,
     JsonValueError,
     UserMessage,
@@ -13,6 +12,7 @@ from pygent import (
     thaw_json,
 )
 from pygent.core import json_values
+from pygent.runtime import ExecutionEvent
 
 
 def test_nested_json_values_are_recursively_frozen_and_thawed():

@@ -14,9 +14,9 @@ from pygent import (
     ModelErrorKind,
     Module,
     ReActLayer,
-    Runtime,
     ToolCallLayer,
 )
+from pygent.runtime import Runtime
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -119,7 +119,7 @@ def test_example_separates_declarations_from_agent_dataflow():
 
 
 def test_runtime_interface_has_a_public_local_reference_implementation():
-    from pygent import LocalRuntime
+    from pygent.runtime import LocalRuntime
 
     assert inspect.isclass(Runtime)
     assert inspect.isclass(LocalRuntime)

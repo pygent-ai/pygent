@@ -14,17 +14,19 @@ from typing import Any, cast
 from uuid import uuid4
 
 from pygent import (
-    CapacityPolicy,
-    CapacityScope,
     Context,
-    ExecutionCapacityPolicy,
-    ExecutionEvent,
-    ExecutionOptions,
-    LocalRuntime,
     ToolMessage,
     UserMessage,
 )
 from pygent.core import FrozenJsonObject, JsonValue, thaw_json
+from pygent.runtime import (
+    CapacityPolicy,
+    CapacityScope,
+    ExecutionCapacityPolicy,
+    ExecutionEvent,
+    ExecutionOptions,
+    LocalRuntime,
+)
 
 from .agent import (
     INVALID_ROUTE_ID,

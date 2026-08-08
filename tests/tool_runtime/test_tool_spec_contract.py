@@ -13,9 +13,9 @@ from pygent import (
     ToolResult,
     ToolSideEffect,
     ToolSpec,
-    ToolTask,
     thaw_json,
 )
+from pygent.tool import ToolTask
 
 
 @pytest.mark.parametrize(

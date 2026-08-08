@@ -9,7 +9,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-from pygent import Context, UserMessage
+from pygent import (
+    Context,
+    UserMessage,
+)
 from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import (
     DefaultModelInvoker,
@@ -25,7 +28,7 @@ from pygent.llm import (
     OpenAICompatibleAdapter,
     RetryPolicy,
 )
-from pygent.llm import adapter as adapter_module
+from pygent.llm import invoker as invoker_module
 
 
 class FakeClient:
@@ -207,7 +210,7 @@ async def test_absolute_deadline_covers_provider_wait():
 async def test_cancellation_cleanup_timeout_is_terminal_and_quarantines_client(
     monkeypatch: pytest.MonkeyPatch, streaming: bool
 ):
-    monkeypatch.setattr(adapter_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
+    monkeypatch.setattr(invoker_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
     primary = CancellationSwallowingClient()
     fallback = FakeClient([completion("fallback")])
     invoker = DefaultModelInvoker(
@@ -278,7 +281,7 @@ async def test_cancellation_cleanup_timeout_is_terminal_and_quarantines_client(
 async def test_close_waits_for_running_stream_anext_before_closing_client(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(adapter_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
+    monkeypatch.setattr(invoker_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
     client = CloseSensitiveStreamingClient()
     invoker = DefaultModelInvoker(
         adapters={"openai": OpenAICompatibleAdapter()},
@@ -327,7 +330,7 @@ async def test_close_waits_for_running_stream_anext_before_closing_client(
 async def test_close_cancels_active_execution_before_closing_stream_client(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(adapter_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
+    monkeypatch.setattr(invoker_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
     client = CloseSensitiveStreamingClient()
     invoker = DefaultModelInvoker(
         adapters={"openai": OpenAICompatibleAdapter()},
@@ -415,7 +418,7 @@ async def test_close_is_idempotent_and_rejects_new_executions() -> None:
 async def test_explicit_task_cancellation_stays_cancelled_when_cleanup_is_unknown(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(adapter_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
+    monkeypatch.setattr(invoker_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
     client = CancellationSwallowingClient()
     invoker = DefaultModelInvoker(
         adapters={"openai": OpenAICompatibleAdapter()},

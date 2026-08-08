@@ -7,15 +7,16 @@ import pytest
 from pygent import (
     AIMessage,
     Context,
-    EffectSafety,
-    ExecutionRequirements,
     ModelCallLayer,
     Module,
     ReActLayer,
-    RecoverySafety,
     ToolCallLayer,
     UserMessage,
-    compile_execution_plan,
+)
+from pygent.core import (
+    EffectSafety,
+    ExecutionRequirements,
+    RecoverySafety,
 )
 from pygent.runtime import (
     CapacityPolicy,
@@ -26,6 +27,7 @@ from pygent.runtime import (
     ExecutionCapacityPolicy,
     LocalRuntime,
     SQLiteHistoryStore,
+    compile_execution_plan,
 )
 
 

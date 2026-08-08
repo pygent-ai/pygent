@@ -6,12 +6,14 @@ import asyncio
 
 from pygent import (
     AIMessage,
-    LocalRuntime,
-    ModelEventKind,
-    ModelExecution,
-    ModelProviderResponse,
     freeze_json_object,
 )
+from pygent.llm import (
+    ModelEventKind,
+    ModelExecution,
+)
+from pygent.llm.spi import ModelProviderResponse
+from pygent.runtime import LocalRuntime
 
 from .app import create_service
 from .domain import ChatRequest, InMemoryConversationStore

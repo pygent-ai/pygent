@@ -1,4 +1,27 @@
+from ._history_store import SQLiteHistoryStore
+from ._history_types import (
+    HistoryConflictError,
+    HistoryStoreError,
+    NonDeterministicReplayError,
+    StoredEffect,
+    StoredExecution,
+    StoredJob,
+    StoredTask,
+    effect_digest,
+)
 from ._local.model_groups import ModelGroupCollection, ModelGroupHandle
+from ._worker_handle import RemoteExecutionHandle
+from ._worker_protocol import (
+    WorkerArtifactResolver,
+    WorkerDeploymentManifest,
+    WorkerInvocation,
+    WorkerOutcomeUnknownError,
+    WorkerProtocolError,
+    WorkerRegistry,
+    WorkerRemoteError,
+    WorkerTarget,
+    WorkerUnavailableError,
+)
 from .api import (
     Binding,
     BoundModule,
@@ -29,17 +52,6 @@ from .api import (
 )
 from .capacity import SQLiteCapacityCoordinator
 from .compiler import compile_execution_plan
-from .history import (
-    HistoryConflictError,
-    HistoryStoreError,
-    NonDeterministicReplayError,
-    SQLiteHistoryStore,
-    StoredEffect,
-    StoredExecution,
-    StoredJob,
-    StoredTask,
-    effect_digest,
-)
 from .local import InMemoryCapacityCoordinator, LocalRuntime, RuntimeBinding
 from .model_deployment import (
     InMemoryModelDeploymentStore,
@@ -58,22 +70,9 @@ from .plan import (
     PlanVersionError,
 )
 from .tasks import DurableToolTaskManager
-from .worker import (
-    HTTPRemoteModuleTarget,
-    HTTPWorkerApp,
-    HTTPWorkerClient,
-    RemoteExecutionHandle,
-    WorkerArtifactResolver,
-    WorkerDeploymentManifest,
-    WorkerInvocation,
-    WorkerOutcomeUnknownError,
-    WorkerProtocolError,
-    WorkerRegistry,
-    WorkerRemoteError,
-    WorkerTarget,
-    WorkerUnavailableError,
-    bound_module_worker_handler,
-)
+from .worker_client import HTTPWorkerClient
+from .worker_server import HTTPWorkerApp
+from .worker_target import HTTPRemoteModuleTarget, bound_module_worker_handler
 
 __all__ = [
     "PLAN_SCHEMA_VERSION",

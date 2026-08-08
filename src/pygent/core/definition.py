@@ -184,7 +184,7 @@ def module_definition_config(module: Any) -> dict[str, object]:
     # They are effective definition state just like instance attributes.  Walk
     # the user MRO up to (but excluding) the framework Module base, preserving
     # normal nearest-class shadowing while ignoring methods and descriptors.
-    from .module import Module
+    from ._module_definition import Module
 
     class_attributes: dict[str, object] = {}
     effective_class_values: dict[str, object] = {}

@@ -9,6 +9,8 @@
 
 LLM 域向用户提供 ModelCallLayer、ModelInvoker 与 ModelProviderAdapter。Layer 声明调用哪个模型组以及如何调用；Invoker 负责 route、retry、fallback 和标准化结果；Provider adapter 负责请求/响应转换与错误归一。Runtime 只拥有 Provider client/连接池的生命周期、容量计数、deadline、取消与执行调度，不拥有 Provider 协议逻辑。
 
+源码边界与这些职责一致：`llm.spi` 是 Provider 扩展契约，`llm.invoker` 拥有 retry/fallback、取消和关闭，`llm.openai_compatible` 拥有 HTTP/SSE transport 与 wire codec。旧的 `llm.adapter` 聚合模块已删除，不提供兼容导入。
+
 ## 输入与输出
 
 ModelCallLayer 不引入 ModelInput 或 ModelOutput：

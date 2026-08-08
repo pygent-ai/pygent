@@ -10,17 +10,15 @@ import pytest
 
 from pygent import (
     Context,
-    EffectDisposition,
-    EffectOutcome,
-    ExecutionAdmissionError,
-    ExecutionDeadlineExceeded,
-    ExecutionOptions,
-    LocalRuntime,
     ToolMessage,
     UserMessage,
 )
-from pygent.core import freeze_json_object
-from pygent.core.module import _execution_scope
+from pygent.core import (
+    EffectDisposition,
+    EffectOutcome,
+    freeze_json_object,
+)
+from pygent.core._module_contracts import _execution_scope
 from pygent.llm import (
     DefaultModelInvoker,
     FallbackPolicy,
@@ -37,6 +35,12 @@ from pygent.llm import (
     RetryPolicy,
 )
 from pygent.llm.layer import _model_effect_request
+from pygent.runtime import (
+    ExecutionAdmissionError,
+    ExecutionDeadlineExceeded,
+    ExecutionOptions,
+    LocalRuntime,
+)
 from pygent.tool import ToolDefinition, ToolResult
 
 
@@ -99,10 +103,10 @@ async def test_managed_model_call_requires_a_finite_deadline() -> None:
 async def test_managed_deadline_remains_execution_deadline_when_provider_ignores_cancel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pygent.llm import adapter as adapter_module
+    from pygent.llm import invoker as invoker_module
 
     monkeypatch.setattr(
-        adapter_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02
+        invoker_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02
     )
 
     class StuckClient:

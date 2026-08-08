@@ -25,7 +25,8 @@ from pygent.core import (
     RemoteModule,
     freeze_json,
 )
-from pygent.core.module import ExecutionScope, _capacity_permit, _validate_result
+from pygent.core._direct_execution import _validate_result
+from pygent.core._module_contracts import ExecutionScope, _capacity_permit
 from pygent.tool import ToolCall, ToolSpec, ToolTask
 
 from ..api import (

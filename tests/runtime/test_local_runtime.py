@@ -425,7 +425,7 @@ async def test_external_wait_is_capped_by_deployment_policy_and_cleans_up():
 
 @pytest.mark.asyncio
 async def test_model_resource_handoff_does_not_hold_runnable_lease():
-    from pygent.core.module import _execution_scope
+    from pygent.core._module_contracts import _execution_scope
 
     resource_entered = asyncio.Event()
     resource_release = asyncio.Event()

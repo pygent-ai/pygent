@@ -5,7 +5,10 @@ from pathlib import Path
 import mcp
 import pytest
 
-from pygent import AIMessage, Context
+from pygent import (
+    AIMessage,
+    Context,
+)
 from pygent.tool import (
     ExecutorRegistry,
     ToolAuthorizationDecision,

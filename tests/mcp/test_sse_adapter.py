@@ -10,7 +10,11 @@ import httpx
 import mcp
 import pytest
 
-from pygent import AIMessage, Context, thaw_json
+from pygent import (
+    AIMessage,
+    Context,
+    thaw_json,
+)
 from pygent.tool import (
     ExecutorRegistry,
     ToolAuthorizationDecision,

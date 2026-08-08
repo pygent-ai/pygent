@@ -53,6 +53,66 @@ toolkit = ToolKit(lookup_weather)
 
 Pydantic 根据类型注解生成 Draft 2020-12 input/output schema，并负责把已验证 JSON 参数还原为 Python 参数及把返回模型序列化为严格 JSON。参数不允许缺少类型注解，也不允许 positional-only、`*args`、`**kwargs` 或生成器。工具描述来自显式 `description` 或 docstring 首段；参数描述按显式 Pydantic `Annotated`/`Field` 优先、Google/NumPy/Sphinx docstring 次之的顺序生成。
 
+## 标准工具
+
+`pygent.tool.standard` 把 0.1.15 中积累的 Bash、文件和 Web 能力迁移为普通 0.2 Python 工具。它不是第二套 Tool API：每个工具仍由 `@tool` 生成 `ToolDefinition/ToolSpec`，由 `ToolKit` 安装本地 executor，并由 `ToolCallLayer` 完成可见性、授权、admission、执行和结果归一化。
+
+```python
+from pygent import Context, ToolAuthorizationDecision
+from pygent.tool import StandardTools
+
+
+def authorize_standard_tool(request, _context):
+    # 生产代码应依据租户、调用方和 request.spec.required_permissions 决策。
+    allowed = set(request.spec.required_permissions) <= {
+        "filesystem:read",
+        "filesystem:write",
+        "shell:execute",
+        "web:search",
+        "web:fetch",
+    }
+    return ToolAuthorizationDecision(
+        call_id=request.call.call_id,
+        allowed=allowed,
+        reason_code="allowed" if allowed else "missing_permission",
+    )
+
+
+standard = StandardTools(workspace_root=".")
+toolkit = standard.toolkit
+tool_layer = toolkit.local_layer(
+    authorization_adapter=authorize_standard_tool,
+    max_concurrency=8,
+)
+context = toolkit.make_visible_in(Context())
+```
+
+`StandardTools` 是部署本地装配助手，不是 portable value。应用也可以只选择一个能力，并保持 SDK 的显式组装方式：
+
+```python
+from pygent import ToolKit
+from pygent.tool import FileTools
+
+files = FileTools(workspace_root="./workspace")
+read_only_tools = ToolKit(files.read, files.glob, files.grep, files.read_lints)
+```
+
+标准集合提供以下模型可见名称与策略：
+
+| 工具 | ToolSideEffect / 幂等 | 权限 | 关键边界 |
+|---|---|---|---|
+| `bash` | `EXTERNAL / NOT_IDEMPOTENT` | `shell:execute` | 默认限制 cwd 在 workspace；进程超时不超过 600 秒；超时返回 `unknown` 且副作用提交状态未知；输出最多投影 512 KiB |
+| `read`, `glob`, `grep`, `read_lints` | `READ / INHERENT` | `filesystem:read` | 默认拒绝 workspace 外路径；glob pattern、匹配结果和符号链接目标都重新验证；读取与搜索有界 |
+| `write` | `WRITE / INHERENT` | `filesystem:write` | 完整 UTF-8 原子替换；同一 FileTools 实例内的同路径变更串行；相同输入可重复得到相同文件内容 |
+| `edit`, `edit_notebook` | `WRITE / NOT_IDEMPOTENT` | `filesystem:write` | 同一实例内串行 read-modify-write 并原子提交；取消在所属写线程退出后返回；不确定失败不谎报未提交 |
+| `web_search`, `web_fetch` | `READ / INHERENT` | `web:search`, `web:fetch` | 公开 HTTP(S)；限制响应大小；默认 fetcher 连接已验证 IP、保留 Host/SNI，并逐跳重新验证重定向 |
+
+所有标准工具的 `sandbox_profile` 为 `workspace`（Web 工具除外，它们通过 URL/DNS 边界限制访问）。在 managed/durable 部署中，Runtime 仍必须声明相应 sandbox capability；Direct 模式不会因为工具名是“标准工具”而自动获得沙箱、授权或跨 Root 容量治理。
+
+`bash(is_background=True)` 是显式外部进程启动：返回 PID 后，该进程不再属于当前同步 ToolTask，调用方负责自己的进程监督与关闭策略。需要 Runtime 管理的独立生命周期时，应使用授权决定选择的 managed detach/Job，而不是把后台进程误当作 durable ToolTask。
+
+默认 `web_fetch` 不使用环境 HTTP 代理，因为代理会使实际连接目标脱离本地 DNS 校验。部署方注入的 `web_fetcher` 属于受信 adapter，必须自行提供等价的目标解析、实际 peer 约束、逐跳重定向校验、响应大小和连接清理保证。
+
 ### Direct/local 组装
 
 ```python
