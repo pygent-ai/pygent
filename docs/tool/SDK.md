@@ -106,11 +106,13 @@ grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=10
 
 `glob` 返回相对于搜索目录的路径；`grep` 返回
 `path:line: content`，并在 `context > 0` 时使用 `-` 标记上下文行。两者都会搜索
-未被忽略的隐藏文件并遵守分层 `.gitignore`；没有匹配时分别返回
+未被忽略的隐藏文件并遵守默认排除目录与分层 `.gitignore`；没有匹配时分别返回
 `No files found matching pattern` 与 `No matches found`。本地实现优先使用 `fd`
-执行 glob，并以 `rg --files` 作为兼容后端；grep 使用 `rg --json`。部署环境至少需要
-`rg`，如需完全采用 fd 的文件发现顺序和行为，应同时安装 `fd`（部分 Linux
-发行版的命令名为 `fdfind`）。include glob 在 Pygent 内过滤，不能覆盖 ignore 规则。
+执行 glob，并以 `rg --files` 作为高性能兼容后端；grep 优先使用 `rg --json`。
+部署环境未安装这些二进制时，框架使用有界 Python fallback，继续遵守 ignore、glob
+和结果限制，因此标准工具仍可开箱即用。安装 `rg`，以及可选的 `fd`（部分 Linux
+发行版命令名为 `fdfind`），只用于获得更高搜索性能。include glob 只能缩小候选集，
+不能覆盖 ignore 规则。
 
 标准集合提供以下模型可见名称与策略：
 

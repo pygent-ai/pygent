@@ -554,6 +554,24 @@ async def test_nested_gitignore_rules_do_not_leak_into_siblings(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_glob_and_grep_fall_back_without_external_search_binaries(
+    tmp_path, monkeypatch
+):
+    (tmp_path / ".gitignore").write_text("ignored/\n", encoding="utf-8")
+    (tmp_path / "ignored").mkdir()
+    (tmp_path / "ignored" / "hidden.py").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "visible.py").write_text("Needle\n", encoding="utf-8")
+    monkeypatch.setattr(file_module, "_search_executable", lambda *_names: None)
+    tools = FileTools(workspace_root=tmp_path)
+
+    assert await succeeded(tools.glob, pattern="**/*.py") == "src/visible.py"
+    assert await succeeded(
+        tools.grep, pattern="needle", ignoreCase=True, glob="*.py"
+    ) == "src/visible.py:1: Needle"
+
+
+@pytest.mark.asyncio
 async def test_grep_invalid_regex_is_a_failed_tool_result(tmp_path):
     (tmp_path / "example.txt").write_text("text\n", encoding="utf-8")
     tools = FileTools(workspace_root=tmp_path)
@@ -566,6 +584,8 @@ async def test_grep_invalid_regex_is_a_failed_tool_result(tmp_path):
 
 @pytest.mark.asyncio
 async def test_cancelled_grep_terminates_its_owned_process(tmp_path, monkeypatch):
+    if file_module._search_executable("rg") is None:
+        pytest.skip("ripgrep is required to exercise subprocess cancellation")
     (tmp_path / "example.txt").write_text("text\n", encoding="utf-8")
     started: list[asyncio.subprocess.Process] = []
 
