@@ -115,6 +115,7 @@ class _LifecycleMixin:
             parent_execution_id=options.parent_execution_id,
             parent_span_id=options.parent_span_id,
         )
+        self._purge_terminal_executions()
         self._executions[execution_id] = record
         if idempotency_identity is not None:
             self._idempotency_records[idempotency_identity] = (
@@ -134,7 +135,27 @@ class _LifecycleMixin:
             name=f"pygent-execution-{execution_id}",
         )
         record.task = task
+        task.add_done_callback(self._execution_finished)
         return _LocalExecutionHandle(record)
+
+    def _execution_finished(self, _task: asyncio.Task[Any]) -> None:
+        self._purge_terminal_executions(reserve=0)
+
+    def _purge_terminal_executions(self, *, reserve: int = 1) -> None:
+        terminal_ids = [
+            execution_id
+            for execution_id, record in self._executions.items()
+            if record.terminal and (record.task is None or record.task.done())
+        ]
+        excess = len(terminal_ids) - self.max_retained_executions + reserve
+        if excess <= 0:
+            return
+        evicted = set(terminal_ids[:excess])
+        for execution_id in evicted:
+            self._executions.pop(execution_id, None)
+        for identity, (_, record) in tuple(self._idempotency_records.items()):
+            if record.execution_id in evicted:
+                del self._idempotency_records[identity]
 
     async def _prepare_model_admission(
         self,

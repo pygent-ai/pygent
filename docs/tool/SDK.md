@@ -360,6 +360,11 @@ final_result = await runtime.get_tool_result(task.task_id)
 
 `ToolTask` 是不可变 JSON 快照，不携带 Runtime 对象或活 handler。查询、取消和取结果都使用稳定 `task_id`。
 
+进程内独立任务设施可以使用
+`InMemoryToolTaskManager(registry, max_retained_tasks=1024)`。该上限只保留最近完成的
+task snapshot/result；运行中的任务不会被淘汰，超过窗口的查询返回不存在。需要跨进程
+或长期查询的任务必须使用 durable Job/ToolTask 实现，不能依赖扩大内存窗口模拟持久化。
+
 当 Binding 的 durable capability 实际生效时，detach admission 必须按稳定 logical key 原子 get-or-create 一个独立 Job；该 key 绑定 run/Root/Module path、该 Module 在 Execution 内的确定性 occurrence、call 与 idempotency identity，确保 Parent recovery 不会重复创建 Job，同时保证跨轮或重复 Module 调用即使复用 `call_id` 也不会折叠成同一 Job。occurrence 必须由可重放调用顺序派生，不能使用随机数或仅使用参数 hash。返回的 `ToolTask.job_id` 指向该 Job。`JobRef(job_id, task_id)`、`JobSnapshot` 与 `JobState` 都是严格、不可变的公开值：Job 保存 logical key、Binding、ExecutionPlan、resource 与 required-capability 身份以及可移植 ToolSpec/ToolCall 请求，但不保存 callback、handler、registry、连接或 Runtime 对象。
 
 ```python

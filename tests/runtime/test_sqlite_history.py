@@ -206,6 +206,16 @@ async def test_checkpoint_compatibility_and_event_cursor(tmp_path):
         assert [thaw_json(event)["index"] for event in events] == [1, 2]
         tail = await store.events_tail(execution_id="run-1", limit=2)
         assert [thaw_json(event)["index"] for event in tail] == [1, 2]
+        await store.append_event(
+            execution_id="run-1", index=2, event={"index": 2}
+        )
+        with pytest.raises(HistoryConflictError):
+            await store.append_event(
+                execution_id="run-1", index=2, event={"index": "conflict"}
+            )
+        await store.append_event(
+            execution_id="run-1", index=3, event={"index": 3}
+        )
 
 
 @pytest.mark.asyncio
@@ -234,3 +244,30 @@ async def test_claim_transactions_serialize_with_concurrent_event_writes(tmp_pat
             )
 
         await asyncio.gather(*(write_and_claim(index) for index in range(64)))
+
+
+@pytest.mark.asyncio
+async def test_concurrent_events_share_group_commit(tmp_path):
+    class CountingHistory(SQLiteHistoryStore):
+        def __init__(self, path):
+            super().__init__(path, max_event_batch_size=64)
+            self.batch_sizes = []
+
+        async def _commit_event_batch(self, batch):
+            self.batch_sizes.append(len(batch))
+            await super()._commit_event_batch(batch)
+
+    async with CountingHistory(tmp_path / "grouped.sqlite3") as store:
+        await asyncio.gather(
+            *(
+                store.append_event(
+                    execution_id=f"execution-{index}",
+                    index=0,
+                    event={"index": index},
+                )
+                for index in range(32)
+            )
+        )
+
+        assert sum(store.batch_sizes) == 32
+        assert len(store.batch_sizes) < 32

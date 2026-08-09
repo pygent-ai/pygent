@@ -829,3 +829,35 @@ async def test_detached_agent_tool_starts_independent_root_not_child():
     assert final is not None
     assert final.status == "succeeded"
     assert final.output == 8
+
+
+@pytest.mark.asyncio
+async def test_in_memory_task_manager_bounds_completed_task_retention() -> None:
+    tool = spec()
+    registry = ExecutorRegistry()
+    registry.register(
+        tool.tool_id,
+        tool.version,
+        LocalToolExecutor(lambda arguments: arguments["value"] * 2),
+    )
+    manager = InMemoryToolTaskManager(registry, max_retained_tasks=2)
+    task_ids = []
+
+    for index in range(5):
+        task = await manager.submit(
+            tool,
+            ToolCall(
+                call_id=f"bounded-{index}",
+                name="double",
+                arguments={"value": index},
+            ),
+        )
+        assert await manager.get_result(task.task_id, wait=True) is not None
+        task_ids.append(task.task_id)
+        await asyncio.sleep(0)
+
+    assert len(manager._snapshots) <= 2
+    assert len(manager._results) <= 2
+    assert len(manager._tasks) <= 2
+    assert manager._invocations == {}
+    assert await manager.get_result(task_ids[0]) is None

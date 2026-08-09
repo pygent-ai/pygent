@@ -83,6 +83,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
         serializer: str | None = None,
         model_deployment_store: ModelDeploymentStore | None = None,
         deployment_namespace: str = "default",
+        max_retained_executions: int = 1024,
     ) -> None:
         wire_values = (input_schema, output_schema, serializer)
         if code_artifact is None and any(value is not None for value in wire_values):
@@ -91,7 +92,14 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
             raise ValueError(
                 "portable Runtime requires input_schema, output_schema, and serializer"
             )
+        if (
+            not isinstance(max_retained_executions, int)
+            or isinstance(max_retained_executions, bool)
+            or max_retained_executions <= 0
+        ):
+            raise ValueError("max_retained_executions must be a positive integer")
         self._closed = False
+        self.max_retained_executions = max_retained_executions
         self._binding_states: dict[object, _BindingState] = {}
         self._shared_resource_gates: dict[
             tuple[str, str], tuple[CapacityPolicy, _ResourceGate]

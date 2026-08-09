@@ -61,7 +61,7 @@ class RuntimeBinding:
 class _ExecutionSubscription:
     def __init__(self, record: _ExecutionRecord, after: int | None) -> None:
         self._record = record
-        self._next = 0 if after is None else after + 1
+        self._next = record.event_base_sequence if after is None else after + 1
 
     async def __aenter__(self) -> AsyncIterator[ExecutionEvent]:
         return self._iterate()
@@ -76,8 +76,11 @@ class _ExecutionSubscription:
 
     async def _iterate(self) -> AsyncIterator[ExecutionEvent]:
         while True:
-            while self._next < len(self._record.events):
-                event = self._record.events[self._next]
+            while self._next <= self._record.committed_sequence:
+                offset = self._next - self._record.event_base_sequence
+                if offset < 0 or offset >= len(self._record.events):
+                    break
+                event = self._record.events[offset]
                 self._next += 1
                 yield event
             if (
@@ -88,13 +91,33 @@ class _ExecutionSubscription:
             async with self._record.event_condition:
                 await self._record.event_condition.wait_for(
                     lambda: (
-                        self._next < len(self._record.events)
+                        self._next <= self._record.committed_sequence
                         or (
                             self._record.terminal_sequence is not None
                             and self._next > self._record.terminal_sequence
                         )
                     )
                 )
+
+
+def _event_from_frozen(frozen: JsonValue) -> ExecutionEvent:
+    item = thaw_json(frozen)
+    if not isinstance(item, dict):
+        raise TypeError("durable event must be a JSON object")
+    return ExecutionEvent(
+        schema_version=cast(str, item.get("schema_version")),
+        event_id=cast(str, item.get("event_id")),
+        execution_id=cast(str, item.get("execution_id")),
+        attempt_id=cast(str, item.get("attempt_id")),
+        trace_id=cast(str, item.get("trace_id")),
+        span_id=cast(str, item.get("span_id")),
+        parent_span_id=cast(str | None, item.get("parent_span_id")),
+        sequence=cast(int, item.get("sequence")),
+        timestamp_unix_ns=cast(int, item.get("timestamp_unix_ns")),
+        module_path=cast(str, item.get("module_path")),
+        kind=cast(str, item.get("kind")),
+        data=cast(dict[str, JsonValue], item.get("data", {})),
+    )
 
 
 class _LocalExecutionHandle(Generic[OutputMessageT]):
@@ -168,6 +191,8 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
     def subscribe(self, *, after: int | None = None) -> _ExecutionSubscription:
         if after is not None and (isinstance(after, bool) or after < -1):
             raise ValueError("event cursor must be -1 or a non-negative integer")
+        if after is not None and after + 1 < self._record.event_base_sequence:
+            raise ValueError("event cursor is outside the retained execution segment")
         return _ExecutionSubscription(self._record, after)
 
 
@@ -193,23 +218,7 @@ class _DurableExecutionSubscription:
                 limit=256,
             )
             for frozen in page:
-                item = thaw_json(frozen)
-                if not isinstance(item, dict):
-                    raise TypeError("durable event must be a JSON object")
-                event = ExecutionEvent(
-                    schema_version=cast(str, item.get("schema_version")),
-                    event_id=cast(str, item.get("event_id")),
-                    execution_id=cast(str, item.get("execution_id")),
-                    attempt_id=cast(str, item.get("attempt_id")),
-                    trace_id=cast(str, item.get("trace_id")),
-                    span_id=cast(str, item.get("span_id")),
-                    parent_span_id=cast(str | None, item.get("parent_span_id")),
-                    sequence=cast(int, item.get("sequence")),
-                    timestamp_unix_ns=cast(int, item.get("timestamp_unix_ns")),
-                    module_path=cast(str, item.get("module_path")),
-                    kind=cast(str, item.get("kind")),
-                    data=cast(dict[str, JsonValue], item.get("data", {})),
-                )
+                event = _event_from_frozen(frozen)
                 if event.sequence != self._next:
                     raise RuntimeError("durable event journal is not contiguous")
                 self._next += 1

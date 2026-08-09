@@ -732,3 +732,22 @@ async def test_structured_gather_executions_children_with_one_runnable_lease():
 
     assert output.content == "work-left|work-right"
     assert [event.kind for event in events].count("span.completed") >= 3
+
+
+@pytest.mark.asyncio
+async def test_runtime_bounds_completed_execution_retention_without_invalidating_handles():
+    runtime = LocalRuntime(max_retained_executions=2)
+    bound = _binding(runtime).bind(Echo())
+    handles = []
+
+    for index in range(5):
+        handle = await bound.start(UserMessage(content=str(index)), Context())
+        await handle.result()
+        handles.append(handle)
+        await asyncio.sleep(0)
+
+    final = await bound.start(UserMessage(content="final"), Context())
+    await final.result()
+    assert len(runtime._executions) <= 2
+    assert (await handles[0].result())[0].content == "0"
+    await runtime.close()

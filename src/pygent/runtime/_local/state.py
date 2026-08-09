@@ -58,9 +58,13 @@ class _ExecutionRecord:
     owner_id: str | None = None
     fencing_token: int | None = None
     events: list[ExecutionEvent] = field(default_factory=list)
+    event_base_sequence: int = 0
+    next_sequence: int = 0
+    committed_sequence: int = -1
     event_stream_closed: bool = False
     event_condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     event_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    journal_tail: asyncio.Task[None] | None = None
     task: asyncio.Task[tuple[Message, Context]] | None = None
     child_calls: int = 0
     module_calls: dict[str, int] = field(default_factory=dict)
@@ -108,7 +112,10 @@ class _ExecutionRecord:
         if execution_id is not None and execution_id != self.execution_id:
             payload.setdefault("origin_execution_id", execution_id)
         frozen = freeze_json_object(payload)
+        persistence: asyncio.Task[None] | None = None
         async with self.event_lock:
+            if self.phase is ExecutionPhase.FINALIZING or self.event_stream_closed:
+                raise RuntimeError("execution journal is finalizing")
             event = ExecutionEvent(
                 schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
                 event_id=event_id or str(uuid.uuid4()),
@@ -118,34 +125,44 @@ class _ExecutionRecord:
                 span_id=effective_span_id,
                 parent_span_id=effective_parent_span_id,
                 module_path=module_path,
-                sequence=len(self.events),
+                sequence=self.next_sequence,
                 timestamp_unix_ns=timestamp_unix_ns or time.time_ns(),
                 kind=kind,
                 data=frozen,
             )
+            self.next_sequence += 1
             self.events.append(event)
             if self.history is not None and self.history_started:
-                await self.history.append_event(
-                    execution_id=self.execution_id,
-                    index=event.sequence,
-                    event={
-                        "schema_version": event.schema_version,
-                        "event_id": event.event_id,
-                        "execution_id": event.execution_id,
-                        "attempt_id": event.attempt_id,
-                        "trace_id": event.trace_id,
-                        "span_id": event.span_id,
-                        "parent_span_id": event.parent_span_id,
-                        "module_path": event.module_path,
-                        "sequence": event.sequence,
-                        "timestamp_unix_ns": event.timestamp_unix_ns,
-                        "kind": event.kind,
-                        "data": thaw_json(cast(JsonValue, event.data)),
-                    },
+                previous = self.journal_tail
+                persistence = asyncio.create_task(
+                    self._persist_event(previous, event),
+                    name=f"pygent-journal-{self.execution_id}-{event.sequence}",
                 )
-        async with self.event_condition:
-            self.event_condition.notify_all()
+                self.journal_tail = persistence
+        if persistence is None:
+            await self._publish_committed(event.sequence)
+        else:
+            await asyncio.shield(persistence)
         return event
+
+    async def _persist_event(
+        self, previous: asyncio.Task[None] | None, event: ExecutionEvent
+    ) -> None:
+        if previous is not None:
+            await asyncio.shield(previous)
+        history = self.history
+        assert history is not None
+        await history.append_event(
+            execution_id=self.execution_id,
+            index=event.sequence,
+            event=self._event_value(event),
+        )
+        await self._publish_committed(event.sequence)
+
+    async def _publish_committed(self, sequence: int) -> None:
+        async with self.event_condition:
+            self.committed_sequence = max(self.committed_sequence, sequence)
+            self.event_condition.notify_all()
 
     @staticmethod
     def _event_value(event: ExecutionEvent) -> dict[str, JsonValue]:
@@ -197,6 +214,10 @@ class _ExecutionRecord:
             stored_error = failure.to_dict()
         self.phase = ExecutionPhase.FINALIZING
         async with self.event_lock:
+            journal_tail = self.journal_tail
+        if journal_tail is not None:
+            await asyncio.shield(journal_tail)
+        async with self.event_lock:
             prepared: list[ExecutionEvent] = []
             for kind, data in terminal_events:
                 prepared.append(
@@ -209,25 +230,28 @@ class _ExecutionRecord:
                         span_id=self.root_span_id,
                         parent_span_id=self.parent_span_id,
                         module_path=self.plan.root,
-                        sequence=len(self.events) + len(prepared),
+                        sequence=self.next_sequence + len(prepared),
                         timestamp_unix_ns=time.time_ns(),
                         kind=kind,
                         data=data,
                     )
                 )
             terminal_sequence = prepared[-1].sequence
-            if self.history is not None and self.history_started:
-                await self.history.finalize_execution(
-                    self.execution_id,
-                    status=status.value,
-                    output=output,
-                    error=stored_error,
-                    terminal_events=tuple(
-                        (event.sequence, self._event_value(event)) for event in prepared
-                    ),
-                    terminal_sequence=terminal_sequence,
-                )
+        if self.history is not None and self.history_started:
+            await self.history.finalize_execution(
+                self.execution_id,
+                status=status.value,
+                output=output,
+                error=stored_error,
+                terminal_events=tuple(
+                    (event.sequence, self._event_value(event)) for event in prepared
+                ),
+                terminal_sequence=terminal_sequence,
+            )
+        async with self.event_lock:
             self.events.extend(prepared)
+            self.next_sequence = terminal_sequence + 1
+            self.committed_sequence = terminal_sequence
             self.status = status
             self.phase = ExecutionPhase.TERMINAL
             self.owner_state = ExecutionOwnerState.TERMINAL
@@ -249,8 +273,8 @@ class _ExecutionRecord:
             self.phase = ExecutionPhase.TERMINAL
             self.owner_state = ExecutionOwnerState.TERMINAL
             self.updated_at_unix_ns = time.time_ns()
-            if self.terminal_sequence is None and self.events:
-                self.terminal_sequence = self.events[-1].sequence
+            if self.terminal_sequence is None and self.committed_sequence >= 0:
+                self.terminal_sequence = self.committed_sequence
             self.event_stream_closed = True
             self.event_condition.notify_all()
 
@@ -262,7 +286,7 @@ class _ExecutionRecord:
             phase=self.phase,
             owner_state=self.owner_state,
             attempt_id=self.attempt_id,
-            last_sequence=len(self.events) - 1,
+            last_sequence=self.committed_sequence,
             terminal_sequence=self.terminal_sequence,
             submitted_at_unix_ns=self.submitted_at_unix_ns,
             updated_at_unix_ns=self.updated_at_unix_ns,

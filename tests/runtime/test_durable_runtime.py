@@ -118,6 +118,18 @@ class _GatedTerminalHistory(SQLiteHistoryStore):
         await super().finalize_execution(execution_id, **kwargs)
 
 
+class _GatedAppendHistory(SQLiteHistoryStore):
+    def __init__(self, path) -> None:
+        super().__init__(path)
+        self.append_entered = asyncio.Event()
+        self.release_append = asyncio.Event()
+
+    async def append_event(self, **kwargs) -> None:
+        self.append_entered.set()
+        await self.release_append.wait()
+        await super().append_event(**kwargs)
+
+
 class EmitsThenReturns(Module[UserMessage, AIMessage]):
     async def forward(self, message, context):
         await self.emit(kind="test.progress", data={})
@@ -177,6 +189,23 @@ async def test_live_subscription_observes_terminal_events_only_after_atomic_fina
             )
         ).fetchone()
         assert released_claim is None
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_event_persistence_does_not_hold_execution_state_lock(tmp_path):
+    async with _GatedAppendHistory(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        handle = await runtime.bind(EmitsThenReturns()).start(
+            UserMessage(content="hello"), Context()
+        )
+        await asyncio.wait_for(history.append_entered.wait(), timeout=1)
+        record = runtime._executions[handle.execution_id]
+
+        await asyncio.wait_for(record.event_lock.acquire(), timeout=1)
+        record.event_lock.release()
+        history.release_append.set()
+        await asyncio.wait_for(handle.result(), timeout=1)
         await runtime.close()
 
 
@@ -242,6 +271,58 @@ async def test_unfinished_durable_run_restarts_at_module_boundary(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_recovery_reads_only_last_event_cursor_not_full_journal(
+    tmp_path, monkeypatch
+):
+    counter = _Counter()
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        bound = runtime.bind(CountingEcho(counter))
+        await history.create_execution(
+            execution_id="cursor-only-recovery",
+            request_id="request",
+            plan_id=bound.plan.plan_id,
+            input=invocation_to_dict(UserMessage(content="again"), Context()),
+            status="running",
+        )
+        for index in range(50):
+            await history.append_event(
+                execution_id="cursor-only-recovery",
+                index=index,
+                event={"sequence": index},
+            )
+
+        original_events_after = history.events_after
+
+        async def fail_full_history_read(**kwargs):
+            raise AssertionError("recovery must not read the full event journal")
+
+        monkeypatch.setattr(history, "events_after", fail_full_history_read)
+        recovered = await runtime.recover(bound, "cursor-only-recovery")
+        await recovered.result()
+        record = runtime._executions["cursor-only-recovery"]
+        assert record.event_base_sequence == 50
+        assert len(record.events) < 20
+
+        monkeypatch.setattr(history, "events_after", original_events_after)
+        async with recovered.subscribe() as subscription:
+            recovered_events = [event async for event in subscription]
+        assert recovered_events
+        assert recovered_events[0].sequence == 50
+        with pytest.raises(
+            ValueError, match="outside the retained execution segment"
+        ):
+            recovered.subscribe(after=-1)
+        persisted = await history.events_after(
+            execution_id="cursor-only-recovery", after=48
+        )
+        assert [event["sequence"] for event in persisted] == list(
+            range(49, 50 + len(record.events))
+        )
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_durable_recovery_claim_rejects_concurrent_owner(tmp_path):
     path = tmp_path / "claimed.sqlite3"
     entered, release = asyncio.Event(), asyncio.Event()
@@ -299,6 +380,45 @@ async def test_unfinished_run_replays_committed_effect_without_reexecution(tmp_p
 
     assert output.content == "ONCE"
     assert counter.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_evicted_durable_idempotency_requires_explicit_attachment(tmp_path):
+    counter = _Counter()
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history, max_retained_executions=1)
+        bound = runtime.bind(CountingEcho(counter))
+        first = await bound.start(
+            UserMessage(content="first"),
+            Context(),
+            execution=ExecutionOptions(
+                identity="user", idempotency_key="operation-first"
+            ),
+        )
+        expected = await first.result()
+        second = await bound.start(
+            UserMessage(content="second"),
+            Context(),
+            execution=ExecutionOptions(
+                identity="user", idempotency_key="operation-second"
+            ),
+        )
+        await second.result()
+        await asyncio.sleep(0)
+
+        repeated = await bound.start(
+            UserMessage(content="first"),
+            Context(),
+            execution=ExecutionOptions(
+                identity="user", idempotency_key="operation-first"
+            ),
+        )
+        with pytest.raises(ExecutionAdmissionError, match="already exists; attach to it"):
+            await repeated.result()
+        attached = await runtime.get_execution_handle(first.execution_id)
+        assert await attached.result() == expected
+        assert counter.calls == 2
+        await runtime.close()
 
 
 @pytest.mark.asyncio

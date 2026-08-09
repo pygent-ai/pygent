@@ -17,10 +17,25 @@ from ._history_types import HistoryStoreError
 class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMixin):
     """One serialized SQLite durability boundary for executions and effects."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        max_event_batch_size: int = 64,
+    ) -> None:
+        if (
+            not isinstance(max_event_batch_size, int)
+            or isinstance(max_event_batch_size, bool)
+            or max_event_batch_size <= 0
+        ):
+            raise ValueError("max_event_batch_size must be a positive integer")
         self.path = str(path)
         self._connection: aiosqlite.Connection | None = None
         self._write_lock = asyncio.Lock()
+        self._event_batch_lock = asyncio.Lock()
+        self._event_batch: list[tuple[str, int, str, asyncio.Future[None]]] = []
+        self._event_flush_task: asyncio.Task[None] | None = None
+        self._max_event_batch_size = max_event_batch_size
 
     async def open(self) -> Self:
         if self._connection is not None:
@@ -149,9 +164,86 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
         return self
 
     async def close(self) -> None:
+        flush_task = self._event_flush_task
+        if flush_task is not None:
+            await asyncio.shield(flush_task)
         connection, self._connection = self._connection, None
         if connection is not None:
             await connection.close()
+
+    async def _queue_event(self, execution_id: str, index: int, payload: str) -> None:
+        loop = asyncio.get_running_loop()
+        committed: asyncio.Future[None] = loop.create_future()
+        async with self._event_batch_lock:
+            self._event_batch.append((execution_id, index, payload, committed))
+            task = self._event_flush_task
+            if task is None or task.done():
+                task = asyncio.create_task(
+                    self._flush_event_batches(), name="pygent-sqlite-event-writer"
+                )
+                self._event_flush_task = task
+        await asyncio.shield(committed)
+
+    async def _flush_event_batches(self) -> None:
+        # One event-loop turn is enough to combine writes from concurrent
+        # executions without imposing a timer on a single interactive stream.
+        await asyncio.sleep(0)
+        while True:
+            async with self._event_batch_lock:
+                batch = self._event_batch[: self._max_event_batch_size]
+                del self._event_batch[: len(batch)]
+                if not batch:
+                    self._event_flush_task = None
+                    return
+            try:
+                await self._commit_event_batch(batch)
+            except BaseException as exc:  # noqa: BLE001 - fail every queued writer
+                for *_, future in batch:
+                    if not future.done():
+                        future.set_exception(exc)
+                async with self._event_batch_lock:
+                    pending, self._event_batch = self._event_batch, []
+                    self._event_flush_task = None
+                for *_, future in pending:
+                    if not future.done():
+                        future.set_exception(exc)
+                return
+            else:
+                for *_, future in batch:
+                    if not future.done():
+                        future.set_result(None)
+
+    async def _commit_event_batch(
+        self, batch: list[tuple[str, int, str, asyncio.Future[None]]]
+    ) -> None:
+        db = self._db()
+        async with self._write_lock:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.executemany(
+                    "INSERT INTO events(execution_id,event_index,event_json) "
+                    "VALUES(?,?,?) ON CONFLICT(execution_id,event_index) DO NOTHING",
+                    [(execution_id, index, payload) for execution_id, index, payload, _ in batch],
+                )
+                if cursor.rowcount != len(batch):
+                    for execution_id, index, payload, _ in batch:
+                        row = await (
+                            await db.execute(
+                                "SELECT event_json FROM events "
+                                "WHERE execution_id=? AND event_index=?",
+                                (execution_id, index),
+                            )
+                        ).fetchone()
+                        if row is None or row[0] != payload:
+                            from ._history_types import HistoryConflictError
+
+                            raise HistoryConflictError(
+                                "event cursor has conflicting content"
+                            )
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
 
     async def __aenter__(self) -> Self:
         return await self.open()

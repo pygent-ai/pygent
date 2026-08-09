@@ -10,7 +10,6 @@ from typing import Any, TypeVar, cast
 
 from pygent.core import (
     Context,
-    JsonValue,
     Message,
     freeze_json_object,
     thaw_json,
@@ -19,7 +18,6 @@ from pygent.core import (
 from .._history_types import StoredExecution
 from ..api import (
     ExecutionAdmissionError,
-    ExecutionEvent,
     ExecutionOptions,
     ExecutionPhase,
     ExecutionStatus,
@@ -119,6 +117,9 @@ class _RecoveryMixin:
                 "which requires a finite recovery deadline"
             )
         message, context = invocation_from_dict(stored.input)
+        last_event_index = await history.last_event_index(
+            execution_id=stored.execution_id
+        )
         record = _ExecutionRecord(
             execution_id=stored.execution_id,
             trace_id=stored.trace_id,
@@ -134,8 +135,10 @@ class _RecoveryMixin:
             idempotency_key=stored.idempotency_key,
             model_calls=model_calls,
             model_admission=model_admission,
+            event_base_sequence=last_event_index + 1,
+            next_sequence=last_event_index + 1,
+            committed_sequence=last_event_index,
         )
-        record.events.extend(await self._load_run_events(stored.execution_id))
         record.owner_id = f"{self._recovery_owner_id}:{record.attempt_id}"
         fencing_token = await history.claim_execution(
             execution_id=stored.execution_id,
@@ -166,6 +169,7 @@ class _RecoveryMixin:
             ),
             name=f"pygent-recovered-{stored.execution_id}",
         )
+        record.task.add_done_callback(self._execution_finished)
         self._executions[stored.execution_id] = record
         return cast(_LocalExecutionHandle[OutputMessageT], _LocalExecutionHandle(record))
 
@@ -189,41 +193,5 @@ class _RecoveryMixin:
             bool(record.model_admission),
             prepared=True,
         )
-
-    async def _load_run_events(self, execution_id: str) -> list[ExecutionEvent]:
-        history = self.history
-        if history is None:
-            return []
-        result: list[ExecutionEvent] = []
-        cursor = -1
-        while True:
-            page = await history.events_after(execution_id=execution_id, after=cursor, limit=4096)
-            if not page:
-                return result
-            for value in page:
-                item = thaw_json(value)
-                if not isinstance(item, Mapping):
-                    raise TypeError("durable execution event must be a JSON object")
-                event = ExecutionEvent(
-                    schema_version=cast(str, item.get("schema_version")),
-                    event_id=cast(str, item.get("event_id")),
-                    execution_id=cast(str, item.get("execution_id")),
-                    attempt_id=cast(str, item.get("attempt_id")),
-                    trace_id=cast(str, item.get("trace_id")),
-                    span_id=cast(str, item.get("span_id")),
-                    parent_span_id=cast(str | None, item.get("parent_span_id")),
-                    module_path=cast(str, item.get("module_path")),
-                    sequence=cast(int, item.get("sequence")),
-                    timestamp_unix_ns=cast(int, item.get("timestamp_unix_ns")),
-                    kind=cast(str, item.get("kind")),
-                    data=cast(Mapping[str, JsonValue], item.get("data", {})),
-                )
-                if event.sequence != len(result):
-                    raise RuntimeError("durable execution event cursor is not contiguous")
-                result.append(event)
-                cursor = event.sequence
-            if len(page) < 4096:
-                return result
-
 
 __all__ = ["_RecoveryMixin"]

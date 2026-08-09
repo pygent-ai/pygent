@@ -27,6 +27,9 @@ class EffectHistoryMixin:
         _write_lock: asyncio.Lock
 
         def _db(self) -> aiosqlite.Connection: ...
+        async def _queue_event(
+            self, execution_id: str, index: int, payload: str
+        ) -> None: ...
 
     @_serialized_write
     async def record_effect(
@@ -243,24 +246,18 @@ class EffectHistoryMixin:
         assert state is not None
         return row[0], state
 
-    @_serialized_write
     async def append_event(
         self, *, execution_id: str, index: int, event: Mapping[str, Any]
     ) -> None:
-        try:
-            await self._db().execute(
-                "INSERT INTO events VALUES(?,?,?)", (execution_id, index, _json(event))
-            )
-            await self._db().commit()
-        except aiosqlite.IntegrityError as exc:
-            await self._db().rollback()
-            cursor = await self._db().execute(
-                "SELECT event_json FROM events WHERE execution_id=? AND event_index=?",
-                (execution_id, index),
-            )
-            row = await cursor.fetchone()
-            if row is None or row[0] != _json(event):
-                raise HistoryConflictError("event cursor has conflicting content") from exc
+        await self._queue_event(execution_id, index, _json(event))
+
+    async def last_event_index(self, *, execution_id: str) -> int:
+        cursor = await self._db().execute(
+            "SELECT COALESCE(MAX(event_index), -1) FROM events WHERE execution_id=?",
+            (execution_id,),
+        )
+        row = await cursor.fetchone()
+        return -1 if row is None else int(row[0])
 
     async def events_after(
         self, *, execution_id: str, after: int = -1, limit: int = 256

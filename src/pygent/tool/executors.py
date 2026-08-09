@@ -607,11 +607,21 @@ class InMemoryToolTaskManager:
     recovery. Managed runtimes can provide their own implementation instead.
     """
 
-    def __init__(self, registry: ExecutorRegistry) -> None:
+    def __init__(
+        self, registry: ExecutorRegistry, *, max_retained_tasks: int = 1024
+    ) -> None:
+        if (
+            not isinstance(max_retained_tasks, int)
+            or isinstance(max_retained_tasks, bool)
+            or max_retained_tasks <= 0
+        ):
+            raise ValueError("max_retained_tasks must be a positive integer")
         self._registry = registry
+        self._max_retained_tasks = max_retained_tasks
         self._snapshots: dict[str, ToolTask] = {}
         self._results: dict[str, ToolResult] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._cleanup_task: asyncio.Task[None] | None = None
         self._invocations: dict[
             str, tuple[ToolSpec, ToolCall, ToolTaskExecution | None]
         ] = {}
@@ -643,6 +653,7 @@ class InMemoryToolTaskManager:
             state=ToolTaskState.PENDING,
         )
         async with self._lock:
+            self._purge_terminal_tasks()
             self._snapshots[snapshot.task_id] = snapshot
             self._invocations[snapshot.task_id] = (spec, call, execution)
         return snapshot
@@ -657,10 +668,12 @@ class InMemoryToolTaskManager:
                 snapshot = self._snapshots[task_id]
             except KeyError as exc:
                 raise KeyError(f"unknown prepared ToolTask {task_id!r}") from exc
-            self._tasks[snapshot.task_id] = asyncio.create_task(
+            task = asyncio.create_task(
                 self._run(snapshot, spec, call, execution),
                 name=f"pygent-{snapshot.task_id}",
             )
+            self._tasks[snapshot.task_id] = task
+            task.add_done_callback(self._task_finished)
 
     async def _run(
         self,
@@ -715,6 +728,42 @@ class InMemoryToolTaskManager:
         async with self._lock:
             self._snapshots[snapshot.task_id] = replace(snapshot, state=state)
             self._results[snapshot.task_id] = result
+            self._invocations.pop(snapshot.task_id, None)
+
+    def _task_finished(self, _task: asyncio.Task[None]) -> None:
+        cleanup = self._cleanup_task
+        if cleanup is None or cleanup.done():
+            self._cleanup_task = asyncio.create_task(
+                self._purge_after_completion(),
+                name="pygent-tool-task-retention",
+            )
+
+    async def _purge_after_completion(self) -> None:
+        async with self._lock:
+            self._purge_terminal_tasks(reserve=0)
+
+    def _purge_terminal_tasks(self, *, reserve: int = 1) -> None:
+        terminal = {
+            ToolTaskState.SUCCEEDED,
+            ToolTaskState.FAILED,
+            ToolTaskState.CANCELLED,
+            ToolTaskState.UNKNOWN,
+        }
+        terminal_ids = [
+            task_id
+            for task_id, snapshot in self._snapshots.items()
+            if snapshot.state in terminal
+            and (
+                (task := self._tasks.get(task_id)) is None
+                or task.done()
+            )
+        ]
+        excess = len(terminal_ids) - self._max_retained_tasks + reserve
+        for task_id in terminal_ids[: max(0, excess)]:
+            self._snapshots.pop(task_id, None)
+            self._results.pop(task_id, None)
+            self._tasks.pop(task_id, None)
+            self._invocations.pop(task_id, None)
 
     async def get_task(self, task_id: str) -> ToolTask | None:
         async with self._lock:
@@ -766,6 +815,9 @@ class InMemoryToolTaskManager:
                 if not task.done():
                     task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        cleanup = self._cleanup_task
+        if cleanup is not None:
+            await cleanup
 
 
 async def _execute_with_timeout(
