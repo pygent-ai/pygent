@@ -650,6 +650,7 @@ async def test_search_process_cleanup_drains_full_stdout_pipe():
 @pytest.mark.asyncio
 async def test_grep_result_limit_drains_buffered_backend_output(tmp_path, monkeypatch):
     (tmp_path / "example.txt").write_text("text\n", encoding="utf-8")
+    monkeypatch.setattr(file_module, "_search_executable", lambda *_names: "rg")
     event = json.dumps(
         {
             "type": "match",
