@@ -31,6 +31,7 @@ from pygent.tool import (
     ToolCall,
     ToolCallLayer,
     ToolDefinition,
+    ToolExecutionContext,
     ToolExecutionError,
     ToolSideEffect,
     ToolSpec,
@@ -79,6 +80,36 @@ def context(tool: ToolSpec) -> Context:
         tools=(tool.definition,),
         metadata={"permissions": ["tool:use"]},
     )
+
+
+@pytest.mark.asyncio
+async def test_agent_invoke_adapter_receives_tool_execution_context():
+    tool = spec()
+    call = ToolCall(
+        call_id="agent-adapter",
+        name="double",
+        arguments={"value": 3},
+    )
+    execution_context = ToolExecutionContext(
+        deadline=123.0,
+        execution_id="execution-1",
+        task_id="task-1",
+        recovery=True,
+    )
+    received: list[ToolExecutionContext] = []
+
+    async def invoke(_spec, actual_call, actual_context):
+        received.append(actual_context)
+        return int(actual_call.arguments["value"]) * 2
+
+    result = await AgentToolExecutor(invoke=invoke).execute(
+        tool,
+        call,
+        execution_context,
+    )
+
+    assert result == 6
+    assert received == [execution_context]
 
 
 @pytest.mark.asyncio
@@ -186,6 +217,45 @@ async def test_bad_arguments_are_rejected_before_authorization() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unknown_argument_is_rejected_before_executor_with_tool_identity() -> None:
+    tool = spec()
+    executed = 0
+
+    async def execute(_arguments):
+        nonlocal executed
+        executed += 1
+        return 1
+
+    registry = ExecutorRegistry()
+    registry.register(tool.tool_id, tool.version, LocalToolExecutor(execute))
+    message, _ = await ToolCallLayer(
+        tools=(tool,),
+        authorization=Authorization(),
+        executor_registry=registry,
+    ).invoke(
+        AIMessage(
+            tool_calls=(
+                ToolCall(
+                    call_id="unknown-argument",
+                    name="double",
+                    arguments={"value": 1, "glob": "*.py"},
+                ),
+            )
+        ),
+        context(tool),
+    )
+
+    result = message.results[0]
+    assert result.status == "rejected"
+    assert result.error_kind == "validation_error"
+    assert result.error_code == "invalid_arguments"
+    assert result.error == "Additional properties are not allowed ('glob' was unexpected)"
+    assert result.tool_id == tool.tool_id
+    assert result.tool_version == tool.version
+    assert executed == 0
+
+
+@pytest.mark.asyncio
 async def test_unknown_side_effect_is_not_reported_uncommitted() -> None:
     tool = spec(side_effect=ToolSideEffect.EXTERNAL)
     registry = ExecutorRegistry()
@@ -238,6 +308,9 @@ async def test_unclassified_external_failure_has_unknown_commit_state() -> None:
     result = message.results[0]
     assert result.status == "unknown"
     assert result.side_effect_committed is None
+    assert result.error == "tool executor failed"
+    assert result.error_kind == "executor_error"
+    assert result.error_code == "RuntimeError"
     assert "opaque external operation" not in (result.error or "")
 
 

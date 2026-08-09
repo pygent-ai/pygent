@@ -231,9 +231,35 @@ def _gitignore_matches(
     return ignored
 
 
-async def _terminate_process(process: asyncio.subprocess.Process) -> None:
+async def _terminate_search_process(
+    process: asyncio.subprocess.Process,
+    stderr_task: asyncio.Task[bytes],
+) -> None:
+    """Kill a search backend, drain its pipes, and reap it in that order.
+
+    On Windows, waiting for a subprocess that still has buffered PIPE output can
+    block even after ``kill()``.  The caller owns stdout while ``stderr_task``
+    owns stderr, so both readers must reach EOF before the process is reaped.
+    """
+
     if process.returncode is None:
-        process.kill()
+        with suppress(ProcessLookupError):
+            process.kill()
+
+    assert process.stdout is not None
+    with suppress(OSError, RuntimeError):
+        await process.stdout.read()
+
+    try:
+        await stderr_task
+    except asyncio.CancelledError:
+        # asyncio.run() cancels every task at shutdown, so the independently
+        # owned stderr reader may already have been cancelled.  Resume draining
+        # only after that reader has released StreamReader's single-reader lock.
+        assert process.stderr is not None
+        with suppress(OSError, RuntimeError):
+            await process.stderr.read()
+
     with suppress(ProcessLookupError):
         await process.wait()
 
@@ -250,7 +276,10 @@ def _relative_search_path(candidate: Path, root: Path) -> str:
 
 
 def _walk_search_files(
-    root: Path, workspace_root: Path, limit: int
+    root: Path,
+    workspace_root: Path,
+    limit: int,
+    cancelled: threading.Event | None = None,
 ) -> list[Path]:
     """Bounded fallback traversal with default and hierarchical git ignores."""
 
@@ -282,7 +311,7 @@ def _walk_search_files(
             tuple[PurePosixPath, tuple[tuple[str, bool, bool], ...]], ...
         ],
     ) -> None:
-        if len(files) >= limit:
+        if len(files) >= limit or (cancelled is not None and cancelled.is_set()):
             return
         local_rules = _gitignore_rules(directory)
         rules = parent_rules + (
@@ -293,7 +322,7 @@ def _walk_search_files(
         except OSError:
             return
         for entry in entries:
-            if len(files) >= limit:
+            if len(files) >= limit or (cancelled is not None and cancelled.is_set()):
                 return
             entry_relative = relative_directory / entry.name
             entry_text = entry_relative.as_posix()
@@ -324,6 +353,20 @@ async def _run_owned_thread(function, *args):
     try:
         return await asyncio.shield(operation)
     except asyncio.CancelledError:
+        with suppress(Exception):
+            await operation
+        raise
+
+
+async def _run_cancellable_search_thread(function, *args):
+    """Request cooperative stop and join a fallback search before cancellation."""
+
+    cancelled = threading.Event()
+    operation = asyncio.create_task(asyncio.to_thread(function, *args, cancelled))
+    try:
+        return await asyncio.shield(operation)
+    except asyncio.CancelledError:
+        cancelled.set()
         with suppress(Exception):
             await operation
         raise
@@ -416,7 +459,7 @@ class FileTools:
     ) -> str:
         """Read text ranges, optional PDF pages, or a bounded binary description."""
 
-        return await asyncio.to_thread(self._read, file_path, limit, offset, pages)
+        return await _run_owned_thread(self._read, file_path, limit, offset, pages)
 
     def _read(
         self, file_path: str, limit: int | None, offset: int | None, pages: str | None
@@ -681,7 +724,7 @@ class FileTools:
     async def read_lints(self, paths: list[str] | None = None) -> str:
         """Return bounded Python syntax diagnostics for files or directories."""
 
-        return await asyncio.to_thread(self._read_lints, paths)
+        return await _run_owned_thread(self._read_lints, paths)
 
     def _read_lints(self, paths: list[str] | None) -> str:
         requested = paths or ["."]
@@ -788,7 +831,7 @@ class FileTools:
         else:
             executable = _search_executable("rg")
             if executable is None:
-                return await asyncio.to_thread(
+                return await _run_cancellable_search_thread(
                     self._glob_fallback, root, pattern, effective_limit
                 )
             arguments = [
@@ -825,12 +868,12 @@ class FileTools:
                 lines.append(relative)
                 if len(lines) >= effective_limit:
                     reached_limit = True
-                    await _terminate_process(process)
+                    await _terminate_search_process(process, stderr_task)
                     break
             stderr = await stderr_task
             code = await process.wait()
         except BaseException:
-            await _terminate_process(process)
+            await _terminate_search_process(process, stderr_task)
             with suppress(asyncio.CancelledError):
                 await stderr_task
             raise
@@ -850,15 +893,23 @@ class FileTools:
             notices.append("50KB limit reached")
         return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
 
-    def _glob_fallback(self, root: Path, pattern: str, limit: int) -> str:
-        candidates = _walk_search_files(root, self.workspace_root, self.max_search_files)
-        lines = [
-            _relative_search_path(candidate, root)
-            for candidate in candidates
-            if _matches_search_glob(
-                _relative_search_path(candidate, root).rstrip("/"), pattern
-            )
-        ]
+    def _glob_fallback(
+        self,
+        root: Path,
+        pattern: str,
+        limit: int,
+        cancelled: threading.Event | None = None,
+    ) -> str:
+        candidates = _walk_search_files(
+            root, self.workspace_root, self.max_search_files, cancelled
+        )
+        lines = []
+        for candidate in candidates:
+            if cancelled is not None and cancelled.is_set():
+                break
+            relative = _relative_search_path(candidate, root)
+            if _matches_search_glob(relative.rstrip("/"), pattern):
+                lines.append(relative)
         reached_limit = len(lines) > limit
         lines = lines[:limit]
         if not lines:
@@ -938,7 +989,7 @@ class FileTools:
             _fail(f"path does not exist: {root}", "file_not_found")
         executable = _search_executable("rg")
         if executable is None:
-            return await asyncio.to_thread(
+            return await _run_cancellable_search_thread(
                 self._grep_fallback,
                 root,
                 pattern,
@@ -997,12 +1048,12 @@ class FileTools:
                 )
                 if len(matches) >= effective_limit:
                     reached_limit = True
-                    await _terminate_process(process)
+                    await _terminate_search_process(process, stderr_task)
                     break
             stderr = await stderr_task
             code = await process.wait()
         except BaseException:
-            await _terminate_process(process)
+            await _terminate_search_process(process, stderr_task)
             with suppress(asyncio.CancelledError):
                 await stderr_task
             raise
@@ -1068,6 +1119,7 @@ class FileTools:
         literal: bool,
         context: int,
         limit: int,
+        cancelled: threading.Event | None = None,
     ) -> str:
         flags = re.IGNORECASE if ignore_case else 0
         try:
@@ -1082,13 +1134,17 @@ class FileTools:
 
         search_root = root if root.is_dir() else root.parent
         candidates = (
-            _walk_search_files(root, self.workspace_root, self.max_search_files)
+            _walk_search_files(
+                root, self.workspace_root, self.max_search_files, cancelled
+            )
             if root.is_dir()
             else [root]
         )
         matches: list[tuple[Path, int, str, list[str]]] = []
         reached_limit = False
         for candidate in candidates:
+            if cancelled is not None and cancelled.is_set():
+                break
             relative = _relative_search_path(candidate, search_root)
             if glob and not _matches_search_glob(relative, glob):
                 continue
@@ -1102,6 +1158,8 @@ class FileTools:
                 "\r\n", "\n"
             ).replace("\r", "\n").split("\n")
             for line_number, line in enumerate(lines, start=1):
+                if cancelled is not None and cancelled.is_set():
+                    break
                 if matcher.search(line) is None:
                     continue
                 matches.append((candidate, line_number, line, lines))

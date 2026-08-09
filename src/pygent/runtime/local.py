@@ -97,6 +97,9 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
             tuple[str, str], tuple[CapacityPolicy, _ResourceGate]
         ] = {}
         self._executions: dict[str, _ExecutionRecord] = {}
+        self._idempotency_records: dict[
+            tuple[str, str, str], tuple[str, _ExecutionRecord]
+        ] = {}
         self._remote_modules: dict[str, Any] = {}
         self._external_waiters: dict[
             tuple[str, str], tuple[_ExecutionRecord, asyncio.Future[Mapping[str, JsonValue]]]
@@ -111,6 +114,10 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
             raise ValueError("deployment_namespace must be a non-empty string")
         self.deployment_namespace = deployment_namespace
         self._model_store_opened = False
+        self._model_store_open_task: asyncio.Task[None] | None = None
+        self._profile_publications: dict[
+            tuple[str, str, str, str], asyncio.Task[Any]
+        ] = {}
         self._model_resource_resolvers: dict[str, Any] = {}
         self._resident_model_invokers: dict[
             str, tuple[Any, ModelResourceOwnership]
@@ -170,9 +177,21 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
     async def _ensure_model_store_open(self) -> None:
         if self._model_store_opened:
             return
-        open_store = getattr(self.model_deployment_store, "open", None)
-        if callable(open_store):
-            await open_store()
+        task = self._model_store_open_task
+        if task is None:
+            async def open_once() -> None:
+                open_store = getattr(self.model_deployment_store, "open", None)
+                if callable(open_store):
+                    await open_store()
+
+            task = asyncio.create_task(open_once(), name="pygent-model-store-open")
+            self._model_store_open_task = task
+        try:
+            await asyncio.shield(task)
+        except BaseException:
+            if task.done() and self._model_store_open_task is task:
+                self._model_store_open_task = None
+            raise
         self._model_store_opened = True
 
     def register_model_resource_resolver(self, resolver: Any) -> None:

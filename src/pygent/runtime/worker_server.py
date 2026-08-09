@@ -19,6 +19,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from pygent.core import (
+    EXECUTION_EVENT_SCHEMA_VERSION,
     ExecutionEvent,
     ExecutionFailure,
     FrozenJsonObject,
@@ -52,6 +53,7 @@ class _ServerExecution:
     condition: asyncio.Condition
     invocation: WorkerInvocation
     root_span_id: str = field(default_factory=lambda: str(uuid4()))
+    attempt_id: str = field(default_factory=lambda: str(uuid4()))
     status: str = "pending"
     result: JsonValue | None = None
     error: JsonValue | None = None
@@ -399,7 +401,11 @@ class HTTPWorkerApp:
             if existing.status in {"pending", "running"} and existing.task is None:
                 self._launch(existing)
             return JSONResponse(
-                {"execution_id": existing_id, "status": self._status(existing)},
+                {
+                    "execution_id": existing_id,
+                    "attempt_id": existing.attempt_id,
+                    "status": self._status(existing),
+                },
                 status_code=202,
             )
         self._purge_terminal_executions()
@@ -422,7 +428,12 @@ class HTTPWorkerApp:
         await self._persist_job(server_run)
         self._launch(server_run)
         return JSONResponse(
-            {"execution_id": execution_id, "status": "running"}, status_code=202
+            {
+                "execution_id": execution_id,
+                "attempt_id": server_run.attempt_id,
+                "status": "running",
+            },
+            status_code=202,
         )
 
     @staticmethod
@@ -647,14 +658,21 @@ class HTTPWorkerApp:
         if run is None:
             return JSONResponse({"error": "execution_not_found"}, status_code=404)
         status = self._status(run)
+        metadata = {
+            "execution_id": run.execution_id,
+            "attempt_id": run.attempt_id,
+            "trace_id": run.invocation.trace_id or run.execution_id,
+            "last_sequence": run.next_event_index - 1,
+            "terminal_sequence": run.next_event_index - 1 if run.terminal else None,
+        }
         if not run.terminal or status in {"pending", "running"}:
             return JSONResponse(
-                {"execution_id": run.execution_id, "status": status}, status_code=202
+                {**metadata, "status": status}, status_code=202
             )
         if status == "cancelled":
             return JSONResponse(
                 {
-                    "execution_id": run.execution_id,
+                    **metadata,
                     "status": "cancelled",
                     "error": thaw_json(run.error),
                 },
@@ -663,7 +681,7 @@ class HTTPWorkerApp:
         if status != "succeeded":
             return JSONResponse(
                 {
-                    "execution_id": run.execution_id,
+                    **metadata,
                     "status": status,
                     "error": thaw_json(run.error),
                 },
@@ -673,7 +691,7 @@ class HTTPWorkerApp:
             return JSONResponse({"error": "missing_result"}, status_code=500)
         return JSONResponse(
             {
-                "execution_id": run.execution_id,
+                **metadata,
                 "status": "succeeded",
                 "result": thaw_json(run.result),
             }
@@ -689,13 +707,14 @@ class HTTPWorkerApp:
             index = run.next_event_index
             run.next_event_index += 1
             event = {
-                "schema_version": "0.2",
+                "schema_version": EXECUTION_EVENT_SCHEMA_VERSION,
                 "event_id": str(uuid4()),
                 "sequence": index,
                 "timestamp_unix_ns": int(time() * 1_000_000_000),
                 "kind": kind,
                 "data": thaw_json(cast(JsonValue, freeze_json_object(data))),
                 "execution_id": run.execution_id,
+                "attempt_id": run.attempt_id,
                 "trace_id": run.invocation.trace_id or run.execution_id,
                 "span_id": run.root_span_id,
                 "parent_span_id": run.invocation.parent_span_id,
@@ -722,13 +741,14 @@ class HTTPWorkerApp:
                 }
             )
             event = {
-                "schema_version": "0.2",
+                "schema_version": EXECUTION_EVENT_SCHEMA_VERSION,
                 "event_id": origin.event_id,
                 "sequence": sequence,
                 "timestamp_unix_ns": origin.timestamp_unix_ns,
                 "kind": origin.kind,
                 "data": data,
                 "execution_id": run.execution_id,
+                "attempt_id": origin.attempt_id,
                 "trace_id": origin.trace_id,
                 "span_id": origin.span_id,
                 "parent_span_id": origin.parent_span_id,

@@ -41,10 +41,10 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
                 )
             ).fetchall()
         }
-        if tables and user_version not in {3, 4}:
+        if tables and user_version != 6:
             await self.close()
             raise HistoryStoreError(
-                "SQLite history schema is incompatible; Pygent 0.2 requires schema v3 or v4"
+                "SQLite history schema is incompatible; this Runtime requires schema v6"
             )
         await self._connection.executescript(
             """
@@ -64,6 +64,12 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
                 model_admission_id TEXT,
                 model_admission_digest TEXT,
                 model_admission_status TEXT NOT NULL DEFAULT 'none',
+                trace_id TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                attempt_id TEXT,
+                terminal_sequence INTEGER,
+                submitted_at_unix_ns INTEGER NOT NULL,
+                updated_at_unix_ns INTEGER NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS tasks (
@@ -130,75 +136,6 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
             );
             """
         )
-        columns = {
-            row[1] for row in await (await self._connection.execute(
-                "PRAGMA table_info(executions)"
-            )).fetchall()
-        }
-        for name, declaration in (
-            ("binding_id", "TEXT NOT NULL DEFAULT ''"),
-            ("identity", "TEXT NOT NULL DEFAULT ''"),
-            ("idempotency_key", "TEXT"),
-            ("model_calls_json", "TEXT NOT NULL DEFAULT '{}'"),
-            ("model_admission_id", "TEXT"),
-            ("model_admission_digest", "TEXT"),
-            ("model_admission_status", "TEXT NOT NULL DEFAULT 'none'"),
-        ):
-            if name not in columns:
-                await self._connection.execute(
-                    f"ALTER TABLE executions ADD COLUMN {name} {declaration}"
-                )
-        effect_columns = await (
-            await self._connection.execute("PRAGMA table_info(effects)")
-        ).fetchall()
-        effect_primary_key = tuple(
-            row[1] for row in sorted(effect_columns, key=lambda row: row[5]) if row[5]
-        )
-        effect_column_names = {row[1] for row in effect_columns}
-        result_not_null = next(
-            (bool(row[3]) for row in effect_columns if row[1] == "result_json"),
-            False,
-        )
-        if (
-            effect_primary_key != ("execution_id", "module_path", "call_index")
-            or "spec_json" not in effect_column_names
-            or "status" not in effect_column_names
-            or result_not_null
-        ):
-            await self._connection.executescript(
-                """
-                ALTER TABLE effects RENAME TO effects_legacy;
-                CREATE TABLE effects (
-                    execution_id TEXT NOT NULL,
-                    module_path TEXT NOT NULL,
-                    call_index INTEGER NOT NULL,
-                    effect_type TEXT NOT NULL,
-                    request_digest TEXT NOT NULL,
-                    spec_json TEXT,
-                    status TEXT NOT NULL,
-                    result_json TEXT,
-                    PRIMARY KEY(execution_id, module_path, call_index)
-                );
-                INSERT INTO effects(execution_id,module_path,call_index,effect_type,
-                                    request_digest,spec_json,status,result_json)
-                SELECT execution_id,module_path,call_index,effect_type,request_digest,
-                       NULL,'completed',result_json
-                FROM effects_legacy;
-                DROP TABLE effects_legacy;
-                """
-            )
-        await self._connection.execute("DROP INDEX IF EXISTS executions_request_id")
-        job_columns = {
-            row[1]
-            for row in await (
-                await self._connection.execute("PRAGMA table_info(jobs)")
-            ).fetchall()
-        }
-        if "logical_key" not in job_columns:
-            await self._connection.execute("ALTER TABLE jobs ADD COLUMN logical_key TEXT")
-            await self._connection.execute(
-                "UPDATE jobs SET logical_key='legacy:' || job_id WHERE logical_key IS NULL"
-            )
         await self._connection.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS jobs_logical_key ON jobs(logical_key)"
         )
@@ -207,7 +144,7 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
             "ON executions(binding_id,identity,idempotency_key) "
             "WHERE idempotency_key IS NOT NULL"
         )
-        await self._connection.execute("PRAGMA user_version=4")
+        await self._connection.execute("PRAGMA user_version=6")
         await self._connection.commit()
         return self
 

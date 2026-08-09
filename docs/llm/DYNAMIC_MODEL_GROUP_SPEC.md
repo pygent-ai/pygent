@@ -298,7 +298,7 @@ MUST NOT authorize route, credential, client, retry, or fallback overrides. The
 runtime_binding = runtime.create_binding(...)
 group = runtime_binding.model_groups.get(assistant_group)
 
-await group.configure(
+await group.ensure_profile(
     profile="balanced",
     routes=(
         ModelRoute("primary", provider="openai", model=user_model),
@@ -309,9 +309,11 @@ await group.configure(
         "tenant-42/openai-primary",
         revision=credential_revision,
     ),
+    make_default=True,
+    deadline=configuration_deadline,
 )
 
-await group.configure(
+await group.ensure_profile(
     profile="quality",
     routes=(
         ModelRoute("primary", provider="openai", model="gpt-5"),
@@ -323,9 +325,8 @@ await group.configure(
         "tenant-42/openai-quality",
         revision=quality_credential_revision,
     ),
+    deadline=configuration_deadline,
 )
-
-await group.set_default("balanced")
 ```
 
 `ModelGroupHandle` is a mutable control-plane handle, not a Module dependency or
@@ -333,22 +334,16 @@ portable value. `get()` MUST accept the typed requirement, not grant authority f
 user-supplied group name alone. The handle derives the immutable capacity declaration
 from that requirement, so ordinary callers do not repeat it.
 
-`configure()` performs Provider-specific validation outside Runtime, followed by
+`ensure_profile()` performs Provider-specific validation outside Runtime, followed by
 Runtime validation of declaration compatibility, exact resource revisions, capacity
-ownership, and publication safety. Failure publishes nothing. Configuring an existing
-profile name creates a new immutable internal snapshot for later admissions. The user
-does not supply or retain a framework snapshot version.
-
-The raw `Binding` form remains usable after bind:
-
-```python
-bound_agent = runtime.bind(agent, binding=binding_policy)
-group = bound_agent.model_groups.get(assistant_group)
-```
-
-When a raw Binding is bound, Runtime issues the internal scope and the resulting
-BoundModule exposes the same safe handle facade. Configuring before bind requires an
-explicit RuntimeBinding. Both forms have the same execution semantics.
+ownership, and publication safety. It normalizes the complete configuration and uses
+its stable digest as the idempotency identity. Concurrent calls for the same scope,
+profile, and digest single-flight and return the same immutable snapshot; different
+digests serialize publication. `make_default=True` publishes the profile current
+pointer and default pointer in the same transaction. Failure publishes nothing. Store
+opening, validation, resource preparation, and publication all obey the explicit
+control-plane deadline and caller cancellation. The user does not supply or retain a
+framework snapshot version.
 
 ### 6.3 Invoke with the default or a temporary selection
 
@@ -432,7 +427,7 @@ the handle is live control-plane state and the Agent definition is immutable.
 Changing the default affects only later admissions that do not select a profile:
 
 ```python
-await group.set_default("quality")
+await group.set_default("quality", deadline=configuration_deadline)
 
 current = await group.current("quality")
 profiles = await group.list_profiles()
@@ -449,7 +444,7 @@ the default, or bypass Provider and Runtime validation.
 An application facade may wrap the handle without exposing resource details:
 
 ```python
-await app.models.configure(
+await app.models.ensure_profile(
     group=group,
     profile="balanced",
     provider="openai-compatible",
@@ -462,6 +457,7 @@ await app.models.configure(
         ModelSelection(id="qwen3-32b", role="primary"),
         ModelSelection(id="deepseek-v3", role="fallback"),
     ],
+    deadline=configuration_deadline,
 )
 ```
 
@@ -607,6 +603,12 @@ Publication atomically changes one profile's current snapshot. Readers observe
 either the complete old snapshot or the complete new snapshot. The framework creates
 the opaque identity and performs concurrency control internally; SDK callers do not
 provide a version or CAS token.
+
+Opening a shared deployment store is single-flight per Runtime. Publication is also
+single-flight per `(deployment_scope_id, requirement_id, profile, config_digest)`.
+Cancellation of one waiter does not cancel work still required by other waiters, while
+every waiter remains bounded by its own control-plane deadline. Failed initialization
+or publication removes the in-flight entry so a later call can retry.
 
 A retired version accepts no new ordinary admissions. Existing active pins remain
 valid until their admission ends; recoverable pins remain valid while their durable

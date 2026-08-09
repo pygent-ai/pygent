@@ -24,6 +24,7 @@ from pygent.runtime import (
     ExecutionAdmissionError,
     ExecutionCapacityPolicy,
     ExecutionOptions,
+    ExecutionPhase,
     ExecutionStatus,
     ExternalWaitRejected,
     LocalRuntime,
@@ -224,7 +225,7 @@ async def test_external_waiter_limit_rejects_then_recovers_after_cancel():
         Context(),
         execution=ExecutionOptions(deadline=time.monotonic() + 3),
     )
-    while first.status is not ExecutionStatus.WAITING_EXTERNAL:
+    while (await first.snapshot()).phase is not ExecutionPhase.WAITING_EXTERNAL:
         await asyncio.sleep(0)
 
     with pytest.raises(ExternalWaitRejected, match="capacity is full"):
@@ -240,7 +241,7 @@ async def test_external_waiter_limit_rejects_then_recovers_after_cancel():
         Context(),
         execution=ExecutionOptions(deadline=time.monotonic() + 3),
     )
-    while third.status is not ExecutionStatus.WAITING_EXTERNAL:
+    while (await third.snapshot()).phase is not ExecutionPhase.WAITING_EXTERNAL:
         await asyncio.sleep(0)
     await runtime.deliver_external(
         kind="approval", key="third", value={"decision": "approved"}

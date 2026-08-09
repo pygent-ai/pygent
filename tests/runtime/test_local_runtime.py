@@ -22,6 +22,7 @@ from pygent.runtime import (
     ExecutionCapacityPolicy,
     ExecutionDeadlineExceeded,
     ExecutionOptions,
+    ExecutionPhase,
     ExecutionStatus,
     LocalRuntime,
     compile_execution_plan,
@@ -101,13 +102,15 @@ async def test_invoke_stream_and_run_handle_share_result_and_event_source():
 
     assert streamed == invoked
     assert [event.kind for event in events] == [
+        "execution.submitted",
+        "execution.admitted",
         "execution.started",
         "span.started",
         "echo.progress",
         "span.completed",
         "execution.completed",
     ]
-    assert [event.sequence for event in events] == list(range(5))
+    assert [event.sequence for event in events] == list(range(7))
     await runtime.close()
 
 
@@ -123,7 +126,7 @@ async def test_run_handle_supports_cursor_reconnect_without_cancelling_run():
 
     assert result[0].content == "HELLO"
     assert handle.status is ExecutionStatus.SUCCEEDED
-    assert [event.sequence for event in remaining] == [1, 2, 3, 4]
+    assert [event.sequence for event in remaining] == [1, 2, 3, 4, 5, 6]
     assert await handle.cancel() is False
     await runtime.close()
 
@@ -229,12 +232,18 @@ async def test_deadline_and_explicit_cancel_have_distinct_terminal_states():
     with pytest.raises(ExecutionDeadlineExceeded):
         await deadline_handle.result()
     assert deadline_handle.status is ExecutionStatus.DEADLINE_EXCEEDED
+    deadline_outcome = await deadline_handle.outcome()
+    assert deadline_outcome.error is not None
+    assert deadline_outcome.error.kind == "deadline_exceeded"
 
     entered.clear()
     cancel_handle = await bound.start(UserMessage(content="cancel"), Context())
     await entered.wait()
     assert await cancel_handle.cancel() is True
     assert cancel_handle.status is ExecutionStatus.CANCELLED
+    cancel_outcome = await cancel_handle.outcome()
+    assert cancel_outcome.error is not None
+    assert cancel_outcome.error.kind == "cancelled"
     await runtime.close()
 
 
@@ -354,7 +363,7 @@ async def test_external_wait_releases_then_reacquires_runnable_lease():
         Context(),
         execution=ExecutionOptions(deadline=time.monotonic() + 2),
     )
-    while handle.status is not ExecutionStatus.WAITING_EXTERNAL:
+    while (await handle.snapshot()).phase is not ExecutionPhase.WAITING_EXTERNAL:
         await asyncio.sleep(0)
 
     # max_runnable_executions is one; this can finish only if the waiter released it.
@@ -414,7 +423,7 @@ async def test_external_wait_is_capped_by_deployment_policy_and_cleans_up():
         Context(),
         execution=ExecutionOptions(deadline=far_future),
     )
-    while retried.status is not ExecutionStatus.WAITING_EXTERNAL:
+    while (await retried.snapshot()).phase is not ExecutionPhase.WAITING_EXTERNAL:
         await asyncio.sleep(0)
     await runtime.deliver_external(
         kind="approval", key="same-key", value={"decision": "approved"}

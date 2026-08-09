@@ -79,8 +79,9 @@ Message 与 Context 可以构成边界数据，但不足以描述完整执行状
 
 | 故障位置 | 可恢复状态 | 允许行为 |
 |---|---|---|
-| Root admission 前 | 尚无已接纳 Execution | 拒绝或重新提交 |
-| Root 已持久化、`forward()` 未开始 | Root 输入与计划身份 | 在新 Worker 创建新 attempt |
+| 逻辑 Execution 尚未 durable commit | 仅有进程内 `SUBMITTING` snapshot | 在 deadline 内提交；失败则原子终结，进程崩溃不承诺可恢复 |
+| Execution 已提交、admission 未完成 | Root 输入、计划身份与 admission journal | 回滚部分资源并终结，或由新 owner 创建新 attempt 继续 admission |
+| admission 已提交、`forward()` 未开始 | Root 输入、计划身份与精确模型/资源 pins | 在新 Worker 创建新 attempt |
 | `forward()` 普通本地计算中 | 最近已提交边界 | 从该边界重试，丢弃未提交局部状态 |
 | Child/Model/Tool 等待中 | 最近边界及已记录调用状态 | 查询结果、重试或失败，取决于 adapter 能力 |
 | `wait_external()` 等待中 | 外部 waiter 可能仍存在，但本地 coroutine continuation 不可恢复 | 注销或过期旧 waiter，从最近已提交边界重试，或等待反馈后创建新 Execution |
@@ -106,7 +107,9 @@ Durable Runtime 至少需要区分：
 
 Runtime 默认只能提供 at-least-once 执行语义。只有底层 Provider、Tool 和业务 Store 都参与同一幂等或事务协议时，才可以对特定边界声明更强保证；不得笼统宣称 exactly-once Agent 执行。
 
-SQLite 恢复会为逻辑 Execution 和共享 Worker Job 原子获取带 TTL 与单调 fencing token 的 owner claim；同一时刻只有一个 attempt owner 可以执行，heartbeat 丢失会取消旧 owner。claim 只避免并发双恢复，不提升外部副作用保证；外部提交仍必须按 EffectSpec、幂等键或资源 fencing 处理。
+每一个 attempt（包括首次执行）都必须先为逻辑 Execution 原子获取带 TTL 与单调 fencing token 的 owner claim；同一时刻只有一个 attempt owner 可以执行，heartbeat 丢失会取消旧 owner。恢复不是特殊 owner 模式，而是取得新 claim 并创建新 `attempt_id`。claim 只避免并发双执行，不提升外部副作用保证；外部提交仍必须按 EffectSpec、幂等键或资源 fencing 处理。
+
+附着与恢复严格分离。`get_execution_handle(execution_id)` 只读取 snapshot、outcome 和 journal，或向当前 owner 写入取消请求；它不得取得 claim 或启动 `forward()`。只有显式 `recover()` 能在验证 ExecutionPlan、恢复资格和原 admission manifest 后取得新 claim。
 
 ## Model、Tool 与事件重放
 
@@ -115,6 +118,14 @@ SQLite 恢复会为逻辑 Execution 和共享 Worker Job 原子获取带 TTL 与
 - Tool 调用必须声明幂等、可查询、可补偿或不可安全重试；不可安全重试的调用在状态不明时必须进入人工或业务决策状态。
 - `emit()` 事件必须携带稳定事件身份。新 attempt 重放相同逻辑事件时，事件系统必须能够去重或明确标记为新 attempt。
 - 流式 token 在故障边界前可能已被客户端观察但尚未成为最终结果；重连协议必须说明是否重放、截断或从持久游标继续。
+
+## 原子终结与订阅关闭
+
+History backend 必须提供单个 `finalize_execution(...)` 事务，在一次提交中完成：追加尚未提交的 terminal span events、追加唯一 Execution terminal event、冻结 `ExecutionOutcome`、更新 terminal snapshot、关闭 active attempt/owner claim，并写入 `terminal_sequence`。事务提交前 Execution 仍处于 `FINALIZING`；提交后 journal、snapshot 与 outcome 对终态达成一致。
+
+`terminal_sequence` 是订阅结束的唯一依据。live observer 与断线重连 observer 都必须持续读取，直到自己的 cursor 已经交付该 sequence；不得因为并发状态查询先读到 terminal status 而停止。Local 与 durable backend 服从同一规则，只允许存储事务实现不同。
+
+准入也必须有明确提交点。模型 pins、资源 leases、容量 tickets、attempt claim 与 history 状态由一个 admission transaction 协调；取消、deadline 或任一步骤失败时按逆序释放，并把失败写为同一逻辑 Execution 的结构化 outcome。崩溃恢复只能采用已提交 manifest，不能保留孤儿 pin 或重新读取 current profile。
 
 ## 代码与 Binding 兼容
 

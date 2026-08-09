@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -33,7 +35,7 @@ class ModelGroupHandle:
     def deployment_scope_id(self) -> str:
         return self._scope_id
 
-    async def configure(
+    async def ensure_profile(
         self,
         *,
         profile: str,
@@ -43,6 +45,8 @@ class ModelGroupHandle:
         resource_ref: ModelResourceRef | None = None,
         resource_bundle: ModelResourceBundle | None = None,
         ownership: ModelResourceOwnership = ModelResourceOwnership.BORROWED,
+        make_default: bool = False,
+        deadline: float,
     ) -> ModelProfileSnapshot:
         if self._runtime._closed:
             raise ModelGroupConfigurationError("Runtime is closed")
@@ -67,25 +71,59 @@ class ModelGroupHandle:
             fallback=fallback,
             resources=resources,
         )
-        await self._runtime._ensure_model_store_open()
-        if resources is not None:
-            resolver = self._runtime._model_resource_resolvers.get(resources.resolver_id)
-            if resolver is None:
-                raise ModelGroupConfigurationError(
-                    f"no model resource resolver {resources.resolver_id!r} is registered"
-                )
-            validate = getattr(resolver, "validate", None)
-            if callable(validate):
-                await validate(snapshot.model_group, resources)
-        await self._runtime.model_deployment_store.publish(snapshot)
-        if invoker is not None:
-            self._runtime._resident_model_invokers[snapshot.snapshot_id] = (
-                invoker,
-                ownership,
-            )
-        return snapshot
+        if isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
+            raise TypeError("deadline must be an absolute monotonic timestamp")
+        key = (self._scope_id, self.requirement.name, profile, snapshot.digest)
+        task = self._runtime._profile_publications.get(key)
+        if task is None:
+            async def publish_once() -> ModelProfileSnapshot:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("model profile configuration deadline exceeded")
+                async with asyncio.timeout(remaining):
+                    await self._runtime._ensure_model_store_open()
+                    if resources is not None:
+                        resolver = self._runtime._model_resource_resolvers.get(
+                            resources.resolver_id
+                        )
+                        if resolver is None:
+                            raise ModelGroupConfigurationError(
+                                f"no model resource resolver {resources.resolver_id!r} is registered"
+                            )
+                        validate = getattr(resolver, "validate", None)
+                        if callable(validate):
+                            await validate(snapshot.model_group, resources)
+                    result = await self._runtime.model_deployment_store.ensure_profile(
+                        snapshot, make_default=make_default
+                    )
+                    if invoker is not None:
+                        self._runtime._resident_model_invokers.setdefault(
+                            result.snapshot_id, (invoker, ownership)
+                        )
+                    return result
 
-    async def set_default(self, profile: str) -> None:
+            task = asyncio.create_task(
+                publish_once(),
+                name=f"pygent-profile-{self.requirement.name}-{profile}",
+            )
+            self._runtime._profile_publications[key] = task
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("model profile configuration deadline exceeded")
+        try:
+            async with asyncio.timeout(remaining):
+                return await asyncio.shield(task)
+        finally:
+            if task.done() and self._runtime._profile_publications.get(key) is task:
+                del self._runtime._profile_publications[key]
+
+    async def set_default(self, profile: str, *, deadline: float) -> None:
+        await self._runtime._await_until(
+            deadline,
+            self._set_default(profile),
+        )
+
+    async def _set_default(self, profile: str) -> None:
         await self._runtime._ensure_model_store_open()
         await self._runtime.model_deployment_store.set_default(
             self._scope_id, self.requirement.name, profile

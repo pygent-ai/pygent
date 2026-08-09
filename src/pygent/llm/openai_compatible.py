@@ -21,7 +21,7 @@ from pygent.core import (
     freeze_json_object,
     thaw_json,
 )
-from pygent.tool import ToolCall, ToolDefinition
+from pygent.tool import ToolCall, ToolDefinition, ToolResult
 
 from ._adapter_contracts import (
     ModelProviderRequest,
@@ -504,15 +504,7 @@ def _encode_messages(
                 "role": "tool",
                 "tool_call_id": result.call_id,
                 "name": (wire_names or {}).get(result.name, result.name),
-                "content": json.dumps(
-                    {
-                        "status": result.status,
-                        "output": thaw_json(result.output),
-                        "error": result.error,
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
+                "content": _encode_tool_result_content(result),
             }
             for result in message.results
         ]
@@ -534,6 +526,19 @@ def _encode_messages(
             for call in message.tool_calls
         ]
     return [encoded]
+
+
+def _encode_tool_result_content(result: ToolResult) -> str:
+    content: dict[str, object] = {
+        "status": result.status,
+        "output": thaw_json(result.output),
+        "error": result.error,
+    }
+    if result.error_kind is not None:
+        content["error_kind"] = result.error_kind
+    if result.error_code is not None:
+        content["error_code"] = result.error_code
+    return json.dumps(content, ensure_ascii=False, separators=(",", ":"))
 
 
 def _decode_tool_calls(

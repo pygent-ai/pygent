@@ -40,7 +40,7 @@ from ..api import (
     CapacityPolicy,
     ExecutionAdmissionError,
     ExecutionOptions,
-    ExecutionStatus,
+    ExecutionPhase,
     ResourceCapacityGate,
     RuntimeClosedError,
 )
@@ -94,7 +94,7 @@ class _ManagedScope(ExecutionScope):
         parent_had_lease = frame.runnable_held
         if parent_had_lease:
             self._release_runnable(frame)
-        self.record.status = ExecutionStatus.WAITING_CHILD
+        self.record.phase = ExecutionPhase.WAITING_CHILD
 
         async def run(operation: Callable[[], Awaitable[Any]]) -> Any:
             return await operation()
@@ -116,9 +116,9 @@ class _ManagedScope(ExecutionScope):
             self._parallel_tasks.difference_update(tasks)
             current = asyncio.current_task()
             if parent_had_lease and (current is None or current.cancelling() == 0):
-                self.record.status = ExecutionStatus.WAITING_RESUME
+                self.record.phase = ExecutionPhase.WAITING_RESUME
                 await self._resume_runnable(frame)
-                self.record.status = ExecutionStatus.RUNNING
+                self.record.phase = ExecutionPhase.RUNNING
 
     async def wait_handle(self, task: asyncio.Task[Any]) -> Any:
         """Wait for an independent execution without holding this flow's lease."""
@@ -134,15 +134,15 @@ class _ManagedScope(ExecutionScope):
         parent_had_lease = frame.runnable_held
         if parent_had_lease:
             self._release_runnable(frame)
-        self.record.status = ExecutionStatus.WAITING_CHILD
+        self.record.phase = ExecutionPhase.WAITING_CHILD
         try:
             return await task
         finally:
             current = asyncio.current_task()
             if parent_had_lease and (current is None or current.cancelling() == 0):
-                self.record.status = ExecutionStatus.WAITING_RESUME
+                self.record.phase = ExecutionPhase.WAITING_RESUME
                 await self._resume_runnable(frame)
-                self.record.status = ExecutionStatus.RUNNING
+                self.record.phase = ExecutionPhase.RUNNING
 
     async def invoke_module(
         self,
@@ -270,7 +270,7 @@ class _ManagedScope(ExecutionScope):
         parent_had_lease = parent.runnable_held
         if parent_had_lease:
             self._release_runnable(parent)
-        self.record.status = ExecutionStatus.WAITING_CHILD
+        self.record.phase = ExecutionPhase.WAITING_CHILD
         try:
             if separate_live_admission:
                 if bound is not None:
@@ -371,7 +371,7 @@ class _ManagedScope(ExecutionScope):
                     recoverable=self.record.history is not None,
                 )
             if parent_had_lease and can_resume:
-                self.record.status = ExecutionStatus.WAITING_RESUME
+                self.record.phase = ExecutionPhase.WAITING_RESUME
                 await self._resume_runnable(parent)
 
     async def _invoke_remote_child(
@@ -393,7 +393,7 @@ class _ManagedScope(ExecutionScope):
         parent_had_lease = parent.runnable_held
         if parent_had_lease:
             self._release_runnable(parent)
-        self.record.status = ExecutionStatus.WAITING_CHILD
+        self.record.phase = ExecutionPhase.WAITING_CHILD
         await self.record.emit(
             execution_id=child_execution_id,
             parent_execution_id=parent.execution_id,
@@ -481,9 +481,9 @@ class _ManagedScope(ExecutionScope):
         finally:
             task = asyncio.current_task()
             if parent_had_lease and (task is None or task.cancelling() == 0):
-                self.record.status = ExecutionStatus.WAITING_RESUME
+                self.record.phase = ExecutionPhase.WAITING_RESUME
                 await self._resume_runnable(parent)
-                self.record.status = ExecutionStatus.RUNNING
+                self.record.phase = ExecutionPhase.RUNNING
 
     async def emit_event(
         self,

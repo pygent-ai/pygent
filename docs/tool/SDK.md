@@ -388,6 +388,22 @@ executor = AgentToolExecutor(
 executor_registry.register(tool_id, version, executor)
 ```
 
+使用自定义调用 adapter 时，adapter 接收同一个 `ToolExecutionContext`，因此可以按
+本次调用的 deadline、`execution_id`、`task_id` 与 recovery 状态解析部署资源，而不把
+运行状态保存到 Agent 或全局变量中：
+
+```python
+async def invoke_agent_tool(spec, call, execution_context):
+    session = await sessions.resolve(
+        execution_id=execution_context.execution_id,
+        task_id=execution_context.task_id,
+        recovery=execution_context.recovery,
+    )
+    return await session.invoke(spec, call, deadline=execution_context.deadline)
+
+executor = AgentToolExecutor(invoke=invoke_agent_tool)
+```
+
 managed sync 调用通过当前 ExecutionScope 成为结构化 Child，继承 lineage、deadline、取消和 join；detach admission 会先可靠建立独立 ToolTask，再在 Parent 可以返回 detached 引用后启动 Agent Root，因此 `max_runnable_runs=1` 也不能形成 Parent RESUME 与新 Root 的互等死锁。detach 创建后台 Task 时不得继承原 Parent execution scope。
 
 `ToolCallLayer` 与 `AgentToolExecutor` 只通过公开 `pygent.core` Infrastructure SPI 取得 Tool permit、executor registry resolver、幂等 key、managed effect 和当前执行状态，不导入私有 `_execution_scope`。用户自定义工具基础设施 Module 使用同一 SPI；Runtime 仍只负责治理与解析，不实现授权、schema、executor 或 Agent 业务逻辑。

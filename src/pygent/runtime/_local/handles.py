@@ -7,17 +7,23 @@ from collections.abc import AsyncIterator
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
-from pygent.core import Context, Message, Module
+from pygent.core import Context, ExecutionFailure, JsonValue, Message, Module, thaw_json
 from pygent.core._module_contracts import _execution_scope
 from pygent.llm import ModelGroupConfig
 
+from .._history_store import SQLiteHistoryStore
 from ..api import (
     Binding,
     DurabilityReport,
     ExecutionEvent,
     ExecutionOptions,
+    ExecutionOutcome,
+    ExecutionOwnerState,
+    ExecutionPhase,
+    ExecutionSnapshot,
     ExecutionStatus,
 )
+from ..codec import invocation_from_dict
 from ..plan import ExecutionPlan
 from .state import _ExecutionRecord
 
@@ -74,12 +80,19 @@ class _ExecutionSubscription:
                 event = self._record.events[self._next]
                 self._next += 1
                 yield event
-            if self._record.terminal:
+            if (
+                self._record.terminal_sequence is not None
+                and self._next > self._record.terminal_sequence
+            ):
                 return
             async with self._record.event_condition:
                 await self._record.event_condition.wait_for(
                     lambda: (
-                        self._next < len(self._record.events) or self._record.terminal
+                        self._next < len(self._record.events)
+                        or (
+                            self._record.terminal_sequence is not None
+                            and self._next > self._record.terminal_sequence
+                        )
                     )
                 )
 
@@ -99,6 +112,18 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
     @property
     def trace_id(self) -> str:
         return self._record.trace_id
+
+    async def snapshot(self) -> ExecutionSnapshot:
+        return self._record.snapshot()
+
+    async def outcome(self) -> ExecutionOutcome:
+        task = self._record.task
+        if task is not None and not task.done():
+            await asyncio.gather(task, return_exceptions=True)
+        outcome = self._record.outcome
+        if outcome is None:
+            raise RuntimeError("execution has no terminal outcome")
+        return outcome
 
     @property
     def request_id(self) -> str:
@@ -129,7 +154,7 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
             await task
         except asyncio.CancelledError:
             pass
-        if self._record.status is ExecutionStatus.QUEUED:
+        if self._record.status is ExecutionStatus.PENDING:
             self._record.status = ExecutionStatus.CANCELLED
             await self._record.emit(
                 parent_execution_id=self._record.parent_execution_id,
@@ -144,6 +169,144 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
         if after is not None and (isinstance(after, bool) or after < -1):
             raise ValueError("event cursor must be -1 or a non-negative integer")
         return _ExecutionSubscription(self._record, after)
+
+
+class _DurableExecutionSubscription:
+    def __init__(
+        self, history: SQLiteHistoryStore, execution_id: str, after: int | None
+    ) -> None:
+        self._history = history
+        self._execution_id = execution_id
+        self._next = 0 if after is None else after + 1
+
+    async def __aenter__(self) -> AsyncIterator[ExecutionEvent]:
+        return self._iterate()
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def _iterate(self) -> AsyncIterator[ExecutionEvent]:
+        while True:
+            page = await self._history.events_after(
+                execution_id=self._execution_id,
+                after=self._next - 1,
+                limit=256,
+            )
+            for frozen in page:
+                item = thaw_json(frozen)
+                if not isinstance(item, dict):
+                    raise TypeError("durable event must be a JSON object")
+                event = ExecutionEvent(
+                    schema_version=cast(str, item.get("schema_version")),
+                    event_id=cast(str, item.get("event_id")),
+                    execution_id=cast(str, item.get("execution_id")),
+                    attempt_id=cast(str, item.get("attempt_id")),
+                    trace_id=cast(str, item.get("trace_id")),
+                    span_id=cast(str, item.get("span_id")),
+                    parent_span_id=cast(str | None, item.get("parent_span_id")),
+                    sequence=cast(int, item.get("sequence")),
+                    timestamp_unix_ns=cast(int, item.get("timestamp_unix_ns")),
+                    module_path=cast(str, item.get("module_path")),
+                    kind=cast(str, item.get("kind")),
+                    data=cast(dict[str, JsonValue], item.get("data", {})),
+                )
+                if event.sequence != self._next:
+                    raise RuntimeError("durable event journal is not contiguous")
+                self._next += 1
+                yield event
+            stored = await self._history.get_execution(self._execution_id)
+            if stored is None:
+                raise KeyError(f"unknown execution {self._execution_id!r}")
+            if (
+                stored.terminal_sequence is not None
+                and self._next > stored.terminal_sequence
+            ):
+                return
+            await asyncio.sleep(0.02)
+
+
+class _DurableExecutionHandle(Generic[OutputMessageT]):
+    """Task-independent attachment backed only by the durable journal."""
+
+    def __init__(self, history: SQLiteHistoryStore, execution_id: str) -> None:
+        self._history = history
+        self._execution_id = execution_id
+
+    @property
+    def execution_id(self) -> str:
+        return self._execution_id
+
+    async def snapshot(self) -> ExecutionSnapshot:
+        stored = await self._history.get_execution(self._execution_id)
+        if stored is None:
+            raise KeyError(f"unknown execution {self._execution_id!r}")
+        status = ExecutionStatus(stored.status)
+        phase = ExecutionPhase(stored.phase)
+        events = await self._history.events_tail(execution_id=self._execution_id, limit=1)
+        last_sequence = -1
+        if events:
+            value = thaw_json(events[0])
+            if isinstance(value, dict):
+                last_sequence = cast(int, value.get("sequence", -1))
+        return ExecutionSnapshot(
+            execution_id=stored.execution_id,
+            trace_id=stored.trace_id,
+            status=status,
+            phase=phase,
+            owner_state=(
+                ExecutionOwnerState.TERMINAL
+                if status.terminal
+                else ExecutionOwnerState.UNOWNED
+            ),
+            attempt_id=stored.attempt_id,
+            last_sequence=last_sequence,
+            terminal_sequence=stored.terminal_sequence,
+            submitted_at_unix_ns=stored.submitted_at_unix_ns,
+            updated_at_unix_ns=stored.updated_at_unix_ns,
+        )
+
+    async def result(self) -> tuple[OutputMessageT, Context]:
+        while True:
+            stored = await self._history.get_execution(self._execution_id)
+            if stored is None:
+                raise KeyError(f"unknown execution {self._execution_id!r}")
+            status = ExecutionStatus(stored.status)
+            if status is ExecutionStatus.SUCCEEDED and stored.output is not None:
+                message, context = invocation_from_dict(stored.output)
+                return cast(OutputMessageT, message), context
+            if status.terminal:
+                raise RuntimeError(
+                    f"execution {self._execution_id} ended with {status.value}: {stored.error!r}"
+                )
+            await asyncio.sleep(0.02)
+
+    async def outcome(self) -> ExecutionOutcome:
+        while True:
+            stored = await self._history.get_execution(self._execution_id)
+            if stored is None:
+                raise KeyError(f"unknown execution {self._execution_id!r}")
+            status = ExecutionStatus(stored.status)
+            if status.terminal and stored.terminal_sequence is not None:
+                if stored.attempt_id is None:
+                    raise RuntimeError("terminal execution has no attempt identity")
+                return ExecutionOutcome(
+                    execution_id=stored.execution_id,
+                    status=status,
+                    attempt_id=stored.attempt_id,
+                    terminal_sequence=stored.terminal_sequence,
+                    error=(
+                        ExecutionFailure.from_dict(thaw_json(stored.error))
+                        if stored.error is not None
+                        else None
+                    ),
+                )
+            await asyncio.sleep(0.02)
+
+    async def cancel(self) -> bool:
+        return False
+
+    def subscribe(self, *, after: int | None = None) -> _DurableExecutionSubscription:
+        return _DurableExecutionSubscription(self._history, self._execution_id, after)
 
 
 class _LocalExecutionStream(Generic[OutputMessageT]):

@@ -52,6 +52,12 @@ class StoredExecution:
     model_admission_id: str | None = None
     model_admission_digest: str | None = None
     model_admission_status: str = "none"
+    trace_id: str = ""
+    phase: str = "submitting"
+    attempt_id: str | None = None
+    terminal_sequence: int | None = None
+    submitted_at_unix_ns: int = 0
+    updated_at_unix_ns: int = 0
 
 
 @dataclass(frozen=True, slots=True)

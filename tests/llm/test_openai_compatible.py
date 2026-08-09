@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -8,6 +9,8 @@ import pytest
 from pygent import (
     Context,
     ToolDefinition,
+    ToolMessage,
+    ToolResult,
     UserMessage,
 )
 from pygent.core import freeze_json_object
@@ -64,6 +67,53 @@ def test_openai_codec_parses_usage_tools_and_structured_output():
     assert response.message.content == '{"answer":"ok"}'
     assert response.usage["input_tokens"] == 3
     assert response.usage["output_tokens"] == 2
+
+
+def test_tool_result_error_classification_is_visible_to_the_model() -> None:
+    request = ModelProviderRequest(
+        route=ModelRoute("main", "openai", "gpt-test"),
+        message=ToolMessage(
+            results=(
+                ToolResult(
+                    call_id="grep-1",
+                    name="grep",
+                    status="rejected",
+                    error="Additional properties are not allowed ('glob' was unexpected)",
+                    error_kind="validation_error",
+                    error_code="invalid_arguments",
+                    side_effect_committed=False,
+                    tool_id="standard.files.grep",
+                    tool_version="3.0.0",
+                ),
+                ToolResult(
+                    call_id="read-1",
+                    name="read",
+                    status="succeeded",
+                    output="contents",
+                    side_effect_committed=True,
+                ),
+            )
+        ),
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+
+    payload = OpenAICompatibleAdapter().build_request(request).to_dict()
+    content = json.loads(payload["messages"][0]["content"])
+
+    assert content == {
+        "status": "rejected",
+        "output": None,
+        "error": "Additional properties are not allowed ('glob' was unexpected)",
+        "error_kind": "validation_error",
+        "error_code": "invalid_arguments",
+    }
+    success_content = json.loads(payload["messages"][1]["content"])
+    assert success_content == {
+        "status": "succeeded",
+        "output": "contents",
+        "error": None,
+    }
 
 
 def test_provider_raw_diagnostics_are_not_projected_through_usage() -> None:

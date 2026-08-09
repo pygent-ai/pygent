@@ -228,19 +228,21 @@ group = bound.model_groups.get(requirement)
 在执行树外发布并选择 profile：
 
 ```python
-await group.configure(
+await group.ensure_profile(
     profile="quick",
     routes=(ModelRoute("primary", "openai", "fast-model"),),
     fallback=FallbackPolicy(("primary",)),
     invoker=quick_invoker,
+    deadline=monotonic() + 30.0,
 )
-await group.configure(
+await group.ensure_profile(
     profile="quality",
     routes=(ModelRoute("primary", "openai", "quality-model"),),
     fallback=FallbackPolicy(("primary",)),
     invoker=quality_invoker,
+    deadline=monotonic() + 30.0,
 )
-await group.set_default("quick")
+await group.set_default("quick", deadline=monotonic() + 30.0)
 ```
 
 单次调用可以在 Agent 允许的范围内覆盖 profile 和生成参数：

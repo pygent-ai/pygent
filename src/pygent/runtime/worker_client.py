@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
-from time import monotonic
+from time import monotonic, time_ns
 from typing import Any, Self, cast
 
 import httpx
@@ -14,6 +14,10 @@ from httpx_sse import aconnect_sse
 from pygent.core import (
     ExecutionEvent,
     ExecutionFailure,
+    ExecutionOwnerState,
+    ExecutionPhase,
+    ExecutionSnapshot,
+    ExecutionStatus,
     FrozenJsonObject,
     JsonValue,
     PlacementMode,
@@ -245,6 +249,9 @@ class HTTPWorkerClient:
             execution_id = payload.get("execution_id")
             if not isinstance(execution_id, str) or not execution_id:
                 raise WorkerProtocolError("Worker start response has no execution_id")
+            attempt_id = payload.get("attempt_id")
+            if not isinstance(attempt_id, str) or not attempt_id:
+                raise WorkerProtocolError("Worker start response has no attempt_id")
             frozen_input = freeze_json(input)
             if not isinstance(frozen_input, FrozenJsonObject):
                 raise WorkerProtocolError("Worker invocation input must be an object")
@@ -252,6 +259,7 @@ class HTTPWorkerClient:
                 client=self,
                 execution_id=execution_id,
                 target=target,
+                attempt_id=attempt_id,
                 binding_ref=binding_ref,
                 input=frozen_input,
                 request_id=request_id,
@@ -323,6 +331,41 @@ class HTTPWorkerClient:
             if "result" not in payload:
                 raise WorkerProtocolError("Worker result response has no result")
             return freeze_json(payload["result"])
+
+    async def snapshot(self, ref: RemoteExecutionHandle) -> ExecutionSnapshot:
+        response = await self._client.get(
+            f"{ref.target.endpoint.rstrip('/')}/v1/executions/{ref.execution_id}"
+        )
+        if response.status_code == 404:
+            raise KeyError(f"unknown execution {ref.execution_id!r}")
+        payload = response.json()
+        raw_status = payload.get("status")
+        try:
+            status = ExecutionStatus(raw_status)
+        except (TypeError, ValueError) as exc:
+            raise WorkerProtocolError("Worker snapshot has an invalid status") from exc
+        terminal = status.terminal
+        phase = ExecutionPhase.TERMINAL if terminal else ExecutionPhase.RUNNING
+        attempt_id = payload.get("attempt_id", ref.attempt_id)
+        trace_id = payload.get("trace_id", ref.trace_id or ref.execution_id)
+        last_sequence = payload.get("last_sequence", -1)
+        terminal_sequence = payload.get("terminal_sequence")
+        return ExecutionSnapshot(
+            execution_id=ref.execution_id,
+            trace_id=cast(str, trace_id),
+            status=status,
+            phase=phase,
+            owner_state=(
+                ExecutionOwnerState.TERMINAL
+                if terminal
+                else ExecutionOwnerState.ACTIVE
+            ),
+            attempt_id=cast(str, attempt_id),
+            last_sequence=cast(int, last_sequence),
+            terminal_sequence=cast(int | None, terminal_sequence),
+            submitted_at_unix_ns=time_ns(),
+            updated_at_unix_ns=time_ns(),
+        )
 
     async def _failover_ref(
         self, ref: RemoteExecutionHandle, *, deadline: float | None, failed: str
@@ -417,6 +460,7 @@ class HTTPWorkerClient:
                             schema_version=cast(str, payload.get("schema_version")),
                             event_id=event_id,
                             execution_id=cast(str, payload.get("execution_id")),
+                            attempt_id=cast(str, payload.get("attempt_id")),
                             trace_id=cast(str, payload.get("trace_id")),
                             span_id=cast(str, payload.get("span_id")),
                             parent_span_id=cast(

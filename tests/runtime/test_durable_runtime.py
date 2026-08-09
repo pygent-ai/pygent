@@ -23,6 +23,7 @@ from pygent.core._module_contracts import _execution_scope
 from pygent.runtime import (
     ExecutionAdmissionError,
     ExecutionOptions,
+    ExecutionStatus,
     HistoryConflictError,
     LocalRuntime,
     SQLiteHistoryStore,
@@ -105,6 +106,80 @@ class BlockingRecover(Module[UserMessage, AIMessage]):
         return AIMessage(content=message.content), context
 
 
+class _GatedTerminalHistory(SQLiteHistoryStore):
+    def __init__(self, path) -> None:
+        super().__init__(path)
+        self.terminal_update_entered = asyncio.Event()
+        self.release_terminal_update = asyncio.Event()
+
+    async def finalize_execution(self, execution_id, **kwargs) -> None:
+        self.terminal_update_entered.set()
+        await self.release_terminal_update.wait()
+        await super().finalize_execution(execution_id, **kwargs)
+
+
+class EmitsThenReturns(Module[UserMessage, AIMessage]):
+    async def forward(self, message, context):
+        await self.emit(kind="test.progress", data={})
+        output = AIMessage(content=message.content.upper())
+        return output, context + message + output
+
+
+@pytest.mark.asyncio
+async def test_live_subscription_observes_terminal_events_only_after_atomic_finalization(
+    tmp_path,
+):
+    async with _GatedTerminalHistory(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        handle = await runtime.bind(EmitsThenReturns()).start(
+            UserMessage(content="hello"), Context()
+        )
+        live_events = []
+        progress_seen = asyncio.Event()
+
+        async def consume_events() -> None:
+            async with handle.subscribe() as subscription:
+                async for event in subscription:
+                    live_events.append(event)
+                    if event.kind == "test.progress":
+                        progress_seen.set()
+
+        consumer = asyncio.create_task(consume_events())
+        await asyncio.wait_for(history.terminal_update_entered.wait(), timeout=1)
+        await asyncio.wait_for(progress_seen.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+        assert handle.status is ExecutionStatus.RUNNING
+        assert consumer.done() is False
+        claim = await (
+            await history._db().execute(
+                "SELECT owner_id FROM execution_claims WHERE execution_id=?",
+                (handle.execution_id,),
+            )
+        ).fetchone()
+        assert claim is not None
+        assert (await handle.snapshot()).attempt_id in claim[0]
+
+        history.release_terminal_update.set()
+        await asyncio.wait_for(handle.result(), timeout=1)
+        await asyncio.wait_for(consumer, timeout=1)
+        persisted_events = await history.events_after(
+            execution_id=handle.execution_id, after=-1
+        )
+
+        live_kinds = [event.kind for event in live_events]
+        assert live_kinds[-2:] == ["span.completed", "execution.completed"]
+        assert live_kinds == [event["kind"] for event in persisted_events]
+        released_claim = await (
+            await history._db().execute(
+                "SELECT owner_id FROM execution_claims WHERE execution_id=?",
+                (handle.execution_id,),
+            )
+        ).fetchone()
+        assert released_claim is None
+        await runtime.close()
+
+
 @pytest.mark.asyncio
 async def test_completed_durable_run_restores_without_reexecuting_forward(tmp_path):
     counter = _Counter()
@@ -124,10 +199,19 @@ async def test_completed_durable_run_restores_without_reexecuting_forward(tmp_pa
 
     async with SQLiteHistoryStore(path) as history:
         restored_runtime = LocalRuntime(history=history)
-        restored = await restored_runtime.recover(
-            restored_runtime.bind(CountingEcho(counter)), execution_id
-        )
+        restored = await restored_runtime.get_execution_handle(execution_id)
         assert await restored.result() == expected
+        snapshot = await restored.snapshot()
+        outcome = await restored.outcome()
+        assert snapshot.submitted_at_unix_ns <= snapshot.updated_at_unix_ns
+        assert snapshot.terminal_sequence == outcome.terminal_sequence
+        async with restored.subscribe() as subscription:
+            restored_events = [event async for event in subscription]
+        assert restored_events[-1].kind == "execution.completed"
+        with pytest.raises(ExecutionAdmissionError, match="attach to its existing outcome"):
+            await restored_runtime.recover(
+                restored_runtime.bind(CountingEcho(counter)), execution_id
+            )
         await restored_runtime.close()
     assert counter.calls == 1
 

@@ -31,6 +31,10 @@ from .execution import (
     ExecutionFailure,
     ExecutionFailureError,
     ExecutionOptions,
+    ExecutionOutcome,
+    ExecutionOwnerState,
+    ExecutionPhase,
+    ExecutionSnapshot,
     ExecutionStatus,
 )
 from .json_values import (
@@ -63,8 +67,12 @@ __all__ = [
     "ExecutionFailure",
     "ExecutionFailureError",
     "ExecutionOptions",
+    "ExecutionOutcome",
+    "ExecutionOwnerState",
+    "ExecutionPhase",
     "ExecutionRequirements",
     "ExecutionScope",
+    "ExecutionSnapshot",
     "ExecutionStatus",
     "FrozenJsonObject",
     "Infrastructure",

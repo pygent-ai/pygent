@@ -45,6 +45,7 @@ def test_message_and_execution_event_freeze_public_metadata():
         schema_version="0.2",
         event_id="event-1",
         execution_id="run-1",
+        attempt_id="attempt-1",
         trace_id="trace-1",
         span_id="span-1",
         parent_span_id=None,

@@ -16,12 +16,12 @@ binding = runtime.create_binding(
     name="interactive-service",
     execution_capacity=ExecutionCapacityPolicy(
         scope=CapacityScope.DEPLOYMENT,
-        max_live_runs=128,
-        max_runnable_runs=8,
+        max_live_executions=128,
+        max_runnable_executions=8,
         max_queue_size=64,
         max_waiters=128,
         max_child_depth=8,
-        max_children_per_run=32,
+        max_children_per_execution=32,
     ),
     model_capacity=CapacityPolicy.passthrough(
         capacity_key="openai-account-a",
@@ -54,35 +54,6 @@ admin = binding.bind(admin_agent)
 
 `CapacityScope.DEPLOYMENT` 表示所有共享该 `binding_id` 的 Worker 共同遵守一个总量；Runtime 必须拥有集中 admission、分布式 permit 或等价协调能力。`LocalRuntime` 在没有 `capacity_coordinator` 时会拒绝这种 Binding，绝不退化为实例内计数。`CapacityCoordinator` 是可注入协议；`InMemoryCapacityCoordinator` 只用于同一进程，`SQLiteCapacityCoordinator` 用独立的 `pygent_capacity_*` 表、FIFO ticket、带 fencing token 的可续期 lease，在共享同一 SQLite 文件的多个 Worker 进程间协调并在 crash 后回收 permit。多主机部署必须注入能兑现相同协议和租约语义的外部协调器，不能把 SQLite 文件放到不保证锁与持久性的网络文件系统上冒充全局 owner。若希望副本数增加时总容量随之增加，应显式使用 `CapacityScope.RUNTIME_INSTANCE`。不支持请求作用域的 Runtime 必须在 bind/compile 阶段拒绝，不能静默把 deployment 上限解释成每 Worker 上限。
 
-## 保留的绑定形式
-
-现有 `Module.bind(runtime, binding=...)` 形式继续保留：
-
-```python
-binding = Binding(
-    name="interactive-service",
-    execution_capacity=ExecutionCapacityPolicy(
-        scope=CapacityScope.DEPLOYMENT,
-        max_live_runs=128,
-        max_runnable_runs=8,
-        max_queue_size=64,
-        max_waiters=128,
-        max_child_depth=8,
-        max_children_per_run=32,
-    ),
-    model_capacity=CapacityPolicy.passthrough(),
-    tool_capacity=CapacityPolicy.limited(
-        scope=CapacityScope.RUNTIME_INSTANCE,
-        max_concurrency=32,
-        max_queue_size=128,
-    ),
-)
-
-bound = agent.bind(runtime, binding=binding)
-```
-
-它与 `runtime.create_binding(...).bind(agent)` 产生相同的 BoundModule 执行契约。前者适合兼容当前代码和直接构造策略值；后者更清楚地表达“先创建部署治理域，再接入一个或多个入口”。在同一 Runtime 中复用同一个 Binding 身份必须共享治理域；两个字段值相同但身份不同的 Binding 不得意外共享 Execution 容量。
-
 ### Binding 与动态模型部署权限
 
 Runtime 为每个实际 Binding 治理域签发稳定的内部 `deployment_scope_id`。该身份不是 Binding 显示名称、tenant 字符串或 Python 对象地址。动态模型配置必须通过 `runtime.create_binding()` 返回的 RuntimeBinding 取得受控句柄；单独的 raw Binding 策略值不能作为配置权限。
@@ -90,19 +61,20 @@ Runtime 为每个实际 Binding 治理域签发稳定的内部 `deployment_scope
 ```python
 assistant = binding.model_groups.get(assistant_group)
 
-await assistant.configure(
+snapshot = await assistant.ensure_profile(
     profile="balanced",
     routes=balanced_routes,
     fallback=balanced_fallback,
     invoker=balanced_invoker,
     resource_ref=balanced_resource_ref,
+    make_default=True,
+    deadline=configuration_deadline,
 )
-await assistant.set_default("balanced")
 ```
 
-`ModelGroupHandle` 属于控制面：它可以创建或替换命名 profile、改变默认 profile 和查询可用配置，但不能放入 Module/Agent。每次成功配置都会发布新的不可变内部快照；版本、CAS、pin 和 lease 由框架维护，不要求开发者保存。Runtime 必须在发布前拒绝与声明不匹配、资源不可解析、容量归属冲突或会破坏现有安全约束的配置。目录查询不会自动发布配置。
+`ModelGroupHandle` 属于控制面，不能放入 Module/Agent。`ensure_profile()` 对规范化配置计算稳定 digest；相同 scope、profile 与 digest 的并发调用 single-flight 并返回同一不可变 snapshot。`make_default=True` 把 profile current pointer 与 default pointer 在一个事务中发布。控制面验证、资源解析、store 打开与发布全都受本次显式 `deadline` 和 cancellation 控制；失败不暴露半发布状态。目录查询不会自动发布配置。
 
-这不改变两种 Binding 形式的执行契约。raw Binding 完成 bind 后，BoundModule 可以暴露同一受控句柄入口。两者都使用 Runtime 签发的部署 scope；原始结构化 Child 继承 Parent scope，预绑定 Child 使用自己的 scope。固定模型的 `register_model_invoker()` 路径保持独立，不因同名 profile 配置而改变。
+Runtime 只通过 `runtime.create_binding()` 创建治理域和签发配置权限。原始结构化 Child 继承 Parent scope，预绑定 Child 使用自己的 scope。固定模型的 `register_model_invoker()` 路径保持独立，不因同名 profile 配置而改变。
 
 延迟模型组在 `start()` admission 时一次解析当前有效 Binding 边界内的全部声明需求与 profile 选择。缺少默认或显式选择的 profile、选择不被 Layer policy 允许、或者生成参数越界时，都在该边界的 `forward()`、模型事件和 effect 开始前失败。独立 Binding Child 在每次 Child execution 开始时建立独立 admission；它不会覆盖 Parent 或另一次 Child admission 已经 pin 的快照。详细契约见 [延迟与动态模型组规范](../llm/DYNAMIC_MODEL_GROUP_SPEC.md)。
 
@@ -153,7 +125,7 @@ main = MainAgent(reviewer=reviewer).bind(
 预绑定 BoundModule 在执行树外创建 Root 时必须使用：
 
 ```python
-message, context = await reviewer.invoke(message, context, run=run)
+message, context = await reviewer.invoke(message, context, execution=execution)
 ```
 
 不要在 `forward()` 中调用 `self.reviewer.invoke(...)`。
@@ -347,7 +319,7 @@ message, context = await bound.invoke(
 流式观察不创建另一套调度语义：
 
 ```python
-async with bound.stream(message, context, run=run) as stream:
+async with bound.stream(message, context, execution=options) as stream:
     async for event in stream:
         print(event.kind, event.data)
 
@@ -356,16 +328,19 @@ async with bound.stream(message, context, run=run) as stream:
 
 `invoke()` 和 `stream()` 都创建 Root Execution，并竞争同一个 Binding 的 execution lease。
 
-普通托管调用可以完全省略 `run`；Runtime 生成 `request_id` 并使用 Binding 默认 deadline、identity 与瞬时执行策略。显式 `ExecutionOptions` 只覆盖本次调用，不是使用 Runtime 的入场券。
+普通托管调用可以完全省略 `execution`；Runtime 生成 `request_id` 并使用 Binding 默认 deadline、identity 与瞬时执行策略。显式 `ExecutionOptions` 只覆盖本次调用，不是使用 Runtime 的入场券。
 
 `request_id` 标识一次传输或 SDK 尝试；`idempotency_key` 标识逻辑业务操作。客户端重试同一操作时应生成新的 `request_id`，但复用原 `idempotency_key`。普通非 durable 调用可以省略 idempotency key；要求去重、恢复或最终提交协调时必须提供。
 
-当前 `stream()` 仍是普通用户的一次性便捷入口：它创建 Execution、订阅事件，并在调用方提前退出时取消该 Execution。该行为不需要普通用户理解内部订阅模型。Durable Runtime 若支持断线重连或后台继续执行，可以另外提供高级 Execution Handle：
+`stream()` 是拥有型便捷入口：它创建 Execution、订阅事件，并在调用方提前退出时取消该 Execution。需要后台继续、独立观察、断线重连或取消控制时直接使用 Execution Handle：
 
 ```python
-run = await bound.start(message, context, run=options)
+handle = await bound.start(message, context, execution=options)
 
-async with run.subscribe(after=cursor) as events:
+snapshot = await handle.snapshot()
+assert snapshot.phase in {ExecutionPhase.SUBMITTING, ExecutionPhase.PREPARING}
+
+async with handle.subscribe(after=cursor) as events:
     async for event in events:
         print(event.kind, event.data)
 
@@ -373,10 +348,20 @@ async with run.subscribe(after=cursor) as events:
 message, context = await handle.result()
 
 # 只有显式控制调用才取消 Execution。
-await run.cancel()
+await handle.cancel()
 ```
 
-`start()`、Execution Handle、`subscribe(after=...)` 和事件游标是 0.2.x 高级控制面；它们承载运行身份、状态、取消和 durable 订阅，不改变 `invoke()/stream()` 与 `handle.result()` 的 `(message, context)` 最终结果契约。普通调用不返回额外包装。
+`start()` 在同步验证输入并创建逻辑 Execution 与 owner Task 后立即返回，不等待 history 打开、profile pin、容量 admission 或 `forward()`。这些阶段通过 `ExecutionSnapshot.phase` 和 `execution.submitted`/`execution.admitted` 事件可观察，并全部受 `ExecutionOptions.deadline` 与 `cancel()` 控制。任何准入失败都由 `handle.result()` 抛出结构化错误，同时 snapshot/outcome 保持可查询。`invoke()` 与 `stream()` 只是该控制面的便捷组合，不改变 `(message, context)` 最终结果契约。
+
+已有 Execution 只能附着，不得隐式恢复：
+
+```python
+handle = await runtime.get_execution_handle(execution_id)
+snapshot = await handle.snapshot()
+
+# 只有恢复控制器才调用；它会验证资格、获取 owner lease 并创建新 attempt。
+recovered = await runtime.recover(execution_id, compatible_bound_module)
+```
 
 不要在 `forward()` 中通过另一个 BoundModule 的 `invoke()` 调用子 Agent。那会创建新的 Root 并切断当前父子树；原始、预绑定和远程 Child 都应直接 `await self.child(...)`，由当前 ExecutionScope 建立结构化关系并应用对应 placement。
 
@@ -483,17 +468,17 @@ binding = Binding(
     name="serial",
     execution_capacity=ExecutionCapacityPolicy(
         scope=CapacityScope.RUNTIME_INSTANCE,
-        max_live_runs=32,
-        max_runnable_runs=1,
+        max_live_executions=32,
+        max_runnable_executions=1,
         max_queue_size=16,
         max_waiters=32,
         max_child_depth=8,
-        max_children_per_run=16,
+        max_children_per_execution=16,
     ),
 )
 
 bound = ReviewPipeline(writer, reviewer).bind(runtime, binding=binding)
-message, context = await bound.invoke(message, context, run=run)
+message, context = await bound.invoke(message, context, execution=execution)
 ```
 
 虽然并发上限为 1，Parent 在等待 writer 或 reviewer 时会释放 lease，因此 Child 可以执行；Child 完成后原 Parent coroutine 通过 RESUME 队列重新获得 lease。
@@ -551,9 +536,13 @@ result = await runtime.deliver_external(
 
 调用方必须把它当作有成本的短等待：每个等待都要有 deadline，Runtime 必须限制 waiter 和 live execution 数；进程退出会丢失 coroutine continuation。无法合理限定为秒级或分钟级的审批应立即返回 `ApprovalRequiredMessage` 并结束当前 Execution，用户反馈到达后再创建新 Execution。
 
-## Deadline 继承
+## Deadline 与取消
 
-历史规则保持不变：
+Root deadline 从 `start()` 被调用时开始，覆盖提交、history/store 初始化、Binding 与计划准备、模型 profile admission、资源与容量排队、`forward()`、清理和 finalization。Runtime 内部每一个 await 都必须使用剩余预算并同时响应 Execution cancellation 与 Runtime shutdown。终态提交可以使用有硬上限的 cleanup grace 保证记录完整，但不得继续业务执行。
+
+配置与 profile 发布不是 Execution 的隐藏前置步骤；它们使用 `ensure_profile(..., deadline=...)` 的独立控制面预算。业务请求只读取并 pin 已发布快照。
+
+Child deadline 只能收紧：
 
 ```python
 effective_child_deadline = min_non_none(
@@ -605,6 +594,6 @@ report = bound.durability
 
 报告始终明确 `arbitrary_coroutine_recovery=False`、`exactly_once_external_side_effects=False`。额外 Runtime/Worker capability 也使用稳定字符串进入 ExecutionPlan。`EFFECT_FREE` 表示本节点本身没有非确定性或外部 effect；`MANAGED_EFFECTS` 表示这些操作全部通过 Runtime 受管 effect 边界，不能把任意第三方 callback 包装成该声明。恢复仍只覆盖受管边界；未知外部副作用、任意第三方 `await`、snapshot compaction、跨版本 migration 和长期 suspend 继续服从 [持久化与恢复边界](DURABILITY.md)。
 
-## 0.2.x 扩展边界
+## SDK 边界
 
-0.2.x 已冻结 direct/managed invoke 与 stream、Binding、Blocking/Parallel Child、Execution Handle、外部等待、SQLite replay、HTTP Worker 和 SSE cursor 的上述接口。Priority 调度、自定义 snapshot compaction、长期 suspend、跨版本 migration 和开放式 Agent discovery 不属于基础 SDK；扩展实现不得改变现有 `forward()` 与 `(message, context)` 契约。
+Runtime 只有一个逻辑 Execution 状态模型、一个 `ExecutionBackend` 控制协议和一个事件终结规则；Local、SQLite history、HTTP Worker 与 SSE 只是后端或 transport 实现。Priority 调度、自定义 snapshot compaction、长期 suspend、跨版本 migration 和开放式 Agent discovery 不属于基础 SDK；扩展实现不得改变现有 `forward()` 与 `(message, context)` 契约。

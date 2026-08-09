@@ -31,7 +31,7 @@ from pygent.runtime import (
     ExecutionAdmissionError,
     ExecutionCapacityPolicy,
     ExecutionOptions,
-    ExecutionStatus,
+    ExecutionPhase,
     ExternalWaitRejected,
     InMemoryCapacityCoordinator,
     LocalRuntime,
@@ -300,7 +300,7 @@ async def test_sqlite_deployment_max_waiters_is_global_across_runtimes(
         Context(),
         execution=ExecutionOptions(),
     )
-    while first_handle.status is not ExecutionStatus.WAITING_EXTERNAL:
+    while (await first_handle.snapshot()).phase is not ExecutionPhase.WAITING_EXTERNAL:
         await asyncio.sleep(0)
 
     second_handle = await second.start(

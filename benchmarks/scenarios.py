@@ -356,13 +356,14 @@ class ScenarioSession:
         group = self.bound.model_groups.get(requirement)
         configured = self.resources.configured_group
         for profile in ("default", "alternate"):
-            await group.configure(
+            await group.ensure_profile(
                 profile=profile,
                 routes=configured.routes,
                 fallback=configured.fallback,
                 invoker=self.resources.invoker,
+                deadline=monotonic() + 5,
             )
-        await group.set_default("default")
+        await group.set_default("default", deadline=monotonic() + 5)
 
     def _configure_runtime(
         self, runtime: LocalRuntime, resources: ModelResources

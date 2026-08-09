@@ -37,9 +37,13 @@ from pygent.runtime import (
     CapacityScope,
     ExecutionAdmissionError,
     ExecutionCapacityPolicy,
+    ExecutionDeadlineExceeded,
     ExecutionOptions,
+    ExecutionPhase,
+    HistoryStoreError,
     HTTPWorkerApp,
     HTTPWorkerClient,
+    InMemoryModelDeploymentStore,
     LocalRuntime,
     SQLiteHistoryStore,
     SQLiteModelDeploymentStore,
@@ -76,6 +80,33 @@ class _Invoker:
         return ModelExecution(operation)
 
 
+class _GatedOpenStore(InMemoryModelDeploymentStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.open_calls = 0
+        self.open_entered = asyncio.Event()
+        self.open_release = asyncio.Event()
+
+    async def open(self) -> None:
+        self.open_calls += 1
+        self.open_entered.set()
+        await self.open_release.wait()
+
+
+class _CommitThenBlockAdmissionStore(InMemoryModelDeploymentStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.block_admission = False
+        self.admission_entered = asyncio.Event()
+
+    async def admit(self, *args, **kwargs):
+        admission = await super().admit(*args, **kwargs)
+        if self.block_admission:
+            self.admission_entered.set()
+            await asyncio.Event().wait()
+        return admission
+
+
 def _requirement(name: str = "assistant") -> ModelGroupConfig:
     return ModelGroupConfig.deferred(
         name=name, max_concurrency=2, capacity_key=f"capacity:{name}"
@@ -99,11 +130,12 @@ def _layer(
 
 
 async def _configure(handle: object, profile: str, invoker: _Invoker) -> None:
-    await handle.configure(  # type: ignore[attr-defined]
+    await handle.ensure_profile(  # type: ignore[attr-defined]
         profile=profile,
         routes=(ModelRoute("main", "test", profile),),
         fallback=FallbackPolicy(("main",)),
         invoker=invoker,
+        deadline=time.monotonic() + 2,
     )
 
 
@@ -140,7 +172,7 @@ async def test_default_and_per_execution_profile_with_generation_override() -> N
     fast = _Invoker("fast")
     await _configure(group, "standard", standard)
     await _configure(group, "fast", fast)
-    await group.set_default("standard")
+    await group.set_default("standard", deadline=time.monotonic() + 2)
 
     first, _ = await bound.invoke(
         UserMessage(content="hello"),
@@ -175,7 +207,7 @@ async def test_profile_update_does_not_change_an_admitted_execution() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     old = _Invoker("old", entered=entered, release=release)
     await _configure(group, "default", old)
-    await group.set_default("default")
+    await group.set_default("default", deadline=time.monotonic() + 2)
 
     handle = await bound.start(
         UserMessage(content="hello"),
@@ -199,10 +231,10 @@ async def test_profile_and_generation_policy_fail_closed() -> None:
     bound = runtime.bind(_layer(requirement, allow_profile=False))
     group = bound.model_groups.get(requirement)
     await _configure(group, "default", _Invoker("default"))
-    await group.set_default("default")
+    await group.set_default("default", deadline=time.monotonic() + 2)
 
     with pytest.raises(ModelProfileSelectionError, match="does not allow profile"):
-        await bound.start(
+        handle = await bound.start(
             UserMessage(content="x"),
             Context(),
             execution=ExecutionOptions(
@@ -210,8 +242,9 @@ async def test_profile_and_generation_policy_fail_closed() -> None:
                 model_calls={"assistant": ModelCallOptions(profile="default")},
             ),
         )
+        await handle.result()
     with pytest.raises(ExecutionAdmissionError, match="max_output_tokens"):
-        await bound.start(
+        handle = await bound.start(
             UserMessage(content="x"),
             Context(),
             execution=ExecutionOptions(
@@ -221,6 +254,7 @@ async def test_profile_and_generation_policy_fail_closed() -> None:
                 },
             ),
         )
+        await handle.result()
     await runtime.close()
 
 
@@ -253,22 +287,23 @@ async def test_binding_scopes_are_isolated_for_the_same_requirement() -> None:
     first_group = first.model_groups.get(requirement)
     second_group = second.model_groups.get(requirement)
     await _configure(first_group, "default", _Invoker("first"))
-    await first_group.set_default("default")
+    await first_group.set_default("default", deadline=time.monotonic() + 2)
     assert first_group.deployment_scope_id != second_group.deployment_scope_id
     with pytest.raises(
         ModelDeploymentUnavailableError, match="no selected or default profile"
     ):
-        await second.start(
+        handle = await second.start(
             UserMessage(content="x"),
             Context(),
             execution=ExecutionOptions(deadline=time.monotonic() + 2),
         )
+        await handle.result()
     await runtime.close()
 
 
 @pytest.mark.asyncio
 @pytest.mark.spec("dynamic-model-group", "DMG-SQLITE-001")
-async def test_history_v3_migrates_to_v4_and_keeps_execution(tmp_path: Path) -> None:
+async def test_history_v3_is_rejected_without_migration(tmp_path: Path) -> None:
     path = tmp_path / "history.sqlite3"
     db = sqlite3.connect(path)
     db.execute(
@@ -286,13 +321,8 @@ async def test_history_v3_migrates_to_v4_and_keeps_execution(tmp_path: Path) -> 
     db.commit()
     db.close()
 
-    async with SQLiteHistoryStore(path) as history:
-        stored = await history.get_execution("run")
-        assert stored is not None
-        assert stored.model_admission_status == "none"
-    db = sqlite3.connect(path)
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 4
-    db.close()
+    with pytest.raises(HistoryStoreError, match="schema v6"):
+        await SQLiteHistoryStore(path).open()
 
 
 @pytest.mark.asyncio
@@ -306,7 +336,7 @@ async def test_sqlite_store_reuses_exact_admission_across_instances(tmp_path: Pa
     bound = runtime.bind(_layer(requirement))
     group = bound.model_groups.get(requirement)
     await _configure(group, "default", _Invoker("resident"))
-    await group.set_default("default")
+    await group.set_default("default", deadline=time.monotonic() + 2)
     admission = await first.admit(
         group.deployment_scope_id,
         (requirement.name,),
@@ -348,16 +378,17 @@ async def test_multi_group_admission_fails_before_any_model_call() -> None:
     invoker = _Invoker("unused")
     first = bound.model_groups.get(first_requirement)
     await _configure(first, "default", invoker)
-    await first.set_default("default")
+    await first.set_default("default", deadline=time.monotonic() + 2)
 
     with pytest.raises(
         ModelDeploymentUnavailableError, match="no selected or default profile"
     ):
-        await bound.start(
+        handle = await bound.start(
             UserMessage(content="x"),
             Context(),
             execution=ExecutionOptions(deadline=time.monotonic() + 2),
         )
+        await handle.result()
     assert invoker.generations == []
     await runtime.close()
 
@@ -432,13 +463,14 @@ async def test_durable_manifest_is_committed_and_purge_releases_it(
             capacity_owner_id="owner-1",
             coordinator_domain=resolver.coordinator_domain,
         )
-        await group.configure(
+        await group.ensure_profile(
             profile="default",
             routes=(ModelRoute("main", "test", "durable"),),
             fallback=FallbackPolicy(("main",)),
             resource_ref=ref,
+            deadline=time.monotonic() + 2,
         )
-        await group.set_default("default")
+        await group.set_default("default", deadline=time.monotonic() + 2)
         handle = await bound.start(
             UserMessage(content="x"),
             Context(),
@@ -468,7 +500,7 @@ async def test_retiring_default_requires_atomic_replacement() -> None:
     group = bound.model_groups.get(requirement)
     await _configure(group, "old", _Invoker("old"))
     await _configure(group, "new", _Invoker("new"))
-    await group.set_default("old")
+    await group.set_default("old", deadline=time.monotonic() + 2)
     with pytest.raises(ModelDeploymentConflictError, match="without a replacement"):
         await group.retire("old")
     await group.retire("old", replacement_default="new")
@@ -522,7 +554,7 @@ async def test_independent_binding_child_uses_its_own_model_admission() -> None:
     )
     group = child.model_groups.get(requirement)
     await _configure(group, "default", _Invoker("child-default"))
-    await group.set_default("default")
+    await group.set_default("default", deadline=time.monotonic() + 2)
 
     output, _ = await parent.invoke(
         UserMessage(content="x"),
@@ -611,26 +643,96 @@ async def test_runtime_closes_owned_resident_once_and_never_closes_borrowed() ->
     owned = _ClosableInvoker("owned")
     borrowed = _ClosableInvoker("borrowed")
     routes = (ModelRoute("main", "test", "x"),)
-    await group.configure(
+    await group.ensure_profile(
         profile="owned-a",
         routes=routes,
         fallback=FallbackPolicy(("main",)),
         invoker=owned,
         ownership=ModelResourceOwnership.OWNED,
+        deadline=time.monotonic() + 2,
     )
-    await group.configure(
+    await group.ensure_profile(
         profile="owned-b",
         routes=routes,
         fallback=FallbackPolicy(("main",)),
         invoker=owned,
         ownership=ModelResourceOwnership.OWNED,
+        deadline=time.monotonic() + 2,
     )
-    await group.configure(
+    await group.ensure_profile(
         profile="borrowed",
         routes=routes,
         fallback=FallbackPolicy(("main",)),
         invoker=borrowed,
+        deadline=time.monotonic() + 2,
     )
     await runtime.close()
     assert owned.closes == 1
     assert borrowed.closes == 0
+
+
+@pytest.mark.asyncio
+async def test_store_open_and_identical_profile_publication_are_single_flight() -> None:
+    store = _GatedOpenStore()
+    requirement = _requirement()
+    runtime = LocalRuntime(model_deployment_store=store)
+    group = runtime.bind(_layer(requirement)).model_groups.get(requirement)
+    invoker = _Invoker("shared")
+    deadline = time.monotonic() + 2
+
+    publications = [
+        asyncio.create_task(
+            group.ensure_profile(
+                profile="default",
+                routes=(ModelRoute("main", "test", "shared"),),
+                fallback=FallbackPolicy(("main",)),
+                invoker=invoker,
+                make_default=True,
+                deadline=deadline,
+            )
+        )
+        for _ in range(8)
+    ]
+    await asyncio.wait_for(store.open_entered.wait(), timeout=1)
+    assert store.open_calls == 1
+    store.open_release.set()
+    snapshots = await asyncio.gather(*publications)
+
+    assert len({snapshot.snapshot_id for snapshot in snapshots}) == 1
+    assert await group.current() == snapshots[0]
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_pre_admission_deadline_returns_handle_and_rolls_back_orphan_pin() -> None:
+    store = _CommitThenBlockAdmissionStore()
+    requirement = _requirement()
+    runtime = LocalRuntime(model_deployment_store=store)
+    bound = runtime.bind(_layer(requirement))
+    group = bound.model_groups.get(requirement)
+    await group.ensure_profile(
+        profile="default",
+        routes=(ModelRoute("main", "test", "default"),),
+        fallback=FallbackPolicy(("main",)),
+        invoker=_Invoker("default"),
+        make_default=True,
+        deadline=time.monotonic() + 2,
+    )
+    store.block_admission = True
+
+    async with asyncio.timeout(0.1):
+        handle = await bound.start(
+            UserMessage(content="x"),
+            Context(),
+            execution=ExecutionOptions(deadline=time.monotonic() + 0.05),
+        )
+    await asyncio.wait_for(store.admission_entered.wait(), timeout=1)
+    assert (await handle.snapshot()).phase is ExecutionPhase.PREPARING
+    with pytest.raises(ExecutionDeadlineExceeded):
+        await handle.result()
+
+    snapshot = await handle.snapshot()
+    assert snapshot.status.value == "deadline_exceeded"
+    assert snapshot.phase is ExecutionPhase.TERMINAL
+    assert await store.get_admission(handle.execution_id) is None
+    await runtime.close()

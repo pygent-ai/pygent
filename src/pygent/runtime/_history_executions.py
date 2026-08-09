@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -91,12 +93,14 @@ class ExecutionHistoryMixin:
         request_id: str,
         plan_id: str,
         input: object,
-        status: str = "queued",
+        status: str = "pending",
         binding_id: str = "",
         identity: str = "",
         idempotency_key: str | None = None,
         model_calls: object | None = None,
         model_admission_status: str = "none",
+        trace_id: str | None = None,
+        attempt_id: str | None = None,
     ) -> StoredExecution:
         stored, _ = await self.begin_execution(
             execution_id=execution_id,
@@ -109,6 +113,8 @@ class ExecutionHistoryMixin:
             idempotency_key=idempotency_key,
             model_calls=model_calls,
             model_admission_status=model_admission_status,
+            trace_id=trace_id or str(uuid.uuid4()),
+            attempt_id=attempt_id,
         )
         return stored
 
@@ -120,12 +126,15 @@ class ExecutionHistoryMixin:
         request_id: str,
         plan_id: str,
         input: object,
-        status: str = "queued",
+        status: str = "pending",
         binding_id: str = "",
         identity: str = "",
         idempotency_key: str | None = None,
         model_calls: object | None = None,
         model_admission_status: str = "none",
+        trace_id: str,
+        phase: str = "submitting",
+        attempt_id: str | None = None,
     ) -> tuple[StoredExecution, bool]:
         db = self._db()
         payload = _json(input)
@@ -133,8 +142,9 @@ class ExecutionHistoryMixin:
         try:
             await db.execute(
                 "INSERT INTO executions(execution_id,request_id,status,plan_id,input_json,"
-                "binding_id,identity,idempotency_key,model_calls_json,model_admission_status) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "binding_id,identity,idempotency_key,model_calls_json,model_admission_status,"
+                "trace_id,phase,attempt_id,submitted_at_unix_ns,updated_at_unix_ns) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     execution_id,
                     request_id,
@@ -146,6 +156,11 @@ class ExecutionHistoryMixin:
                     idempotency_key,
                     model_calls_payload,
                     model_admission_status,
+                    trace_id,
+                    phase,
+                    attempt_id,
+                    time.time_ns(),
+                    time.time_ns(),
                 ),
             )
             await db.commit()
@@ -168,6 +183,9 @@ class ExecutionHistoryMixin:
                     "idempotency identity is committed with different input"
                 ) from exc
             return existing, False
+        except BaseException:
+            await db.rollback()
+            raise
         result = await self.get_execution(execution_id)
         assert result is not None
         return result, True
@@ -176,21 +194,25 @@ class ExecutionHistoryMixin:
     async def commit_model_admission(
         self, execution_id: str, *, admission_id: str, manifest_digest: str
     ) -> None:
-        cursor = await self._db().execute(
-            "UPDATE executions SET model_admission_id=?,model_admission_digest=?,"
-            "model_admission_status='committed',updated_at=CURRENT_TIMESTAMP "
-            "WHERE execution_id=? AND model_admission_status IN ('preparing','committed')",
-            (admission_id, manifest_digest, execution_id),
-        )
-        if cursor.rowcount != 1:
-            await self._db().rollback()
-            raise HistoryConflictError("model admission intent is not preparing")
-        await self._db().execute(
-            "INSERT OR IGNORE INTO execution_model_admissions(execution_id,admission_id) "
-            "VALUES(?,?)",
-            (execution_id, admission_id),
-        )
-        await self._db().commit()
+        db = self._db()
+        try:
+            cursor = await db.execute(
+                "UPDATE executions SET model_admission_id=?,model_admission_digest=?,"
+                "model_admission_status='committed',updated_at=CURRENT_TIMESTAMP "
+                "WHERE execution_id=? AND model_admission_status IN ('preparing','committed')",
+                (admission_id, manifest_digest, execution_id),
+            )
+            if cursor.rowcount != 1:
+                raise HistoryConflictError("model admission intent is not preparing")
+            await db.execute(
+                "INSERT OR IGNORE INTO execution_model_admissions(execution_id,admission_id) "
+                "VALUES(?,?)",
+                (execution_id, admission_id),
+            )
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
 
     @_serialized_write
     async def add_model_admission_ref(
@@ -244,16 +266,23 @@ class ExecutionHistoryMixin:
         output: object | None = None,
         error: object | None = None,
         attempt: int | None = None,
+        phase: str | None = None,
+        attempt_id: str | None = None,
     ) -> None:
         db = self._db()
         cursor = await db.execute(
             "UPDATE executions SET status=?, output_json=?, error_json=?, "
-            "attempt=COALESCE(?,attempt), updated_at=CURRENT_TIMESTAMP WHERE execution_id=?",
+            "attempt=COALESCE(?,attempt), phase=COALESCE(?,phase), "
+            "attempt_id=COALESCE(?,attempt_id), "
+            "updated_at_unix_ns=?, updated_at=CURRENT_TIMESTAMP WHERE execution_id=?",
             (
                 status,
                 None if output is None else _json(output),
                 None if error is None else _json(error),
                 attempt,
+                phase,
+                attempt_id,
+                time.time_ns(),
                 execution_id,
             ),
         )
@@ -275,7 +304,9 @@ class ExecutionHistoryMixin:
         cursor = await db.execute(
             "SELECT execution_id,request_id,status,plan_id,input_json,output_json,"
             "error_json,attempt,binding_id,identity,idempotency_key,model_calls_json,"
-            "model_admission_id,model_admission_digest,model_admission_status FROM executions "
+            "model_admission_id,model_admission_digest,model_admission_status,trace_id,phase,"
+            "attempt_id,terminal_sequence,submitted_at_unix_ns,updated_at_unix_ns "
+            "FROM executions "
             "WHERE binding_id=? AND identity=? AND idempotency_key=?",
             (binding_id, identity, idempotency_key),
         )
@@ -287,7 +318,9 @@ class ExecutionHistoryMixin:
         cursor = await db.execute(
             "SELECT execution_id,request_id,status,plan_id,input_json,output_json,"
             f"error_json,attempt,binding_id,identity,idempotency_key,model_calls_json,"
-            f"model_admission_id,model_admission_digest,model_admission_status FROM executions "
+            f"model_admission_id,model_admission_digest,model_admission_status,trace_id,phase,"
+            f"attempt_id,terminal_sequence,submitted_at_unix_ns,updated_at_unix_ns "
+            f"FROM executions "
             f"WHERE {column}=? ORDER BY updated_at DESC LIMIT 1",
             (value,),
         )
@@ -314,4 +347,53 @@ class ExecutionHistoryMixin:
             model_admission_id=row[12],
             model_admission_digest=row[13],
             model_admission_status=row[14],
+            trace_id=row[15],
+            phase=row[16],
+            attempt_id=row[17],
+            terminal_sequence=row[18],
+            submitted_at_unix_ns=row[19],
+            updated_at_unix_ns=row[20],
         )
+
+    @_serialized_write
+    async def finalize_execution(
+        self,
+        execution_id: str,
+        *,
+        status: str,
+        output: object | None,
+        error: object | None,
+        terminal_events: tuple[tuple[int, object], ...],
+        terminal_sequence: int,
+    ) -> None:
+        """Commit terminal journal entries and the materialized outcome atomically."""
+
+        db = self._db()
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            for index, event in terminal_events:
+                await db.execute(
+                    "INSERT INTO events(execution_id,event_index,event_json) VALUES(?,?,?)",
+                    (execution_id, index, _json(event)),
+                )
+            cursor = await db.execute(
+                "UPDATE executions SET status=?,phase='terminal',output_json=?,error_json=?,"
+                "terminal_sequence=?,updated_at_unix_ns=?,updated_at=CURRENT_TIMESTAMP "
+                "WHERE execution_id=? "
+                "AND terminal_sequence IS NULL",
+                (
+                    status,
+                    None if output is None else _json(output),
+                    None if error is None else _json(error),
+                    terminal_sequence,
+                    time.time_ns(),
+                    execution_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise HistoryConflictError("execution is already finalized or unknown")
+            await db.execute("DELETE FROM execution_claims WHERE execution_id=?", (execution_id,))
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise

@@ -29,7 +29,7 @@ from pygent.runtime import (
     ExecutionCapacityPolicy,
     ExecutionEvent,
     ExecutionOptions,
-    ExecutionStatus,
+    ExecutionPhase,
     LocalRuntime,
     SQLiteHistoryStore,
 )
@@ -136,7 +136,12 @@ async def test_http_worker_client_fails_over_declared_targets():
             )
         if request.method == "POST":
             return httpx.Response(
-                202, json={"execution_id": "remote-run", "status": "running"}
+                202,
+                json={
+                    "execution_id": "remote-run",
+                    "attempt_id": "attempt-1",
+                    "status": "running",
+                },
             )
         return httpx.Response(
             200,
@@ -401,6 +406,7 @@ async def test_durable_worker_accepts_concurrent_jobs_without_nested_transaction
                     schema_version="0.2",
                     event_id=str(uuid4()),
                     execution_id=invocation.request_id,
+                    attempt_id="attempt-1",
                     trace_id=invocation.request_id,
                     span_id=invocation.request_id,
                     parent_span_id=None,
@@ -652,11 +658,11 @@ async def test_sse_client_reconnects_from_last_observed_cursor():
         after = request.url.params["after"]
         if after == "-1":
             stream = _InterruptedSSE(
-                b'id: 0\nevent: execution\ndata: {"schema_version":"0.2","event_id":"event-0","execution_id":"run-1","trace_id":"run-1","span_id":"span-1","parent_span_id":null,"sequence":0,"timestamp_unix_ns":1,"module_path":"worker","kind":"execution.started","data":{}}\n\n'
+                b'id: 0\nevent: execution\ndata: {"schema_version":"1","event_id":"event-0","execution_id":"run-1","attempt_id":"attempt-1","trace_id":"run-1","span_id":"span-1","parent_span_id":null,"sequence":0,"timestamp_unix_ns":1,"module_path":"worker","kind":"execution.started","data":{}}\n\n'
             )
         else:
             stream = _CompleteSSE(
-                b'id: 1\nevent: execution\ndata: {"schema_version":"0.2","event_id":"event-1","execution_id":"run-1","trace_id":"run-1","span_id":"span-1","parent_span_id":null,"sequence":1,"timestamp_unix_ns":2,"module_path":"worker","kind":"execution.completed","data":{}}\n\n'
+                b'id: 1\nevent: execution\ndata: {"schema_version":"1","event_id":"event-1","execution_id":"run-1","attempt_id":"attempt-1","trace_id":"run-1","span_id":"span-1","parent_span_id":null,"sequence":1,"timestamp_unix_ns":2,"module_path":"worker","kind":"execution.completed","data":{}}\n\n'
             )
         return httpx.Response(
             200,
@@ -849,7 +855,7 @@ async def test_remote_child_wait_hands_off_parent_runnable_lease():
         local = binding.bind(LocalEcho())
         handle = await remote.start(UserMessage(content="x"), Context())
         await entered.wait()
-        assert handle.status is ExecutionStatus.WAITING_CHILD
+        assert (await handle.snapshot()).phase is ExecutionPhase.WAITING_CHILD
         assert (await local.invoke(UserMessage(content="y"), Context()))[
             0
         ].content == "local"

@@ -41,6 +41,9 @@ ToolTaskExecution: TypeAlias = Callable[
 AgentToolRequestBuilder: TypeAlias = Callable[
     ["ToolSpec", "ToolCall"], tuple[Message, Context]
 ]
+_AgentToolInvokeAdapter: TypeAlias = Callable[
+    ["ToolSpec", "ToolCall", "ToolExecutionContext"], object | Awaitable[object]
+]
 AgentToolResultBuilder: TypeAlias = Callable[
     [Message, Context], object | Awaitable[object]
 ]
@@ -332,7 +335,7 @@ class AgentToolExecutor:
 
     def __init__(
         self,
-        invoke: Callable[[ToolSpec, ToolCall], object | Awaitable[object]] | None = None,
+        invoke: _AgentToolInvokeAdapter | None = None,
         *,
         agent: ModuleDependency[Message, Message] | None = None,
         request_builder: AgentToolRequestBuilder | None = None,
@@ -362,7 +365,7 @@ class AgentToolExecutor:
             invoke = self._invoke
             if invoke is None:  # pragma: no cover - constructor invariant
                 raise RuntimeError("AgentToolExecutor has no invocation adapter")
-            value = invoke(spec, call)
+            value = invoke(spec, call, context)
             if inspect.isawaitable(value):
                 value = await value
             return value

@@ -12,13 +12,18 @@ from pygent.core import (
     Context,
     JsonValue,
     Message,
-    Module,
     freeze_json_object,
     thaw_json,
 )
 
 from .._history_types import StoredExecution
-from ..api import ExecutionAdmissionError, ExecutionEvent, ExecutionStatus
+from ..api import (
+    ExecutionAdmissionError,
+    ExecutionEvent,
+    ExecutionOptions,
+    ExecutionPhase,
+    ExecutionStatus,
+)
 from ..codec import invocation_from_dict
 from .handles import _LocalBoundModule, _LocalExecutionHandle
 from .policies import _finite_deadline_requirement
@@ -103,32 +108,10 @@ class _RecoveryMixin:
             raise ExecutionAdmissionError(
                 "durable execution has no exact model admission manifest"
             )
-        if stored.status == ExecutionStatus.SUCCEEDED.value and stored.output is not None:
-            output, context = invocation_from_dict(stored.output)
-            record = _ExecutionRecord(
-                execution_id=stored.execution_id,
-                trace_id=stored.execution_id,
-                root_span_id=str(uuid.uuid4()),
-                request_id=stored.request_id,
-                binding_state=self._state_for(bound.binding),
-                plan=bound.plan,
-                graph=bound.graph,
-                deadline=None,
-                status=ExecutionStatus.SUCCEEDED,
-                history=history,
-                attempt=stored.attempt,
-                idempotency_key=stored.idempotency_key,
-                model_calls=model_calls,
-                model_admission=model_admission,
+        if ExecutionStatus(stored.status).terminal:
+            raise ExecutionAdmissionError(
+                "terminal execution cannot be recovered; attach to its existing outcome"
             )
-            record.events.extend(await self._load_run_events(stored.execution_id))
-
-            async def completed() -> tuple[Message, Context]:
-                return output, context
-
-            record.task = asyncio.create_task(completed())
-            self._executions[stored.execution_id] = record
-            return cast(_LocalExecutionHandle[OutputMessageT], _LocalExecutionHandle(record))
         deadline_requirement = _finite_deadline_requirement(bound.module)
         if deadline_requirement is not None and deadline is None:
             raise ExecutionAdmissionError(
@@ -138,7 +121,7 @@ class _RecoveryMixin:
         message, context = invocation_from_dict(stored.input)
         record = _ExecutionRecord(
             execution_id=stored.execution_id,
-            trace_id=stored.execution_id,
+            trace_id=stored.trace_id,
             root_span_id=str(uuid.uuid4()),
             request_id=stored.request_id,
             binding_state=self._state_for(bound.binding),
@@ -146,35 +129,40 @@ class _RecoveryMixin:
             graph=bound.graph,
             deadline=deadline,
             history=history,
+            history_started=True,
             attempt=stored.attempt + 1,
             idempotency_key=stored.idempotency_key,
             model_calls=model_calls,
             model_admission=model_admission,
         )
         record.events.extend(await self._load_run_events(stored.execution_id))
+        record.owner_id = f"{self._recovery_owner_id}:{record.attempt_id}"
         fencing_token = await history.claim_execution(
             execution_id=stored.execution_id,
-            owner_id=self._recovery_owner_id,
+            owner_id=record.owner_id,
             lease_ttl=self._recovery_lease_ttl,
         )
         if fencing_token is None:
             raise ExecutionAdmissionError("durable execution is owned by another recovery attempt")
+        record.fencing_token = fencing_token
         try:
             await history.update_execution(
                 stored.execution_id,
-                status=ExecutionStatus.QUEUED.value,
+                status=ExecutionStatus.PENDING.value,
                 attempt=stored.attempt + 1,
+                attempt_id=record.attempt_id,
+                phase=ExecutionPhase.PREPARING.value,
             )
         except BaseException:
             await history.release_execution_claim(
                 execution_id=stored.execution_id,
-                owner_id=self._recovery_owner_id,
+                owner_id=record.owner_id,
                 fencing_token=fencing_token,
             )
             raise
         record.task = asyncio.create_task(
             self._run_recovered_with_claim(
-                record, bound.module, message, context, fencing_token
+                record, bound, message, context, fencing_token
             ),
             name=f"pygent-recovered-{stored.execution_id}",
         )
@@ -184,44 +172,23 @@ class _RecoveryMixin:
     async def _run_recovered_with_claim(
         self,
         record: _ExecutionRecord,
-        module: Module[Any, Any],
+        bound: _LocalBoundModule[Any, Any],
         message: Message,
         context: Context,
         fencing_token: int,
     ) -> tuple[Message, Context]:
         history = record.history
         assert history is not None
-        owner_task = asyncio.current_task()
-
-        async def heartbeat() -> None:
-            while True:
-                await asyncio.sleep(self._recovery_lease_ttl / 3)
-                renewed = await history.renew_execution_claim(
-                    execution_id=record.execution_id,
-                    owner_id=self._recovery_owner_id,
-                    fencing_token=fencing_token,
-                    lease_ttl=self._recovery_lease_ttl,
-                )
-                if not renewed:
-                    if owner_task is not None:
-                        owner_task.cancel()
-                    return
-
-        lease_task = asyncio.create_task(
-            heartbeat(), name=f"pygent-run-claim-{record.execution_id}"
+        return await self._run_root(
+            record,
+            bound,
+            ExecutionOptions(deadline=record.deadline, model_calls=record.model_calls),
+            message,
+            context,
+            {},
+            bool(record.model_admission),
+            prepared=True,
         )
-        try:
-            return await self._run_root(record, module, message, context)
-        finally:
-            lease_task.cancel()
-            await asyncio.gather(lease_task, return_exceptions=True)
-            await asyncio.shield(
-                history.release_execution_claim(
-                    execution_id=record.execution_id,
-                    owner_id=self._recovery_owner_id,
-                    fencing_token=fencing_token,
-                )
-            )
 
     async def _load_run_events(self, execution_id: str) -> list[ExecutionEvent]:
         history = self.history
@@ -241,6 +208,7 @@ class _RecoveryMixin:
                     schema_version=cast(str, item.get("schema_version")),
                     event_id=cast(str, item.get("event_id")),
                     execution_id=cast(str, item.get("execution_id")),
+                    attempt_id=cast(str, item.get("attempt_id")),
                     trace_id=cast(str, item.get("trace_id")),
                     span_id=cast(str, item.get("span_id")),
                     parent_span_id=cast(str | None, item.get("parent_span_id")),

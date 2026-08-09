@@ -19,6 +19,7 @@ from pygent import (
 from pygent.llm import ModelExecution
 from pygent.runtime import (
     ExecutionOptions,
+    ExecutionStatus,
     LocalRuntime,
     SQLiteHistoryStore,
 )
@@ -71,13 +72,9 @@ async def test_terminal_model_failure_and_event_cursor_replay_without_provider_c
 
     async with SQLiteHistoryStore(path) as history:
         runtime = LocalRuntime(history=history)
-        recovered = await runtime.recover(
-            runtime.bind(failing_model(invoker)),
-            execution_id,
-            deadline=time.monotonic() + 3,
-        )
-        with pytest.raises(ModelCallError, match="provider unavailable"):
-            await recovered.result()
+        attached = await runtime.get_execution_handle(execution_id)
+        outcome = await attached.outcome()
+        assert outcome.status is ExecutionStatus.FAILED
         events = await history.events_after(execution_id=execution_id)
         await runtime.close()
 

@@ -35,7 +35,12 @@ from .execution import (
     EffectDisposition,
     EffectOutcome,
     ExecutionEvent,
+    ExecutionFailure,
     ExecutionOptions,
+    ExecutionOutcome,
+    ExecutionOwnerState,
+    ExecutionPhase,
+    ExecutionSnapshot,
     ExecutionStatus,
 )
 from .json_values import (
@@ -62,7 +67,13 @@ class _DirectExecutionRecord(Generic[OutputMessageT]):
     message: Message
     context: Context
     options: ExecutionOptions
-    status: ExecutionStatus = ExecutionStatus.QUEUED
+    attempt_id: str = field(default_factory=lambda: str(uuid4()))
+    status: ExecutionStatus = ExecutionStatus.PENDING
+    phase: ExecutionPhase = ExecutionPhase.SUBMITTING
+    submitted_at_unix_ns: int = field(default_factory=time.time_ns)
+    updated_at_unix_ns: int = field(default_factory=time.time_ns)
+    terminal_sequence: int | None = None
+    outcome: ExecutionOutcome | None = None
     events: list[ExecutionEvent] = field(default_factory=list)
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     task: asyncio.Task[tuple[OutputMessageT, Context]] | None = None
@@ -95,6 +106,7 @@ class _DirectExecutionRecord(Generic[OutputMessageT]):
                 schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
                 event_id=str(uuid4()),
                 execution_id=self.execution_id,
+                attempt_id=self.attempt_id,
                 trace_id=self.trace_id,
                 span_id=span_id,
                 parent_span_id=parent_span_id,
@@ -108,9 +120,40 @@ class _DirectExecutionRecord(Generic[OutputMessageT]):
             self.condition.notify_all()
             return event
 
-    async def notify_terminal(self) -> None:
+    async def notify_terminal(
+        self, status: ExecutionStatus, failure: ExecutionFailure | None = None
+    ) -> None:
         async with self.condition:
+            self.status = status
+            self.phase = ExecutionPhase.TERMINAL
+            self.updated_at_unix_ns = time.time_ns()
+            self.terminal_sequence = self.events[-1].sequence
+            self.outcome = ExecutionOutcome(
+                execution_id=self.execution_id,
+                status=self.status,
+                attempt_id=self.attempt_id,
+                terminal_sequence=self.terminal_sequence,
+                error=failure,
+            )
             self.condition.notify_all()
+
+    def snapshot(self) -> ExecutionSnapshot:
+        return ExecutionSnapshot(
+            execution_id=self.execution_id,
+            trace_id=self.trace_id,
+            status=self.status,
+            phase=self.phase,
+            owner_state=(
+                ExecutionOwnerState.TERMINAL
+                if self.status.terminal
+                else ExecutionOwnerState.ACTIVE
+            ),
+            attempt_id=self.attempt_id,
+            last_sequence=len(self.events) - 1,
+            terminal_sequence=self.terminal_sequence,
+            submitted_at_unix_ns=self.submitted_at_unix_ns,
+            updated_at_unix_ns=self.updated_at_unix_ns,
+        )
 
 
 class _DirectExecutionScope:
@@ -391,14 +434,17 @@ class _DirectExecutionSubscription:
         self._record.ensure_started()
         while True:
             async with self._record.condition:
-                while len(self._record.events) <= self._cursor + 1 and not self._record.terminal:
+                while (
+                    len(self._record.events) <= self._cursor + 1
+                    and self._record.terminal_sequence is None
+                ):
                     await self._record.condition.wait()
                 available = tuple(self._record.events[self._cursor + 1 :])
-                terminal = self._record.terminal
+                terminal_sequence = self._record.terminal_sequence
             for event in available:
                 self._cursor = event.sequence
                 yield event
-            if terminal and len(self._record.events) <= self._cursor + 1:
+            if terminal_sequence is not None and self._cursor >= terminal_sequence:
                 return
 
 
@@ -419,6 +465,17 @@ class _DirectExecutionHandle(Generic[OutputMessageT]):
     @property
     def status(self) -> ExecutionStatus:
         return self._record.status
+
+    async def snapshot(self) -> ExecutionSnapshot:
+        return self._record.snapshot()
+
+    async def outcome(self) -> ExecutionOutcome:
+        self._record.ensure_started()
+        assert self._record.task is not None
+        await asyncio.gather(self._record.task, return_exceptions=True)
+        if self._record.outcome is None:
+            raise RuntimeError("execution has no terminal outcome")
+        return self._record.outcome
 
     async def result(self) -> tuple[OutputMessageT, Context]:
         self._record.ensure_started()
@@ -500,6 +557,7 @@ async def _run_direct_execution(
     scope = _DirectExecutionScope(record)
     token = _execution_scope.set(scope)
     record.status = ExecutionStatus.RUNNING
+    record.phase = ExecutionPhase.RUNNING
     await record.emit(
         span_id=record.root_span_id,
         parent_span_id=None,
@@ -512,7 +570,6 @@ async def _run_direct_execution(
             record.module, record.message, record.context
         )
     except asyncio.CancelledError:
-        record.status = ExecutionStatus.CANCELLED
         await record.emit(
             span_id=record.root_span_id,
             parent_span_id=None,
@@ -520,9 +577,16 @@ async def _run_direct_execution(
             kind="execution.cancelled",
             data={},
         )
+        await record.notify_terminal(
+            ExecutionStatus.CANCELLED,
+            ExecutionFailure(
+                domain="runtime",
+                kind="cancelled",
+                message="execution was cancelled",
+            ),
+        )
         raise
     except BaseException as exc:
-        record.status = ExecutionStatus.FAILED
         await record.emit(
             span_id=record.root_span_id,
             parent_span_id=None,
@@ -530,9 +594,16 @@ async def _run_direct_execution(
             kind="execution.failed",
             data={"error_type": type(exc).__name__, "message": str(exc)},
         )
+        await record.notify_terminal(
+            ExecutionStatus.FAILED,
+            ExecutionFailure(
+                domain="runtime",
+                kind=type(exc).__name__,
+                message=str(exc) or type(exc).__name__,
+            ),
+        )
         raise
     else:
-        record.status = ExecutionStatus.SUCCEEDED
         await record.emit(
             span_id=record.root_span_id,
             parent_span_id=None,
@@ -540,8 +611,8 @@ async def _run_direct_execution(
             kind="execution.completed",
             data={},
         )
+        await record.notify_terminal(ExecutionStatus.SUCCEEDED)
         return cast(OutputMessageT, message), context
     finally:
         scope.close()
         _execution_scope.reset(token)
-        await record.notify_terminal()

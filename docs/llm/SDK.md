@@ -203,7 +203,7 @@ model = ModelCallLayer(
 binding = runtime.create_binding(...)
 group = binding.model_groups.get(assistant_group)
 
-await group.configure(
+await group.ensure_profile(
     profile="balanced",
     routes=(
         ModelRoute("primary", provider="openai", model=selected_model),
@@ -214,9 +214,10 @@ await group.configure(
         "tenant-42/openai-primary",
         revision=credential_revision,
     ),
+    deadline=configuration_deadline,
 )
 
-await group.configure(
+await group.ensure_profile(
     profile="quality",
     routes=(
         ModelRoute("primary", provider="openai", model="gpt-5"),
@@ -228,12 +229,13 @@ await group.configure(
         "tenant-42/openai-quality",
         revision=quality_credential_revision,
     ),
+    deadline=configuration_deadline,
 )
 
-await group.set_default("balanced")
+await group.set_default("balanced", deadline=configuration_deadline)
 ```
 
-`configure()` 会先做 Provider 配置验证，再让 Runtime 检查声明匹配、资源引用、容量归属与当前执行安全性；任一检查失败都不会产生可选快照。重复配置同名 profile 会创建新的不可变快照，只影响之后选择该 profile 的 admission。开发者不传递或维护版本号。资源引用必须指向不可变 revision，不能只是会被静默改写的 credential 别名。
+`ensure_profile()` 会先做 Provider 配置验证，再让 Runtime 检查声明匹配、资源引用、容量归属与当前执行安全性；任一检查失败都不会产生可选快照。相同配置 digest 的并发调用 single-flight 并返回同一不可变快照，不同配置串行发布且只影响之后的 admission。开发者不传递或维护版本号。资源引用必须指向不可变 revision，不能只是会被静默改写的 credential 别名。
 
 正常调用使用默认 profile；临时选择和生成参数放在本次不可变 `ExecutionOptions` 中，不修改 Agent 或全局默认：
 
@@ -265,7 +267,7 @@ message, context = await bound_agent.invoke(
 更新默认值也只通过句柄完成：
 
 ```python
-await group.set_default("quality")
+await group.set_default("quality", deadline=configuration_deadline)
 ```
 
 这只影响之后未显式选择 profile 的 admission。已经开始的 Root，以及继承同一 Binding admission 的结构化 Child，继续使用已 pin 的快照。句柄可额外提供 `current()`（默认 profile）、`current(profile)`、`list_profiles()` 和 `available_models()` 供控制台展示与预检，但目录结果只表示查询当时可见，不会自动创建 profile 或改变默认值。

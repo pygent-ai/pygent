@@ -1,10 +1,10 @@
-# Pygent 0.2 第一原则
+# Pygent 第一原则
 
-> 0.2 执行原则：每次业务调用只有一个 Execution Owner。`start()` 创建执行，`invoke()` 固定投影为 `start() + result()`，`stream()` 固定投影为 owned `start() + subscribe()`；结果、事件和控制面不能各自重复运行 `forward()`、模型 Provider 或工具 Executor。统一事件信封、Span、ModelExecution、ToolExecution、EffectOutcome 与 Worker 转发契约见 [Execution contract](EXECUTION.md)。
+> 每次业务调用只有一个逻辑 Execution，每个实际 attempt 只有一个 fenced owner。`start()` 创建可立即观察和取消的逻辑执行，`invoke()` 固定投影为 `start() + result()`，`stream()` 固定投影为 owned `start() + subscribe()`；结果、事件和控制面不能各自重复运行 `forward()`、模型 Provider 或工具 Executor。统一事件信封、Snapshot、Outcome、Attempt、Span、ModelExecution、ToolExecution、EffectOutcome 与 Worker 转发契约见 [Execution contract](EXECUTION.md)。
 
 模型 attempt 必须串行且取消清理有界；无法确认上一请求已退出时的 `OUTCOME_UNKNOWN`、禁止 retry/fallback 与 client 隔离语义同样由 [Execution contract](EXECUTION.md) 统一定义。
 
-本文是 Pygent 0.2 的最高契约。一经确认，只能澄清表述，不能改变语义；任何文档、测试或实现与本文冲突时，均以本文为准。
+本文是 Pygent 的最高契约。任何文档、测试或实现与本文冲突时，均以本文为准；改变执行语义必须先修改本契约和 SDK 示例，不保留并行的旧控制面。
 
 1. **Binding 是可选的部署域，不是 Agent 身份**：直接执行不创建 Binding；只有接入托管 Runtime 时，Binding 才表示一组 Module/Agent 共同使用的部署策略与资源治理域。托管执行中的结构化父子 Agent 默认继承当前 Binding，只有需要独立治理边界时才创建不同 Binding，包括容量、资源、权限、安全、SLA、服务、部署策略或生命周期隔离。
 2. **统一抽象**：Agent、Layer 与用户组合都只是 Module；内置能力不享有特权。
@@ -18,5 +18,8 @@
 10. **定义可共享**：Module 图允许同一 Module 被多条属性路径引用；定义身份可以共享，每次调用身份必须独立。direct execution 不提供框架级共享容量治理，调用方自行管理并发与本地资源；托管执行按 Runtime 解析的资源身份共享物理资源容量。
 11. **控制语义可组合**：handoff、审批请求和领域终止条件可以由用户定义的 Message 与 Module 表达；普通 Module 不因此获得跨进程持久挂起或恢复 Python 调用栈的隐式能力。
 12. **公开值可移植**：Message、Context、ToolDefinition、ToolSpec、ToolTask、ToolResult 与 ExecutionEvent 的公开扩展数据必须是严格、有限且递归冻结的 JSON 值，不得携带连接、锁、协程、handler 或任意 Python 对象。
+13. **完整生命周期只有一个预算**：Execution deadline 从提交开始，覆盖准入前初始化、模型/资源 pin、容量排队、业务执行、取消清理和终结；所有等待都必须可取消。配置与发布是独立控制面操作，使用自己的显式 deadline。
+14. **Journal 决定终结顺序**：terminal span events、唯一 Execution terminal event、冻结 Outcome、终态 Snapshot 与 terminal sequence 必须原子提交。任何订阅都在交付 terminal sequence 后结束，不能根据另一路先读到的 terminal status 提前退出。
+15. **观察不等于取得执行权**：Handle 只是由 backend 支撑的稳定控制面引用。attach 只能观察、等待或请求取消；recover 必须验证资格、获取新 owner lease 和 fencing token，并创建新 attempt。首次 attempt 与恢复 attempt 使用同一所有权协议。
 
 可恢复执行的能力分级与故障边界见 [Runtime Durability](runtime/DURABILITY.md)，参考实现的内部记录与重放方案见 [透明恢复与确定性重放](runtime/REPLAY.md)。

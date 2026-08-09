@@ -244,17 +244,17 @@ RESUME 是调度概念，不是持久化恢复概念。它要求原 owner Task�
 需要 durable 重连、后台继续执行或多个观察者时，Runtime 提供独立的稳定 Execution Handle：
 
 ```python
-run = await bound.start(message, context, run=options)
+handle = await bound.start(message, context, execution=options)
 
-async with run.subscribe(after=event_cursor) as events:
+async with handle.subscribe(after=event_cursor) as events:
     async for event in events:
         ...
 
 message, context = await handle.result()
-await run.cancel()
+await handle.cancel()
 ```
 
-关闭 `events` 只注销当前订阅者，不改变 Execution 状态；取消 Execution 必须调用显式控制入口。订阅游标、事件去重与 retention 只在 Runtime 声明相应 durable event capability 时可用。0.2.x 的 `start()`、`subscribe()` 与 Execution Handle 是公开控制面，但不改变 `invoke()`、`stream().final_result()` 与 `handle.result()` 统一返回 `(message, context)` 的最终结果契约。运行元数据保留在 Handle，不使用额外包装业务结果。
+关闭 `events` 只注销当前订阅者，不改变 Execution 状态；取消 Execution 必须调用显式控制入口。订阅以 `terminal_sequence` 为唯一关闭依据，事件去重与 retention 只在 Runtime 声明相应 durable event capability 时可用。`start()`、`snapshot()`、`outcome()`、`subscribe()` 与 Execution Handle 是统一公开控制面，但不改变 `invoke()`、`stream().final_result()` 与 `handle.result()` 统一返回 `(message, context)` 的最终结果契约。
 
 ## 调度与公平
 

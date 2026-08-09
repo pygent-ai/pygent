@@ -620,6 +620,106 @@ async def test_cancelled_grep_terminates_its_owned_process(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_search_process_cleanup_drains_full_stdout_pipe():
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        (
+            "import os, time\n"
+            "chunk = b'x' * 65536\n"
+            "for _ in range(64):\n"
+            "    os.write(1, chunk)\n"
+            "time.sleep(30)\n"
+        ),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    assert process.stderr is not None
+    stderr_task = asyncio.create_task(process.stderr.read())
+    await asyncio.sleep(0.1)
+
+    await asyncio.wait_for(
+        file_module._terminate_search_process(process, stderr_task), timeout=2
+    )
+
+    assert process.returncode is not None
+    assert stderr_task.done()
+
+
+@pytest.mark.asyncio
+async def test_grep_result_limit_drains_buffered_backend_output(tmp_path, monkeypatch):
+    (tmp_path / "example.txt").write_text("text\n", encoding="utf-8")
+    event = json.dumps(
+        {
+            "type": "match",
+            "data": {
+                "path": {"text": "example.txt"},
+                "line_number": 1,
+                "lines": {"text": "text\n"},
+            },
+        }
+    )
+    started: list[asyncio.subprocess.Process] = []
+
+    async def start_noisy_process(*_args, **_kwargs):
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            (
+                "import sys\n"
+                f"line = {event + chr(10)!r}\n"
+                "while True:\n"
+                "    sys.stdout.write(line)\n"
+                "    sys.stdout.flush()\n"
+            ),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        started.append(process)
+        await asyncio.sleep(0.1)
+        return process
+
+    monkeypatch.setattr(
+        FileTools, "_start_search_process", staticmethod(start_noisy_process)
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await asyncio.wait_for(tools.grep("text", limit=1), timeout=2)
+
+    assert output.startswith("example.txt:1: text")
+    assert "1 matches limit reached" in output
+    assert started[0].returncode is not None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_grep_fallback_joins_its_worker_thread(tmp_path, monkeypatch):
+    (tmp_path / "example.txt").write_text("text\n", encoding="utf-8")
+    monkeypatch.setattr(file_module, "_search_executable", lambda *_names: None)
+    started = threading.Event()
+    stopped = threading.Event()
+    tools = FileTools(workspace_root=tmp_path)
+
+    def slow_fallback(*args):
+        cancelled = args[-1]
+        started.set()
+        cancelled.wait(30)
+        stopped.set()
+        return "No matches found"
+
+    monkeypatch.setattr(tools, "_grep_fallback", slow_fallback)
+    invocation = asyncio.create_task(tools.grep("text"))
+    assert await asyncio.to_thread(started.wait, 1)
+
+    invocation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(invocation, timeout=1)
+
+    assert stopped.is_set()
+
+
+@pytest.mark.asyncio
 async def test_file_tool_errors_are_non_throwing_tool_results(tmp_path):
     tools = FileTools(workspace_root=tmp_path)
 

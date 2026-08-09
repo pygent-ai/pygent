@@ -15,6 +15,10 @@ from pygent.core import (
     Context,
     ExecutionEvent,
     ExecutionOptions,
+    ExecutionOutcome,
+    ExecutionOwnerState,
+    ExecutionPhase,
+    ExecutionSnapshot,
     ExecutionStatus,
     Message,
     Module,
@@ -398,6 +402,22 @@ class ExecutionSubscription(Protocol):
     ) -> None: ...
 
 
+class ExecutionBackend(Protocol[BoundOutputMessageT_co]):
+    """Storage/transport boundary used by stable Execution handles."""
+
+    async def snapshot(self, execution_id: str) -> ExecutionSnapshot: ...
+
+    async def result(
+        self, execution_id: str
+    ) -> tuple[BoundOutputMessageT_co, Context]: ...
+
+    async def request_cancel(self, execution_id: str) -> bool: ...
+
+    def subscribe(
+        self, execution_id: str, *, after: int | None = None
+    ) -> ExecutionSubscription: ...
+
+
 class ExecutionHandle(Protocol[BoundOutputMessageT_co]):
     """Advanced control plane for a managed root execution."""
 
@@ -409,6 +429,10 @@ class ExecutionHandle(Protocol[BoundOutputMessageT_co]):
 
     @property
     def status(self) -> ExecutionStatus: ...
+
+    async def snapshot(self) -> ExecutionSnapshot: ...
+
+    async def outcome(self) -> ExecutionOutcome: ...
 
     async def result(self) -> tuple[BoundOutputMessageT_co, Context]: ...
 
@@ -474,6 +498,10 @@ class Runtime(Protocol):
 
     async def get_job(self, job_id: str) -> JobSnapshot | None: ...
 
+    async def get_execution_handle(
+        self, execution_id: str
+    ) -> ExecutionHandle[Message]: ...
+
     async def purge_execution(self, execution_id: str) -> None: ...
 
 
@@ -486,11 +514,16 @@ __all__ = [
     "DurabilityPolicy",
     "DurabilityReport",
     "ExecutionAdmissionError",
+    "ExecutionBackend",
     "ExecutionCapacityPolicy",
     "ExecutionDeadlineExceeded",
     "ExecutionEvent",
     "ExecutionHandle",
     "ExecutionOptions",
+    "ExecutionOutcome",
+    "ExecutionOwnerState",
+    "ExecutionPhase",
+    "ExecutionSnapshot",
     "ExecutionStatus",
     "ExecutionStream",
     "ExecutionSubscription",

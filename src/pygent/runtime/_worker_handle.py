@@ -5,9 +5,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Self
+from uuid import uuid4
 
 from pygent.core import (
     ExecutionEvent,
+    ExecutionOutcome,
+    ExecutionSnapshot,
     ExecutionStatus,
     FrozenJsonObject,
     JsonValue,
@@ -27,6 +30,7 @@ class RemoteExecutionHandle:
     client: HTTPWorkerClient = field(repr=False, compare=False)
     execution_id: str
     target: WorkerTarget
+    attempt_id: str = field(default_factory=lambda: str(uuid4()))
     binding_ref: str = ""
     input: FrozenJsonObject | None = None
     request_id: str = ""
@@ -48,6 +52,22 @@ class RemoteExecutionHandle:
     @property
     def status(self) -> ExecutionStatus:
         return ExecutionStatus.RUNNING
+
+    async def snapshot(self) -> ExecutionSnapshot:
+        return await self.client.snapshot(self)
+
+    async def outcome(self) -> ExecutionOutcome:
+        while True:
+            snapshot = await self.snapshot()
+            if snapshot.status.terminal:
+                assert snapshot.attempt_id is not None
+                assert snapshot.terminal_sequence is not None
+                return ExecutionOutcome(
+                    execution_id=self.execution_id,
+                    status=snapshot.status,
+                    attempt_id=snapshot.attempt_id,
+                    terminal_sequence=snapshot.terminal_sequence,
+                )
 
     async def result(self, *, deadline: float | None = None) -> JsonValue:
         return await self.client.result(self, deadline=deadline)

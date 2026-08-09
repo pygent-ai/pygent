@@ -94,11 +94,8 @@ class ExecutionFailureError(RuntimeError):
 class ExecutionStatus(str, Enum):
     """Stable externally observable state of one root execution."""
 
-    QUEUED = "queued"
+    PENDING = "pending"
     RUNNING = "running"
-    WAITING_CHILD = "waiting_child"
-    WAITING_RESUME = "waiting_resume"
-    WAITING_EXTERNAL = "waiting_external"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -112,6 +109,80 @@ class ExecutionStatus(str, Enum):
             ExecutionStatus.CANCELLED,
             ExecutionStatus.DEADLINE_EXCEEDED,
         }
+
+
+class ExecutionPhase(str, Enum):
+    """Detailed progress of a logical execution, separate from its outcome."""
+
+    SUBMITTING = "submitting"
+    PREPARING = "preparing"
+    WAITING_ADMISSION = "waiting_admission"
+    STARTING = "starting"
+    RUNNING = "running"
+    WAITING_CHILD = "waiting_child"
+    WAITING_RESUME = "waiting_resume"
+    WAITING_EXTERNAL = "waiting_external"
+    FINALIZING = "finalizing"
+    TERMINAL = "terminal"
+
+
+class ExecutionOwnerState(str, Enum):
+    """Whether an attempt currently owns the right to advance an execution."""
+
+    ACTIVE = "active"
+    UNOWNED = "unowned"
+    TERMINAL = "terminal"
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionSnapshot:
+    """Canonical materialized state returned by every Execution backend."""
+
+    execution_id: str
+    trace_id: str
+    status: ExecutionStatus
+    phase: ExecutionPhase
+    owner_state: ExecutionOwnerState
+    attempt_id: str | None
+    last_sequence: int
+    terminal_sequence: int | None
+    submitted_at_unix_ns: int
+    updated_at_unix_ns: int
+
+    def __post_init__(self) -> None:
+        for name in ("execution_id", "trace_id"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ValueError(f"{name} must be a non-empty string")
+        if self.attempt_id is not None and (
+            not isinstance(self.attempt_id, str) or not self.attempt_id
+        ):
+            raise ValueError("attempt_id must be non-empty when provided")
+        if self.last_sequence < -1:
+            raise ValueError("last_sequence must be -1 or a non-negative integer")
+        if self.terminal_sequence is not None and self.terminal_sequence < 0:
+            raise ValueError("terminal_sequence must be non-negative when provided")
+        if self.status.terminal != (self.phase is ExecutionPhase.TERMINAL):
+            raise ValueError("terminal status and phase must agree")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionOutcome:
+    """Frozen terminal outcome independent of a local owner Task."""
+
+    execution_id: str
+    status: ExecutionStatus
+    attempt_id: str
+    terminal_sequence: int
+    error: ExecutionFailure | None = None
+
+    def __post_init__(self) -> None:
+        if not self.status.terminal:
+            raise ValueError("ExecutionOutcome requires a terminal status")
+        for name in ("execution_id", "attempt_id"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ValueError(f"{name} must be a non-empty string")
+        if self.terminal_sequence < 0:
+            raise ValueError("terminal_sequence must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +245,7 @@ class ExecutionEvent:
     schema_version: str
     event_id: str
     execution_id: str
+    attempt_id: str
     trace_id: str
     span_id: str
     parent_span_id: str | None
@@ -188,6 +260,7 @@ class ExecutionEvent:
             "schema_version",
             "event_id",
             "execution_id",
+            "attempt_id",
             "trace_id",
             "span_id",
             "module_path",
@@ -239,7 +312,7 @@ class EffectOutcome(Generic[EffectValueT]):
             raise ValueError("attempt must be a positive integer")
 
 
-EXECUTION_EVENT_SCHEMA_VERSION = "0.2"
+EXECUTION_EVENT_SCHEMA_VERSION = "1"
 
 
 __all__ = [
@@ -250,5 +323,9 @@ __all__ = [
     "ExecutionFailure",
     "ExecutionFailureError",
     "ExecutionOptions",
+    "ExecutionOutcome",
+    "ExecutionOwnerState",
+    "ExecutionPhase",
+    "ExecutionSnapshot",
     "ExecutionStatus",
 ]

@@ -95,21 +95,23 @@ async def run_managed_demo(
         )
         bound = binding.bind(agent)
         group = bound.model_groups.get(requirement)
-        await group.configure(
+        await group.ensure_profile(
             profile="quick",
             routes=(ModelRoute("primary", "offline", "quick"),),
             fallback=FallbackPolicy(("primary",)),
             invoker=quick,
             ownership=ModelResourceOwnership.OWNED,
+            deadline=monotonic() + 5,
         )
-        await group.configure(
+        await group.ensure_profile(
             profile="quality",
             routes=(ModelRoute("primary", "offline", "quality"),),
             fallback=FallbackPolicy(("primary",)),
             invoker=quality,
             ownership=ModelResourceOwnership.OWNED,
+            deadline=monotonic() + 5,
         )
-        await group.set_default("quick")
+        await group.set_default("quick", deadline=monotonic() + 5)
 
         model_calls = (
             {}

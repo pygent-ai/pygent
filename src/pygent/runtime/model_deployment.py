@@ -183,6 +183,7 @@ class ModelDeploymentStore(Protocol):
 
     async def ensure_scope(self, namespace: str, binding_name: str, policy_digest: str) -> str: ...
     async def publish(self, snapshot: ModelProfileSnapshot) -> ModelProfileSnapshot: ...
+    async def ensure_profile(self, snapshot: ModelProfileSnapshot, *, make_default: bool) -> ModelProfileSnapshot: ...
     async def set_default(self, scope_id: str, group_name: str, profile: str) -> None: ...
     async def default_profile(self, scope_id: str, group_name: str) -> str: ...
     async def current(self, scope_id: str, group_name: str, profile: str) -> ModelProfileSnapshot: ...
@@ -225,6 +226,22 @@ class InMemoryModelDeploymentStore:
             self._profiles[key] = snapshot
             self._retired.discard(key)
         return snapshot
+
+    async def ensure_profile(
+        self, snapshot: ModelProfileSnapshot, *, make_default: bool
+    ) -> ModelProfileSnapshot:
+        key = (snapshot.deployment_scope_id, snapshot.group_name, snapshot.profile)
+        async with self._lock:
+            current = self._profiles.get(key)
+            if current is not None and current.digest == snapshot.digest and key not in self._retired:
+                result = current
+            else:
+                self._profiles[key] = snapshot
+                self._retired.discard(key)
+                result = snapshot
+            if make_default:
+                self._defaults[(snapshot.deployment_scope_id, snapshot.group_name)] = snapshot.profile
+            return result
 
     async def set_default(self, scope_id: str, group_name: str, profile: str) -> None:
         key = (scope_id, group_name, profile)
@@ -450,6 +467,49 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
             (snapshot.deployment_scope_id, snapshot.group_name, snapshot.profile, _canonical(_snapshot_value(snapshot))),
         )
         await db.commit()
+        return result
+
+    @_sqlite_serialized
+    async def ensure_profile(
+        self, snapshot: ModelProfileSnapshot, *, make_default: bool
+    ) -> ModelProfileSnapshot:
+        db = self._connection()
+        key = (snapshot.deployment_scope_id, snapshot.group_name, snapshot.profile)
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            row = await (
+                await db.execute(
+                    "SELECT snapshot_json,retired FROM pygent_model_profiles "
+                    "WHERE scope_id=? AND group_name=? AND profile=?",
+                    key,
+                )
+            ).fetchone()
+            result = snapshot
+            if row is not None and not row[1]:
+                current = _snapshot_from_value(json.loads(row[0]))
+                if current.digest == snapshot.digest:
+                    result = current
+            if result is snapshot:
+                await db.execute(
+                    "INSERT INTO pygent_model_profiles(scope_id,group_name,profile,snapshot_json,retired) "
+                    "VALUES(?,?,?,?,0) ON CONFLICT(scope_id,group_name,profile) DO UPDATE SET "
+                    "snapshot_json=excluded.snapshot_json,retired=0",
+                    (*key, _canonical(_snapshot_value(snapshot))),
+                )
+            if make_default:
+                await db.execute(
+                    "INSERT INTO pygent_model_defaults(scope_id,group_name,profile) VALUES(?,?,?) "
+                    "ON CONFLICT(scope_id,group_name) DO UPDATE SET profile=excluded.profile",
+                    key,
+                )
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
+        self._profiles[key] = result
+        self._retired.discard(key)
+        if make_default:
+            self._defaults[(key[0], key[1])] = key[2]
         return result
 
     @_sqlite_serialized

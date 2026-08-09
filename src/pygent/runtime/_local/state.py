@@ -13,6 +13,7 @@ from typing import Any, cast
 from pygent.core import (
     EXECUTION_EVENT_SCHEMA_VERSION,
     Context,
+    ExecutionFailure,
     JsonValue,
     Message,
     Module,
@@ -22,7 +23,14 @@ from pygent.core import (
 from pygent.tool import ToolTaskManager
 
 from .._history_store import SQLiteHistoryStore
-from ..api import ExecutionEvent, ExecutionStatus
+from ..api import (
+    ExecutionEvent,
+    ExecutionOutcome,
+    ExecutionOwnerState,
+    ExecutionPhase,
+    ExecutionSnapshot,
+    ExecutionStatus,
+)
 from ..plan import ExecutionPlan
 from .capacity import _BindingState
 
@@ -39,8 +47,18 @@ class _ExecutionRecord:
     deadline: float | None
     parent_execution_id: str | None = None
     parent_span_id: str | None = None
-    status: ExecutionStatus = ExecutionStatus.QUEUED
+    status: ExecutionStatus = ExecutionStatus.PENDING
+    phase: ExecutionPhase = ExecutionPhase.SUBMITTING
+    owner_state: ExecutionOwnerState = ExecutionOwnerState.ACTIVE
+    attempt_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    submitted_at_unix_ns: int = field(default_factory=time.time_ns)
+    updated_at_unix_ns: int = field(default_factory=time.time_ns)
+    terminal_sequence: int | None = None
+    outcome: ExecutionOutcome | None = None
+    owner_id: str | None = None
+    fencing_token: int | None = None
     events: list[ExecutionEvent] = field(default_factory=list)
+    event_stream_closed: bool = False
     event_condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     event_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[tuple[Message, Context]] | None = None
@@ -50,6 +68,7 @@ class _ExecutionRecord:
     runnable_held: bool = False
     deadline_fired: bool = False
     history: SQLiteHistoryStore | None = None
+    history_started: bool = False
     attempt: int = 1
     idempotency_key: str | None = None
     model_calls: Any = None
@@ -94,6 +113,7 @@ class _ExecutionRecord:
                 schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
                 event_id=event_id or str(uuid.uuid4()),
                 execution_id=self.execution_id,
+                attempt_id=self.attempt_id,
                 trace_id=self.trace_id,
                 span_id=effective_span_id,
                 parent_span_id=effective_parent_span_id,
@@ -104,7 +124,7 @@ class _ExecutionRecord:
                 data=frozen,
             )
             self.events.append(event)
-            if self.history is not None:
+            if self.history is not None and self.history_started:
                 await self.history.append_event(
                     execution_id=self.execution_id,
                     index=event.sequence,
@@ -112,6 +132,7 @@ class _ExecutionRecord:
                         "schema_version": event.schema_version,
                         "event_id": event.event_id,
                         "execution_id": event.execution_id,
+                        "attempt_id": event.attempt_id,
                         "trace_id": event.trace_id,
                         "span_id": event.span_id,
                         "parent_span_id": event.parent_span_id,
@@ -126,9 +147,126 @@ class _ExecutionRecord:
             self.event_condition.notify_all()
         return event
 
-    async def notify_terminal(self) -> None:
+    @staticmethod
+    def _event_value(event: ExecutionEvent) -> dict[str, JsonValue]:
+        return {
+            "schema_version": event.schema_version,
+            "event_id": event.event_id,
+            "execution_id": event.execution_id,
+            "attempt_id": event.attempt_id,
+            "trace_id": event.trace_id,
+            "span_id": event.span_id,
+            "parent_span_id": event.parent_span_id,
+            "module_path": event.module_path,
+            "sequence": event.sequence,
+            "timestamp_unix_ns": event.timestamp_unix_ns,
+            "kind": event.kind,
+            "data": cast(JsonValue, thaw_json(cast(JsonValue, event.data))),
+        }
+
+    async def finalize(
+        self,
+        *,
+        status: ExecutionStatus,
+        terminal_events: tuple[tuple[str, Mapping[str, JsonValue]], ...],
+        output: object | None = None,
+        error: object | None = None,
+    ) -> None:
+        """Publish the terminal journal and materialized status as one boundary."""
+
+        if not status.terminal:
+            raise ValueError("finalization requires a terminal status")
+        failure: ExecutionFailure | None = None
+        stored_error = error
+        if status is not ExecutionStatus.SUCCEEDED:
+            error_value = error if isinstance(error, Mapping) else {}
+            kind = str(error_value.get("type", status.value))
+            message = str(
+                error_value.get("message", f"execution ended with {status.value}")
+            )
+            failure = ExecutionFailure(
+                domain="runtime",
+                kind=kind,
+                message=message,
+                details={
+                    key: value
+                    for key, value in error_value.items()
+                    if key not in {"type", "message"}
+                },
+            )
+            stored_error = failure.to_dict()
+        self.phase = ExecutionPhase.FINALIZING
+        async with self.event_lock:
+            prepared: list[ExecutionEvent] = []
+            for kind, data in terminal_events:
+                prepared.append(
+                    ExecutionEvent(
+                        schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
+                        event_id=str(uuid.uuid4()),
+                        execution_id=self.execution_id,
+                        attempt_id=self.attempt_id,
+                        trace_id=self.trace_id,
+                        span_id=self.root_span_id,
+                        parent_span_id=self.parent_span_id,
+                        module_path=self.plan.root,
+                        sequence=len(self.events) + len(prepared),
+                        timestamp_unix_ns=time.time_ns(),
+                        kind=kind,
+                        data=data,
+                    )
+                )
+            terminal_sequence = prepared[-1].sequence
+            if self.history is not None and self.history_started:
+                await self.history.finalize_execution(
+                    self.execution_id,
+                    status=status.value,
+                    output=output,
+                    error=stored_error,
+                    terminal_events=tuple(
+                        (event.sequence, self._event_value(event)) for event in prepared
+                    ),
+                    terminal_sequence=terminal_sequence,
+                )
+            self.events.extend(prepared)
+            self.status = status
+            self.phase = ExecutionPhase.TERMINAL
+            self.owner_state = ExecutionOwnerState.TERMINAL
+            self.terminal_sequence = terminal_sequence
+            self.outcome = ExecutionOutcome(
+                execution_id=self.execution_id,
+                status=status,
+                attempt_id=self.attempt_id,
+                terminal_sequence=terminal_sequence,
+                error=failure,
+            )
+            self.updated_at_unix_ns = time.time_ns()
+            self.event_stream_closed = True
         async with self.event_condition:
             self.event_condition.notify_all()
+
+    async def notify_terminal(self) -> None:
+        async with self.event_condition:
+            self.phase = ExecutionPhase.TERMINAL
+            self.owner_state = ExecutionOwnerState.TERMINAL
+            self.updated_at_unix_ns = time.time_ns()
+            if self.terminal_sequence is None and self.events:
+                self.terminal_sequence = self.events[-1].sequence
+            self.event_stream_closed = True
+            self.event_condition.notify_all()
+
+    def snapshot(self) -> ExecutionSnapshot:
+        return ExecutionSnapshot(
+            execution_id=self.execution_id,
+            trace_id=self.trace_id,
+            status=self.status,
+            phase=self.phase,
+            owner_state=self.owner_state,
+            attempt_id=self.attempt_id,
+            last_sequence=len(self.events) - 1,
+            terminal_sequence=self.terminal_sequence,
+            submitted_at_unix_ns=self.submitted_at_unix_ns,
+            updated_at_unix_ns=self.updated_at_unix_ns,
+        )
 
 
 _module_stack: ContextVar[tuple[str, ...]] = ContextVar(

@@ -1,6 +1,6 @@
 # Pygent 0.2 Execution contract
 
-Pygent 0.2 has one owner for every business execution. `start()` creates that owner and returns an `ExecutionHandle`; `invoke()` is exactly `start() + result()`, while `stream()` is an owned `start() + subscribe()` view. None of these entry points may execute `forward()`, a provider request, or a tool operation a second time.
+Pygent has one logical identity for every business execution and one fenced owner for every actual attempt. `start()` creates the logical execution plus its first owner task and returns an `ExecutionHandle` without waiting for admission; `invoke()` is exactly `start() + result()`, while `stream()` is an owned `start() + subscribe()` view. None of these entry points may execute `forward()`, a provider request, or a tool operation a second time.
 
 ## Control, result, and observation
 
@@ -15,9 +15,15 @@ async def observe():
 result, _ = await asyncio.gather(handle.result(), observe())
 ```
 
-`ExecutionHandle` exposes `execution_id`, `trace_id`, `status`, `result()`, `cancel()`, and `subscribe(after=...)`. Multiple subscriptions own independent cursors. Closing a subscription only stops that observer. Exiting a stream created by `module.stream()` before consuming its result cancels that stream's execution because the stream owns it.
+`ExecutionHandle` exposes `execution_id`, `snapshot()`, `outcome()`, `result()`, `cancel()`, and `subscribe(after=...)`. It is a stable reference backed by an `ExecutionBackend`; it does not own the coroutine. `snapshot()` returns the canonical `ExecutionSnapshot` including logical status, detailed phase, active `attempt_id`, owner state, trace identity, last journal sequence, optional terminal sequence, and timestamps; `outcome()` returns the frozen terminal identity and final journal cursor. Multiple subscriptions own independent cursors. Closing a subscription only stops that observer. Exiting a stream created by `module.stream()` before consuming its result cancels that stream's execution because the stream owns it.
 
-Every public `ExecutionEvent` is strict JSON and contains `schema_version`, globally unique `event_id`, `execution_id`, `trace_id`, `span_id`, optional `parent_span_id`, per-execution `sequence`, `timestamp_unix_ns`, `module_path`, `kind`, and `data`. Sequence is monotonic only inside one observable execution stream. Child modules and tool calls create spans; each root execution and span emits exactly one terminal lifecycle event.
+`ExecutionStatus` is the coarse logical state: `PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`, `CANCELLED`, or `DEADLINE_EXCEEDED`. `ExecutionPhase` explains non-terminal progress such as `SUBMITTING`, `PREPARING`, `WAITING_ADMISSION`, `STARTING`, `RUNNING`, and `FINALIZING`. A submitted execution always reaches one terminal `ExecutionOutcome`; admission errors are outcomes of that logical execution, not exceptions that occur before an execution exists.
+
+Every public `ExecutionEvent` is strict JSON and contains `schema_version`, globally unique `event_id`, `execution_id`, `attempt_id`, `trace_id`, `span_id`, optional `parent_span_id`, per-execution `sequence`, `timestamp_unix_ns`, `module_path`, `kind`, and `data`. Sequence is monotonic only inside one observable execution stream. `execution.submitted` is the first lifecycle event; an admitted attempt emits `execution.admitted` before `forward()` begins. Child modules and tool calls create spans; each root execution and span emits exactly one terminal lifecycle event.
+
+Finalization appends all terminal span events, the one Execution terminal event, the frozen `ExecutionOutcome`, terminal snapshot, and `terminal_sequence` atomically. A subscription ends only after its cursor has yielded `terminal_sequence`. Reading a terminal status is never sufficient to stop a live or durable subscription.
+
+`runtime.get_execution_handle(execution_id)` attaches to an existing execution and never creates an attempt. `runtime.recover(execution_id, ...)` is a separate privileged operation that validates recovery eligibility, obtains a fenced owner lease, and creates a new `attempt_id`.
 
 Remote events are imported into the parent execution and receive a new parent-stream `sequence`. Their `event_id` is preserved and `data` includes `origin_execution_id` and `origin_sequence`, allowing reconnect deduplication without claiming global clock ordering.
 
@@ -35,8 +41,8 @@ Model events use a closed vocabulary. Every logical call emits `model.started` a
 
 Managed effects return `EffectOutcome(value, disposition, effect_id, attempt)`. `disposition` is `executed`, `replayed`, or `retried`. Replay returns the committed value and emits an effect replay event; it never fabricates provider/tool deltas or counts usage again.
 
-## Compatibility boundary
+## Contract boundary
 
-This is a breaking 0.2 contract. Public `Run*` names, the former split ModelInvoker `invoke/stream` SPI, `/runs` Worker routes, pre-0.2 Runtime plans and Worker payloads, and pre-0.2 SQLite history are rejected without aliases, adapters, or migration. The stable business contract remains `forward(message, context) -> (message, context)`, with direct execution still excluding Binding capacity, remote placement, and durable recovery.
+There are no aliases, adapters, dual state models, or history migrations for superseded Runtime control-plane contracts. The stable business contract remains `forward(message, context) -> (message, context)`, with direct execution still excluding Binding capacity, remote placement, and durable recovery.
 
 Trace persistence, trace queries, cost aggregation, and reasoning capture are deliberately outside this release. The event and span identities added here are their foundation, not a TraceStore product.
