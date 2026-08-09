@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Self
+from typing import Self, cast
 
 from pygent.core import (
     FrozenJsonObject,
@@ -20,6 +20,8 @@ from .types import (
     ModelRoute,
 )
 
+_PROVIDER_STREAM_TERMINAL = object()
+
 
 class _ProviderStreamOwner:
     """Sole task owner of one provider iterator from open through close."""
@@ -33,7 +35,7 @@ class _ProviderStreamOwner:
         self._client = client
         self._route = route
         self._payload = payload
-        self._items: asyncio.Queue[FrozenJsonObject] = asyncio.Queue(maxsize=1)
+        self._items: asyncio.Queue[FrozenJsonObject | object] = asyncio.Queue(maxsize=1)
         self._stopping = False
         self._task = asyncio.create_task(self._run(), name="pygent-model-stream-owner")
 
@@ -54,29 +56,16 @@ class _ProviderStreamOwner:
 
     async def next(self) -> FrozenJsonObject:
         if not self._items.empty():
-            return self._items.get_nowait()
-        if self._task.done():
+            item = self._items.get_nowait()
+        elif self._task.done():
             await self._task
             raise StopAsyncIteration
-        item_task = asyncio.create_task(
-            self._items.get(), name="pygent-model-stream-item"
-        )
-        try:
-            done, _ = await asyncio.wait(
-                {item_task, self._task}, return_when=asyncio.FIRST_COMPLETED
-            )
-            if item_task in done:
-                return item_task.result()
-            item_task.cancel()
-            await asyncio.gather(item_task, return_exceptions=True)
-            if not self._items.empty():
-                return self._items.get_nowait()
+        else:
+            item = await self._items.get()
+        if item is _PROVIDER_STREAM_TERMINAL:
             await self._task
             raise StopAsyncIteration
-        finally:
-            if not item_task.done():
-                item_task.cancel()
-                await asyncio.gather(item_task, return_exceptions=True)
+        return cast(FrozenJsonObject, item)
 
     async def _run(self) -> None:
         iterator = self._client.stream(self._route, self._payload).__aiter__()
@@ -88,9 +77,19 @@ class _ProviderStreamOwner:
                 if self._stopping:
                     return
         finally:
-            close = getattr(iterator, "aclose", None)
-            if callable(close):
-                await close()
+            try:
+                close = getattr(iterator, "aclose", None)
+                if callable(close):
+                    await close()
+            finally:
+                # Keep the one-item backpressure bound without allowing cleanup
+                # to block after the consumer has stopped.  If the queue already
+                # holds the final data item, ``next()`` observes the completed
+                # owner on its following call instead.
+                try:
+                    self._items.put_nowait(_PROVIDER_STREAM_TERMINAL)
+                except asyncio.QueueFull:
+                    pass
 
 
 class _ModelExecutionSubscription:

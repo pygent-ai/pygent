@@ -510,6 +510,46 @@ async def test_stream_normalizes_text_usage_and_completion():
 
 
 @pytest.mark.asyncio
+async def test_stream_owner_does_not_create_a_task_for_each_provider_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeClient(
+        [
+            *(
+                freeze_json_object({"choices": [{"delta": {"content": "x"}}]})
+                for _ in range(100)
+            ),
+            freeze_json_object({"done": True}),
+        ]
+    )
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": client, "fallback": client},
+        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+    )
+    task_names: list[str | None] = []
+    create_task = asyncio.create_task
+
+    def record_task(coro, *, name=None, context=None):
+        task_names.append(name)
+        return create_task(coro, name=name, context=context)
+
+    monkeypatch.setattr(asyncio, "create_task", record_task)
+    result = await invoker.execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    ).result()
+
+    assert result.message.content == "x" * 100
+    assert task_names.count("pygent-model-stream-owner") == 1
+    assert "pygent-model-stream-item" not in task_names
+    assert "pygent-model-stream-next" not in task_names
+
+
+@pytest.mark.asyncio
 async def test_stream_rejects_transport_eof_without_completion_marker():
     client = FakeClient(
         [freeze_json_object({"choices": [{"delta": {"content": "partial"}}]})]

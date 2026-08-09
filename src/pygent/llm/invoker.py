@@ -53,6 +53,7 @@ from .types import (
 
 _CANCELLATION_CLEANUP_GRACE_SECONDS = 1.0
 
+
 class DefaultModelInvoker:
     """Bounded model executor with deterministic route/retry/fallback order."""
 
@@ -758,6 +759,30 @@ async def _await_stream_owner(
                 "model provider outcome is unknown after cancellation",
             ) from None
         raise
+    if cancel_event is None:
+        try:
+            if deadline is None:
+                return await owner.next()
+            async with asyncio.timeout(max(0.0, deadline - time.monotonic())):
+                return await owner.next()
+        except TimeoutError:
+            owner.cancel()
+            cleaned = await _await_cancellation_cleanup(owner.task)
+            if not cleaned:
+                on_cleanup_stuck(client, owner.task)
+                raise ModelProviderError(
+                    ModelErrorKind.OUTCOME_UNKNOWN,
+                    "model provider outcome is unknown after cancellation",
+                ) from None
+            raise ModelProviderError(
+                ModelErrorKind.TIMEOUT, "model deadline exceeded"
+            ) from None
+        except asyncio.CancelledError:
+            owner.cancel()
+            cleaned = await _await_cancellation_cleanup(owner.task)
+            if not cleaned:
+                on_cleanup_stuck(client, owner.task)
+            raise
     next_task = asyncio.create_task(owner.next(), name="pygent-model-stream-next")
     cancel_task = (
         asyncio.create_task(cancel_event.wait()) if cancel_event is not None else None
