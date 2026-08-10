@@ -106,7 +106,11 @@ class ModelStreamEvent:
             kind = ModelEventKind(self.kind)
         except ValueError as exc:
             raise ValueError(f"unsupported model event kind: {self.kind}") from exc
-        data = freeze_json_object(self.data)
+        data = (
+            self.data
+            if isinstance(self.data, FrozenJsonObject)
+            else freeze_json_object(self.data)
+        )
         _validate_public_model_event(kind, data)
         object.__setattr__(self, "kind", kind.value)
         object.__setattr__(self, "data", data)
@@ -125,7 +129,8 @@ class ModelProviderStreamPart:
         except ValueError as exc:
             raise ValueError(f"unsupported provider stream part: {self.kind}") from exc
         object.__setattr__(self, "kind", kind.value)
-        object.__setattr__(self, "data", freeze_json_object(self.data))
+        if not isinstance(self.data, FrozenJsonObject):
+            object.__setattr__(self, "data", freeze_json_object(self.data))
 
 
 class ModelProviderClient(Protocol):

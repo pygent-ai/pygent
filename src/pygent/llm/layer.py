@@ -25,7 +25,6 @@ from pygent.core import (
     ToolMessage,
     current_infrastructure,
     freeze_json,
-    freeze_json_object,
     thaw_json,
 )
 from pygent.tool import ToolCall, ToolDefinition
@@ -158,7 +157,7 @@ class ModelCallLayer(Module[Message, AIMessage]):
                 async def relay_events() -> None:
                     async with model_execution.subscribe() as events:
                         async for event in events:
-                            await emit(event.kind, freeze_json_object(event.data))
+                            await emit(event.kind, cast(FrozenJsonObject, event.data))
 
                 relay = asyncio.create_task(
                     relay_events(), name="pygent-model-event-relay"

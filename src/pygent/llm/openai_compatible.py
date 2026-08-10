@@ -8,6 +8,7 @@ import json
 import math
 import re
 from collections.abc import AsyncIterator, Mapping
+from functools import lru_cache
 from typing import Self, cast
 
 import httpx
@@ -289,24 +290,13 @@ class OpenAICompatibleAdapter:
         if generation.max_output_tokens is not None:
             body["max_tokens"] = generation.max_output_tokens
         if generation.response_schema is not None:
-            body["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": generation.response_schema_name,
-                    "strict": True,
-                    "schema": freeze_json_object(generation.response_schema).to_dict(),
-                },
-            }
+            body["response_format"] = _response_format_projection(
+                cast(FrozenJsonObject, generation.response_schema),
+                generation.response_schema_name,
+            )
         if request.tools:
             body["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": wire_names[tool.name],
-                        "description": tool.description,
-                        "parameters": freeze_json_object(tool.parameters).to_dict(),
-                    },
-                }
+                _tool_projection(tool, wire_names[tool.name])
                 for tool in request.tools
             ]
             choice = generation.tool_choice
@@ -363,7 +353,9 @@ class OpenAICompatibleAdapter:
                 value = json.loads(content)
                 jsonschema.validate(
                     value,
-                    freeze_json_object(request.generation.response_schema).to_dict(),
+                    _schema_projection(
+                        cast(FrozenJsonObject, request.generation.response_schema)
+                    ),
                 )
             except (json.JSONDecodeError, jsonschema.ValidationError) as exc:
                 raise ModelProviderError(
@@ -596,6 +588,7 @@ def _decode_tool_calls(
     return tuple(calls)
 
 
+@lru_cache(maxsize=512)
 def _openai_tool_name(name: str) -> str:
     """Map a portable tool name to a deterministic OpenAI wire name."""
 
@@ -604,6 +597,39 @@ def _openai_tool_name(name: str) -> str:
     prefix = re.sub(r"[^A-Za-z0-9_-]", "_", name).strip("_") or "tool"
     digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
     return f"{prefix[:49]}__{digest}"
+
+
+@lru_cache(maxsize=128)
+def _schema_projection(schema: FrozenJsonObject) -> dict[str, object]:
+    """Cache deployment-static schema projection, never request content."""
+
+    return schema.to_dict()
+
+
+@lru_cache(maxsize=128)
+def _response_format_projection(
+    schema: FrozenJsonObject, name: str
+) -> dict[str, object]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "strict": True,
+            "schema": _schema_projection(schema),
+        },
+    }
+
+
+@lru_cache(maxsize=512)
+def _tool_projection(tool: ToolDefinition, wire_name: str) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": wire_name,
+            "description": tool.description,
+            "parameters": cast(FrozenJsonObject, tool.parameters).to_dict(),
+        },
+    }
 
 
 def _original_tool_name(wire_name: str, tools: tuple[ToolDefinition, ...]) -> str:

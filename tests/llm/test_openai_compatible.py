@@ -24,6 +24,7 @@ from pygent.llm import (
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
 )
+from pygent.llm import openai_compatible as openai_compatible_module
 
 
 def _request(
@@ -198,6 +199,34 @@ def test_optional_generation_fields_are_omitted_but_zero_is_preserved():
     ).to_dict()
     assert explicit_payload["temperature"] == 0
     assert explicit_payload["max_tokens"] == 1
+
+
+def test_deployment_static_projections_are_reused_without_sharing_public_mutation():
+    tool = ToolDefinition(
+        name="weather.lookup",
+        description="weather",
+        parameters={"type": "object", "properties": {"city": {"type": "string"}}},
+    )
+    generation = GenerationConfig(
+        response_schema={
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+        }
+    )
+    request = _request(generation=generation, tools=(tool,))
+    adapter = OpenAICompatibleAdapter()
+    openai_compatible_module._tool_projection.cache_clear()
+    openai_compatible_module._response_format_projection.cache_clear()
+
+    first = adapter.build_request(request).to_dict()
+    first["tools"][0]["function"]["description"] = "mutated"
+    first["response_format"]["json_schema"]["name"] = "mutated"
+    second = adapter.build_request(request).to_dict()
+
+    assert second["tools"][0]["function"]["description"] == "weather"
+    assert second["response_format"]["json_schema"]["name"] == "response"
+    assert openai_compatible_module._tool_projection.cache_info().hits == 1
+    assert openai_compatible_module._response_format_projection.cache_info().hits == 1
 
 
 def test_portable_tool_name_and_named_choice_round_trip_through_wire_mapping():
