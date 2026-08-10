@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import aiosqlite
@@ -23,6 +24,25 @@ from ._history_types import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _BeginEffectBatchItem:
+    execution_id: str
+    module_path: str
+    call_index: int
+    effect_type: str
+    digest: str
+    spec_json: str
+    frozen_spec: JsonValue
+
+
+@dataclass(frozen=True, slots=True)
+class _CompleteEffectBatchItem:
+    result_json: str
+    execution_id: str
+    module_path: str
+    call_index: int
+
+
 class EffectHistoryMixin:
     if TYPE_CHECKING:
         _write_lock: asyncio.Lock
@@ -34,6 +54,15 @@ class EffectHistoryMixin:
         async def _queue_transaction(
             self,
             operation: Callable[[aiosqlite.Connection], Awaitable[Any]],
+            *,
+            batch_key: str | None = None,
+            batch_payload: object | None = None,
+            batch_operation: (
+                Callable[
+                    [aiosqlite.Connection, list[object]], Awaitable[list[object]]
+                ]
+                | None
+            ) = None,
         ) -> Any: ...
 
     @_serialized_write
@@ -114,6 +143,15 @@ class EffectHistoryMixin:
         digest = effect_digest(request)
         frozen_spec = freeze_json(spec)
         spec_json = _json_frozen(frozen_spec)
+        batch_item = _BeginEffectBatchItem(
+            execution_id,
+            module_path,
+            call_index,
+            effect_type,
+            digest,
+            spec_json,
+            frozen_spec,
+        )
         async def operation(
             db: aiosqlite.Connection,
         ) -> tuple[StoredEffect, bool]:
@@ -158,7 +196,15 @@ class EffectHistoryMixin:
                 True,
             )
 
-        return cast(tuple[StoredEffect, bool], await self._queue_transaction(operation))
+        return cast(
+            tuple[StoredEffect, bool],
+            await self._queue_transaction(
+                operation,
+                batch_key="begin_effect",
+                batch_payload=batch_item,
+                batch_operation=self._batch_begin_effects,
+            ),
+        )
 
     async def complete_effect(
         self,
@@ -169,6 +215,9 @@ class EffectHistoryMixin:
         result: object,
     ) -> None:
         payload = _json(result)
+        batch_item = _CompleteEffectBatchItem(
+            payload, execution_id, module_path, call_index
+        )
 
         async def operation(db: aiosqlite.Connection) -> None:
             cursor = await db.execute(
@@ -180,7 +229,77 @@ class EffectHistoryMixin:
             if cursor.rowcount != 1:
                 raise HistoryConflictError("effect is not in a completable started state")
 
-        await self._queue_transaction(operation)
+        await self._queue_transaction(
+            operation,
+            batch_key="complete_effect",
+            batch_payload=batch_item,
+            batch_operation=self._batch_complete_effects,
+        )
+
+    async def _batch_begin_effects(
+        self, db: aiosqlite.Connection, payloads: list[object]
+    ) -> list[object]:
+        items = [cast(_BeginEffectBatchItem, item) for item in payloads]
+        keys = {
+            (item.execution_id, item.module_path, item.call_index) for item in items
+        }
+        if len(keys) != len(items):
+            raise HistoryConflictError("effect batch contains duplicate identities")
+        await db.executemany(
+            "INSERT INTO effects(execution_id,module_path,call_index,effect_type,"
+            "request_digest,spec_json,status,result_json) "
+            "VALUES(?,?,?,?,?,?,?,NULL)",
+            [
+                (
+                    item.execution_id,
+                    item.module_path,
+                    item.call_index,
+                    item.effect_type,
+                    item.digest,
+                    item.spec_json,
+                    "started",
+                )
+                for item in items
+            ],
+        )
+        return [
+            (
+                StoredEffect(
+                    execution_id=item.execution_id,
+                    module_path=item.module_path,
+                    call_index=item.call_index,
+                    effect_type=item.effect_type,
+                    request_digest=item.digest,
+                    status="started",
+                    spec=item.frozen_spec,
+                    result=None,
+                ),
+                True,
+            )
+            for item in items
+        ]
+
+    async def _batch_complete_effects(
+        self, db: aiosqlite.Connection, payloads: list[object]
+    ) -> list[object]:
+        items = [cast(_CompleteEffectBatchItem, item) for item in payloads]
+        cursor = await db.executemany(
+            "UPDATE effects SET status='completed',result_json=? "
+            "WHERE execution_id=? AND module_path=? AND call_index=? "
+            "AND status='started'",
+            [
+                (
+                    item.result_json,
+                    item.execution_id,
+                    item.module_path,
+                    item.call_index,
+                )
+                for item in items
+            ],
+        )
+        if cursor.rowcount != len(items):
+            raise HistoryConflictError("effect batch contains an invalid started state")
+        return [None] * len(items)
 
     @_serialized_write
     async def mark_effect_unknown(

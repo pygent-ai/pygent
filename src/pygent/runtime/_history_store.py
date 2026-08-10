@@ -38,6 +38,12 @@ class _EventBatch:
 class _TransactionRequest:
     operation: Callable[[aiosqlite.Connection], Awaitable[object]]
     committed: asyncio.Future[object]
+    batch_key: str | None = None
+    batch_payload: object | None = None
+    batch_operation: (
+        Callable[[aiosqlite.Connection, list[object]], Awaitable[list[object]]]
+        | None
+    ) = None
 
 
 class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMixin):
@@ -346,7 +352,16 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
     async def _queue_transaction(
         self,
         operation: Callable[[aiosqlite.Connection], Awaitable[_T]],
+        *,
+        batch_key: str | None = None,
+        batch_payload: object | None = None,
+        batch_operation: (
+            Callable[[aiosqlite.Connection, list[object]], Awaitable[list[object]]]
+            | None
+        ) = None,
     ) -> _T:
+        if (batch_key is None) != (batch_operation is None):
+            raise TypeError("batch_key and batch_operation must be provided together")
         self._db()
         await self._transaction_capacity.acquire()
         try:
@@ -355,7 +370,13 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
             committed: asyncio.Future[object] = loop.create_future()
             committed.add_done_callback(_consume_future_exception)
             self._transaction_queue.append(
-                _TransactionRequest(cast(Callable[..., Awaitable[object]], operation), committed)
+                _TransactionRequest(
+                    cast(Callable[..., Awaitable[object]], operation),
+                    committed,
+                    batch_key,
+                    batch_payload,
+                    batch_operation,
+                )
             )
             task = self._transaction_writer_task
             if task is None or task.done():
@@ -400,7 +421,35 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
         async with self._write_lock:
             await db.execute("BEGIN IMMEDIATE")
             try:
-                results = [await request.operation(db) for request in batch]
+                results: list[object] = []
+                index = 0
+                while index < len(batch):
+                    request = batch[index]
+                    if request.batch_key is None:
+                        results.append(await request.operation(db))
+                        index += 1
+                        continue
+                    end = index + 1
+                    while (
+                        end < len(batch)
+                        and batch[end].batch_key == request.batch_key
+                    ):
+                        end += 1
+                    run = batch[index:end]
+                    if len(run) == 1:
+                        results.append(await request.operation(db))
+                    else:
+                        assert request.batch_operation is not None
+                        batched = await request.batch_operation(
+                            db,
+                            [item.batch_payload for item in run],
+                        )
+                        if len(batched) != len(run):
+                            raise RuntimeError(
+                                "transaction batch operation returned the wrong result count"
+                            )
+                        results.extend(batched)
+                    index = end
                 await db.commit()
             except BaseException:
                 await db.rollback()

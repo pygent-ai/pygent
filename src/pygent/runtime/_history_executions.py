@@ -6,6 +6,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 import aiosqlite
@@ -19,6 +20,24 @@ from ._history_types import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _BeginExecutionBatchItem:
+    values: tuple[object, ...]
+    stored: StoredExecution
+
+
+@dataclass(frozen=True, slots=True)
+class _UpdateExecutionBatchItem:
+    values: tuple[object, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _FinalizeExecutionBatchItem:
+    event_rows: tuple[tuple[str, int, str], ...]
+    update_values: tuple[object, ...]
+    execution_id: str
+
+
 class ExecutionHistoryMixin:
     if TYPE_CHECKING:
         _write_lock: asyncio.Lock
@@ -27,6 +46,15 @@ class ExecutionHistoryMixin:
         async def _queue_transaction(
             self,
             operation: Callable[[aiosqlite.Connection], Awaitable[Any]],
+            *,
+            batch_key: str | None = None,
+            batch_payload: object | None = None,
+            batch_operation: (
+                Callable[
+                    [aiosqlite.Connection, list[object]], Awaitable[list[object]]
+                ]
+                | None
+            ) = None,
         ) -> Any: ...
 
     async def claim_execution(
@@ -138,6 +166,47 @@ class ExecutionHistoryMixin:
         payload = _json(input)
         model_calls_payload = _json({} if model_calls is None else model_calls)
         submitted_at_unix_ns = time.time_ns()
+        frozen_input = _load(payload)
+        frozen_model_calls = _load(model_calls_payload)
+        assert frozen_input is not None
+        values = (
+            execution_id,
+            request_id,
+            status,
+            plan_id,
+            payload,
+            binding_id,
+            identity,
+            idempotency_key,
+            model_calls_payload,
+            model_admission_status,
+            trace_id,
+            phase,
+            attempt_id,
+            submitted_at_unix_ns,
+            submitted_at_unix_ns,
+        )
+        created_record = StoredExecution(
+            execution_id=execution_id,
+            request_id=request_id,
+            status=status,
+            plan_id=plan_id,
+            input=frozen_input,
+            output=None,
+            error=None,
+            attempt=1,
+            binding_id=binding_id,
+            identity=identity,
+            idempotency_key=idempotency_key,
+            model_calls=frozen_model_calls,
+            model_admission_status=model_admission_status,
+            trace_id=trace_id,
+            phase=phase,
+            attempt_id=attempt_id,
+            submitted_at_unix_ns=submitted_at_unix_ns,
+            updated_at_unix_ns=submitted_at_unix_ns,
+        )
+        batch_item = _BeginExecutionBatchItem(values, created_record)
 
         async def operation(
             connection: aiosqlite.Connection,
@@ -149,23 +218,7 @@ class ExecutionHistoryMixin:
                     "model_admission_status,trace_id,phase,attempt_id,"
                     "submitted_at_unix_ns,updated_at_unix_ns) "
                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        execution_id,
-                        request_id,
-                        status,
-                        plan_id,
-                        payload,
-                        binding_id,
-                        identity,
-                        idempotency_key,
-                        model_calls_payload,
-                        model_admission_status,
-                        trace_id,
-                        phase,
-                        attempt_id,
-                        submitted_at_unix_ns,
-                        submitted_at_unix_ns,
-                    ),
+                    values,
                 )
             except aiosqlite.IntegrityError as exc:
                 existing = (
@@ -184,18 +237,22 @@ class ExecutionHistoryMixin:
                         "idempotency identity is committed with different input"
                     ) from exc
                 return existing, False
-            return None, True
+            return created_record, True
 
         existing, created = cast(
             tuple[StoredExecution | None, bool],
-            await self._queue_transaction(operation),
+            await self._queue_transaction(
+                operation,
+                batch_key="begin_execution",
+                batch_payload=batch_item,
+                batch_operation=self._batch_begin_executions,
+            ),
         )
         if not created:
             assert existing is not None
             return existing, False
-        result = await self.get_execution(execution_id)
-        assert result is not None
-        return result, True
+        assert existing is not None
+        return existing, True
 
     @_serialized_write
     async def commit_model_admission(
@@ -285,6 +342,7 @@ class ExecutionHistoryMixin:
             time.time_ns(),
             execution_id,
         )
+        batch_item = _UpdateExecutionBatchItem(values)
 
         async def operation(db: aiosqlite.Connection) -> None:
             cursor = await db.execute(
@@ -298,7 +356,12 @@ class ExecutionHistoryMixin:
             if cursor.rowcount != 1:
                 raise KeyError(f"unknown execution {execution_id!r}")
 
-        await self._queue_transaction(operation)
+        await self._queue_transaction(
+            operation,
+            batch_key="update_execution",
+            batch_payload=batch_item,
+            batch_operation=self._batch_update_executions,
+        )
 
     async def get_execution(self, execution_id: str) -> StoredExecution | None:
         return await self._select_run("execution_id", execution_id)
@@ -385,29 +448,100 @@ class ExecutionHistoryMixin:
         output_payload = None if output is None else _json(output)
         error_payload = None if error is None else _json(error)
         updated_at_unix_ns = time.time_ns()
+        event_rows = tuple(
+            (execution_id, index, payload) for index, payload in payloads
+        )
+        update_values = (
+            status,
+            output_payload,
+            error_payload,
+            terminal_sequence,
+            updated_at_unix_ns,
+            execution_id,
+        )
+        batch_item = _FinalizeExecutionBatchItem(
+            event_rows, update_values, execution_id
+        )
 
         async def operation(db: aiosqlite.Connection) -> None:
-            for index, payload in payloads:
+            for event_execution_id, index, payload in event_rows:
                 await db.execute(
                     "INSERT INTO events(execution_id,event_index,event_json) VALUES(?,?,?)",
-                    (execution_id, index, payload),
+                    (event_execution_id, index, payload),
                 )
             cursor = await db.execute(
                 "UPDATE executions SET status=?,phase='terminal',output_json=?,error_json=?,"
                 "terminal_sequence=?,updated_at_unix_ns=?,updated_at=CURRENT_TIMESTAMP "
                 "WHERE execution_id=? "
                 "AND terminal_sequence IS NULL",
-                (
-                    status,
-                    output_payload,
-                    error_payload,
-                    terminal_sequence,
-                    updated_at_unix_ns,
-                    execution_id,
-                ),
+                update_values,
             )
             if cursor.rowcount != 1:
                 raise HistoryConflictError("execution is already finalized or unknown")
             await db.execute("DELETE FROM execution_claims WHERE execution_id=?", (execution_id,))
 
-        await self._queue_transaction(operation)
+        await self._queue_transaction(
+            operation,
+            batch_key="finalize_execution",
+            batch_payload=batch_item,
+            batch_operation=self._batch_finalize_executions,
+        )
+
+    async def _batch_begin_executions(
+        self, db: aiosqlite.Connection, payloads: list[object]
+    ) -> list[object]:
+        items = [cast(_BeginExecutionBatchItem, item) for item in payloads]
+        identities = {item.stored.execution_id for item in items}
+        if len(identities) != len(items):
+            raise HistoryConflictError("execution batch contains duplicate identities")
+        await db.executemany(
+            "INSERT INTO executions(execution_id,request_id,status,plan_id,input_json,"
+            "binding_id,identity,idempotency_key,model_calls_json,"
+            "model_admission_status,trace_id,phase,attempt_id,"
+            "submitted_at_unix_ns,updated_at_unix_ns) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [item.values for item in items],
+        )
+        return [(item.stored, True) for item in items]
+
+    async def _batch_update_executions(
+        self, db: aiosqlite.Connection, payloads: list[object]
+    ) -> list[object]:
+        items = [cast(_UpdateExecutionBatchItem, item) for item in payloads]
+        cursor = await db.executemany(
+            "UPDATE executions SET status=?, output_json=?, error_json=?, "
+            "attempt=COALESCE(?,attempt), phase=COALESCE(?,phase), "
+            "attempt_id=COALESCE(?,attempt_id), "
+            "updated_at_unix_ns=?, updated_at=CURRENT_TIMESTAMP "
+            "WHERE execution_id=?",
+            [item.values for item in items],
+        )
+        if cursor.rowcount != len(items):
+            raise KeyError("execution batch contains an unknown execution")
+        return [None] * len(items)
+
+    async def _batch_finalize_executions(
+        self, db: aiosqlite.Connection, payloads: list[object]
+    ) -> list[object]:
+        items = [cast(_FinalizeExecutionBatchItem, item) for item in payloads]
+        event_rows = [row for item in items for row in item.event_rows]
+        if event_rows:
+            await db.executemany(
+                "INSERT INTO events(execution_id,event_index,event_json) VALUES(?,?,?)",
+                event_rows,
+            )
+        cursor = await db.executemany(
+            "UPDATE executions SET status=?,phase='terminal',output_json=?,error_json=?,"
+            "terminal_sequence=?,updated_at_unix_ns=?,updated_at=CURRENT_TIMESTAMP "
+            "WHERE execution_id=? AND terminal_sequence IS NULL",
+            [item.update_values for item in items],
+        )
+        if cursor.rowcount != len(items):
+            raise HistoryConflictError(
+                "execution batch contains an already finalized or unknown execution"
+            )
+        await db.executemany(
+            "DELETE FROM execution_claims WHERE execution_id=?",
+            [(item.execution_id,) for item in items],
+        )
+        return [None] * len(items)

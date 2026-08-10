@@ -485,6 +485,104 @@ async def test_concurrent_effect_boundaries_share_transactions(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_homogeneous_transaction_runs_use_vectorized_sql(tmp_path):
+    class CountingHistory(SQLiteHistoryStore):
+        def __init__(self, path):
+            super().__init__(path)
+            self.vector_sizes = {
+                "begin_execution": [],
+                "update_execution": [],
+                "begin_effect": [],
+                "complete_effect": [],
+                "finalize_execution": [],
+            }
+
+        async def _batch_begin_executions(self, db, payloads):
+            self.vector_sizes["begin_execution"].append(len(payloads))
+            return await super()._batch_begin_executions(db, payloads)
+
+        async def _batch_update_executions(self, db, payloads):
+            self.vector_sizes["update_execution"].append(len(payloads))
+            return await super()._batch_update_executions(db, payloads)
+
+        async def _batch_begin_effects(self, db, payloads):
+            self.vector_sizes["begin_effect"].append(len(payloads))
+            return await super()._batch_begin_effects(db, payloads)
+
+        async def _batch_complete_effects(self, db, payloads):
+            self.vector_sizes["complete_effect"].append(len(payloads))
+            return await super()._batch_complete_effects(db, payloads)
+
+        async def _batch_finalize_executions(self, db, payloads):
+            self.vector_sizes["finalize_execution"].append(len(payloads))
+            return await super()._batch_finalize_executions(db, payloads)
+
+    count = 16
+    async with CountingHistory(tmp_path / "vectorized.sqlite3") as store:
+        await asyncio.gather(
+            *(
+                store.create_execution(
+                    execution_id=f"execution-{index}",
+                    request_id=f"request-{index}",
+                    plan_id="plan",
+                    input={"index": index},
+                )
+                for index in range(count)
+            )
+        )
+        await asyncio.gather(
+            *(
+                store.update_execution(
+                    f"execution-{index}", status="running", phase="running"
+                )
+                for index in range(count)
+            )
+        )
+        await asyncio.gather(
+            *(
+                store.begin_effect(
+                    execution_id=f"execution-{index}",
+                    module_path="root",
+                    call_index=0,
+                    effect_type="test.effect",
+                    request={"index": index},
+                    spec={"side_effect": "read"},
+                )
+                for index in range(count)
+            )
+        )
+        await asyncio.gather(
+            *(
+                store.complete_effect(
+                    execution_id=f"execution-{index}",
+                    module_path="root",
+                    call_index=0,
+                    result={"index": index},
+                )
+                for index in range(count)
+            )
+        )
+        await asyncio.gather(
+            *(
+                store.finalize_execution(
+                    f"execution-{index}",
+                    status="succeeded",
+                    output={"index": index},
+                    error=None,
+                    terminal_events=((0, {"kind": "execution.completed"}),),
+                    terminal_sequence=0,
+                )
+                for index in range(count)
+            )
+        )
+
+    assert all(
+        sum(sizes) == count and max(sizes) > 1
+        for sizes in store.vector_sizes.values()
+    )
+
+
+@pytest.mark.asyncio
 async def test_failed_transaction_request_isolated_from_valid_peer(tmp_path):
     async with SQLiteHistoryStore(tmp_path / "isolated.sqlite3") as store:
         await store.create_execution(
