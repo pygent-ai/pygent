@@ -41,7 +41,20 @@ from .types import (
 _OPENAI_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _DEFAULT_HTTP1_POOL_SHARDS = 8
 _DEFAULT_MAX_CONNECTIONS_PER_SHARD = 32
-_DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD = 8
+_DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD = 32
+
+
+def _response_body_is_received(response: httpx.Response) -> bool:
+    """Return whether a declared response body is already in httpx's buffers."""
+
+    raw_length = response.headers.get("content-length")
+    if raw_length is None:
+        return False
+    try:
+        content_length = int(raw_length)
+    except ValueError:
+        return False
+    return content_length >= 0 and response.num_bytes_downloaded >= content_length
 
 
 class OpenAICompatibleClient:
@@ -128,13 +141,19 @@ class OpenAICompatibleClient:
             headers={**self._request_headers, "Accept": "text/event-stream"},
         ) as response:
             response.raise_for_status()
+            drain_received_body = False
             async for line in response.aiter_lines():
+                if drain_received_body:
+                    continue
                 line = line.strip()
                 if not line or line.startswith(":") or not line.startswith("data:"):
                     continue
                 data = line[5:].strip()
                 if data == "[DONE]":
                     yield freeze_json_object({"done": True})
+                    if _response_body_is_received(response):
+                        drain_received_body = True
+                        continue
                     return
                 try:
                     item = json.loads(data)

@@ -13,7 +13,7 @@ from pygent import (
     ToolResult,
     UserMessage,
 )
-from pygent.core import freeze_json_object
+from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import (
     GenerationConfig,
     ModelErrorKind,
@@ -368,6 +368,131 @@ async def test_http_and_sse_transport_use_openai_compatible_endpoint():
     # An injected client remains owned by the caller.
     assert not http_client.is_closed
     await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_completed_sse_response_reuses_http1_connection(
+) -> None:
+    connection_count = 0
+
+    async def serve_connection(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        nonlocal connection_count
+        connection_count += 1
+        try:
+            while True:
+                try:
+                    head = await reader.readuntil(b"\r\n\r\n")
+                except (asyncio.IncompleteReadError, ConnectionError):
+                    return
+                headers = {}
+                for raw_line in head.split(b"\r\n")[1:]:
+                    if b":" in raw_line:
+                        name, value = raw_line.split(b":", 1)
+                        headers[name.lower()] = value.strip()
+                content_length = int(headers.get(b"content-length", b"0"))
+                if content_length:
+                    await reader.readexactly(content_length)
+                body = (
+                    b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+                    b"data: [DONE]\n\n"
+                )
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\n"
+                    b"Content-Type: text/event-stream\r\n"
+                    + f"Content-Length: {len(body)}\r\n".encode()
+                    + b"\r\n"
+                    + body
+                )
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(serve_connection, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    http_client = httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{port}/v1", trust_env=False
+    )
+    client = OpenAICompatibleClient(
+        base_url=f"http://127.0.0.1:{port}/v1", client=http_client
+    )
+    route = ModelRoute("main", "openai", "gpt-test")
+    payload = OpenAICompatibleAdapter().build_request(_request())
+
+    try:
+        for _ in range(2):
+            streamed = [item async for item in client.stream(route, payload)]
+            assert streamed[-1]["done"] is True
+        assert connection_count == 1
+    finally:
+        await client.aclose()
+        await http_client.aclose()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_done_does_not_wait_for_unknown_length_sse_eof() -> None:
+    release = asyncio.Event()
+
+    async def serve_connection(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        try:
+            head = await reader.readuntil(b"\r\n\r\n")
+            content_length = next(
+                (
+                    int(line.split(b":", 1)[1].strip())
+                    for line in head.split(b"\r\n")
+                    if line.lower().startswith(b"content-length:")
+                ),
+                0,
+            )
+            if content_length:
+                await reader.readexactly(content_length)
+            body = b"data: [DONE]\n\n"
+            writer.write(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/event-stream\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+                + f"{len(body):x}\r\n".encode()
+                + body
+                + b"\r\n"
+            )
+            await writer.drain()
+            await release.wait()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(serve_connection, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    http_client = httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{port}/v1", trust_env=False
+    )
+    client = OpenAICompatibleClient(
+        base_url=f"http://127.0.0.1:{port}/v1", client=http_client
+    )
+
+    async def collect() -> list[FrozenJsonObject]:
+        return [
+            item
+            async for item in client.stream(
+                ModelRoute("main", "openai", "gpt-test"), freeze_json_object({})
+            )
+        ]
+
+    try:
+        streamed = await asyncio.wait_for(collect(), timeout=1)
+        assert streamed[-1]["done"] is True
+    finally:
+        release.set()
+        await client.aclose()
+        await http_client.aclose()
+        server.close()
+        await server.wait_closed()
 
 
 @pytest.mark.asyncio
