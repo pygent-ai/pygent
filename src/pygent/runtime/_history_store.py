@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
@@ -12,6 +14,12 @@ from ._history_effects import EffectHistoryMixin
 from ._history_executions import ExecutionHistoryMixin
 from ._history_jobs import JobHistoryMixin
 from ._history_types import HistoryStoreError
+
+
+@dataclass(slots=True)
+class _EventBatch:
+    events: list[tuple[str, int, str]]
+    committed: asyncio.Future[None]
 
 
 class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMixin):
@@ -32,8 +40,7 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
         self.path = str(path)
         self._connection: aiosqlite.Connection | None = None
         self._write_lock = asyncio.Lock()
-        self._event_batch_lock = asyncio.Lock()
-        self._event_batch: list[tuple[str, int, str, asyncio.Future[None]]] = []
+        self._event_batches: deque[_EventBatch] = deque()
         self._event_flush_task: asyncio.Task[None] | None = None
         self._max_event_batch_size = max_event_batch_size
 
@@ -172,49 +179,58 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
             await connection.close()
 
     async def _queue_event(self, execution_id: str, index: int, payload: str) -> None:
-        loop = asyncio.get_running_loop()
-        committed: asyncio.Future[None] = loop.create_future()
-        async with self._event_batch_lock:
-            self._event_batch.append((execution_id, index, payload, committed))
-            task = self._event_flush_task
-            if task is None or task.done():
-                task = asyncio.create_task(
-                    self._flush_event_batches(), name="pygent-sqlite-event-writer"
-                )
-                self._event_flush_task = task
+        committed = self._enqueue_event_payload(execution_id, index, payload)
         await asyncio.shield(committed)
 
+    def _enqueue_event_payload(
+        self, execution_id: str, index: int, payload: str
+    ) -> asyncio.Future[None]:
+        """Queue an event synchronously and return its batch commit receipt."""
+
+        self._db()
+        loop = asyncio.get_running_loop()
+        if (
+            not self._event_batches
+            or len(self._event_batches[-1].events) >= self._max_event_batch_size
+        ):
+            self._event_batches.append(
+                _EventBatch([], loop.create_future())
+            )
+        batch = self._event_batches[-1]
+        batch.events.append((execution_id, index, payload))
+        task = self._event_flush_task
+        if task is None or task.done():
+            self._event_flush_task = asyncio.create_task(
+                self._flush_event_batches(), name="pygent-sqlite-event-writer"
+            )
+        return batch.committed
+
     async def _flush_event_batches(self) -> None:
-        # One event-loop turn is enough to combine writes from concurrent
-        # executions without imposing a timer on a single interactive stream.
-        await asyncio.sleep(0)
         while True:
-            async with self._event_batch_lock:
-                batch = self._event_batch[: self._max_event_batch_size]
-                del self._event_batch[: len(batch)]
-                if not batch:
-                    self._event_flush_task = None
-                    return
+            if not self._event_batches:
+                self._event_flush_task = None
+                return
+            batch = self._event_batches[0]
+            if len(batch.events) < self._max_event_batch_size:
+                await asyncio.sleep(0)
+            batch = self._event_batches.popleft()
             try:
-                await self._commit_event_batch(batch)
+                await self._commit_event_batch(batch.events)
             except BaseException as exc:  # noqa: BLE001 - fail every queued writer
-                for *_, future in batch:
-                    if not future.done():
-                        future.set_exception(exc)
-                async with self._event_batch_lock:
-                    pending, self._event_batch = self._event_batch, []
-                    self._event_flush_task = None
-                for *_, future in pending:
-                    if not future.done():
-                        future.set_exception(exc)
+                if not batch.committed.done():
+                    batch.committed.set_exception(exc)
+                pending, self._event_batches = self._event_batches, deque()
+                self._event_flush_task = None
+                for queued in pending:
+                    if not queued.committed.done():
+                        queued.committed.set_exception(exc)
                 return
             else:
-                for *_, future in batch:
-                    if not future.done():
-                        future.set_result(None)
+                if not batch.committed.done():
+                    batch.committed.set_result(None)
 
     async def _commit_event_batch(
-        self, batch: list[tuple[str, int, str, asyncio.Future[None]]]
+        self, batch: list[tuple[str, int, str]]
     ) -> None:
         db = self._db()
         async with self._write_lock:
@@ -223,10 +239,10 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
                 cursor = await db.executemany(
                     "INSERT INTO events(execution_id,event_index,event_json) "
                     "VALUES(?,?,?) ON CONFLICT(execution_id,event_index) DO NOTHING",
-                    [(execution_id, index, payload) for execution_id, index, payload, _ in batch],
+                    batch,
                 )
                 if cursor.rowcount != len(batch):
-                    for execution_id, index, payload, _ in batch:
+                    for execution_id, index, payload in batch:
                         row = await (
                             await db.execute(
                                 "SELECT event_json FROM events "

@@ -335,3 +335,48 @@ async def test_concurrent_events_share_group_commit(tmp_path):
 
         assert sum(store.batch_sizes) == 32
         assert len(store.batch_sizes) < 32
+
+
+@pytest.mark.asyncio
+async def test_full_event_batch_shares_one_commit_receipt(tmp_path):
+    async with SQLiteHistoryStore(
+        tmp_path / "grouped.sqlite3", max_event_batch_size=8
+    ) as store:
+        receipts = [
+            store._enqueue_event_payload(
+                f"execution-{index}", index, json.dumps({"index": index})
+            )
+            for index in range(8)
+        ]
+
+        assert len({id(receipt) for receipt in receipts}) == 1
+        await asyncio.gather(*(asyncio.shield(receipt) for receipt in receipts))
+        assert all(receipt.done() and receipt.exception() is None for receipt in receipts)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_event_waiter_does_not_cancel_shared_commit(tmp_path):
+    class GatedHistory(SQLiteHistoryStore):
+        def __init__(self, path):
+            super().__init__(path)
+            self.commit_entered = asyncio.Event()
+            self.release_commit = asyncio.Event()
+
+        async def _commit_event_batch(self, batch):
+            self.commit_entered.set()
+            await self.release_commit.wait()
+            await super()._commit_event_batch(batch)
+
+    async with GatedHistory(tmp_path / "cancelled.sqlite3") as store:
+        waiter = asyncio.create_task(
+            store.append_event(execution_id="execution", index=0, event={"ok": True})
+        )
+        await asyncio.wait_for(store.commit_entered.wait(), timeout=1)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        store.release_commit.set()
+        assert store._event_flush_task is not None
+        await asyncio.shield(store._event_flush_task)
+        persisted = await store.events_after(execution_id="execution", after=-1)
+        assert [thaw_json(event) for event in persisted] == [{"ok": True}]

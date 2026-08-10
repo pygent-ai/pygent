@@ -124,10 +124,10 @@ class _GatedAppendHistory(SQLiteHistoryStore):
         self.append_entered = asyncio.Event()
         self.release_append = asyncio.Event()
 
-    async def append_event(self, **kwargs) -> None:
+    async def _commit_event_batch(self, batch) -> None:
         self.append_entered.set()
         await self.release_append.wait()
-        await super().append_event(**kwargs)
+        await super()._commit_event_batch(batch)
 
 
 class EmitsThenReturns(Module[UserMessage, AIMessage]):

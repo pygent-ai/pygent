@@ -64,7 +64,7 @@ class _ExecutionRecord:
     event_condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     active_subscribers: int = 0
     event_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    journal_tail: asyncio.Task[None] | None = None
+    journal_tail: asyncio.Future[None] | None = None
     task: asyncio.Task[tuple[Message, Context]] | None = None
     child_calls: int = 0
     module_calls: dict[str, int] = field(default_factory=dict)
@@ -113,7 +113,7 @@ class _ExecutionRecord:
             copied_payload = dict(data)
             copied_payload.setdefault("origin_execution_id", execution_id)
             payload = copied_payload
-        persistence: asyncio.Task[None] | None = None
+        persistence: asyncio.Future[None] | None = None
         async with self.event_lock:
             if self.phase is ExecutionPhase.FINALIZING or self.event_stream_closed:
                 raise RuntimeError("execution journal is finalizing")
@@ -134,31 +134,18 @@ class _ExecutionRecord:
             self.next_sequence += 1
             self.events.append(event)
             if self.history is not None and self.history_started:
-                previous = self.journal_tail
-                persistence = asyncio.create_task(
-                    self._persist_event(previous, event),
-                    name=f"pygent-journal-{self.execution_id}-{event.sequence}",
+                persistence = self.history._enqueue_event_payload(
+                    self.execution_id,
+                    event.sequence,
+                    self._event_payload(event),
                 )
                 self.journal_tail = persistence
         if persistence is None:
             await self._publish_committed(event.sequence)
         else:
             await asyncio.shield(persistence)
+            await self._publish_committed(event.sequence)
         return event
-
-    async def _persist_event(
-        self, previous: asyncio.Task[None] | None, event: ExecutionEvent
-    ) -> None:
-        if previous is not None:
-            await asyncio.shield(previous)
-        history = self.history
-        assert history is not None
-        await history.append_event(
-            execution_id=self.execution_id,
-            index=event.sequence,
-            _payload=self._event_payload(event),
-        )
-        await self._publish_committed(event.sequence)
 
     async def _publish_committed(self, sequence: int) -> None:
         if self.active_subscribers == 0:
