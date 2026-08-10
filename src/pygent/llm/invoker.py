@@ -85,7 +85,7 @@ class DefaultModelInvoker:
         deadline: float | None = None,
         cancel_event: asyncio.Event | None = None,
     ) -> ModelExecution:
-        return ModelExecution(
+        return ModelExecution._from_trusted_operation(
             lambda event_sink: self._execute_registered(
                 model_group=model_group,
                 retry_policy=retry_policy,

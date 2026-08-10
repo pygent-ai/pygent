@@ -116,6 +116,17 @@ class ModelStreamEvent:
         object.__setattr__(self, "data", data)
 
 
+def _trusted_model_stream_event(
+    kind: str, data: FrozenJsonObject
+) -> ModelStreamEvent:
+    """Construct one event already normalized by the built-in invoker."""
+
+    event = object.__new__(ModelStreamEvent)
+    object.__setattr__(event, "kind", kind)
+    object.__setattr__(event, "data", data)
+    return event
+
+
 @dataclass(frozen=True, slots=True)
 class ModelProviderStreamPart:
     """One provider-neutral increment; one wire chunk may produce many parts."""

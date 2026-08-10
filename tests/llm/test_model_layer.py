@@ -30,6 +30,7 @@ from pygent.llm import (
     ModelProviderCapabilities,
     ModelProviderResponse,
     ModelRoute,
+    ModelStreamEvent,
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
     RetryPolicy,
@@ -66,6 +67,24 @@ def definition(name: str) -> ToolDefinition:
         description=f"{name} tool",
         parameters={"type": "object"},
     )
+
+
+def test_public_model_stream_events_remain_strictly_validated() -> None:
+    with pytest.raises(ValueError, match="unsupported model event kind"):
+        ModelStreamEvent("private.invalid", {})
+    with pytest.raises(ValueError, match="data fields must be exactly"):
+        ModelStreamEvent("model.started", {})
+
+
+@pytest.mark.asyncio
+async def test_public_model_execution_operations_do_not_use_trusted_events() -> None:
+    async def operation(emit):
+        await emit("model.started", freeze_json_object({}))
+        raise AssertionError("invalid event unexpectedly accepted")
+
+    execution = ModelExecution(operation)
+    with pytest.raises(ValueError, match="data fields must be exactly"):
+        await execution.result()
 
 
 def layer(invoker=None) -> ModelCallLayer:

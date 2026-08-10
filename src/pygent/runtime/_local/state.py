@@ -14,10 +14,13 @@ from pygent.core import (
     EXECUTION_EVENT_SCHEMA_VERSION,
     Context,
     ExecutionFailure,
+    FrozenJsonObject,
     JsonValue,
     Message,
     Module,
+    freeze_json_object,
 )
+from pygent.core.execution import _trusted_execution_event
 from pygent.tool import ToolTaskManager
 
 from .._history_store import SQLiteHistoryStore
@@ -126,7 +129,7 @@ class _ExecutionRecord:
                     raise RuntimeError("execution journal is finalizing")
                 if self.journal_error is not None:
                     raise self.journal_error
-                event = ExecutionEvent(
+                event = _trusted_execution_event(
                     schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
                     event_id=event_id or str(uuid.uuid4()),
                     execution_id=self.execution_id,
@@ -138,7 +141,11 @@ class _ExecutionRecord:
                     sequence=self.next_sequence,
                     timestamp_unix_ns=timestamp_unix_ns or time.time_ns(),
                     kind=kind,
-                    data=payload,
+                    data=(
+                        payload
+                        if isinstance(payload, FrozenJsonObject)
+                        else freeze_json_object(payload)
+                    ),
                 )
                 self.next_sequence += 1
                 self.events.append(event)
@@ -250,7 +257,7 @@ class _ExecutionRecord:
             prepared: list[ExecutionEvent] = []
             for kind, data in terminal_events:
                 prepared.append(
-                    ExecutionEvent(
+                    _trusted_execution_event(
                         schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
                         event_id=str(uuid.uuid4()),
                         execution_id=self.execution_id,
@@ -262,7 +269,11 @@ class _ExecutionRecord:
                         sequence=self.next_sequence + len(prepared),
                         timestamp_unix_ns=time.time_ns(),
                         kind=kind,
-                        data=data,
+                        data=(
+                            data
+                            if isinstance(data, FrozenJsonObject)
+                            else freeze_json_object(data)
+                        ),
                     )
                 )
             terminal_sequence = prepared[-1].sequence
