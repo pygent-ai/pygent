@@ -62,6 +62,27 @@ def test_message_and_execution_event_freeze_public_metadata():
     assert event.data["percent"] == 50
 
 
+def test_execution_event_reuses_root_frozen_payload():
+    payload = json_values.freeze_json_object({"percent": 50})
+
+    event = ExecutionEvent(
+        schema_version="0.2",
+        event_id="event-1",
+        execution_id="run-1",
+        attempt_id="attempt-1",
+        trace_id="trace-1",
+        span_id="span-1",
+        parent_span_id=None,
+        module_path="root",
+        sequence=0,
+        timestamp_unix_ns=1,
+        kind="demo.progress",
+        data=payload,
+    )
+
+    assert event.data is payload
+
+
 @pytest.mark.parametrize("container_kind", ["list", "object"])
 def test_cyclic_json_values_are_rejected(container_kind):
     if container_kind == "list":

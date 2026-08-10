@@ -467,6 +467,7 @@ class _LifecycleMixin:
                 record.history is not None
                 and record.owner_id is not None
                 and record.fencing_token is not None
+                and not record.terminal
             ):
                 await asyncio.shield(
                     record.history.release_execution_claim(

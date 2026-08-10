@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pygent-ai"
-version = "0.2.8"
+version = "0.2.9"
 description = "A PyTorch-like Module framework for building stateless LLM agents."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,6 +16,7 @@ dependencies = [
     "jsonschema>=4.23",
     "mcp>=1.0",
     "pydantic>=2.8",
+    "sniffio>=1.3",
     "starlette>=0.38",
     "typing-extensions>=4.12",
     "uvicorn>=0.30",

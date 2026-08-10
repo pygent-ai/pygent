@@ -15,6 +15,7 @@ from ._adapter_contracts import (
     ModelProviderClient,
     ModelProviderResponse,
     ModelStreamEvent,
+    _trusted_model_stream_event,
 )
 from .types import (
     ModelRoute,
@@ -130,8 +131,26 @@ class ModelExecution:
         self,
         operation: Callable[[EventSink], Awaitable[ModelProviderResponse]],
     ) -> None:
+        self._initialize(operation, trusted_events=False)
+
+    @classmethod
+    def _from_trusted_operation(
+        cls,
+        operation: Callable[[EventSink], Awaitable[ModelProviderResponse]],
+    ) -> ModelExecution:
+        execution = object.__new__(cls)
+        execution._initialize(operation, trusted_events=True)
+        return execution
+
+    def _initialize(
+        self,
+        operation: Callable[[EventSink], Awaitable[ModelProviderResponse]],
+        *,
+        trusted_events: bool,
+    ) -> None:
         self._events: list[ModelStreamEvent] = []
         self._condition = asyncio.Condition()
+        self._trusted_events = trusted_events
 
         async def run() -> ModelProviderResponse:
             return await operation(self._publish)
@@ -143,7 +162,11 @@ class ModelExecution:
 
     async def _publish(self, kind: str, data: FrozenJsonObject) -> None:
         async with self._condition:
-            self._events.append(ModelStreamEvent(kind, data))
+            self._events.append(
+                _trusted_model_stream_event(kind, data)
+                if self._trusted_events
+                else ModelStreamEvent(kind, data)
+            )
             self._condition.notify_all()
 
     async def _notify(self) -> None:

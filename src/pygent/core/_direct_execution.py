@@ -42,11 +42,13 @@ from .execution import (
     ExecutionPhase,
     ExecutionSnapshot,
     ExecutionStatus,
+    _trusted_execution_event,
 )
 from .json_values import (
     FrozenJsonObject,
     JsonValue,
     freeze_json,
+    freeze_json_object,
 )
 from .values import Context, Message
 
@@ -102,7 +104,7 @@ class _DirectExecutionRecord(Generic[OutputMessageT]):
         if not isinstance(kind, str) or not kind:
             raise ValueError("event kind must be a non-empty string")
         async with self.condition:
-            event = ExecutionEvent(
+            event = _trusted_execution_event(
                 schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
                 event_id=str(uuid4()),
                 execution_id=self.execution_id,
@@ -114,7 +116,11 @@ class _DirectExecutionRecord(Generic[OutputMessageT]):
                 timestamp_unix_ns=time.time_ns(),
                 module_path=module_path,
                 kind=kind,
-                data=data,
+                data=(
+                    data
+                    if isinstance(data, FrozenJsonObject)
+                    else freeze_json_object(data)
+                ),
             )
             self.events.append(event)
             self.condition.notify_all()

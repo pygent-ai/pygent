@@ -14,15 +14,17 @@ from pygent.core import (
     EXECUTION_EVENT_SCHEMA_VERSION,
     Context,
     ExecutionFailure,
+    FrozenJsonObject,
     JsonValue,
     Message,
     Module,
     freeze_json_object,
-    thaw_json,
 )
+from pygent.core.execution import _trusted_execution_event
 from pygent.tool import ToolTaskManager
 
 from .._history_store import SQLiteHistoryStore
+from .._history_types import _json_frozen_object
 from ..api import (
     ExecutionEvent,
     ExecutionOutcome,
@@ -63,8 +65,11 @@ class _ExecutionRecord:
     committed_sequence: int = -1
     event_stream_closed: bool = False
     event_condition: asyncio.Condition = field(default_factory=asyncio.Condition)
+    active_subscribers: int = 0
     event_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    journal_tail: asyncio.Task[None] | None = None
+    journal_tail: asyncio.Future[None] | None = None
+    journal_error: BaseException | None = None
+    journal_notification: asyncio.Task[None] | None = None
     task: asyncio.Task[tuple[Message, Context]] | None = None
     child_calls: int = 0
     module_calls: dict[str, int] = field(default_factory=dict)
@@ -108,58 +113,83 @@ class _ExecutionRecord:
             if parent_span_id is not None
             else (self.parent_span_id if frame is None else frame.parent_span_id)
         )
-        payload: dict[str, JsonValue] = dict(data)
+        payload: Mapping[str, JsonValue] = data
         if execution_id is not None and execution_id != self.execution_id:
-            payload.setdefault("origin_execution_id", execution_id)
-        frozen = freeze_json_object(payload)
-        persistence: asyncio.Task[None] | None = None
-        async with self.event_lock:
-            if self.phase is ExecutionPhase.FINALIZING or self.event_stream_closed:
-                raise RuntimeError("execution journal is finalizing")
-            event = ExecutionEvent(
-                schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
-                event_id=event_id or str(uuid.uuid4()),
-                execution_id=self.execution_id,
-                attempt_id=self.attempt_id,
-                trace_id=self.trace_id,
-                span_id=effective_span_id,
-                parent_span_id=effective_parent_span_id,
-                module_path=module_path,
-                sequence=self.next_sequence,
-                timestamp_unix_ns=timestamp_unix_ns or time.time_ns(),
-                kind=kind,
-                data=frozen,
-            )
-            self.next_sequence += 1
-            self.events.append(event)
-            if self.history is not None and self.history_started:
-                previous = self.journal_tail
-                persistence = asyncio.create_task(
-                    self._persist_event(previous, event),
-                    name=f"pygent-journal-{self.execution_id}-{event.sequence}",
+            copied_payload = dict(data)
+            copied_payload.setdefault("origin_execution_id", execution_id)
+            payload = copied_payload
+        history = self.history if self.history_started else None
+        reserved = False
+        if history is not None:
+            await history._reserve_event_slot()
+            reserved = True
+        try:
+            async with self.event_lock:
+                if self.phase is ExecutionPhase.FINALIZING or self.event_stream_closed:
+                    raise RuntimeError("execution journal is finalizing")
+                if self.journal_error is not None:
+                    raise self.journal_error
+                event = _trusted_execution_event(
+                    schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
+                    event_id=event_id or str(uuid.uuid4()),
+                    execution_id=self.execution_id,
+                    attempt_id=self.attempt_id,
+                    trace_id=self.trace_id,
+                    span_id=effective_span_id,
+                    parent_span_id=effective_parent_span_id,
+                    module_path=module_path,
+                    sequence=self.next_sequence,
+                    timestamp_unix_ns=timestamp_unix_ns or time.time_ns(),
+                    kind=kind,
+                    data=(
+                        payload
+                        if isinstance(payload, FrozenJsonObject)
+                        else freeze_json_object(payload)
+                    ),
                 )
-                self.journal_tail = persistence
-        if persistence is None:
+                self.next_sequence += 1
+                self.events.append(event)
+                if history is not None:
+                    self.journal_tail = history._enqueue_reserved_event_payload(
+                        self.execution_id,
+                        event.sequence,
+                        self._event_payload(event),
+                        on_commit=self._mark_journal_committed,
+                        on_error=self._mark_journal_failed,
+                    )
+                    reserved = False
+        except BaseException:
+            if reserved:
+                assert history is not None
+                history._event_capacity.release()
+            raise
+        if history is None:
             await self._publish_committed(event.sequence)
-        else:
-            await asyncio.shield(persistence)
         return event
 
-    async def _persist_event(
-        self, previous: asyncio.Task[None] | None, event: ExecutionEvent
-    ) -> None:
-        if previous is not None:
-            await asyncio.shield(previous)
-        history = self.history
-        assert history is not None
-        await history.append_event(
-            execution_id=self.execution_id,
-            index=event.sequence,
-            event=self._event_value(event),
-        )
-        await self._publish_committed(event.sequence)
+    def _mark_journal_committed(self, sequence: int) -> None:
+        self.committed_sequence = max(self.committed_sequence, sequence)
+        if self.active_subscribers == 0:
+            return
+        task = self.journal_notification
+        if task is None or task.done():
+            self.journal_notification = asyncio.create_task(
+                self._notify_journal_committed(),
+                name=f"pygent-journal-notify-{self.execution_id}",
+            )
+
+    def _mark_journal_failed(self, exc: BaseException) -> None:
+        if self.journal_error is None:
+            self.journal_error = exc
+
+    async def _notify_journal_committed(self) -> None:
+        async with self.event_condition:
+            self.event_condition.notify_all()
 
     async def _publish_committed(self, sequence: int) -> None:
+        if self.active_subscribers == 0:
+            self.committed_sequence = max(self.committed_sequence, sequence)
+            return
         async with self.event_condition:
             self.committed_sequence = max(self.committed_sequence, sequence)
             self.event_condition.notify_all()
@@ -178,8 +208,12 @@ class _ExecutionRecord:
             "sequence": event.sequence,
             "timestamp_unix_ns": event.timestamp_unix_ns,
             "kind": event.kind,
-            "data": cast(JsonValue, thaw_json(cast(JsonValue, event.data))),
+            "data": cast(JsonValue, event.data),
         }
+
+    @classmethod
+    def _event_payload(cls, event: ExecutionEvent) -> str:
+        return _json_frozen_object(cls._event_value(event))
 
     async def finalize(
         self,
@@ -217,11 +251,13 @@ class _ExecutionRecord:
             journal_tail = self.journal_tail
         if journal_tail is not None:
             await asyncio.shield(journal_tail)
+        if self.journal_error is not None:
+            raise self.journal_error
         async with self.event_lock:
             prepared: list[ExecutionEvent] = []
             for kind, data in terminal_events:
                 prepared.append(
-                    ExecutionEvent(
+                    _trusted_execution_event(
                         schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
                         event_id=str(uuid.uuid4()),
                         execution_id=self.execution_id,
@@ -233,7 +269,11 @@ class _ExecutionRecord:
                         sequence=self.next_sequence + len(prepared),
                         timestamp_unix_ns=time.time_ns(),
                         kind=kind,
-                        data=data,
+                        data=(
+                            data
+                            if isinstance(data, FrozenJsonObject)
+                            else freeze_json_object(data)
+                        ),
                     )
                 )
             terminal_sequence = prepared[-1].sequence
@@ -243,8 +283,9 @@ class _ExecutionRecord:
                 status=status.value,
                 output=output,
                 error=stored_error,
-                terminal_events=tuple(
-                    (event.sequence, self._event_value(event)) for event in prepared
+                terminal_events=(),
+                _terminal_event_payloads=tuple(
+                    (event.sequence, self._event_payload(event)) for event in prepared
                 ),
                 terminal_sequence=terminal_sequence,
             )
@@ -265,18 +306,20 @@ class _ExecutionRecord:
             )
             self.updated_at_unix_ns = time.time_ns()
             self.event_stream_closed = True
-        async with self.event_condition:
-            self.event_condition.notify_all()
+        if self.active_subscribers:
+            async with self.event_condition:
+                self.event_condition.notify_all()
 
     async def notify_terminal(self) -> None:
-        async with self.event_condition:
-            self.phase = ExecutionPhase.TERMINAL
-            self.owner_state = ExecutionOwnerState.TERMINAL
-            self.updated_at_unix_ns = time.time_ns()
-            if self.terminal_sequence is None and self.committed_sequence >= 0:
-                self.terminal_sequence = self.committed_sequence
-            self.event_stream_closed = True
-            self.event_condition.notify_all()
+        self.phase = ExecutionPhase.TERMINAL
+        self.owner_state = ExecutionOwnerState.TERMINAL
+        self.updated_at_unix_ns = time.time_ns()
+        if self.terminal_sequence is None and self.committed_sequence >= 0:
+            self.terminal_sequence = self.committed_sequence
+        self.event_stream_closed = True
+        if self.active_subscribers:
+            async with self.event_condition:
+                self.event_condition.notify_all()
 
     def snapshot(self) -> ExecutionSnapshot:
         return ExecutionSnapshot(

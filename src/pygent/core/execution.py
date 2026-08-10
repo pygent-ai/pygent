@@ -281,7 +281,44 @@ class ExecutionEvent:
             or self.timestamp_unix_ns <= 0
         ):
             raise ValueError("timestamp_unix_ns must be a positive integer")
-        object.__setattr__(self, "data", freeze_json_object(self.data))
+        if not isinstance(self.data, FrozenJsonObject):
+            object.__setattr__(self, "data", freeze_json_object(self.data))
+
+
+def _trusted_execution_event(
+    *,
+    schema_version: str,
+    event_id: str,
+    execution_id: str,
+    attempt_id: str,
+    trace_id: str,
+    span_id: str,
+    parent_span_id: str | None,
+    sequence: int,
+    timestamp_unix_ns: int,
+    module_path: str,
+    kind: str,
+    data: FrozenJsonObject,
+) -> ExecutionEvent:
+    """Construct an event whose complete envelope was produced by Pygent itself."""
+
+    event = object.__new__(ExecutionEvent)
+    for name, value in (
+        ("schema_version", schema_version),
+        ("event_id", event_id),
+        ("execution_id", execution_id),
+        ("attempt_id", attempt_id),
+        ("trace_id", trace_id),
+        ("span_id", span_id),
+        ("parent_span_id", parent_span_id),
+        ("sequence", sequence),
+        ("timestamp_unix_ns", timestamp_unix_ns),
+        ("module_path", module_path),
+        ("kind", kind),
+        ("data", data),
+    ):
+        object.__setattr__(event, name, value)
+    return event
 
 
 class EffectDisposition(str, Enum):

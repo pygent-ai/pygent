@@ -62,8 +62,13 @@ class _ExecutionSubscription:
     def __init__(self, record: _ExecutionRecord, after: int | None) -> None:
         self._record = record
         self._next = record.event_base_sequence if after is None else after + 1
+        self._entered = False
 
     async def __aenter__(self) -> AsyncIterator[ExecutionEvent]:
+        if self._entered:
+            raise RuntimeError("execution subscription is already active")
+        self._entered = True
+        self._record.active_subscribers += 1
         return self._iterate()
 
     async def __aexit__(
@@ -72,7 +77,9 @@ class _ExecutionSubscription:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        return None
+        if self._entered:
+            self._entered = False
+            self._record.active_subscribers -= 1
 
     async def _iterate(self) -> AsyncIterator[ExecutionEvent]:
         while True:

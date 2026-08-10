@@ -122,13 +122,39 @@ async def test_run_handle_supports_cursor_reconnect_without_cancelling_run():
 
     result = await handle.result()
     async with handle.subscribe(after=0) as subscription:
+        assert handle._record.active_subscribers == 1
         remaining = [event async for event in subscription]
+    assert handle._record.active_subscribers == 0
 
     assert result[0].content == "HELLO"
     assert handle.status is ExecutionStatus.SUCCEEDED
     assert [event.sequence for event in remaining] == [1, 2, 3, 4, 5, 6]
     assert await handle.cancel() is False
     await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_without_subscribers_skips_condition_notifications():
+    class CountingCondition(asyncio.Condition):
+        def __init__(self) -> None:
+            super().__init__()
+            self.notifications = 0
+
+        def notify_all(self) -> None:
+            self.notifications += 1
+            super().notify_all()
+
+    runtime = LocalRuntime()
+    handle = await _binding(runtime).bind(Echo()).start(
+        UserMessage(content="hello"), Context()
+    )
+    condition = CountingCondition()
+    handle._record.event_condition = condition
+
+    await handle.result()
+    await runtime.close()
+
+    assert condition.notifications == 0
 
 
 @pytest.mark.asyncio

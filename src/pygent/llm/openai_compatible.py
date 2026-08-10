@@ -8,6 +8,7 @@ import json
 import math
 import re
 from collections.abc import AsyncIterator, Mapping
+from functools import lru_cache
 from typing import Self, cast
 
 import httpx
@@ -38,6 +39,23 @@ from .types import (
 )
 
 _OPENAI_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_DEFAULT_HTTP1_POOL_SHARDS = 8
+_DEFAULT_MAX_CONNECTIONS_PER_SHARD = 32
+_DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD = 32
+
+
+def _response_body_is_received(response: httpx.Response) -> bool:
+    """Return whether a declared response body is already in httpx's buffers."""
+
+    raw_length = response.headers.get("content-length")
+    if raw_length is None:
+        return False
+    try:
+        content_length = int(raw_length)
+    except ValueError:
+        return False
+    return content_length >= 0 and response.num_bytes_downloaded >= content_length
+
 
 class OpenAICompatibleClient:
     """Small HTTP/SSE client for OpenAI, GLM, Qwen, and compatible endpoints."""
@@ -60,9 +78,25 @@ class OpenAICompatibleClient:
         self._models_endpoint = f"{api_root}/models"
         self._request_headers = request_headers
         self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(
-            base_url=api_root, headers=request_headers, timeout=None
+        self._clients = (
+            (client,)
+            if client is not None
+            else tuple(
+                httpx.AsyncClient(
+                    base_url=api_root,
+                    headers=request_headers,
+                    timeout=None,
+                    limits=httpx.Limits(
+                        max_connections=_DEFAULT_MAX_CONNECTIONS_PER_SHARD,
+                        max_keepalive_connections=(
+                            _DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD
+                        ),
+                    ),
+                )
+                for _ in range(_DEFAULT_HTTP1_POOL_SHARDS)
+            )
         )
+        self._next_client_index = 0
         self._models: ModelCatalog = _OpenAICompatibleModelCatalog(self)
         self._closed = False
 
@@ -76,7 +110,7 @@ class OpenAICompatibleClient:
         self, route: ModelRoute, payload: FrozenJsonObject
     ) -> FrozenJsonObject:
         self._ensure_open()
-        response = await self._client.post(
+        response = await self._next_http_client().post(
             self._endpoint,
             json=payload.to_dict(),
             headers=self._request_headers or None,
@@ -100,20 +134,26 @@ class OpenAICompatibleClient:
         self._ensure_open()
         body = payload.to_dict()
         body["stream"] = True
-        async with self._client.stream(
+        async with self._next_http_client().stream(
             "POST",
             self._endpoint,
             json=body,
             headers={**self._request_headers, "Accept": "text/event-stream"},
         ) as response:
             response.raise_for_status()
+            drain_received_body = False
             async for line in response.aiter_lines():
+                if drain_received_body:
+                    continue
                 line = line.strip()
                 if not line or line.startswith(":") or not line.startswith("data:"):
                     continue
                 data = line[5:].strip()
                 if data == "[DONE]":
                     yield freeze_json_object({"done": True})
+                    if _response_body_is_received(response):
+                        drain_received_body = True
+                        continue
                     return
                 try:
                     item = json.loads(data)
@@ -134,7 +174,7 @@ class OpenAICompatibleClient:
             return
         self._closed = True
         if self._owns_client:
-            await self._client.aclose()
+            await asyncio.gather(*(client.aclose() for client in self._clients))
 
     async def __aenter__(self) -> Self:
         self._ensure_open()
@@ -147,12 +187,17 @@ class OpenAICompatibleClient:
         if self._closed:
             raise RuntimeError("model provider client is closed")
 
+    def _next_http_client(self) -> httpx.AsyncClient:
+        client = self._clients[self._next_client_index]
+        self._next_client_index = (self._next_client_index + 1) % len(self._clients)
+        return client
+
     async def _list_models_payload(
         self, *, timeout: float | None
     ) -> FrozenJsonObject:
         self._ensure_open()
         try:
-            response = await self._client.get(
+            response = await self._next_http_client().get(
                 self._models_endpoint,
                 headers=self._request_headers or None,
                 timeout=timeout,
@@ -264,24 +309,13 @@ class OpenAICompatibleAdapter:
         if generation.max_output_tokens is not None:
             body["max_tokens"] = generation.max_output_tokens
         if generation.response_schema is not None:
-            body["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": generation.response_schema_name,
-                    "strict": True,
-                    "schema": freeze_json_object(generation.response_schema).to_dict(),
-                },
-            }
+            body["response_format"] = _response_format_projection(
+                cast(FrozenJsonObject, generation.response_schema),
+                generation.response_schema_name,
+            )
         if request.tools:
             body["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": wire_names[tool.name],
-                        "description": tool.description,
-                        "parameters": freeze_json_object(tool.parameters).to_dict(),
-                    },
-                }
+                _tool_projection(tool, wire_names[tool.name])
                 for tool in request.tools
             ]
             choice = generation.tool_choice
@@ -338,7 +372,9 @@ class OpenAICompatibleAdapter:
                 value = json.loads(content)
                 jsonschema.validate(
                     value,
-                    freeze_json_object(request.generation.response_schema).to_dict(),
+                    _schema_projection(
+                        cast(FrozenJsonObject, request.generation.response_schema)
+                    ),
                 )
             except (json.JSONDecodeError, jsonschema.ValidationError) as exc:
                 raise ModelProviderError(
@@ -571,6 +607,7 @@ def _decode_tool_calls(
     return tuple(calls)
 
 
+@lru_cache(maxsize=512)
 def _openai_tool_name(name: str) -> str:
     """Map a portable tool name to a deterministic OpenAI wire name."""
 
@@ -579,6 +616,39 @@ def _openai_tool_name(name: str) -> str:
     prefix = re.sub(r"[^A-Za-z0-9_-]", "_", name).strip("_") or "tool"
     digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
     return f"{prefix[:49]}__{digest}"
+
+
+@lru_cache(maxsize=128)
+def _schema_projection(schema: FrozenJsonObject) -> dict[str, object]:
+    """Cache deployment-static schema projection, never request content."""
+
+    return schema.to_dict()
+
+
+@lru_cache(maxsize=128)
+def _response_format_projection(
+    schema: FrozenJsonObject, name: str
+) -> dict[str, object]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "strict": True,
+            "schema": _schema_projection(schema),
+        },
+    }
+
+
+@lru_cache(maxsize=512)
+def _tool_projection(tool: ToolDefinition, wire_name: str) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": wire_name,
+            "description": tool.description,
+            "parameters": cast(FrozenJsonObject, tool.parameters).to_dict(),
+        },
+    }
 
 
 def _original_tool_name(wire_name: str, tools: tuple[ToolDefinition, ...]) -> str:
