@@ -38,6 +38,10 @@ from .types import (
 )
 
 _OPENAI_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_DEFAULT_HTTP1_POOL_SHARDS = 8
+_DEFAULT_MAX_CONNECTIONS_PER_SHARD = 32
+_DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD = 8
+
 
 class OpenAICompatibleClient:
     """Small HTTP/SSE client for OpenAI, GLM, Qwen, and compatible endpoints."""
@@ -60,9 +64,25 @@ class OpenAICompatibleClient:
         self._models_endpoint = f"{api_root}/models"
         self._request_headers = request_headers
         self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(
-            base_url=api_root, headers=request_headers, timeout=None
+        self._clients = (
+            (client,)
+            if client is not None
+            else tuple(
+                httpx.AsyncClient(
+                    base_url=api_root,
+                    headers=request_headers,
+                    timeout=None,
+                    limits=httpx.Limits(
+                        max_connections=_DEFAULT_MAX_CONNECTIONS_PER_SHARD,
+                        max_keepalive_connections=(
+                            _DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD
+                        ),
+                    ),
+                )
+                for _ in range(_DEFAULT_HTTP1_POOL_SHARDS)
+            )
         )
+        self._next_client_index = 0
         self._models: ModelCatalog = _OpenAICompatibleModelCatalog(self)
         self._closed = False
 
@@ -76,7 +96,7 @@ class OpenAICompatibleClient:
         self, route: ModelRoute, payload: FrozenJsonObject
     ) -> FrozenJsonObject:
         self._ensure_open()
-        response = await self._client.post(
+        response = await self._next_http_client().post(
             self._endpoint,
             json=payload.to_dict(),
             headers=self._request_headers or None,
@@ -100,7 +120,7 @@ class OpenAICompatibleClient:
         self._ensure_open()
         body = payload.to_dict()
         body["stream"] = True
-        async with self._client.stream(
+        async with self._next_http_client().stream(
             "POST",
             self._endpoint,
             json=body,
@@ -134,7 +154,7 @@ class OpenAICompatibleClient:
             return
         self._closed = True
         if self._owns_client:
-            await self._client.aclose()
+            await asyncio.gather(*(client.aclose() for client in self._clients))
 
     async def __aenter__(self) -> Self:
         self._ensure_open()
@@ -147,12 +167,17 @@ class OpenAICompatibleClient:
         if self._closed:
             raise RuntimeError("model provider client is closed")
 
+    def _next_http_client(self) -> httpx.AsyncClient:
+        client = self._clients[self._next_client_index]
+        self._next_client_index = (self._next_client_index + 1) % len(self._clients)
+        return client
+
     async def _list_models_payload(
         self, *, timeout: float | None
     ) -> FrozenJsonObject:
         self._ensure_open()
         try:
-            response = await self._client.get(
+            response = await self._next_http_client().get(
                 self._models_endpoint,
                 headers=self._request_headers or None,
                 timeout=timeout,

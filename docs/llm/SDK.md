@@ -87,6 +87,12 @@ finally:
     await client.aclose()
 ```
 
+默认 OpenAI-compatible transport 使用八个有界 HTTP/1.1 连接池，总计最多 256 个连接、
+64 个 keep-alive 连接，并以无等待轮询分配请求。这样在高并发下避免单个大连接池的
+线性扫描，同时保持 direct 模式的连接资源有界。需要 HTTP/2、代理、证书或不同连接
+上限时，应用可以通过现有 `client=httpx.AsyncClient(...)` 注入部署客户端；注入客户端
+的关闭责任仍属于调用方，`OpenAICompatibleClient.aclose()` 只关闭自己创建的连接池。
+
 `list()` 默认使用独立的十秒有限超时，可以通过 `timeout=<positive seconds>` 调整，或显式传 `None` 交给调用方取消边界。返回顺序与 Provider 一致；每个 ModelInfo 只保留稳定的 `id` 以及可选 `created`、`owned_by`。认证、限流、超时、不可用和非法响应通过脱敏的 ModelProviderError/ModelErrorKind 报告。
 
 目录查询不是 ModelCallLayer 调用：它不执行 route、retry/fallback，不获取 Runtime Model permit，也不产生 `model.*` 事件。`ModelProviderClient` 协议保持不变，自定义推理 client 不需要实现目录。

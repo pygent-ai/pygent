@@ -344,13 +344,35 @@ async def test_http_and_sse_transport_use_openai_compatible_endpoint():
 @pytest.mark.asyncio
 async def test_owned_client_close_is_idempotent_and_blocks_reuse():
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
+    owned_clients = client._clients
+    assert len(owned_clients) == 8
+    assert [client._next_http_client() for _ in range(9)] == [
+        *owned_clients,
+        owned_clients[0],
+    ]
     await client.aclose()
     await client.aclose()
+    assert all(http_client.is_closed for http_client in owned_clients)
     with pytest.raises(RuntimeError, match="closed"):
         await client.invoke(
             ModelRoute("main", "openai", "gpt-test"),
             OpenAICompatibleAdapter().build_request(_request()),
         )
+
+
+@pytest.mark.asyncio
+async def test_injected_http_client_is_not_sharded_or_closed():
+    http_client = httpx.AsyncClient()
+    client = OpenAICompatibleClient(
+        base_url="https://models.example/v1", client=http_client
+    )
+
+    assert client._clients == (http_client,)
+    assert client._next_http_client() is http_client
+    assert client._next_http_client() is http_client
+    await client.aclose()
+    assert not http_client.is_closed
+    await http_client.aclose()
 
 
 @pytest.mark.asyncio
