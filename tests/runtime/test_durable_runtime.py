@@ -137,6 +137,20 @@ class EmitsThenReturns(Module[UserMessage, AIMessage]):
         return output, context + message + output
 
 
+class EmitsThenSignals(Module[UserMessage, AIMessage]):
+    trusted_live_resource_attributes = ("progressed",)
+
+    def __init__(self, progressed: asyncio.Event) -> None:
+        super().__init__()
+        self.progressed = progressed
+
+    async def forward(self, message, context):
+        await self.emit(kind="test.progress", data={})
+        self.progressed.set()
+        output = AIMessage(content=message.content.upper())
+        return output, context + message + output
+
+
 @pytest.mark.asyncio
 async def test_live_subscription_observes_terminal_events_only_after_atomic_finalization(
     tmp_path,
@@ -206,6 +220,26 @@ async def test_event_persistence_does_not_hold_execution_state_lock(tmp_path):
         record.event_lock.release()
         history.release_append.set()
         await asyncio.wait_for(handle.result(), timeout=1)
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_ordinary_journal_commit_does_not_block_forward_progress(tmp_path):
+    async with _GatedAppendHistory(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        progressed = asyncio.Event()
+        handle = await runtime.bind(EmitsThenSignals(progressed)).start(
+            UserMessage(content="hello"), Context()
+        )
+
+        await asyncio.wait_for(history.append_entered.wait(), timeout=1)
+        await asyncio.wait_for(progressed.wait(), timeout=1)
+        result = asyncio.create_task(handle.result())
+        await asyncio.sleep(0)
+        assert result.done() is False
+
+        history.release_append.set()
+        await asyncio.wait_for(result, timeout=1)
         await runtime.close()
 
 

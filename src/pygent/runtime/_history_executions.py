@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, cast
 
 import aiosqlite
 
@@ -23,41 +24,40 @@ class ExecutionHistoryMixin:
         _write_lock: asyncio.Lock
 
         def _db(self) -> aiosqlite.Connection: ...
+        async def _queue_transaction(
+            self,
+            operation: Callable[[aiosqlite.Connection], Awaitable[Any]],
+        ) -> Any: ...
 
     async def claim_execution(
         self, *, execution_id: str, owner_id: str, lease_ttl: float
     ) -> int | None:
         """Atomically claim one durable recovery attempt across processes."""
 
-        db = self._db()
-        async with self._write_lock:
-            await db.execute("BEGIN IMMEDIATE")
-            try:
+        async def operation(db: aiosqlite.Connection) -> int | None:
+            await db.execute(
+                "DELETE FROM execution_claims "
+                "WHERE execution_id=? AND expires_at<=unixepoch('subsec')",
+                (execution_id,),
+            )
+            row = await (
                 await db.execute(
-                    "DELETE FROM execution_claims "
-                    "WHERE execution_id=? AND expires_at<=unixepoch('subsec')",
+                    "SELECT owner_id FROM execution_claims WHERE execution_id=?",
                     (execution_id,),
                 )
-                row = await (
-                    await db.execute(
-                        "SELECT owner_id FROM execution_claims WHERE execution_id=?", (execution_id,)
-                    )
-                ).fetchone()
-                if row is not None:
-                    await db.rollback()
-                    return None
-                cursor = await db.execute("INSERT INTO execution_fences DEFAULT VALUES")
-                token = cursor.lastrowid
-                assert token is not None
-                await db.execute(
-                    "INSERT INTO execution_claims VALUES(?,?,?,unixepoch('subsec')+?)",
-                    (execution_id, owner_id, token, lease_ttl),
-                )
-                await db.commit()
-                return int(token)
-            except BaseException:
-                await db.rollback()
-                raise
+            ).fetchone()
+            if row is not None:
+                return None
+            cursor = await db.execute("INSERT INTO execution_fences DEFAULT VALUES")
+            token = cursor.lastrowid
+            assert token is not None
+            await db.execute(
+                "INSERT INTO execution_claims VALUES(?,?,?,unixepoch('subsec')+?)",
+                (execution_id, owner_id, token, lease_ttl),
+            )
+            return int(token)
+
+        return cast(int | None, await self._queue_transaction(operation))
 
     async def renew_execution_claim(
         self,
@@ -118,7 +118,6 @@ class ExecutionHistoryMixin:
         )
         return stored
 
-    @_serialized_write
     async def begin_execution(
         self,
         *,
@@ -136,56 +135,64 @@ class ExecutionHistoryMixin:
         phase: str = "submitting",
         attempt_id: str | None = None,
     ) -> tuple[StoredExecution, bool]:
-        db = self._db()
         payload = _json(input)
         model_calls_payload = _json({} if model_calls is None else model_calls)
-        try:
-            await db.execute(
-                "INSERT INTO executions(execution_id,request_id,status,plan_id,input_json,"
-                "binding_id,identity,idempotency_key,model_calls_json,model_admission_status,"
-                "trace_id,phase,attempt_id,submitted_at_unix_ns,updated_at_unix_ns) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    execution_id,
-                    request_id,
-                    status,
-                    plan_id,
-                    payload,
-                    binding_id,
-                    identity,
-                    idempotency_key,
-                    model_calls_payload,
-                    model_admission_status,
-                    trace_id,
-                    phase,
-                    attempt_id,
-                    time.time_ns(),
-                    time.time_ns(),
-                ),
-            )
-            await db.commit()
-        except aiosqlite.IntegrityError as exc:
-            await db.rollback()
-            existing = (
-                await self.get_execution_by_idempotency(
-                    binding_id=binding_id,
-                    identity=identity,
-                    idempotency_key=idempotency_key,
+        submitted_at_unix_ns = time.time_ns()
+
+        async def operation(
+            connection: aiosqlite.Connection,
+        ) -> tuple[StoredExecution | None, bool]:
+            try:
+                await connection.execute(
+                    "INSERT INTO executions(execution_id,request_id,status,plan_id,input_json,"
+                    "binding_id,identity,idempotency_key,model_calls_json,"
+                    "model_admission_status,trace_id,phase,attempt_id,"
+                    "submitted_at_unix_ns,updated_at_unix_ns) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        execution_id,
+                        request_id,
+                        status,
+                        plan_id,
+                        payload,
+                        binding_id,
+                        identity,
+                        idempotency_key,
+                        model_calls_payload,
+                        model_admission_status,
+                        trace_id,
+                        phase,
+                        attempt_id,
+                        submitted_at_unix_ns,
+                        submitted_at_unix_ns,
+                    ),
                 )
-                if idempotency_key is not None
-                else await self.get_execution(execution_id)
-            )
-            if existing is None or (
-                existing.plan_id != plan_id
-                or _json(existing.input) != payload
-            ):
-                raise HistoryConflictError(
-                    "idempotency identity is committed with different input"
-                ) from exc
+            except aiosqlite.IntegrityError as exc:
+                existing = (
+                    await self.get_execution_by_idempotency(
+                        binding_id=binding_id,
+                        identity=identity,
+                        idempotency_key=idempotency_key,
+                    )
+                    if idempotency_key is not None
+                    else await self.get_execution(execution_id)
+                )
+                if existing is None or (
+                    existing.plan_id != plan_id or _json(existing.input) != payload
+                ):
+                    raise HistoryConflictError(
+                        "idempotency identity is committed with different input"
+                    ) from exc
+                return existing, False
+            return None, True
+
+        existing, created = cast(
+            tuple[StoredExecution | None, bool],
+            await self._queue_transaction(operation),
+        )
+        if not created:
+            assert existing is not None
             return existing, False
-        except BaseException:
-            await db.rollback()
-            raise
         result = await self.get_execution(execution_id)
         assert result is not None
         return result, True
@@ -257,7 +264,6 @@ class ExecutionHistoryMixin:
         await db.execute("DELETE FROM executions WHERE execution_id=?", (execution_id,))
         await db.commit()
 
-    @_serialized_write
     async def update_execution(
         self,
         execution_id: str,
@@ -269,27 +275,30 @@ class ExecutionHistoryMixin:
         phase: str | None = None,
         attempt_id: str | None = None,
     ) -> None:
-        db = self._db()
-        cursor = await db.execute(
-            "UPDATE executions SET status=?, output_json=?, error_json=?, "
-            "attempt=COALESCE(?,attempt), phase=COALESCE(?,phase), "
-            "attempt_id=COALESCE(?,attempt_id), "
-            "updated_at_unix_ns=?, updated_at=CURRENT_TIMESTAMP WHERE execution_id=?",
-            (
-                status,
-                None if output is None else _json(output),
-                None if error is None else _json(error),
-                attempt,
-                phase,
-                attempt_id,
-                time.time_ns(),
-                execution_id,
-            ),
+        values = (
+            status,
+            None if output is None else _json(output),
+            None if error is None else _json(error),
+            attempt,
+            phase,
+            attempt_id,
+            time.time_ns(),
+            execution_id,
         )
-        if cursor.rowcount != 1:
-            await db.rollback()
-            raise KeyError(f"unknown execution {execution_id!r}")
-        await db.commit()
+
+        async def operation(db: aiosqlite.Connection) -> None:
+            cursor = await db.execute(
+                "UPDATE executions SET status=?, output_json=?, error_json=?, "
+                "attempt=COALESCE(?,attempt), phase=COALESCE(?,phase), "
+                "attempt_id=COALESCE(?,attempt_id), "
+                "updated_at_unix_ns=?, updated_at=CURRENT_TIMESTAMP "
+                "WHERE execution_id=?",
+                values,
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"unknown execution {execution_id!r}")
+
+        await self._queue_transaction(operation)
 
     async def get_execution(self, execution_id: str) -> StoredExecution | None:
         return await self._select_run("execution_id", execution_id)
@@ -355,7 +364,6 @@ class ExecutionHistoryMixin:
             updated_at_unix_ns=row[20],
         )
 
-    @_serialized_write
     async def finalize_execution(
         self,
         execution_id: str,
@@ -369,14 +377,16 @@ class ExecutionHistoryMixin:
     ) -> None:
         """Commit terminal journal entries and the materialized outcome atomically."""
 
-        db = self._db()
-        await db.execute("BEGIN IMMEDIATE")
-        try:
-            payloads = (
-                tuple((index, _json(event)) for index, event in terminal_events)
-                if _terminal_event_payloads is None
-                else _terminal_event_payloads
-            )
+        payloads = (
+            tuple((index, _json(event)) for index, event in terminal_events)
+            if _terminal_event_payloads is None
+            else _terminal_event_payloads
+        )
+        output_payload = None if output is None else _json(output)
+        error_payload = None if error is None else _json(error)
+        updated_at_unix_ns = time.time_ns()
+
+        async def operation(db: aiosqlite.Connection) -> None:
             for index, payload in payloads:
                 await db.execute(
                     "INSERT INTO events(execution_id,event_index,event_json) VALUES(?,?,?)",
@@ -389,17 +399,15 @@ class ExecutionHistoryMixin:
                 "AND terminal_sequence IS NULL",
                 (
                     status,
-                    None if output is None else _json(output),
-                    None if error is None else _json(error),
+                    output_payload,
+                    error_payload,
                     terminal_sequence,
-                    time.time_ns(),
+                    updated_at_unix_ns,
                     execution_id,
                 ),
             )
             if cursor.rowcount != 1:
                 raise HistoryConflictError("execution is already finalized or unknown")
             await db.execute("DELETE FROM execution_claims WHERE execution_id=?", (execution_id,))
-            await db.commit()
-        except BaseException:
-            await db.rollback()
-            raise
+
+        await self._queue_transaction(operation)

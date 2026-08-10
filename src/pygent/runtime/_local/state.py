@@ -65,6 +65,8 @@ class _ExecutionRecord:
     active_subscribers: int = 0
     event_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     journal_tail: asyncio.Future[None] | None = None
+    journal_error: BaseException | None = None
+    journal_notification: asyncio.Task[None] | None = None
     task: asyncio.Task[tuple[Message, Context]] | None = None
     child_calls: int = 0
     module_calls: dict[str, int] = field(default_factory=dict)
@@ -113,39 +115,69 @@ class _ExecutionRecord:
             copied_payload = dict(data)
             copied_payload.setdefault("origin_execution_id", execution_id)
             payload = copied_payload
-        persistence: asyncio.Future[None] | None = None
-        async with self.event_lock:
-            if self.phase is ExecutionPhase.FINALIZING or self.event_stream_closed:
-                raise RuntimeError("execution journal is finalizing")
-            event = ExecutionEvent(
-                schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
-                event_id=event_id or str(uuid.uuid4()),
-                execution_id=self.execution_id,
-                attempt_id=self.attempt_id,
-                trace_id=self.trace_id,
-                span_id=effective_span_id,
-                parent_span_id=effective_parent_span_id,
-                module_path=module_path,
-                sequence=self.next_sequence,
-                timestamp_unix_ns=timestamp_unix_ns or time.time_ns(),
-                kind=kind,
-                data=payload,
-            )
-            self.next_sequence += 1
-            self.events.append(event)
-            if self.history is not None and self.history_started:
-                persistence = self.history._enqueue_event_payload(
-                    self.execution_id,
-                    event.sequence,
-                    self._event_payload(event),
+        history = self.history if self.history_started else None
+        reserved = False
+        if history is not None:
+            await history._reserve_event_slot()
+            reserved = True
+        try:
+            async with self.event_lock:
+                if self.phase is ExecutionPhase.FINALIZING or self.event_stream_closed:
+                    raise RuntimeError("execution journal is finalizing")
+                if self.journal_error is not None:
+                    raise self.journal_error
+                event = ExecutionEvent(
+                    schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
+                    event_id=event_id or str(uuid.uuid4()),
+                    execution_id=self.execution_id,
+                    attempt_id=self.attempt_id,
+                    trace_id=self.trace_id,
+                    span_id=effective_span_id,
+                    parent_span_id=effective_parent_span_id,
+                    module_path=module_path,
+                    sequence=self.next_sequence,
+                    timestamp_unix_ns=timestamp_unix_ns or time.time_ns(),
+                    kind=kind,
+                    data=payload,
                 )
-                self.journal_tail = persistence
-        if persistence is None:
-            await self._publish_committed(event.sequence)
-        else:
-            await asyncio.shield(persistence)
+                self.next_sequence += 1
+                self.events.append(event)
+                if history is not None:
+                    self.journal_tail = history._enqueue_reserved_event_payload(
+                        self.execution_id,
+                        event.sequence,
+                        self._event_payload(event),
+                        on_commit=self._mark_journal_committed,
+                        on_error=self._mark_journal_failed,
+                    )
+                    reserved = False
+        except BaseException:
+            if reserved:
+                assert history is not None
+                history._event_capacity.release()
+            raise
+        if history is None:
             await self._publish_committed(event.sequence)
         return event
+
+    def _mark_journal_committed(self, sequence: int) -> None:
+        self.committed_sequence = max(self.committed_sequence, sequence)
+        if self.active_subscribers == 0:
+            return
+        task = self.journal_notification
+        if task is None or task.done():
+            self.journal_notification = asyncio.create_task(
+                self._notify_journal_committed(),
+                name=f"pygent-journal-notify-{self.execution_id}",
+            )
+
+    def _mark_journal_failed(self, exc: BaseException) -> None:
+        if self.journal_error is None:
+            self.journal_error = exc
+
+    async def _notify_journal_committed(self) -> None:
+        async with self.event_condition:
+            self.event_condition.notify_all()
 
     async def _publish_committed(self, sequence: int) -> None:
         if self.active_subscribers == 0:
@@ -212,6 +244,8 @@ class _ExecutionRecord:
             journal_tail = self.journal_tail
         if journal_tail is not None:
             await asyncio.shield(journal_tail)
+        if self.journal_error is not None:
+            raise self.journal_error
         async with self.event_lock:
             prepared: list[ExecutionEvent] = []
             for kind, data in terminal_events:

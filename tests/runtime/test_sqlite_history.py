@@ -16,6 +16,29 @@ from pygent.runtime import (
 from pygent.runtime._history_types import _json_frozen, _json_frozen_object
 
 
+@pytest.mark.parametrize("pending_batches", [0, -1, True])
+def test_pending_event_batches_must_be_positive_integer(tmp_path, pending_batches):
+    with pytest.raises(ValueError, match="max_pending_event_batches"):
+        SQLiteHistoryStore(
+            tmp_path / "history.sqlite3",
+            max_pending_event_batches=pending_batches,
+        )
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("max_transaction_batch_size", 0),
+        ("max_transaction_batch_size", True),
+        ("max_pending_transactions", -1),
+        ("max_pending_transactions", True),
+    ],
+)
+def test_transaction_batch_bounds_must_be_positive_integers(tmp_path, name, value):
+    with pytest.raises(ValueError, match=name):
+        SQLiteHistoryStore(tmp_path / "history.sqlite3", **{name: value})
+
+
 def test_validated_json_object_serialization_reuses_frozen_children():
     payload = freeze_json_object(
         {"nested": {"value": 1}, "sequence": [True, None, "上海"]}
@@ -342,12 +365,14 @@ async def test_full_event_batch_shares_one_commit_receipt(tmp_path):
     async with SQLiteHistoryStore(
         tmp_path / "grouped.sqlite3", max_event_batch_size=8
     ) as store:
-        receipts = [
-            store._enqueue_event_payload(
-                f"execution-{index}", index, json.dumps({"index": index})
+        receipts = []
+        for index in range(8):
+            await store._reserve_event_slot()
+            receipts.append(
+                store._enqueue_reserved_event_payload(
+                    f"execution-{index}", index, json.dumps({"index": index})
+                )
             )
-            for index in range(8)
-        ]
 
         assert len({id(receipt) for receipt in receipts}) == 1
         await asyncio.gather(*(asyncio.shield(receipt) for receipt in receipts))
@@ -380,3 +405,116 @@ async def test_cancelled_event_waiter_does_not_cancel_shared_commit(tmp_path):
         await asyncio.shield(store._event_flush_task)
         persisted = await store.events_after(execution_id="execution", after=-1)
         assert [thaw_json(event) for event in persisted] == [{"ok": True}]
+
+
+@pytest.mark.asyncio
+async def test_pending_event_capacity_applies_backpressure(tmp_path):
+    class GatedHistory(SQLiteHistoryStore):
+        def __init__(self, path):
+            super().__init__(
+                path, max_event_batch_size=1, max_pending_event_batches=1
+            )
+            self.commit_entered = asyncio.Event()
+            self.release_commit = asyncio.Event()
+
+        async def _commit_event_batch(self, batch):
+            self.commit_entered.set()
+            await self.release_commit.wait()
+            await super()._commit_event_batch(batch)
+
+    async with GatedHistory(tmp_path / "bounded.sqlite3") as store:
+        first = asyncio.create_task(
+            store.append_event(execution_id="execution", index=0, event={"index": 0})
+        )
+        await asyncio.wait_for(store.commit_entered.wait(), timeout=1)
+        second = asyncio.create_task(
+            store.append_event(execution_id="execution", index=1, event={"index": 1})
+        )
+        await asyncio.sleep(0)
+        assert second.done() is False
+
+        store.release_commit.set()
+        await asyncio.gather(first, second)
+        persisted = await store.events_after(execution_id="execution", after=-1)
+        assert [thaw_json(event) for event in persisted] == [
+            {"index": 0},
+            {"index": 1},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_effect_boundaries_share_transactions(tmp_path):
+    class CountingHistory(SQLiteHistoryStore):
+        def __init__(self, path):
+            super().__init__(path)
+            self.transaction_sizes = []
+
+        async def _run_transaction_batch(self, batch):
+            self.transaction_sizes.append(len(batch))
+            return await super()._run_transaction_batch(batch)
+
+    async with CountingHistory(tmp_path / "effects.sqlite3") as store:
+        started = await asyncio.gather(
+            *(
+                store.begin_effect(
+                    execution_id=f"execution-{index}",
+                    module_path="root",
+                    call_index=0,
+                    effect_type="test.effect",
+                    request={"index": index},
+                    spec={"side_effect": "read"},
+                )
+                for index in range(32)
+            )
+        )
+        await asyncio.gather(
+            *(
+                store.complete_effect(
+                    execution_id=f"execution-{index}",
+                    module_path="root",
+                    call_index=0,
+                    result={"index": index},
+                )
+                for index in range(32)
+            )
+        )
+
+        assert all(created for _, created in started)
+        assert sum(store.transaction_sizes) == 64
+        assert len(store.transaction_sizes) < 64
+
+
+@pytest.mark.asyncio
+async def test_failed_transaction_request_isolated_from_valid_peer(tmp_path):
+    async with SQLiteHistoryStore(tmp_path / "isolated.sqlite3") as store:
+        await store.create_execution(
+            execution_id="valid",
+            request_id="valid",
+            plan_id="plan",
+            input={},
+        )
+
+        failed, succeeded = await asyncio.gather(
+            store.finalize_execution(
+                "missing",
+                status="succeeded",
+                output={},
+                error=None,
+                terminal_events=((0, {"kind": "execution.completed"}),),
+                terminal_sequence=0,
+            ),
+            store.finalize_execution(
+                "valid",
+                status="succeeded",
+                output={"ok": True},
+                error=None,
+                terminal_events=((0, {"kind": "execution.completed"}),),
+                terminal_sequence=0,
+            ),
+            return_exceptions=True,
+        )
+
+        assert isinstance(failed, HistoryConflictError)
+        assert succeeded is None
+        stored = await store.get_execution("valid")
+        assert stored is not None and stored.status == "succeeded"

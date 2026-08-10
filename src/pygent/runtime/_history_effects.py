@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import aiosqlite
@@ -31,6 +31,10 @@ class EffectHistoryMixin:
         async def _queue_event(
             self, execution_id: str, index: int, payload: str
         ) -> None: ...
+        async def _queue_transaction(
+            self,
+            operation: Callable[[aiosqlite.Connection], Awaitable[Any]],
+        ) -> Any: ...
 
     @_serialized_write
     async def record_effect(
@@ -95,7 +99,6 @@ class EffectHistoryMixin:
             result=frozen_result,
         )
 
-    @_serialized_write
     async def begin_effect(
         self,
         *,
@@ -111,24 +114,36 @@ class EffectHistoryMixin:
         digest = effect_digest(request)
         frozen_spec = freeze_json(spec)
         spec_json = _json_frozen(frozen_spec)
-        try:
-            await self._db().execute(
-                "INSERT INTO effects(execution_id,module_path,call_index,effect_type,"
-                "request_digest,spec_json,status,result_json) VALUES(?,?,?,?,?,?,?,NULL)",
-                (
-                    execution_id,
-                    module_path,
-                    call_index,
-                    effect_type,
-                    digest,
-                    spec_json,
-                    "started",
-                ),
-            )
-            await self._db().commit()
-        except aiosqlite.IntegrityError:
-            await self._db().rollback()
-        else:
+        async def operation(
+            db: aiosqlite.Connection,
+        ) -> tuple[StoredEffect, bool]:
+            try:
+                await db.execute(
+                    "INSERT INTO effects(execution_id,module_path,call_index,effect_type,"
+                    "request_digest,spec_json,status,result_json) "
+                    "VALUES(?,?,?,?,?,?,?,NULL)",
+                    (
+                        execution_id,
+                        module_path,
+                        call_index,
+                        effect_type,
+                        digest,
+                        spec_json,
+                        "started",
+                    ),
+                )
+            except aiosqlite.IntegrityError:
+                return (
+                    await self.replay_effect(
+                        execution_id=execution_id,
+                        module_path=module_path,
+                        call_index=call_index,
+                        effect_type=effect_type,
+                        request=request,
+                        spec=spec,
+                    ),
+                    False,
+                )
             return (
                 StoredEffect(
                     execution_id=execution_id,
@@ -142,19 +157,9 @@ class EffectHistoryMixin:
                 ),
                 True,
             )
-        return (
-            await self.replay_effect(
-                execution_id=execution_id,
-                module_path=module_path,
-                call_index=call_index,
-                effect_type=effect_type,
-                request=request,
-                spec=spec,
-            ),
-            False,
-        )
 
-    @_serialized_write
+        return cast(tuple[StoredEffect, bool], await self._queue_transaction(operation))
+
     async def complete_effect(
         self,
         *,
@@ -163,15 +168,19 @@ class EffectHistoryMixin:
         call_index: int,
         result: object,
     ) -> None:
-        cursor = await self._db().execute(
-            "UPDATE effects SET status='completed',result_json=? WHERE execution_id=? "
-            "AND module_path=? AND call_index=? AND status='started'",
-            (_json(result), execution_id, module_path, call_index),
-        )
-        if cursor.rowcount != 1:
-            await self._db().rollback()
-            raise HistoryConflictError("effect is not in a completable started state")
-        await self._db().commit()
+        payload = _json(result)
+
+        async def operation(db: aiosqlite.Connection) -> None:
+            cursor = await db.execute(
+                "UPDATE effects SET status='completed',result_json=? "
+                "WHERE execution_id=? AND module_path=? AND call_index=? "
+                "AND status='started'",
+                (payload, execution_id, module_path, call_index),
+            )
+            if cursor.rowcount != 1:
+                raise HistoryConflictError("effect is not in a completable started state")
+
+        await self._queue_transaction(operation)
 
     @_serialized_write
     async def mark_effect_unknown(

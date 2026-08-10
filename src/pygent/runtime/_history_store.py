@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Self
+from typing import Any, Self, TypeVar, cast
 
 import aiosqlite
 
@@ -15,11 +16,28 @@ from ._history_executions import ExecutionHistoryMixin
 from ._history_jobs import JobHistoryMixin
 from ._history_types import HistoryStoreError
 
+_T = TypeVar("_T")
+
+
+@dataclass(slots=True)
+class _QueuedEvent:
+    execution_id: str
+    index: int
+    payload: str
+    on_commit: Callable[[int], None] | None = None
+    on_error: Callable[[BaseException], None] | None = None
+
 
 @dataclass(slots=True)
 class _EventBatch:
-    events: list[tuple[str, int, str]]
+    events: list[_QueuedEvent]
     committed: asyncio.Future[None]
+
+
+@dataclass(slots=True)
+class _TransactionRequest:
+    operation: Callable[[aiosqlite.Connection], Awaitable[object]]
+    committed: asyncio.Future[object]
 
 
 class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMixin):
@@ -30,6 +48,9 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
         path: str | Path,
         *,
         max_event_batch_size: int = 64,
+        max_pending_event_batches: int = 16,
+        max_transaction_batch_size: int = 64,
+        max_pending_transactions: int = 1024,
     ) -> None:
         if (
             not isinstance(max_event_batch_size, int)
@@ -37,12 +58,31 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
             or max_event_batch_size <= 0
         ):
             raise ValueError("max_event_batch_size must be a positive integer")
+        if (
+            not isinstance(max_pending_event_batches, int)
+            or isinstance(max_pending_event_batches, bool)
+            or max_pending_event_batches <= 0
+        ):
+            raise ValueError("max_pending_event_batches must be a positive integer")
+        for name, value in (
+            ("max_transaction_batch_size", max_transaction_batch_size),
+            ("max_pending_transactions", max_pending_transactions),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
         self.path = str(path)
         self._connection: aiosqlite.Connection | None = None
         self._write_lock = asyncio.Lock()
         self._event_batches: deque[_EventBatch] = deque()
         self._event_flush_task: asyncio.Task[None] | None = None
         self._max_event_batch_size = max_event_batch_size
+        self._event_capacity = asyncio.Semaphore(
+            max_event_batch_size * max_pending_event_batches
+        )
+        self._transaction_queue: deque[_TransactionRequest] = deque()
+        self._transaction_writer_task: asyncio.Task[None] | None = None
+        self._transaction_capacity = asyncio.Semaphore(max_pending_transactions)
+        self._max_transaction_batch_size = max_transaction_batch_size
 
     async def open(self) -> Self:
         if self._connection is not None:
@@ -174,16 +214,41 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
         flush_task = self._event_flush_task
         if flush_task is not None:
             await asyncio.shield(flush_task)
+        transaction_task = self._transaction_writer_task
+        if transaction_task is not None:
+            await asyncio.shield(transaction_task)
         connection, self._connection = self._connection, None
         if connection is not None:
             await connection.close()
 
     async def _queue_event(self, execution_id: str, index: int, payload: str) -> None:
-        committed = self._enqueue_event_payload(execution_id, index, payload)
+        await self._reserve_event_slot()
+        try:
+            committed = self._enqueue_reserved_event_payload(
+                execution_id, index, payload
+            )
+        except BaseException:
+            self._event_capacity.release()
+            raise
         await asyncio.shield(committed)
 
-    def _enqueue_event_payload(
-        self, execution_id: str, index: int, payload: str
+    async def _reserve_event_slot(self) -> None:
+        self._db()
+        await self._event_capacity.acquire()
+        try:
+            self._db()
+        except BaseException:
+            self._event_capacity.release()
+            raise
+
+    def _enqueue_reserved_event_payload(
+        self,
+        execution_id: str,
+        index: int,
+        payload: str,
+        *,
+        on_commit: Callable[[int], None] | None = None,
+        on_error: Callable[[BaseException], None] | None = None,
     ) -> asyncio.Future[None]:
         """Queue an event synchronously and return its batch commit receipt."""
 
@@ -193,11 +258,13 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
             not self._event_batches
             or len(self._event_batches[-1].events) >= self._max_event_batch_size
         ):
-            self._event_batches.append(
-                _EventBatch([], loop.create_future())
-            )
+            committed: asyncio.Future[None] = loop.create_future()
+            committed.add_done_callback(_consume_future_exception)
+            self._event_batches.append(_EventBatch([], committed))
         batch = self._event_batches[-1]
-        batch.events.append((execution_id, index, payload))
+        batch.events.append(
+            _QueuedEvent(execution_id, index, payload, on_commit, on_error)
+        )
         task = self._event_flush_task
         if task is None or task.done():
             self._event_flush_task = asyncio.create_task(
@@ -217,20 +284,32 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
             try:
                 await self._commit_event_batch(batch.events)
             except BaseException as exc:  # noqa: BLE001 - fail every queued writer
+                for event in batch.events:
+                    self._event_capacity.release()
+                    if event.on_error is not None:
+                        event.on_error(exc)
                 if not batch.committed.done():
                     batch.committed.set_exception(exc)
                 pending, self._event_batches = self._event_batches, deque()
                 self._event_flush_task = None
                 for queued in pending:
+                    for event in queued.events:
+                        self._event_capacity.release()
+                        if event.on_error is not None:
+                            event.on_error(exc)
                     if not queued.committed.done():
                         queued.committed.set_exception(exc)
                 return
             else:
+                for event in batch.events:
+                    self._event_capacity.release()
+                    if event.on_commit is not None:
+                        event.on_commit(event.index)
                 if not batch.committed.done():
                     batch.committed.set_result(None)
 
     async def _commit_event_batch(
-        self, batch: list[tuple[str, int, str]]
+        self, batch: list[_QueuedEvent]
     ) -> None:
         db = self._db()
         async with self._write_lock:
@@ -239,18 +318,21 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
                 cursor = await db.executemany(
                     "INSERT INTO events(execution_id,event_index,event_json) "
                     "VALUES(?,?,?) ON CONFLICT(execution_id,event_index) DO NOTHING",
-                    batch,
+                    [
+                        (event.execution_id, event.index, event.payload)
+                        for event in batch
+                    ],
                 )
                 if cursor.rowcount != len(batch):
-                    for execution_id, index, payload in batch:
+                    for event in batch:
                         row = await (
                             await db.execute(
                                 "SELECT event_json FROM events "
                                 "WHERE execution_id=? AND event_index=?",
-                                (execution_id, index),
+                                (event.execution_id, event.index),
                             )
                         ).fetchone()
-                        if row is None or row[0] != payload:
+                        if row is None or row[0] != event.payload:
                             from ._history_types import HistoryConflictError
 
                             raise HistoryConflictError(
@@ -260,6 +342,97 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
             except BaseException:
                 await db.rollback()
                 raise
+
+    async def _queue_transaction(
+        self,
+        operation: Callable[[aiosqlite.Connection], Awaitable[_T]],
+    ) -> _T:
+        self._db()
+        await self._transaction_capacity.acquire()
+        try:
+            self._db()
+            loop = asyncio.get_running_loop()
+            committed: asyncio.Future[object] = loop.create_future()
+            committed.add_done_callback(_consume_future_exception)
+            self._transaction_queue.append(
+                _TransactionRequest(cast(Callable[..., Awaitable[object]], operation), committed)
+            )
+            task = self._transaction_writer_task
+            if task is None or task.done():
+                self._transaction_writer_task = asyncio.create_task(
+                    self._flush_transaction_batches(),
+                    name="pygent-sqlite-transaction-writer",
+                )
+        except BaseException:
+            self._transaction_capacity.release()
+            raise
+        return cast(_T, await asyncio.shield(committed))
+
+    async def _flush_transaction_batches(self) -> None:
+        while True:
+            if not self._transaction_queue:
+                self._transaction_writer_task = None
+                return
+            await asyncio.sleep(0)
+            batch = [
+                self._transaction_queue.popleft()
+                for _ in range(
+                    min(len(self._transaction_queue), self._max_transaction_batch_size)
+                )
+            ]
+            try:
+                results = await self._run_transaction_batch(batch)
+            except asyncio.CancelledError as exc:
+                self._finish_transaction_errors(batch, exc)
+                pending, self._transaction_queue = self._transaction_queue, deque()
+                self._finish_transaction_errors(list(pending), exc)
+                self._transaction_writer_task = None
+                raise
+            except Exception:  # noqa: BLE001 - retry failed batch in isolation
+                await self._retry_transaction_batch_individually(batch)
+            else:
+                self._finish_transaction_results(batch, results)
+
+    async def _run_transaction_batch(
+        self, batch: list[_TransactionRequest]
+    ) -> list[object]:
+        db = self._db()
+        async with self._write_lock:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                results = [await request.operation(db) for request in batch]
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
+        return results
+
+    async def _retry_transaction_batch_individually(
+        self, batch: list[_TransactionRequest]
+    ) -> None:
+        for request in batch:
+            try:
+                result = (await self._run_transaction_batch([request]))[0]
+            except BaseException as exc:  # noqa: BLE001 - isolate failed request
+                self._finish_transaction_errors([request], exc)
+            else:
+                self._finish_transaction_results([request], [result])
+
+    def _finish_transaction_results(
+        self, batch: list[_TransactionRequest], results: list[object]
+    ) -> None:
+        for request, result in zip(batch, results, strict=True):
+            self._transaction_capacity.release()
+            if not request.committed.done():
+                request.committed.set_result(result)
+
+    def _finish_transaction_errors(
+        self, batch: list[_TransactionRequest], exc: BaseException
+    ) -> None:
+        for request in batch:
+            self._transaction_capacity.release()
+            if not request.committed.done():
+                request.committed.set_exception(exc)
 
     async def __aenter__(self) -> Self:
         return await self.open()
@@ -271,3 +444,8 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
         if self._connection is None:
             raise HistoryStoreError("SQLiteHistoryStore is not open")
         return self._connection
+
+
+def _consume_future_exception(future: asyncio.Future[Any]) -> None:
+    if not future.cancelled():
+        future.exception()
