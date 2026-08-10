@@ -1,17 +1,36 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 
 import pytest
 
-from pygent.core import thaw_json
+from pygent.core import freeze_json_object, thaw_json
 from pygent.runtime import (
     HistoryConflictError,
     HistoryStoreError,
     NonDeterministicReplayError,
     SQLiteHistoryStore,
 )
+from pygent.runtime._history_types import _json_frozen, _json_frozen_object
+
+
+def test_validated_json_object_serialization_reuses_frozen_children():
+    payload = freeze_json_object(
+        {"nested": {"value": 1}, "sequence": [True, None, "上海"]}
+    )
+
+    assert _json_frozen_object({"data": payload, "sequence": 3}) == json.dumps(
+        {"data": thaw_json(payload), "sequence": 3},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert _json_frozen(payload) == json.dumps(
+        thaw_json(payload),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 @pytest.mark.asyncio
@@ -129,6 +148,51 @@ async def test_idempotency_identity_and_effect_history_are_conflict_safe(tmp_pat
                 request={"prompt": "hello"},
                 result={"content": "different effect"},
             )
+
+
+@pytest.mark.asyncio
+async def test_new_effect_boundary_returns_without_replay_query(tmp_path):
+    class NoReplayOnInsertHistory(SQLiteHistoryStore):
+        async def replay_effect(self, **kwargs):
+            raise AssertionError("new effect boundary must not be read back")
+
+    async with NoReplayOnInsertHistory(tmp_path / "history.sqlite3") as store:
+        stored, created = await store.begin_effect(
+            execution_id="run-1",
+            module_path="root.tool",
+            call_index=0,
+            effect_type="tool",
+            request={"name": "search"},
+            spec={"idempotency": "required"},
+        )
+
+    assert created is True
+    assert stored.status == "started"
+    assert thaw_json(stored.spec) == {"idempotency": "required"}
+
+
+@pytest.mark.asyncio
+async def test_completed_effect_with_json_null_result_remains_idempotent(tmp_path):
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as store:
+        first = await store.record_effect(
+            execution_id="run-1",
+            module_path="root.tool",
+            call_index=0,
+            effect_type="tool",
+            request={"name": "noop"},
+            result=None,
+        )
+        repeated = await store.record_effect(
+            execution_id="run-1",
+            module_path="root.tool",
+            call_index=0,
+            effect_type="tool",
+            request={"name": "noop"},
+            result=None,
+        )
+
+    assert first.result is None
+    assert repeated == first
 
 
 @pytest.mark.asyncio

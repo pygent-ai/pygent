@@ -281,7 +281,8 @@ class ExecutionEvent:
             or self.timestamp_unix_ns <= 0
         ):
             raise ValueError("timestamp_unix_ns must be a positive integer")
-        object.__setattr__(self, "data", freeze_json_object(self.data))
+        if not isinstance(self.data, FrozenJsonObject):
+            object.__setattr__(self, "data", freeze_json_object(self.data))
 
 
 class EffectDisposition(str, Enum):

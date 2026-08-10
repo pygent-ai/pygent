@@ -16,6 +16,7 @@ from ._history_types import (
     NonDeterministicReplayError,
     StoredEffect,
     _json,
+    _json_frozen,
     _load,
     _serialized_write,
     effect_digest,
@@ -45,8 +46,10 @@ class EffectHistoryMixin:
     ) -> StoredEffect:
         db = self._db()
         digest = effect_digest(request)
-        result_json = _json(result)
-        spec_json = None if spec is None else _json(spec)
+        frozen_result = freeze_json(result)
+        result_json = _json_frozen(frozen_result)
+        frozen_spec = None if spec is None else freeze_json(spec)
+        spec_json = None if frozen_spec is None else _json_frozen(frozen_spec)
         try:
             await db.execute(
                 "INSERT INTO effects(execution_id,module_path,call_index,effect_type,"
@@ -73,7 +76,10 @@ class EffectHistoryMixin:
                 request=request,
                 spec=spec,
             )
-            if existing.status != "completed" or _json(existing.result) != result_json:
+            if (
+                existing.status != "completed"
+                or _json_frozen(existing.result) != result_json
+            ):
                 raise HistoryConflictError(
                     "effect identity is already committed with another result"
                 ) from exc
@@ -85,8 +91,8 @@ class EffectHistoryMixin:
             effect_type=effect_type,
             request_digest=digest,
             status="completed",
-            spec=None if spec is None else freeze_json(spec),
-            result=freeze_json(result),
+            spec=frozen_spec,
+            result=frozen_result,
         )
 
     @_serialized_write
@@ -102,7 +108,9 @@ class EffectHistoryMixin:
     ) -> tuple[StoredEffect, bool]:
         """Persist the started boundary before an operation can escape."""
 
-        created = False
+        digest = effect_digest(request)
+        frozen_spec = freeze_json(spec)
+        spec_json = _json_frozen(frozen_spec)
         try:
             await self._db().execute(
                 "INSERT INTO effects(execution_id,module_path,call_index,effect_type,"
@@ -112,15 +120,28 @@ class EffectHistoryMixin:
                     module_path,
                     call_index,
                     effect_type,
-                    effect_digest(request),
-                    _json(spec),
+                    digest,
+                    spec_json,
                     "started",
                 ),
             )
             await self._db().commit()
-            created = True
         except aiosqlite.IntegrityError:
             await self._db().rollback()
+        else:
+            return (
+                StoredEffect(
+                    execution_id=execution_id,
+                    module_path=module_path,
+                    call_index=call_index,
+                    effect_type=effect_type,
+                    request_digest=digest,
+                    status="started",
+                    spec=frozen_spec,
+                    result=None,
+                ),
+                True,
+            )
         return (
             await self.replay_effect(
                 execution_id=execution_id,
@@ -130,7 +151,7 @@ class EffectHistoryMixin:
                 request=request,
                 spec=spec,
             ),
-            created,
+            False,
         )
 
     @_serialized_write
@@ -247,9 +268,18 @@ class EffectHistoryMixin:
         return row[0], state
 
     async def append_event(
-        self, *, execution_id: str, index: int, event: Mapping[str, Any]
+        self,
+        *,
+        execution_id: str,
+        index: int,
+        event: Mapping[str, Any] | None = None,
+        _payload: str | None = None,
     ) -> None:
-        await self._queue_event(execution_id, index, _json(event))
+        if _payload is None:
+            if event is None:
+                raise TypeError("event is required when no encoded payload is provided")
+            _payload = _json(event)
+        await self._queue_event(execution_id, index, _payload)
 
     async def last_event_index(self, *, execution_id: str) -> int:
         cursor = await self._db().execute(

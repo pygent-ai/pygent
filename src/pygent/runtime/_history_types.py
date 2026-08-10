@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from functools import wraps
 from typing import Concatenate, Literal, ParamSpec, Protocol, TypeVar
@@ -100,7 +100,23 @@ class StoredEffect:
 
 def _json(value: object) -> str:
     frozen = freeze_json(value)
-    return json.dumps(thaw_json(frozen), sort_keys=True, separators=(",", ":"))
+    return _json_frozen(frozen)
+
+
+def _json_frozen(value: JsonValue) -> str:
+    """Serialize an already validated immutable JSON value without re-freezing it."""
+
+    return json.dumps(thaw_json(value), sort_keys=True, separators=(",", ":"))
+
+
+def _json_frozen_object(value: Mapping[str, JsonValue]) -> str:
+    """Serialize a validated object whose child values are already immutable JSON."""
+
+    return json.dumps(
+        {key: thaw_json(item) for key, item in value.items()},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _load(value: str | None) -> JsonValue | None:

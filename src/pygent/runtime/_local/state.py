@@ -17,12 +17,11 @@ from pygent.core import (
     JsonValue,
     Message,
     Module,
-    freeze_json_object,
-    thaw_json,
 )
 from pygent.tool import ToolTaskManager
 
 from .._history_store import SQLiteHistoryStore
+from .._history_types import _json_frozen_object
 from ..api import (
     ExecutionEvent,
     ExecutionOutcome,
@@ -63,6 +62,7 @@ class _ExecutionRecord:
     committed_sequence: int = -1
     event_stream_closed: bool = False
     event_condition: asyncio.Condition = field(default_factory=asyncio.Condition)
+    active_subscribers: int = 0
     event_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     journal_tail: asyncio.Task[None] | None = None
     task: asyncio.Task[tuple[Message, Context]] | None = None
@@ -108,10 +108,11 @@ class _ExecutionRecord:
             if parent_span_id is not None
             else (self.parent_span_id if frame is None else frame.parent_span_id)
         )
-        payload: dict[str, JsonValue] = dict(data)
+        payload: Mapping[str, JsonValue] = data
         if execution_id is not None and execution_id != self.execution_id:
-            payload.setdefault("origin_execution_id", execution_id)
-        frozen = freeze_json_object(payload)
+            copied_payload = dict(data)
+            copied_payload.setdefault("origin_execution_id", execution_id)
+            payload = copied_payload
         persistence: asyncio.Task[None] | None = None
         async with self.event_lock:
             if self.phase is ExecutionPhase.FINALIZING or self.event_stream_closed:
@@ -128,7 +129,7 @@ class _ExecutionRecord:
                 sequence=self.next_sequence,
                 timestamp_unix_ns=timestamp_unix_ns or time.time_ns(),
                 kind=kind,
-                data=frozen,
+                data=payload,
             )
             self.next_sequence += 1
             self.events.append(event)
@@ -155,11 +156,14 @@ class _ExecutionRecord:
         await history.append_event(
             execution_id=self.execution_id,
             index=event.sequence,
-            event=self._event_value(event),
+            _payload=self._event_payload(event),
         )
         await self._publish_committed(event.sequence)
 
     async def _publish_committed(self, sequence: int) -> None:
+        if self.active_subscribers == 0:
+            self.committed_sequence = max(self.committed_sequence, sequence)
+            return
         async with self.event_condition:
             self.committed_sequence = max(self.committed_sequence, sequence)
             self.event_condition.notify_all()
@@ -178,8 +182,12 @@ class _ExecutionRecord:
             "sequence": event.sequence,
             "timestamp_unix_ns": event.timestamp_unix_ns,
             "kind": event.kind,
-            "data": cast(JsonValue, thaw_json(cast(JsonValue, event.data))),
+            "data": cast(JsonValue, event.data),
         }
+
+    @classmethod
+    def _event_payload(cls, event: ExecutionEvent) -> str:
+        return _json_frozen_object(cls._event_value(event))
 
     async def finalize(
         self,
@@ -243,8 +251,9 @@ class _ExecutionRecord:
                 status=status.value,
                 output=output,
                 error=stored_error,
-                terminal_events=tuple(
-                    (event.sequence, self._event_value(event)) for event in prepared
+                terminal_events=(),
+                _terminal_event_payloads=tuple(
+                    (event.sequence, self._event_payload(event)) for event in prepared
                 ),
                 terminal_sequence=terminal_sequence,
             )
@@ -265,18 +274,20 @@ class _ExecutionRecord:
             )
             self.updated_at_unix_ns = time.time_ns()
             self.event_stream_closed = True
-        async with self.event_condition:
-            self.event_condition.notify_all()
+        if self.active_subscribers:
+            async with self.event_condition:
+                self.event_condition.notify_all()
 
     async def notify_terminal(self) -> None:
-        async with self.event_condition:
-            self.phase = ExecutionPhase.TERMINAL
-            self.owner_state = ExecutionOwnerState.TERMINAL
-            self.updated_at_unix_ns = time.time_ns()
-            if self.terminal_sequence is None and self.committed_sequence >= 0:
-                self.terminal_sequence = self.committed_sequence
-            self.event_stream_closed = True
-            self.event_condition.notify_all()
+        self.phase = ExecutionPhase.TERMINAL
+        self.owner_state = ExecutionOwnerState.TERMINAL
+        self.updated_at_unix_ns = time.time_ns()
+        if self.terminal_sequence is None and self.committed_sequence >= 0:
+            self.terminal_sequence = self.committed_sequence
+        self.event_stream_closed = True
+        if self.active_subscribers:
+            async with self.event_condition:
+                self.event_condition.notify_all()
 
     def snapshot(self) -> ExecutionSnapshot:
         return ExecutionSnapshot(

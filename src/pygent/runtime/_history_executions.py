@@ -365,16 +365,22 @@ class ExecutionHistoryMixin:
         error: object | None,
         terminal_events: tuple[tuple[int, object], ...],
         terminal_sequence: int,
+        _terminal_event_payloads: tuple[tuple[int, str], ...] | None = None,
     ) -> None:
         """Commit terminal journal entries and the materialized outcome atomically."""
 
         db = self._db()
         await db.execute("BEGIN IMMEDIATE")
         try:
-            for index, event in terminal_events:
+            payloads = (
+                tuple((index, _json(event)) for index, event in terminal_events)
+                if _terminal_event_payloads is None
+                else _terminal_event_payloads
+            )
+            for index, payload in payloads:
                 await db.execute(
                     "INSERT INTO events(execution_id,event_index,event_json) VALUES(?,?,?)",
-                    (execution_id, index, _json(event)),
+                    (execution_id, index, payload),
                 )
             cursor = await db.execute(
                 "UPDATE executions SET status=?,phase='terminal',output_json=?,error_json=?,"
