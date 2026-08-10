@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import aiosqlite
 
-from pygent.core import JsonValue, freeze_json
+from pygent.core import JsonValue
 
 from ._history_types import (
     HistoryConflictError,
@@ -19,8 +19,9 @@ from ._history_types import (
     _json,
     _json_frozen,
     _load,
+    _prepare_json,
+    _prepared_json_digest,
     _serialized_write,
-    effect_digest,
 )
 
 
@@ -78,11 +79,14 @@ class EffectHistoryMixin:
         spec: object | None = None,
     ) -> StoredEffect:
         db = self._db()
-        digest = effect_digest(request)
-        frozen_result = freeze_json(result)
-        result_json = _json_frozen(frozen_result)
-        frozen_spec = None if spec is None else freeze_json(spec)
-        spec_json = None if frozen_spec is None else _json_frozen(frozen_spec)
+        prepared_request = _prepare_json(request)
+        digest = _prepared_json_digest(prepared_request)
+        prepared_result = _prepare_json(result)
+        frozen_result = prepared_result.frozen
+        result_json = prepared_result.payload
+        prepared_spec = None if spec is None else _prepare_json(spec)
+        frozen_spec = None if prepared_spec is None else prepared_spec.frozen
+        spec_json = None if prepared_spec is None else prepared_spec.payload
         try:
             await db.execute(
                 "INSERT INTO effects(execution_id,module_path,call_index,effect_type,"
@@ -140,9 +144,11 @@ class EffectHistoryMixin:
     ) -> tuple[StoredEffect, bool]:
         """Persist the started boundary before an operation can escape."""
 
-        digest = effect_digest(request)
-        frozen_spec = freeze_json(spec)
-        spec_json = _json_frozen(frozen_spec)
+        prepared_request = _prepare_json(request)
+        digest = _prepared_json_digest(prepared_request)
+        prepared_spec = _prepare_json(spec)
+        frozen_spec = prepared_spec.frozen
+        spec_json = prepared_spec.payload
         batch_item = _BeginEffectBatchItem(
             execution_id,
             module_path,
@@ -214,7 +220,7 @@ class EffectHistoryMixin:
         call_index: int,
         result: object,
     ) -> None:
-        payload = _json(result)
+        payload = _prepare_json(result).payload
         batch_item = _CompleteEffectBatchItem(
             payload, execution_id, module_path, call_index
         )
@@ -337,13 +343,18 @@ class EffectHistoryMixin:
             raise NonDeterministicReplayError(
                 "effect type differs from committed deterministic history"
             )
-        digest = effect_digest(request)
+        prepared_request = _prepare_json(request)
+        digest = _prepared_json_digest(prepared_request)
         if row[1] != digest:
             raise NonDeterministicReplayError(
                 "effect request differs from committed deterministic history"
             )
         stored_spec = _load(row[2])
-        if spec is not None and stored_spec is not None and _json(stored_spec) != _json(spec):
+        if (
+            spec is not None
+            and stored_spec is not None
+            and _prepare_json(stored_spec).payload != _prepare_json(spec).payload
+        ):
             raise NonDeterministicReplayError(
                 "effect recovery policy differs from committed history"
             )

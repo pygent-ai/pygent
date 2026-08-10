@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sqlite3
 
 import pytest
 
-from pygent.core import freeze_json_object, thaw_json
+from pygent.core import JsonValueError, freeze_json_object, thaw_json
 from pygent.runtime import (
     HistoryConflictError,
     HistoryStoreError,
     NonDeterministicReplayError,
     SQLiteHistoryStore,
 )
-from pygent.runtime._history_types import _json_frozen, _json_frozen_object
+from pygent.runtime._history_types import (
+    _json_frozen,
+    _json_frozen_object,
+    _prepare_json,
+    effect_digest,
+)
 
 
 @pytest.mark.parametrize("pending_batches", [0, -1, True])
@@ -54,6 +60,25 @@ def test_validated_json_object_serialization_reuses_frozen_children():
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def test_prepared_json_reuses_frozen_root_and_preserves_digest_bytes():
+    payload = freeze_json_object(
+        {"message": "上海", "nested": {"enabled": True}, "sequence": [1, 2]}
+    )
+    expected = json.dumps(
+        thaw_json(payload),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    prepared = _prepare_json(payload)
+
+    assert prepared.frozen is payload
+    assert prepared.payload == expected
+    assert effect_digest(payload) == hashlib.sha256(expected.encode()).hexdigest()
+    with pytest.raises(JsonValueError):
+        _prepare_json({"invalid": float("nan")})
 
 
 @pytest.mark.asyncio

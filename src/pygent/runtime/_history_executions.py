@@ -16,6 +16,7 @@ from ._history_types import (
     StoredExecution,
     _json,
     _load,
+    _prepare_json,
     _serialized_write,
 )
 
@@ -163,12 +164,13 @@ class ExecutionHistoryMixin:
         phase: str = "submitting",
         attempt_id: str | None = None,
     ) -> tuple[StoredExecution, bool]:
-        payload = _json(input)
-        model_calls_payload = _json({} if model_calls is None else model_calls)
+        prepared_input = _prepare_json(input)
+        prepared_model_calls = _prepare_json({} if model_calls is None else model_calls)
+        payload = prepared_input.payload
+        model_calls_payload = prepared_model_calls.payload
         submitted_at_unix_ns = time.time_ns()
-        frozen_input = _load(payload)
-        frozen_model_calls = _load(model_calls_payload)
-        assert frozen_input is not None
+        frozen_input = prepared_input.frozen
+        frozen_model_calls = prepared_model_calls.frozen
         values = (
             execution_id,
             request_id,
