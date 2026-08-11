@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ssl
 
 import httpx
 import pytest
@@ -512,6 +513,60 @@ async def test_owned_client_close_is_idempotent_and_blocks_reuse():
             ModelRoute("main", "openai", "gpt-test"),
             OpenAICompatibleAdapter().build_request(_request()),
         )
+
+
+@pytest.mark.asyncio
+async def test_owned_http_shards_share_one_strict_ssl_context(monkeypatch):
+    contexts = []
+    shard_contexts = []
+    original_create_ssl_context = httpx.create_ssl_context
+    original_async_client = httpx.AsyncClient
+
+    def recording_create_ssl_context(*args, **kwargs):
+        context = original_create_ssl_context(*args, **kwargs)
+        contexts.append(context)
+        return context
+
+    def recording_async_client(*args, **kwargs):
+        shard_contexts.append(kwargs.get("verify"))
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "create_ssl_context", recording_create_ssl_context)
+    monkeypatch.setattr(httpx, "AsyncClient", recording_async_client)
+    client = OpenAICompatibleClient(
+        base_url="https://models.example/v1",
+        api_key="secret",
+    )
+    try:
+        assert len(contexts) == 1
+        assert len(shard_contexts) == 8
+        assert all(context is contexts[0] for context in shard_contexts)
+        assert contexts[0].check_hostname is True
+        assert contexts[0].verify_mode == ssl.CERT_REQUIRED
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_injected_http_client_does_not_create_or_take_over_ssl_context(
+    monkeypatch,
+):
+    injected = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200))
+    )
+
+    def fail_create_ssl_context(*args, **kwargs):
+        raise AssertionError("injected client unexpectedly created a TLS context")
+
+    monkeypatch.setattr(httpx, "create_ssl_context", fail_create_ssl_context)
+    client = OpenAICompatibleClient(
+        base_url="https://models.example/v1",
+        client=injected,
+    )
+    await client.aclose()
+
+    assert not injected.is_closed
+    await injected.aclose()
 
 
 @pytest.mark.asyncio
