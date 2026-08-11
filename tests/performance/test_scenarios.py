@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from dataclasses import replace
 from pathlib import Path
 from time import perf_counter
@@ -104,16 +105,29 @@ async def test_durable_http_worker_handles_concurrent_successful_executions():
         # release runners can take more than 20 seconds under shared-host load.
         request_deadline_seconds=60.0,
     )
-    async with ScenarioSession(
-        profile,
-        "http-worker-invoke",
-        capacity=8,
-        worker_count=2,
-    ) as session:
-        samples = await asyncio.gather(
-            *(session.execute(index, perf_counter(), "closed") for index in range(8))
-        )
-        sqlite_bytes = session.sqlite_bytes()
+    async def exercise():
+        async with ScenarioSession(
+            profile,
+            "http-worker-invoke",
+            capacity=8,
+            worker_count=2,
+        ) as session:
+            samples = await asyncio.gather(
+                *(session.execute(index, perf_counter(), "closed") for index in range(8))
+            )
+            return samples, session.sqlite_bytes()
+
+    def exercise_on_windows_selector():
+        loop = asyncio.SelectorEventLoop()
+        try:
+            return loop.run_until_complete(exercise())
+        finally:
+            loop.close()
+
+    if sys.platform == "win32":
+        samples, sqlite_bytes = await asyncio.to_thread(exercise_on_windows_selector)
+    else:
+        samples, sqlite_bytes = await exercise()
 
     assert all(sample.succeeded and sample.context_isolated for sample in samples)
     assert {sample.worker_id for sample in samples} == {"worker-0", "worker-1"}
