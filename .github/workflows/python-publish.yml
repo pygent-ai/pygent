@@ -37,7 +37,7 @@ jobs:
           - {os: windows-latest, target: x86_64}
           - {os: ubuntu-latest, target: x86_64}
           - {os: ubuntu-24.04-arm, target: aarch64}
-          - {os: macos-13, target: x86_64}
+          - {os: macos-15-intel, target: x86_64}
           - {os: macos-14, target: aarch64}
     runs-on: ${{ matrix.os }}
     steps:
@@ -85,7 +85,7 @@ jobs:
           - {os: windows-latest, artifact: pygent-wheel-windows-latest-x86_64}
           - {os: ubuntu-latest, artifact: pygent-wheel-ubuntu-latest-x86_64}
           - {os: ubuntu-24.04-arm, artifact: pygent-wheel-ubuntu-24.04-arm-aarch64}
-          - {os: macos-13, artifact: pygent-wheel-macos-13-x86_64}
+          - {os: macos-15-intel, artifact: pygent-wheel-macos-15-intel-x86_64}
           - {os: macos-14, artifact: pygent-wheel-macos-14-aarch64}
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.platform.os }}
