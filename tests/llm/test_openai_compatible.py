@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import ssl
 
 import httpx
 import pytest
@@ -413,12 +412,7 @@ async def test_completed_sse_response_reuses_http1_connection(
 
     server = await asyncio.start_server(serve_connection, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
-    http_client = httpx.AsyncClient(
-        base_url=f"http://127.0.0.1:{port}/v1", trust_env=False
-    )
-    client = OpenAICompatibleClient(
-        base_url=f"http://127.0.0.1:{port}/v1", client=http_client
-    )
+    client = OpenAICompatibleClient(base_url=f"http://127.0.0.1:{port}/v1")
     route = ModelRoute("main", "openai", "gpt-test")
     payload = OpenAICompatibleAdapter().build_request(_request())
 
@@ -429,7 +423,6 @@ async def test_completed_sse_response_reuses_http1_connection(
         assert connection_count == 1
     finally:
         await client.aclose()
-        await http_client.aclose()
         server.close()
         await server.wait_closed()
 
@@ -470,12 +463,7 @@ async def test_done_does_not_wait_for_unknown_length_sse_eof() -> None:
 
     server = await asyncio.start_server(serve_connection, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
-    http_client = httpx.AsyncClient(
-        base_url=f"http://127.0.0.1:{port}/v1", trust_env=False
-    )
-    client = OpenAICompatibleClient(
-        base_url=f"http://127.0.0.1:{port}/v1", client=http_client
-    )
+    client = OpenAICompatibleClient(base_url=f"http://127.0.0.1:{port}/v1")
 
     async def collect() -> list[FrozenJsonObject]:
         return [
@@ -494,7 +482,6 @@ async def test_done_does_not_wait_for_unknown_length_sse_eof() -> None:
     finally:
         release.set()
         await client.aclose()
-        await http_client.aclose()
         server.close()
         await server.wait_closed()
 
@@ -550,12 +537,7 @@ async def test_completed_chunked_sse_response_reuses_http1_connection(
 
     server = await asyncio.start_server(serve_connection, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
-    http_client = httpx.AsyncClient(
-        base_url=f"http://127.0.0.1:{port}/v1", trust_env=False
-    )
-    client = OpenAICompatibleClient(
-        base_url=f"http://127.0.0.1:{port}/v1", client=http_client
-    )
+    client = OpenAICompatibleClient(base_url=f"http://127.0.0.1:{port}/v1")
     route = ModelRoute("main", "openai", "gpt-test")
     payload = OpenAICompatibleAdapter().build_request(_request())
 
@@ -566,7 +548,6 @@ async def test_completed_chunked_sse_response_reuses_http1_connection(
         assert connection_count == 1
     finally:
         await client.aclose()
-        await http_client.aclose()
         server.close()
         await server.wait_closed()
 
@@ -577,21 +558,23 @@ async def test_owned_client_honors_system_proxy_bypass(
     monkeypatch, bypass: bool
 ) -> None:
     trust_environment = []
-    original_async_client = httpx.AsyncClient
+
+    class RecordingNativeClient:
+        def __init__(self, _headers, trust_env, _limit):
+            trust_environment.append(trust_env)
+
+        async def close(self):
+            return None
 
     monkeypatch.setattr(
         "pygent.llm.openai_compatible.urllib.request.proxy_bypass",
         lambda _: bypass,
     )
 
-    def recording_async_client(*args, **kwargs):
-        trust_environment.append(kwargs.get("trust_env"))
-        return original_async_client(*args, **kwargs)
-
-    monkeypatch.setattr(httpx, "AsyncClient", recording_async_client)
+    monkeypatch.setattr(openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient)
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
 
-    assert trust_environment == [not bypass] * 8
+    assert trust_environment == [not bypass]
     await client.aclose()
 
 
@@ -600,7 +583,13 @@ async def test_owned_client_keeps_environment_when_proxy_bypass_fails(
     monkeypatch,
 ) -> None:
     trust_environment = []
-    original_async_client = httpx.AsyncClient
+
+    class RecordingNativeClient:
+        def __init__(self, _headers, trust_env, _limit):
+            trust_environment.append(trust_env)
+
+        async def close(self):
+            return None
 
     def fail_bypass(_: str) -> bool:
         raise OSError("proxy bypass lookup failed")
@@ -610,29 +599,21 @@ async def test_owned_client_keeps_environment_when_proxy_bypass_fails(
         fail_bypass,
     )
 
-    def recording_async_client(*args, **kwargs):
-        trust_environment.append(kwargs.get("trust_env"))
-        return original_async_client(*args, **kwargs)
-
-    monkeypatch.setattr(httpx, "AsyncClient", recording_async_client)
+    monkeypatch.setattr(openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient)
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
 
-    assert trust_environment == [True] * 8
+    assert trust_environment == [True]
     await client.aclose()
 
 
 @pytest.mark.asyncio
 async def test_owned_client_close_is_idempotent_and_blocks_reuse():
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
-    owned_clients = client._clients
-    assert len(owned_clients) == 8
-    assert [client._next_http_slot()[0] for _ in range(9)] == [
-        *owned_clients,
-        owned_clients[0],
-    ]
+    assert client._clients == ()
+    assert client._native_client is not None
+    assert client._native_client._limits() == (56, 32)
     await client.aclose()
     await client.aclose()
-    assert all(http_client.is_closed for http_client in owned_clients)
     with pytest.raises(RuntimeError, match="closed"):
         await client.invoke(
             ModelRoute("main", "openai", "gpt-test"),
@@ -641,133 +622,44 @@ async def test_owned_client_close_is_idempotent_and_blocks_reuse():
 
 
 @pytest.mark.asyncio
-async def test_owned_shard_admission_bounds_work_before_httpcore(monkeypatch):
-    active = 0
-    maximum_active = 0
-    saturated = asyncio.Event()
-    release = asyncio.Event()
-    original_async_client = httpx.AsyncClient
-
-    async def handler(_: httpx.Request) -> httpx.Response:
-        nonlocal active, maximum_active
-        active += 1
-        maximum_active = max(maximum_active, active)
-        if active == 56:
-            saturated.set()
-        try:
-            await release.wait()
-            return httpx.Response(200, json={"ok": True})
-        finally:
-            active -= 1
-
-    def mock_async_client(*args, **kwargs):
-        return original_async_client(
-            *args,
-            **kwargs,
-            transport=httpx.MockTransport(handler),
-        )
-
-    monkeypatch.setattr(httpx, "AsyncClient", mock_async_client)
+async def test_owned_native_transport_bounds_connections_before_http():
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
-    route = ModelRoute("main", "openai", "gpt-test")
-    payload = OpenAICompatibleAdapter().build_request(_request())
-    tasks = [asyncio.create_task(client.invoke(route, payload)) for _ in range(64)]
     try:
-        await asyncio.wait_for(saturated.wait(), timeout=1)
-        await asyncio.sleep(0)
-        assert maximum_active == 56
-        assert active == 56
-
-        for task in tasks[-8:]:
-            task.cancel()
-        cancelled = await asyncio.gather(*tasks[-8:], return_exceptions=True)
-        assert all(isinstance(value, asyncio.CancelledError) for value in cancelled)
-
-        release.set()
-        results = await asyncio.gather(*tasks[:-8])
-        assert all(result["ok"] is True for result in results)
-        assert maximum_active == 56
+        assert client._native_client is not None
+        assert client._native_client._limits() == (56, 32)
     finally:
-        release.set()
-        await asyncio.gather(*tasks, return_exceptions=True)
         await client.aclose()
 
 
 @pytest.mark.asyncio
-async def test_owned_close_rejects_queued_shard_requests(monkeypatch):
-    active = 0
-    saturated = asyncio.Event()
-    release = asyncio.Event()
-    original_async_client = httpx.AsyncClient
-
-    async def handler(_: httpx.Request) -> httpx.Response:
-        nonlocal active
-        active += 1
-        if active == 56:
-            saturated.set()
-        try:
-            await release.wait()
-            return httpx.Response(200, json={"ok": True})
-        finally:
-            active -= 1
-
-    def mock_async_client(*args, **kwargs):
-        return original_async_client(
-            *args,
-            **kwargs,
-            transport=httpx.MockTransport(handler),
-        )
-
-    monkeypatch.setattr(httpx, "AsyncClient", mock_async_client)
+async def test_owned_close_rejects_new_native_requests():
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
     route = ModelRoute("main", "openai", "gpt-test")
     payload = OpenAICompatibleAdapter().build_request(_request())
-    tasks = [asyncio.create_task(client.invoke(route, payload)) for _ in range(64)]
-
-    await asyncio.wait_for(saturated.wait(), timeout=1)
-    close_task = asyncio.create_task(client.aclose())
-    await asyncio.sleep(0)
-    assert not close_task.done()
-    release.set()
-    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-    await asyncio.wait_for(close_task, timeout=1)
-
-    assert sum(isinstance(value, RuntimeError) for value in outcomes) == 8
-    assert sum(isinstance(value, FrozenJsonObject) for value in outcomes) == 56
+    await client.aclose()
+    with pytest.raises(RuntimeError, match="closed"):
+        await client.invoke(route, payload)
 
 
 @pytest.mark.asyncio
-async def test_owned_http_shards_share_one_strict_ssl_context(monkeypatch):
+async def test_owned_transport_uses_native_strict_tls_client(monkeypatch):
     contexts = []
-    shard_contexts = []
-    shard_limits = []
     original_create_ssl_context = httpx.create_ssl_context
-    original_async_client = httpx.AsyncClient
 
     def recording_create_ssl_context(*args, **kwargs):
         context = original_create_ssl_context(*args, **kwargs)
         contexts.append(context)
         return context
 
-    def recording_async_client(*args, **kwargs):
-        shard_contexts.append(kwargs.get("verify"))
-        shard_limits.append(kwargs.get("limits"))
-        return original_async_client(*args, **kwargs)
-
     monkeypatch.setattr(httpx, "create_ssl_context", recording_create_ssl_context)
-    monkeypatch.setattr(httpx, "AsyncClient", recording_async_client)
     client = OpenAICompatibleClient(
         base_url="https://models.example/v1",
         api_key="secret",
     )
     try:
-        assert len(contexts) == 1
-        assert len(shard_contexts) == 8
-        assert all(context is contexts[0] for context in shard_contexts)
-        assert all(limit.max_connections == 7 for limit in shard_limits)
-        assert all(limit.max_keepalive_connections == 7 for limit in shard_limits)
-        assert contexts[0].check_hostname is True
-        assert contexts[0].verify_mode == ssl.CERT_REQUIRED
+        assert contexts == []
+        assert client._native_client is not None
+        assert client._clients == ()
     finally:
         await client.aclose()
 

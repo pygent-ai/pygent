@@ -13,7 +13,10 @@ htmlcov/
 
 build/
 dist/
+target/
 *.egg-info/
+src/pygent/_native.pyd
+src/pygent/_native.pdb
 
 sessions/
 .doc_project_maintainer/

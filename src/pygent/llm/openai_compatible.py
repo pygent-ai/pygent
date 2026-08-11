@@ -16,6 +16,7 @@ from typing import Self, cast
 import httpx
 import jsonschema  # type: ignore[import-untyped]
 
+from pygent import _native
 from pygent.core import (
     AIMessage,
     FrozenJsonObject,
@@ -143,32 +144,20 @@ class OpenAICompatibleClient:
         self._owns_client = client is None
         self._clients: tuple[httpx.AsyncClient, ...]
         self._admissions: tuple[_ShardAdmission, ...] | None
+        self._native_client: _native.NativeHttpClient | None
         if client is not None:
             self._clients = (client,)
             self._admissions = None
+            self._native_client = None
         else:
-            ssl_context = httpx.create_ssl_context()
             trust_env = _trust_environment_for_url(api_root)
-            self._clients = tuple(
-                httpx.AsyncClient(
-                    base_url=api_root,
-                    headers=request_headers,
-                    timeout=None,
-                    verify=ssl_context,
-                    trust_env=trust_env,
-                    limits=httpx.Limits(
-                        max_connections=_DEFAULT_MAX_CONNECTIONS_PER_SHARD,
-                        max_keepalive_connections=(
-                            _DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD
-                        ),
-                    ),
-                )
-                for _ in range(_DEFAULT_HTTP1_POOL_SHARDS)
+            self._native_client = _native.NativeHttpClient(
+                request_headers,
+                trust_env,
+                _DEFAULT_HTTP1_POOL_SHARDS * _DEFAULT_MAX_CONNECTIONS_PER_SHARD,
             )
-            self._admissions = tuple(
-                _ShardAdmission(_DEFAULT_MAX_CONNECTIONS_PER_SHARD)
-                for _ in self._clients
-            )
+            self._clients = ()
+            self._admissions = None
         self._next_client_index = 0
         self._models: ModelCatalog = _OpenAICompatibleModelCatalog(self)
         self._closed = False
@@ -182,6 +171,34 @@ class OpenAICompatibleClient:
     async def invoke(
         self, route: ModelRoute, payload: FrozenJsonObject
     ) -> FrozenJsonObject:
+        native_client = self._native_client
+        if native_client is not None:
+            self._ensure_open()
+            try:
+                status, raw_body = await native_client.request_json(
+                    "POST",
+                    self._endpoint,
+                    _wire_json(payload.to_dict()),
+                    None,
+                )
+            except asyncio.CancelledError:
+                raise
+            except RuntimeError as exc:
+                raise httpx.TransportError(str(exc)) from exc
+            _raise_for_native_status(status, "POST", self._endpoint)
+            try:
+                body = json.loads(raw_body)
+            except (TypeError, ValueError) as exc:
+                raise ModelProviderError(
+                    ModelErrorKind.INVALID_RESPONSE,
+                    "provider returned invalid JSON",
+                ) from exc
+            if not isinstance(body, Mapping):
+                raise ModelProviderError(
+                    ModelErrorKind.INVALID_RESPONSE,
+                    "provider response must be an object",
+                )
+            return freeze_json_object(cast(Mapping[str, object], body))
         client, admission = await self._acquire_http_client()
         try:
             response = await client.post(
@@ -210,6 +227,48 @@ class OpenAICompatibleClient:
     async def stream(
         self, route: ModelRoute, payload: FrozenJsonObject
     ) -> AsyncIterator[FrozenJsonObject]:
+        native_client = self._native_client
+        if native_client is not None:
+            self._ensure_open()
+            body = payload.to_dict()
+            body["stream"] = True
+            native_stream = native_client.stream_sse(
+                self._endpoint, _wire_json(body)
+            )
+            completed = False
+            try:
+                async for kind, value in native_stream:
+                    if kind == "status":
+                        _raise_for_native_status(
+                            cast(int, value), "POST", self._endpoint
+                        )
+                    if kind == "error":
+                        raise httpx.TransportError(cast(str, value))
+                    if kind != "data":  # pragma: no cover - native invariant
+                        raise RuntimeError("native SSE transport returned invalid item")
+                    data = cast(str, value).strip()
+                    if data == "[DONE]":
+                        completed = True
+                        yield freeze_json_object({"done": True})
+                        return
+                    try:
+                        item = json.loads(data)
+                    except json.JSONDecodeError as exc:
+                        raise ModelProviderError(
+                            ModelErrorKind.INVALID_RESPONSE,
+                            "provider returned an invalid SSE event",
+                        ) from exc
+                    if not isinstance(item, Mapping):
+                        raise ModelProviderError(
+                            ModelErrorKind.INVALID_RESPONSE,
+                            "provider SSE event must be an object",
+                        )
+                    yield freeze_json_object(cast(Mapping[str, object], item))
+            finally:
+                if not completed:
+                    native_stream.close()
+                    await asyncio.shield(native_stream.wait_closed())
+            return
         client, admission = await self._acquire_http_client()
         try:
             body = payload.to_dict()
@@ -261,6 +320,10 @@ class OpenAICompatibleClient:
         if self._closed:
             return
         self._closed = True
+        native_client = self._native_client
+        if native_client is not None:
+            await native_client.close()
+            return
         admissions = self._admissions
         if admissions is not None:
             for admission in admissions:
@@ -302,6 +365,30 @@ class OpenAICompatibleClient:
         self, *, timeout: float | None
     ) -> FrozenJsonObject:
         self._ensure_open()
+        native_client = self._native_client
+        if native_client is not None:
+            try:
+                status, raw_body = await native_client.request_json(
+                    "GET", self._models_endpoint, None, timeout
+                )
+            except asyncio.CancelledError:
+                raise
+            except RuntimeError as exc:
+                raise httpx.TransportError(str(exc)) from exc
+            _raise_for_native_status(status, "GET", self._models_endpoint)
+            try:
+                body = json.loads(raw_body)
+            except (TypeError, ValueError) as exc:
+                raise ModelProviderError(
+                    ModelErrorKind.INVALID_RESPONSE,
+                    "model catalog returned invalid JSON",
+                ) from exc
+            if not isinstance(body, Mapping):
+                raise ModelProviderError(
+                    ModelErrorKind.INVALID_RESPONSE,
+                    "model catalog response must be an object",
+                )
+            return freeze_json_object(cast(Mapping[str, object], body))
         try:
             client, admission = await self._acquire_http_client()
             try:
@@ -630,6 +717,20 @@ def _trust_environment_for_url(url: str) -> bool:
         return not urllib.request.proxy_bypass(hostname)
     except OSError:
         return True
+
+
+def _wire_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _raise_for_native_status(status: int, method: str, url: str) -> None:
+    if 200 <= status < 300:
+        return
+    request = httpx.Request(method, url)
+    response = httpx.Response(status, request=request)
+    raise httpx.HTTPStatusError(
+        f"provider returned HTTP {status}", request=request, response=response
+    )
 
 
 def _normalize_openai_error(error: BaseException) -> ModelErrorKind:

@@ -28,14 +28,41 @@ jobs:
       - run: uv run ruff check src tests examples
       - run: uv run mypy src
 
-  build:
+  build-wheels:
+    needs: verify-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, target: x86_64}
+          - {os: ubuntu-latest, target: x86_64}
+          - {os: ubuntu-24.04-arm, target: aarch64}
+          - {os: macos-13, target: x86_64}
+          - {os: macos-14, target: aarch64}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          manylinux: auto
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pygent-wheel-${{ matrix.os }}-${{ matrix.target }}
+          path: dist/*.whl
+
+  build-sdist:
     needs: verify-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: PyO3/maturin-action@v1
         with:
-          python-version: "3.11"
+          command: sdist
+          args: --out dist
       - uses: astral-sh/setup-uv@v6
       - name: Verify release tag
         if: github.event_name == 'release'
@@ -43,15 +70,44 @@ jobs:
         run: |
           version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           test "$version" = "${{ github.event.release.tag_name }}" || test "v$version" = "${{ github.event.release.tag_name }}"
-      - run: uv build
       - run: uvx twine check dist/*
       - uses: actions/upload-artifact@v4
         with:
-          name: pygent-release-dists
-          path: dist/
+          name: pygent-sdist
+          path: dist/*.tar.gz
+
+  verify-wheels:
+    needs: build-wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - {os: windows-latest, artifact: pygent-wheel-windows-latest-x86_64}
+          - {os: ubuntu-latest, artifact: pygent-wheel-ubuntu-latest-x86_64}
+          - {os: ubuntu-24.04-arm, artifact: pygent-wheel-ubuntu-24.04-arm-aarch64}
+          - {os: macos-13, artifact: pygent-wheel-macos-13-x86_64}
+          - {os: macos-14, artifact: pygent-wheel-macos-14-aarch64}
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.platform.artifact }}
+          path: dist
+      - name: Clean-install native wheel
+        run: >-
+          python -c "import glob,subprocess,sys;
+          wheels=glob.glob('dist/*.whl');
+          assert len(wheels)==1, wheels;
+          subprocess.check_call([sys.executable,'-m','pip','install',wheels[0]]);
+          import pygent._native;
+          print(pygent._native.NativeHttpClient)"
 
   publish:
-    needs: build
+    needs: [verify-wheels, build-sdist]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -61,8 +117,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: pygent-release-dists
+          pattern: pygent-*
           path: dist/
+          merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/

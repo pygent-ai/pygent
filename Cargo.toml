@@ -1,0 +1,18 @@
+[package]
+name = "pygent-native"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+path = "rust/src/lib.rs"
+
+[dependencies]
+futures-util = "0.3"
+pyo3 = { version = "0.23", features = ["abi3-py311"] }
+pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
+reqwest = { version = "0.12", default-features = false, features = ["http2", "rustls-tls-native-roots", "stream"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+tokio-util = "0.7"
