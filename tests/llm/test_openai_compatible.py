@@ -486,14 +486,139 @@ async def test_done_does_not_wait_for_unknown_length_sse_eof() -> None:
         ]
 
     try:
+        started = asyncio.get_running_loop().time()
         streamed = await asyncio.wait_for(collect(), timeout=1)
+        elapsed = asyncio.get_running_loop().time() - started
         assert streamed[-1]["done"] is True
+        assert elapsed < 0.25
     finally:
         release.set()
         await client.aclose()
         await http_client.aclose()
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_delay", [0.0, 0.01])
+async def test_completed_chunked_sse_response_reuses_http1_connection(
+    terminal_delay: float,
+) -> None:
+    connection_count = 0
+
+    async def serve_connection(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        nonlocal connection_count
+        connection_count += 1
+        try:
+            while True:
+                try:
+                    head = await reader.readuntil(b"\r\n\r\n")
+                except (asyncio.IncompleteReadError, ConnectionError):
+                    return
+                content_length = next(
+                    (
+                        int(line.split(b":", 1)[1].strip())
+                        for line in head.split(b"\r\n")
+                        if line.lower().startswith(b"content-length:")
+                    ),
+                    0,
+                )
+                if content_length:
+                    await reader.readexactly(content_length)
+                body = (
+                    b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+                    b"data: [DONE]\n\n"
+                )
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\n"
+                    b"Content-Type: text/event-stream\r\n"
+                    b"Transfer-Encoding: chunked\r\n\r\n"
+                    + f"{len(body):x}\r\n".encode()
+                    + body
+                    + b"\r\n"
+                )
+                await writer.drain()
+                if terminal_delay:
+                    await asyncio.sleep(terminal_delay)
+                writer.write(b"0\r\n\r\n")
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(serve_connection, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    http_client = httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{port}/v1", trust_env=False
+    )
+    client = OpenAICompatibleClient(
+        base_url=f"http://127.0.0.1:{port}/v1", client=http_client
+    )
+    route = ModelRoute("main", "openai", "gpt-test")
+    payload = OpenAICompatibleAdapter().build_request(_request())
+
+    try:
+        for _ in range(2):
+            streamed = [item async for item in client.stream(route, payload)]
+            assert streamed[-1]["done"] is True
+        assert connection_count == 1
+    finally:
+        await client.aclose()
+        await http_client.aclose()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.parametrize("bypass", [False, True])
+@pytest.mark.asyncio
+async def test_owned_client_honors_system_proxy_bypass(
+    monkeypatch, bypass: bool
+) -> None:
+    trust_environment = []
+    original_async_client = httpx.AsyncClient
+
+    monkeypatch.setattr(
+        "pygent.llm.openai_compatible.urllib.request.proxy_bypass",
+        lambda _: bypass,
+    )
+
+    def recording_async_client(*args, **kwargs):
+        trust_environment.append(kwargs.get("trust_env"))
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", recording_async_client)
+    client = OpenAICompatibleClient(base_url="https://models.example/v1")
+
+    assert trust_environment == [not bypass] * 8
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_owned_client_keeps_environment_when_proxy_bypass_fails(
+    monkeypatch,
+) -> None:
+    trust_environment = []
+    original_async_client = httpx.AsyncClient
+
+    def fail_bypass(_: str) -> bool:
+        raise OSError("proxy bypass lookup failed")
+
+    monkeypatch.setattr(
+        "pygent.llm.openai_compatible.urllib.request.proxy_bypass",
+        fail_bypass,
+    )
+
+    def recording_async_client(*args, **kwargs):
+        trust_environment.append(kwargs.get("trust_env"))
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", recording_async_client)
+    client = OpenAICompatibleClient(base_url="https://models.example/v1")
+
+    assert trust_environment == [True] * 8
+    await client.aclose()
 
 
 @pytest.mark.asyncio
@@ -519,6 +644,7 @@ async def test_owned_client_close_is_idempotent_and_blocks_reuse():
 async def test_owned_http_shards_share_one_strict_ssl_context(monkeypatch):
     contexts = []
     shard_contexts = []
+    shard_limits = []
     original_create_ssl_context = httpx.create_ssl_context
     original_async_client = httpx.AsyncClient
 
@@ -529,6 +655,7 @@ async def test_owned_http_shards_share_one_strict_ssl_context(monkeypatch):
 
     def recording_async_client(*args, **kwargs):
         shard_contexts.append(kwargs.get("verify"))
+        shard_limits.append(kwargs.get("limits"))
         return original_async_client(*args, **kwargs)
 
     monkeypatch.setattr(httpx, "create_ssl_context", recording_create_ssl_context)
@@ -541,6 +668,8 @@ async def test_owned_http_shards_share_one_strict_ssl_context(monkeypatch):
         assert len(contexts) == 1
         assert len(shard_contexts) == 8
         assert all(context is contexts[0] for context in shard_contexts)
+        assert all(limit.max_connections == 7 for limit in shard_limits)
+        assert all(limit.max_keepalive_connections == 7 for limit in shard_limits)
         assert contexts[0].check_hostname is True
         assert contexts[0].verify_mode == ssl.CERT_REQUIRED
     finally:

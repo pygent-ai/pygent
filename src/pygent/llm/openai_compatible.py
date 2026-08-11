@@ -7,6 +7,8 @@ import hashlib
 import json
 import math
 import re
+import urllib.parse
+import urllib.request
 from collections.abc import AsyncIterator, Mapping
 from functools import lru_cache
 from typing import Self, cast
@@ -40,8 +42,9 @@ from .types import (
 
 _OPENAI_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _DEFAULT_HTTP1_POOL_SHARDS = 8
-_DEFAULT_MAX_CONNECTIONS_PER_SHARD = 32
-_DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD = 32
+_DEFAULT_MAX_CONNECTIONS_PER_SHARD = 7
+_DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD = 7
+_SSE_DRAIN_GRACE_SECONDS = 0.05
 
 
 def _response_body_is_received(response: httpx.Response) -> bool:
@@ -83,12 +86,14 @@ class OpenAICompatibleClient:
             self._clients = (client,)
         else:
             ssl_context = httpx.create_ssl_context()
+            trust_env = _trust_environment_for_url(api_root)
             self._clients = tuple(
                 httpx.AsyncClient(
                     base_url=api_root,
                     headers=request_headers,
                     timeout=None,
                     verify=ssl_context,
+                    trust_env=trust_env,
                     limits=httpx.Limits(
                         max_connections=_DEFAULT_MAX_CONNECTIONS_PER_SHARD,
                         max_keepalive_connections=(
@@ -143,10 +148,8 @@ class OpenAICompatibleClient:
             headers={**self._request_headers, "Accept": "text/event-stream"},
         ) as response:
             response.raise_for_status()
-            drain_received_body = False
-            async for line in response.aiter_lines():
-                if drain_received_body:
-                    continue
+            lines = response.aiter_lines()
+            async for line in lines:
                 line = line.strip()
                 if not line or line.startswith(":") or not line.startswith("data:"):
                     continue
@@ -154,8 +157,15 @@ class OpenAICompatibleClient:
                 if data == "[DONE]":
                     yield freeze_json_object({"done": True})
                     if _response_body_is_received(response):
-                        drain_received_body = True
-                        continue
+                        async for _ in lines:
+                            pass
+                    else:
+                        try:
+                            async with asyncio.timeout(_SSE_DRAIN_GRACE_SECONDS):
+                                async for _ in lines:
+                                    pass
+                        except (TimeoutError, httpx.TransportError):
+                            pass
                     return
                 try:
                     item = json.loads(data)
@@ -509,6 +519,18 @@ def _validate_catalog_timeout(timeout: float | None) -> None:
         or timeout <= 0
     ):
         raise ValueError("timeout must be finite and positive, or None")
+
+
+def _trust_environment_for_url(url: str) -> bool:
+    """Honor the operating system's proxy-bypass decision for one API root."""
+
+    hostname = urllib.parse.urlsplit(url).hostname
+    if hostname is None:
+        return True
+    try:
+        return not urllib.request.proxy_bypass(hostname)
+    except OSError:
+        return True
 
 
 def _normalize_openai_error(error: BaseException) -> ModelErrorKind:
