@@ -158,6 +158,52 @@ async def test_execution_without_subscribers_skips_condition_notifications():
 
 
 @pytest.mark.asyncio
+async def test_managed_child_event_reuses_validated_payload_projection(monkeypatch):
+    from pygent.runtime._local import state as local_state
+
+    repeated_marker_freezes = 0
+    original_freeze = local_state.freeze_json_object
+
+    def counting_freeze(value=()):
+        nonlocal repeated_marker_freezes
+        if isinstance(value, dict) and "projection_marker" in value:
+            repeated_marker_freezes += 1
+        return original_freeze(value)
+
+    monkeypatch.setattr(local_state, "freeze_json_object", counting_freeze)
+
+    class Emits(Module[UserMessage, AIMessage]):
+        async def forward(self, message: UserMessage, context: Context):
+            await self.emit(
+                kind="child.projection",
+                data={"projection_marker": {"items": [1, 2]}},
+            )
+            return AIMessage(content="child"), context
+
+    class Parent(Module[UserMessage, AIMessage]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.child = Emits()
+
+        async def forward(self, message: UserMessage, context: Context):
+            return await self.child(message, context)
+
+    runtime = LocalRuntime()
+    handle = await _binding(runtime).bind(Parent()).start(UserMessage(), Context())
+    assert await handle.result() == (AIMessage(content="child"), Context())
+    async with handle.subscribe() as subscription:
+        events = [event async for event in subscription]
+    await runtime.close()
+
+    event = next(event for event in events if event.kind == "child.projection")
+    assert event.data.to_dict() == {
+        "projection_marker": {"items": [1, 2]},
+        "origin_execution_id": event.data["origin_execution_id"],
+    }
+    assert repeated_marker_freezes == 0
+
+
+@pytest.mark.asyncio
 async def test_managed_handle_wait_hands_off_runnable_lease_before_resume():
     runtime = LocalRuntime()
     binding = runtime.create_binding(

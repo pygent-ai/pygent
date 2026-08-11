@@ -78,14 +78,17 @@ class OpenAICompatibleClient:
         self._models_endpoint = f"{api_root}/models"
         self._request_headers = request_headers
         self._owns_client = client is None
-        self._clients = (
-            (client,)
-            if client is not None
-            else tuple(
+        self._clients: tuple[httpx.AsyncClient, ...]
+        if client is not None:
+            self._clients = (client,)
+        else:
+            ssl_context = httpx.create_ssl_context()
+            self._clients = tuple(
                 httpx.AsyncClient(
                     base_url=api_root,
                     headers=request_headers,
                     timeout=None,
+                    verify=ssl_context,
                     limits=httpx.Limits(
                         max_connections=_DEFAULT_MAX_CONNECTIONS_PER_SHARD,
                         max_keepalive_connections=(
@@ -95,7 +98,6 @@ class OpenAICompatibleClient:
                 )
                 for _ in range(_DEFAULT_HTTP1_POOL_SHARDS)
             )
-        )
         self._next_client_index = 0
         self._models: ModelCatalog = _OpenAICompatibleModelCatalog(self)
         self._closed = False

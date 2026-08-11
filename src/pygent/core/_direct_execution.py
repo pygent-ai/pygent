@@ -78,6 +78,7 @@ class _DirectExecutionRecord(Generic[OutputMessageT]):
     outcome: ExecutionOutcome | None = None
     events: list[ExecutionEvent] = field(default_factory=list)
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
+    active_subscribers: int = 0
     task: asyncio.Task[tuple[OutputMessageT, Context]] | None = None
     module_paths: dict[int, str] = field(default_factory=dict)
 
@@ -103,44 +104,48 @@ class _DirectExecutionRecord(Generic[OutputMessageT]):
     ) -> ExecutionEvent:
         if not isinstance(kind, str) or not kind:
             raise ValueError("event kind must be a non-empty string")
-        async with self.condition:
-            event = _trusted_execution_event(
-                schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
-                event_id=str(uuid4()),
-                execution_id=self.execution_id,
-                attempt_id=self.attempt_id,
-                trace_id=self.trace_id,
-                span_id=span_id,
-                parent_span_id=parent_span_id,
-                sequence=len(self.events),
-                timestamp_unix_ns=time.time_ns(),
-                module_path=module_path,
-                kind=kind,
-                data=(
-                    data
-                    if isinstance(data, FrozenJsonObject)
-                    else freeze_json_object(data)
-                ),
-            )
-            self.events.append(event)
-            self.condition.notify_all()
+        event = _trusted_execution_event(
+            schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
+            event_id=str(uuid4()),
+            execution_id=self.execution_id,
+            attempt_id=self.attempt_id,
+            trace_id=self.trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+            sequence=len(self.events),
+            timestamp_unix_ns=time.time_ns(),
+            module_path=module_path,
+            kind=kind,
+            data=(
+                data
+                if isinstance(data, FrozenJsonObject)
+                else freeze_json_object(data)
+            ),
+        )
+        self.events.append(event)
+        if self.active_subscribers == 0:
             return event
+        async with self.condition:
+            self.condition.notify_all()
+        return event
 
     async def notify_terminal(
         self, status: ExecutionStatus, failure: ExecutionFailure | None = None
     ) -> None:
+        self.status = status
+        self.phase = ExecutionPhase.TERMINAL
+        self.updated_at_unix_ns = time.time_ns()
+        self.terminal_sequence = self.events[-1].sequence
+        self.outcome = ExecutionOutcome(
+            execution_id=self.execution_id,
+            status=self.status,
+            attempt_id=self.attempt_id,
+            terminal_sequence=self.terminal_sequence,
+            error=failure,
+        )
+        if self.active_subscribers == 0:
+            return
         async with self.condition:
-            self.status = status
-            self.phase = ExecutionPhase.TERMINAL
-            self.updated_at_unix_ns = time.time_ns()
-            self.terminal_sequence = self.events[-1].sequence
-            self.outcome = ExecutionOutcome(
-                execution_id=self.execution_id,
-                status=self.status,
-                attempt_id=self.attempt_id,
-                terminal_sequence=self.terminal_sequence,
-                error=failure,
-            )
             self.condition.notify_all()
 
     def snapshot(self) -> ExecutionSnapshot:
@@ -418,8 +423,14 @@ class _DirectExecutionSubscription:
         self._record = record
         self._cursor = -1 if after is None else after
         self._claimed = False
+        self._entered = False
+        self._active = False
 
     async def __aenter__(self) -> Self:
+        if self._entered:
+            raise RuntimeError("execution subscription is already active")
+        self._entered = True
+        self._activate()
         return self
 
     async def __aexit__(
@@ -428,7 +439,9 @@ class _DirectExecutionSubscription:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        return None
+        if self._entered:
+            self._entered = False
+            self._deactivate()
 
     def __aiter__(self) -> AsyncIterator[ExecutionEvent]:
         if self._claimed:
@@ -436,22 +449,36 @@ class _DirectExecutionSubscription:
         self._claimed = True
         return self._iterate()
 
+    def _activate(self) -> None:
+        if not self._active:
+            self._active = True
+            self._record.active_subscribers += 1
+
+    def _deactivate(self) -> None:
+        if self._active:
+            self._active = False
+            self._record.active_subscribers -= 1
+
     async def _iterate(self) -> AsyncIterator[ExecutionEvent]:
+        self._activate()
         self._record.ensure_started()
-        while True:
-            async with self._record.condition:
-                while (
-                    len(self._record.events) <= self._cursor + 1
-                    and self._record.terminal_sequence is None
-                ):
-                    await self._record.condition.wait()
-                available = tuple(self._record.events[self._cursor + 1 :])
-                terminal_sequence = self._record.terminal_sequence
-            for event in available:
-                self._cursor = event.sequence
-                yield event
-            if terminal_sequence is not None and self._cursor >= terminal_sequence:
-                return
+        try:
+            while True:
+                async with self._record.condition:
+                    while (
+                        len(self._record.events) <= self._cursor + 1
+                        and self._record.terminal_sequence is None
+                    ):
+                        await self._record.condition.wait()
+                    available = tuple(self._record.events[self._cursor + 1 :])
+                    terminal_sequence = self._record.terminal_sequence
+                for event in available:
+                    self._cursor = event.sequence
+                    yield event
+                if terminal_sequence is not None and self._cursor >= terminal_sequence:
+                    return
+        finally:
+            self._deactivate()
 
 
 class _DirectExecutionHandle(Generic[OutputMessageT]):

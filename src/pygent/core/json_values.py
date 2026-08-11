@@ -111,6 +111,97 @@ def freeze_json_object(value: JsonObjectInput = ()) -> FrozenJsonObject:
     return frozen
 
 
+def _freeze_json_object_with_default(
+    value: JsonObjectInput,
+    key: str,
+    default: object,
+) -> FrozenJsonObject:
+    state = _FreezeState(set())
+    state.visit(depth=0)
+    container_id = id(value)
+    state.active_container_ids.add(container_id)
+    try:
+        pairs = cast(
+            Iterable[tuple[str, object]],
+            value.items() if isinstance(value, Mapping) else value,
+        )
+        frozen_items: list[tuple[str, JsonValue]] = []
+        seen: set[str] = set()
+        for pair in pairs:
+            candidate, item = pair
+            if not isinstance(candidate, str):
+                raise JsonValueError("JSON object keys must be strings")
+            if candidate in seen:
+                raise JsonValueError(f"duplicate JSON object key: {candidate!r}")
+            seen.add(candidate)
+            frozen_items.append(
+                (candidate, _freeze(item, state=state, depth=1))
+            )
+        if key not in seen:
+            frozen_items.append((key, _freeze(default, state=state, depth=1)))
+    except (TypeError, ValueError) as exc:
+        if isinstance(exc, JsonValueError):
+            raise
+        raise JsonValueError("JSON objects must contain key/value pairs") from exc
+    finally:
+        state.active_container_ids.discard(container_id)
+
+    frozen = object.__new__(FrozenJsonObject)
+    object.__setattr__(frozen, "_items", tuple(frozen_items))
+    return frozen
+
+
+def _patch_frozen_json_object(
+    value: FrozenJsonObject,
+    updates: Mapping[str, object],
+    *,
+    overwrite: bool,
+) -> FrozenJsonObject:
+    """Patch one validated root while reusing its immutable child projections."""
+
+    if not updates:
+        return value
+    update_items = tuple(updates.items())
+    for key, _ in update_items:
+        if not isinstance(key, str):
+            raise JsonValueError("JSON object keys must be strings")
+    update_by_key = dict(update_items)
+    existing_keys = {key for key, _ in value._items}
+    if not overwrite and all(key in existing_keys for key, _ in update_items):
+        return value
+
+    state = _FreezeState(set())
+    state.visit(depth=0)
+    patched_items: list[tuple[str, JsonValue]] = []
+    for key, existing in value._items:
+        if overwrite and key in update_by_key:
+            patched = _freeze(update_by_key[key], state=state, depth=1)
+        else:
+            _count_frozen_nodes(existing, state=state)
+            patched = existing
+        patched_items.append((key, patched))
+    for key, update in update_items:
+        if key not in existing_keys:
+            patched_items.append((key, _freeze(update, state=state, depth=1)))
+
+    patched = object.__new__(FrozenJsonObject)
+    object.__setattr__(patched, "_items", tuple(patched_items))
+    return patched
+
+
+def _count_frozen_nodes(value: JsonValue, *, state: _FreezeState) -> None:
+    pending = [(value, 1)]
+    while pending:
+        current, depth = pending.pop()
+        state.visit(depth=depth)
+        if isinstance(current, FrozenJsonObject):
+            pending.extend(
+                (item, depth + 1) for _, item in reversed(current._items)
+            )
+        elif isinstance(current, tuple):
+            pending.extend((item, depth + 1) for item in reversed(current))
+
+
 def _freeze(value: object, *, state: _FreezeState, depth: int) -> JsonValue:
     state.visit(depth=depth)
 

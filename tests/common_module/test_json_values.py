@@ -123,3 +123,105 @@ def test_pre_frozen_values_still_count_toward_aggregate_depth(monkeypatch):
 
     with pytest.raises(JsonValueError, match="maximum depth"):
         json_values.freeze_json_object({"next": value})
+
+
+def test_private_root_patch_reuses_validated_children_and_preserves_order():
+    nested = json_values.freeze_json_object({"items": [1, 2]})
+    original = json_values.freeze_json_object(
+        {"origin_execution_id": "caller", "nested": nested}
+    )
+
+    patched = json_values._patch_frozen_json_object(
+        original,
+        {"origin_execution_id": "runtime", "origin_sequence": 3},
+        overwrite=True,
+    )
+    defaulted = json_values._patch_frozen_json_object(
+        original,
+        {"origin_execution_id": "runtime"},
+        overwrite=False,
+    )
+
+    assert tuple(patched) == (
+        "origin_execution_id",
+        "nested",
+        "origin_sequence",
+    )
+    assert patched.to_dict() == {
+        "origin_execution_id": "runtime",
+        "nested": {"items": [1, 2]},
+        "origin_sequence": 3,
+    }
+    assert patched["nested"] is original["nested"]
+    assert defaulted is original
+
+
+def test_private_root_patch_preserves_aggregate_node_limit(monkeypatch):
+    original = json_values.freeze_json_object({"nested": [None]})
+    monkeypatch.setattr(json_values, "MAX_JSON_NODES", 3)
+
+    with pytest.raises(JsonValueError, match="maximum size"):
+        json_values._patch_frozen_json_object(
+            original,
+            {"origin_execution_id": "child"},
+            overwrite=False,
+        )
+
+
+def test_private_root_patch_preserves_current_depth_limit(monkeypatch):
+    original = json_values.freeze_json_object({"nested": [[None]]})
+    monkeypatch.setattr(json_values, "MAX_JSON_DEPTH", 2)
+
+    with pytest.raises(JsonValueError, match="maximum depth"):
+        json_values._patch_frozen_json_object(
+            original,
+            {"origin_execution_id": "child"},
+            overwrite=False,
+        )
+
+
+def test_root_default_is_included_in_the_initial_validation_pass():
+    result = json_values._freeze_json_object_with_default(
+        {"nested": {"items": [1, 2]}},
+        "origin_execution_id",
+        "child",
+    )
+
+    assert type(result) is FrozenJsonObject
+    assert result.to_dict() == {
+        "nested": {"items": [1, 2]},
+        "origin_execution_id": "child",
+    }
+
+    preserved = json_values._freeze_json_object_with_default(
+        (("origin_execution_id", "caller"),),
+        "origin_execution_id",
+        "child",
+    )
+    assert preserved.to_dict() == {"origin_execution_id": "caller"}
+
+
+def test_root_default_keeps_duplicate_and_value_validation_strict():
+    with pytest.raises(JsonValueError, match="duplicate"):
+        json_values._freeze_json_object_with_default(
+            (("value", 1), ("value", 2)),
+            "origin_execution_id",
+            "child",
+        )
+    with pytest.raises(JsonValueError, match="finite"):
+        json_values._freeze_json_object_with_default(
+            {"value": math.nan},
+            "origin_execution_id",
+            "child",
+        )
+
+
+def test_root_default_preserves_aggregate_node_limit(monkeypatch):
+    monkeypatch.setattr(json_values, "MAX_JSON_NODES", 3)
+
+    with pytest.raises(JsonValueError, match="maximum size"):
+        json_values._freeze_json_object_with_default(
+            {"nested": [None]},
+            "origin_execution_id",
+            "child",
+        )

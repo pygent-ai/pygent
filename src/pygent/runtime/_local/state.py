@@ -21,6 +21,9 @@ from pygent.core import (
     freeze_json_object,
 )
 from pygent.core.execution import _trusted_execution_event
+from pygent.core.json_values import (
+    _patch_frozen_json_object,
+)
 from pygent.tool import ToolTaskManager
 
 from .._history_store import SQLiteHistoryStore
@@ -114,10 +117,22 @@ class _ExecutionRecord:
             else (self.parent_span_id if frame is None else frame.parent_span_id)
         )
         payload: Mapping[str, JsonValue] = data
-        if execution_id is not None and execution_id != self.execution_id:
-            copied_payload = dict(data)
-            copied_payload.setdefault("origin_execution_id", execution_id)
-            payload = copied_payload
+        foreign_execution = execution_id is not None and execution_id != self.execution_id
+        if foreign_execution:
+            if isinstance(data, FrozenJsonObject):
+                payload = (
+                    data
+                    if "origin_execution_id" in data
+                    else _patch_frozen_json_object(
+                        data,
+                        {"origin_execution_id": execution_id},
+                        overwrite=False,
+                    )
+                )
+            else:
+                copied_payload = dict(data)
+                copied_payload.setdefault("origin_execution_id", execution_id)
+                payload = copied_payload
         history = self.history if self.history_started else None
         reserved = False
         if history is not None:
