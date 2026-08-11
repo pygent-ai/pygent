@@ -117,6 +117,89 @@ async def test_direct_start_has_one_owner_and_independent_subscribers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_direct_execution_without_subscribers_skips_condition_notifications() -> None:
+    class CountingCondition(asyncio.Condition):
+        def __init__(self) -> None:
+            super().__init__()
+            self.acquisitions = 0
+            self.notifications = 0
+
+        async def acquire(self) -> bool:
+            self.acquisitions += 1
+            return await super().acquire()
+
+        def notify_all(self) -> None:
+            self.notifications += 1
+            super().notify_all()
+
+    class ManyEvents(Module[UserMessage, AIMessage]):
+        async def forward(self, message: UserMessage, context: Context):
+            for index in range(100):
+                await self.emit(kind="delta", data={"index": index})
+            return AIMessage(content="done"), context
+
+    handle = await ManyEvents().start(UserMessage(), Context())
+    condition = CountingCondition()
+    handle._record.condition = condition
+
+    assert await handle.result() == (AIMessage(content="done"), Context())
+    assert handle._record.active_subscribers == 0
+    assert condition.acquisitions == 0
+    assert condition.notifications == 0
+
+
+@pytest.mark.asyncio
+async def test_direct_subscription_releases_notification_interest_on_exit() -> None:
+    release = asyncio.Event()
+
+    class Waits(Module[UserMessage, AIMessage]):
+        async def forward(self, message: UserMessage, context: Context):
+            await self.emit(kind="ready", data={})
+            await release.wait()
+            return AIMessage(content="done"), context
+
+    handle = await Waits().start(UserMessage(), Context())
+    async with handle.subscribe() as subscription:
+        assert handle._record.active_subscribers == 1
+        iterator = subscription.__aiter__()
+        event = await anext(iterator)
+        assert event.kind == "execution.started"
+        await iterator.aclose()
+        assert handle._record.active_subscribers == 0
+
+    assert handle._record.active_subscribers == 0
+    release.set()
+    assert await handle.result() == (AIMessage(content="done"), Context())
+
+
+@pytest.mark.asyncio
+async def test_cancelled_direct_subscription_releases_notification_interest() -> None:
+    release = asyncio.Event()
+
+    class Waits(Module[UserMessage, AIMessage]):
+        async def forward(self, message: UserMessage, context: Context):
+            await release.wait()
+            return AIMessage(content="done"), context
+
+    handle = await Waits().start(UserMessage(), Context())
+    while len(handle._record.events) < 2:
+        await asyncio.sleep(0)
+    subscription = handle.subscribe(after=handle._record.events[-1].sequence)
+    iterator = subscription.__aiter__()
+    pending = asyncio.create_task(anext(iterator))
+    await asyncio.sleep(0)
+    assert handle._record.active_subscribers == 1
+
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert handle._record.active_subscribers == 0
+
+    release.set()
+    assert await handle.result() == (AIMessage(content="done"), Context())
+
+
+@pytest.mark.asyncio
 async def test_early_stream_exit_cancels_and_cleans_up_execution() -> None:
     cancelled = asyncio.Event()
 
