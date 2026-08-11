@@ -353,7 +353,9 @@ class Module(Generic[InputMessageT, OutputMessageT]):
         scope = _execution_scope.get()
         if scope is None:
             raise RuntimeError("Module events require a bound Runtime execution")
-        await scope.emit_event(self, kind, freeze_json_object(data))
+        prepare = getattr(scope, "_prepare_module_event_data", None)
+        payload = prepare(data) if callable(prepare) else freeze_json_object(data)
+        await scope.emit_event(self, kind, payload)
 
     async def wait_external(
         self,

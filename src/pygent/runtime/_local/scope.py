@@ -18,15 +18,22 @@ from pygent.core import (
     EffectRecoveryUnknown,
     EffectRetryPolicy,
     EffectSpec,
+    FrozenJsonObject,
+    JsonObjectInput,
     JsonValue,
     Message,
     Module,
     ModuleDependency,
     RemoteModule,
     freeze_json,
+    freeze_json_object,
 )
 from pygent.core._direct_execution import _validate_result
 from pygent.core._module_contracts import ExecutionScope, _capacity_permit
+from pygent.core.json_values import (
+    _freeze_json_object_with_default,
+    _patch_frozen_json_object,
+)
 from pygent.tool import (
     SandboxExecutorSupport,
     ToolCall,
@@ -79,6 +86,18 @@ class _ManagedScope(ExecutionScope):
                 "Module Child calls from an unregistered asyncio Task are not "
                 "structured; use the Runtime parallel Child API"
             )
+
+    def _prepare_module_event_data(
+        self, data: JsonObjectInput
+    ) -> FrozenJsonObject:
+        frame = _execution_frame.get()
+        if frame is None or frame.execution_id == self.record.execution_id:
+            return freeze_json_object(data)
+        return _freeze_json_object_with_default(
+            data,
+            "origin_execution_id",
+            frame.execution_id,
+        )
 
     async def gather(
         self, operations: tuple[Callable[[], Awaitable[Any]], ...]
@@ -407,9 +426,14 @@ class _ManagedScope(ExecutionScope):
             invoke_remote_child = getattr(bound, "invoke_remote_child", None)
             if callable(invoke_remote_child):
                 async def relay_remote_event(event: Any) -> None:
-                    payload = event.data.to_dict()
-                    payload["origin_execution_id"] = event.execution_id
-                    payload["origin_sequence"] = event.sequence
+                    payload = _patch_frozen_json_object(
+                        event.data,
+                        {
+                            "origin_execution_id": event.execution_id,
+                            "origin_sequence": event.sequence,
+                        },
+                        overwrite=True,
+                    )
                     await self.record.emit(
                         execution_id=event.execution_id,
                         parent_execution_id=parent.execution_id,

@@ -117,7 +117,9 @@ class _DirectExecutionRecord(Generic[OutputMessageT]):
             module_path=module_path,
             kind=kind,
             data=(
-                data if isinstance(data, FrozenJsonObject) else freeze_json_object(data)
+                data
+                if isinstance(data, FrozenJsonObject)
+                else freeze_json_object(data)
             ),
         )
         self.events.append(event)
