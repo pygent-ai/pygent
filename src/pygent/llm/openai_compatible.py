@@ -47,6 +47,66 @@ _DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD = 7
 _SSE_DRAIN_GRACE_SECONDS = 0.05
 
 
+class _ShardAdmission:
+    """Bound work before it enters one httpcore connection pool."""
+
+    __slots__ = (
+        "_active",
+        "_closed",
+        "_drained",
+        "_pending",
+        "_semaphore",
+    )
+
+    def __init__(self, limit: int) -> None:
+        self._semaphore = asyncio.Semaphore(limit)
+        self._pending = 0
+        self._active = 0
+        self._closed = False
+        self._drained = asyncio.Event()
+        self._drained.set()
+
+    async def acquire(self) -> None:
+        if self._closed:
+            raise RuntimeError("model provider client is closed")
+        self._pending += 1
+        self._drained.clear()
+        try:
+            await self._semaphore.acquire()
+        except BaseException:
+            self._pending -= 1
+            self._set_drained_if_idle()
+            raise
+        self._pending -= 1
+        if self._closed:
+            self._semaphore.release()
+            self._set_drained_if_idle()
+            raise RuntimeError("model provider client is closed")
+        self._active += 1
+
+    def release(self) -> None:
+        if self._active <= 0:  # pragma: no cover - private ownership invariant
+            raise RuntimeError("HTTP shard admission permit is not held")
+        self._active -= 1
+        self._semaphore.release()
+        self._set_drained_if_idle()
+
+    def begin_close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for _ in range(self._pending):
+            self._semaphore.release()
+        self._set_drained_if_idle()
+
+    async def wait_closed(self) -> None:
+        await self._drained.wait()
+
+    def _set_drained_if_idle(self) -> None:
+        if self._pending == 0 and self._active == 0:
+            self._drained.set()
+
+
 def _response_body_is_received(response: httpx.Response) -> bool:
     """Return whether a declared response body is already in httpx's buffers."""
 
@@ -82,8 +142,10 @@ class OpenAICompatibleClient:
         self._request_headers = request_headers
         self._owns_client = client is None
         self._clients: tuple[httpx.AsyncClient, ...]
+        self._admissions: tuple[_ShardAdmission, ...] | None
         if client is not None:
             self._clients = (client,)
+            self._admissions = None
         else:
             ssl_context = httpx.create_ssl_context()
             trust_env = _trust_environment_for_url(api_root)
@@ -103,6 +165,10 @@ class OpenAICompatibleClient:
                 )
                 for _ in range(_DEFAULT_HTTP1_POOL_SHARDS)
             )
+            self._admissions = tuple(
+                _ShardAdmission(_DEFAULT_MAX_CONNECTIONS_PER_SHARD)
+                for _ in self._clients
+            )
         self._next_client_index = 0
         self._models: ModelCatalog = _OpenAICompatibleModelCatalog(self)
         self._closed = False
@@ -116,77 +182,93 @@ class OpenAICompatibleClient:
     async def invoke(
         self, route: ModelRoute, payload: FrozenJsonObject
     ) -> FrozenJsonObject:
-        self._ensure_open()
-        response = await self._next_http_client().post(
-            self._endpoint,
-            json=payload.to_dict(),
-            headers=self._request_headers or None,
-        )
-        response.raise_for_status()
+        client, admission = await self._acquire_http_client()
         try:
-            body = response.json()
-        except (TypeError, ValueError) as exc:
-            raise ModelProviderError(
-                ModelErrorKind.INVALID_RESPONSE, "provider returned invalid JSON"
-            ) from exc
-        if not isinstance(body, Mapping):
-            raise ModelProviderError(
-                ModelErrorKind.INVALID_RESPONSE, "provider response must be an object"
+            response = await client.post(
+                self._endpoint,
+                json=payload.to_dict(),
+                headers=self._request_headers or None,
             )
-        return freeze_json_object(cast(Mapping[str, object], body))
+            response.raise_for_status()
+            try:
+                body = response.json()
+            except (TypeError, ValueError) as exc:
+                raise ModelProviderError(
+                    ModelErrorKind.INVALID_RESPONSE,
+                    "provider returned invalid JSON",
+                ) from exc
+            if not isinstance(body, Mapping):
+                raise ModelProviderError(
+                    ModelErrorKind.INVALID_RESPONSE,
+                    "provider response must be an object",
+                )
+            return freeze_json_object(cast(Mapping[str, object], body))
+        finally:
+            if admission is not None:
+                admission.release()
 
     async def stream(
         self, route: ModelRoute, payload: FrozenJsonObject
     ) -> AsyncIterator[FrozenJsonObject]:
-        self._ensure_open()
-        body = payload.to_dict()
-        body["stream"] = True
-        async with self._next_http_client().stream(
-            "POST",
-            self._endpoint,
-            json=body,
-            headers={**self._request_headers, "Accept": "text/event-stream"},
-        ) as response:
-            response.raise_for_status()
-            lines = response.aiter_lines()
-            async for line in lines:
-                line = line.strip()
-                if not line or line.startswith(":") or not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    yield freeze_json_object({"done": True})
-                    if _response_body_is_received(response):
-                        async for _ in lines:
-                            pass
-                    else:
-                        try:
-                            async with asyncio.timeout(_SSE_DRAIN_GRACE_SECONDS):
-                                async for _ in lines:
-                                    pass
-                        except (TimeoutError, httpx.TransportError):
-                            pass
-                    return
-                try:
-                    item = json.loads(data)
-                except json.JSONDecodeError as exc:
-                    raise ModelProviderError(
-                        ModelErrorKind.INVALID_RESPONSE,
-                        "provider returned an invalid SSE event",
-                    ) from exc
-                if not isinstance(item, Mapping):
-                    raise ModelProviderError(
-                        ModelErrorKind.INVALID_RESPONSE,
-                        "provider SSE event must be an object",
-                    )
-                yield freeze_json_object(cast(Mapping[str, object], item))
+        client, admission = await self._acquire_http_client()
+        try:
+            body = payload.to_dict()
+            body["stream"] = True
+            async with client.stream(
+                "POST",
+                self._endpoint,
+                json=body,
+                headers={**self._request_headers, "Accept": "text/event-stream"},
+            ) as response:
+                response.raise_for_status()
+                lines = response.aiter_lines()
+                async for line in lines:
+                    line = line.strip()
+                    if not line or line.startswith(":") or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        yield freeze_json_object({"done": True})
+                        if _response_body_is_received(response):
+                            async for _ in lines:
+                                pass
+                        else:
+                            try:
+                                async with asyncio.timeout(_SSE_DRAIN_GRACE_SECONDS):
+                                    async for _ in lines:
+                                        pass
+                            except (TimeoutError, httpx.TransportError):
+                                pass
+                        return
+                    try:
+                        item = json.loads(data)
+                    except json.JSONDecodeError as exc:
+                        raise ModelProviderError(
+                            ModelErrorKind.INVALID_RESPONSE,
+                            "provider returned an invalid SSE event",
+                        ) from exc
+                    if not isinstance(item, Mapping):
+                        raise ModelProviderError(
+                            ModelErrorKind.INVALID_RESPONSE,
+                            "provider SSE event must be an object",
+                        )
+                    yield freeze_json_object(cast(Mapping[str, object], item))
+        finally:
+            if admission is not None:
+                admission.release()
 
     async def aclose(self) -> None:
         if self._closed:
             return
         self._closed = True
+        admissions = self._admissions
+        if admissions is not None:
+            for admission in admissions:
+                admission.begin_close()
         if self._owns_client:
             await asyncio.gather(*(client.aclose() for client in self._clients))
+        if admissions is not None:
+            await asyncio.gather(*(item.wait_closed() for item in admissions))
 
     async def __aenter__(self) -> Self:
         self._ensure_open()
@@ -199,23 +281,40 @@ class OpenAICompatibleClient:
         if self._closed:
             raise RuntimeError("model provider client is closed")
 
-    def _next_http_client(self) -> httpx.AsyncClient:
-        client = self._clients[self._next_client_index]
+    async def _acquire_http_client(
+        self,
+    ) -> tuple[httpx.AsyncClient, _ShardAdmission | None]:
+        self._ensure_open()
+        client, admission = self._next_http_slot()
+        if admission is not None:
+            await admission.acquire()
+        return client, admission
+
+    def _next_http_slot(
+        self,
+    ) -> tuple[httpx.AsyncClient, _ShardAdmission | None]:
+        index = self._next_client_index
         self._next_client_index = (self._next_client_index + 1) % len(self._clients)
-        return client
+        admission = None if self._admissions is None else self._admissions[index]
+        return self._clients[index], admission
 
     async def _list_models_payload(
         self, *, timeout: float | None
     ) -> FrozenJsonObject:
         self._ensure_open()
         try:
-            response = await self._next_http_client().get(
-                self._models_endpoint,
-                headers=self._request_headers or None,
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            body = response.json()
+            client, admission = await self._acquire_http_client()
+            try:
+                response = await client.get(
+                    self._models_endpoint,
+                    headers=self._request_headers or None,
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                body = response.json()
+            finally:
+                if admission is not None:
+                    admission.release()
         except asyncio.CancelledError:
             raise
         except (TypeError, ValueError) as exc:

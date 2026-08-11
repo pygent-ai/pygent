@@ -626,7 +626,7 @@ async def test_owned_client_close_is_idempotent_and_blocks_reuse():
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
     owned_clients = client._clients
     assert len(owned_clients) == 8
-    assert [client._next_http_client() for _ in range(9)] == [
+    assert [client._next_http_slot()[0] for _ in range(9)] == [
         *owned_clients,
         owned_clients[0],
     ]
@@ -638,6 +638,102 @@ async def test_owned_client_close_is_idempotent_and_blocks_reuse():
             ModelRoute("main", "openai", "gpt-test"),
             OpenAICompatibleAdapter().build_request(_request()),
         )
+
+
+@pytest.mark.asyncio
+async def test_owned_shard_admission_bounds_work_before_httpcore(monkeypatch):
+    active = 0
+    maximum_active = 0
+    saturated = asyncio.Event()
+    release = asyncio.Event()
+    original_async_client = httpx.AsyncClient
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        if active == 56:
+            saturated.set()
+        try:
+            await release.wait()
+            return httpx.Response(200, json={"ok": True})
+        finally:
+            active -= 1
+
+    def mock_async_client(*args, **kwargs):
+        return original_async_client(
+            *args,
+            **kwargs,
+            transport=httpx.MockTransport(handler),
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_async_client)
+    client = OpenAICompatibleClient(base_url="https://models.example/v1")
+    route = ModelRoute("main", "openai", "gpt-test")
+    payload = OpenAICompatibleAdapter().build_request(_request())
+    tasks = [asyncio.create_task(client.invoke(route, payload)) for _ in range(64)]
+    try:
+        await asyncio.wait_for(saturated.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert maximum_active == 56
+        assert active == 56
+
+        for task in tasks[-8:]:
+            task.cancel()
+        cancelled = await asyncio.gather(*tasks[-8:], return_exceptions=True)
+        assert all(isinstance(value, asyncio.CancelledError) for value in cancelled)
+
+        release.set()
+        results = await asyncio.gather(*tasks[:-8])
+        assert all(result["ok"] is True for result in results)
+        assert maximum_active == 56
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_owned_close_rejects_queued_shard_requests(monkeypatch):
+    active = 0
+    saturated = asyncio.Event()
+    release = asyncio.Event()
+    original_async_client = httpx.AsyncClient
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal active
+        active += 1
+        if active == 56:
+            saturated.set()
+        try:
+            await release.wait()
+            return httpx.Response(200, json={"ok": True})
+        finally:
+            active -= 1
+
+    def mock_async_client(*args, **kwargs):
+        return original_async_client(
+            *args,
+            **kwargs,
+            transport=httpx.MockTransport(handler),
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_async_client)
+    client = OpenAICompatibleClient(base_url="https://models.example/v1")
+    route = ModelRoute("main", "openai", "gpt-test")
+    payload = OpenAICompatibleAdapter().build_request(_request())
+    tasks = [asyncio.create_task(client.invoke(route, payload)) for _ in range(64)]
+
+    await asyncio.wait_for(saturated.wait(), timeout=1)
+    close_task = asyncio.create_task(client.aclose())
+    await asyncio.sleep(0)
+    assert not close_task.done()
+    release.set()
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.wait_for(close_task, timeout=1)
+
+    assert sum(isinstance(value, RuntimeError) for value in outcomes) == 8
+    assert sum(isinstance(value, FrozenJsonObject) for value in outcomes) == 56
 
 
 @pytest.mark.asyncio
@@ -706,8 +802,8 @@ async def test_injected_http_client_is_not_sharded_or_closed():
     )
 
     assert client._clients == (http_client,)
-    assert client._next_http_client() is http_client
-    assert client._next_http_client() is http_client
+    assert client._next_http_slot() == (http_client, None)
+    assert client._next_http_slot() == (http_client, None)
     await client.aclose()
     assert not http_client.is_closed
     await http_client.aclose()
