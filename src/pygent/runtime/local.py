@@ -58,6 +58,7 @@ from .api import (
     RuntimeClosedError,
 )
 from .compiler import compile_execution_plan
+from .context_codec import ContextCodec, ContextCodecRegistry
 from .model_deployment import InMemoryModelDeploymentStore, ModelDeploymentStore
 from .plan import CodeArtifactSpec, ExecutionPlan
 
@@ -84,6 +85,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
         model_deployment_store: ModelDeploymentStore | None = None,
         deployment_namespace: str = "default",
         max_retained_executions: int = 1024,
+        context_codecs: tuple[ContextCodec, ...] = (),
     ) -> None:
         wire_values = (input_schema, output_schema, serializer)
         if code_artifact is None and any(value is not None for value in wire_values):
@@ -137,6 +139,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
         self.input_schema = input_schema
         self.output_schema = output_schema
         self.serializer = serializer
+        self.context_codec_registry = ContextCodecRegistry(context_codecs)
         self._recovery_owner_id = uuid.uuid4().hex
         self._recovery_lease_ttl = 30.0
         built_in = {"runtime.asyncio", "runtime.local", "external.wait"}
@@ -370,6 +373,9 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
             input_schema=self.input_schema,
             output_schema=self.output_schema,
             serializer=self.serializer,
+            context_codecs=tuple(
+                codec.identity for codec in self.context_codec_registry.codecs
+            ),
         )
 
     def bind(

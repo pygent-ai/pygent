@@ -57,6 +57,7 @@ from .api import (
 )
 from .capacity import SQLiteCapacityCoordinator
 from .compiler import compile_execution_plan
+from .context_codec import ContextCodec, ContextCodecError
 from .local import InMemoryCapacityCoordinator, LocalRuntime, RuntimeBinding
 from .model_deployment import (
     InMemoryModelDeploymentStore,
@@ -87,6 +88,8 @@ __all__ = [
     "CapacityPolicy",
     "CapacityScope",
     "CodeArtifactSpec",
+    "ContextCodec",
+    "ContextCodecError",
     "DurabilityMode",
     "DurabilityPolicy",
     "DurabilityReport",

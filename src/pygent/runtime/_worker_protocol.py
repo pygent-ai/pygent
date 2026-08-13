@@ -200,6 +200,7 @@ class WorkerDeploymentManifest:
     input_schema: str
     output_schema: str
     serializer: str
+    context_codecs: tuple[tuple[str, int, str, str], ...] = ()
 
 
 WorkerEventSink = Callable[[ExecutionEvent], Awaitable[None]]

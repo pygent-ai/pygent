@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from time import monotonic, time_ns
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ import httpx
 import pytest
 
 from pygent import (
+    ContextCodec,
     ModelCallError,
     ModelErrorKind,
 )
@@ -43,6 +45,7 @@ from pygent.runtime._worker_protocol import (
     WorkerTarget,
     WorkerUnavailableError,
 )
+from pygent.runtime.context_codec import BASE_CONTEXT_CODEC
 from pygent.runtime.worker_client import HTTPWorkerClient
 from pygent.runtime.worker_server import HTTPWorkerApp
 from pygent.runtime.worker_target import (
@@ -66,9 +69,9 @@ def _portable_runtime(**kwargs) -> LocalRuntime:
             digest="sha256:portable-worker-fixture",
             entrypoint="tests.runtime.test_http_worker:build_worker",
         ),
-        input_schema="schema://pygent/message-context-input@0.2",
-        output_schema="schema://pygent/message-context-output@0.2",
-        serializer="pygent-json-v1",
+        input_schema="schema://pygent/message-context-input@0.3",
+        output_schema="schema://pygent/message-context-output@0.3",
+        serializer="pygent-json-v2",
         **kwargs,
     )
 
@@ -82,9 +85,10 @@ def _artifact_resolver(artifact: CodeArtifactSpec) -> WorkerDeploymentManifest:
         artifact=artifact,
         verified_digest=artifact.digest,
         entrypoint=build_worker,
-        input_schema="schema://pygent/message-context-input@0.2",
-        output_schema="schema://pygent/message-context-output@0.2",
-        serializer="pygent-json-v1",
+        input_schema="schema://pygent/message-context-input@0.3",
+        output_schema="schema://pygent/message-context-output@0.3",
+        serializer="pygent-json-v2",
+        context_codecs=(BASE_CONTEXT_CODEC.identity,),
     )
 
 
@@ -791,6 +795,69 @@ async def test_remote_module_executes_through_http_worker_protocol():
 
 
 @pytest.mark.asyncio
+async def test_agent_context_crosses_http_worker_without_field_loss():
+    @dataclass(frozen=True, slots=True)
+    class RemoteContext(Context):
+        context_schema = "tests.http-worker-context"
+        context_schema_version = 1
+        tenant: str = ""
+        history: tuple[str, ...] = ()
+
+    codec = ContextCodec.dataclass(RemoteContext)
+
+    class Echo(Module[UserMessage, AIMessage]):
+        async def forward(self, message, context):
+            return AIMessage(content=message.content.upper()), context + message
+
+    worker_runtime = _portable_runtime(context_codecs=(codec,))
+    worker_bound = worker_runtime.bind(Echo())
+
+    def resolver(artifact):
+        manifest = _artifact_resolver(artifact)
+        return WorkerDeploymentManifest(
+            artifact=manifest.artifact,
+            verified_digest=manifest.verified_digest,
+            entrypoint=manifest.entrypoint,
+            input_schema=manifest.input_schema,
+            output_schema=manifest.output_schema,
+            serializer=manifest.serializer,
+            context_codecs=worker_bound.plan.context_codecs,
+        )
+
+    worker = HTTPWorkerApp(
+        bound_module_worker_handler(
+            {"agent-context": worker_bound}, artifact_resolver=resolver
+        )
+    )
+    registry = WorkerRegistry()
+    registry.publish(
+        "agent-context", (WorkerTarget("worker", "http://worker", ("local",)),)
+    )
+    async with HTTPWorkerClient(
+        registry, transport=httpx.ASGITransport(app=worker.app)
+    ) as client:
+        remote = HTTPRemoteModuleTarget(
+            client,
+            "agent-context",
+            worker_bound.plan.plan_id,
+            worker_bound.plan.graph_hash,
+            ("local",),
+            context_codecs=(codec,),
+        )
+        output, context = await remote.invoke(
+            UserMessage(content="remote"),
+            RemoteContext(tenant="acme", history=("created",)),
+            deadline=None,
+        )
+
+    assert output.content == "REMOTE"
+    assert type(context) is RemoteContext
+    assert context.tenant == "acme"
+    assert context.history == ("created",)
+    assert [message.content for message in context.messages] == ["remote"]
+
+
+@pytest.mark.asyncio
 async def test_remote_child_wait_hands_off_parent_runnable_lease():
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -894,10 +961,33 @@ def test_bound_worker_rejects_unverified_artifact_manifest():
             input_schema=manifest.input_schema,
             output_schema=manifest.output_schema,
             serializer=manifest.serializer,
+            context_codecs=manifest.context_codecs,
         )
 
     with pytest.raises(WorkerProtocolError, match="does not verify"):
         bound_module_worker_handler({"echo": bound}, artifact_resolver=unverified)
+
+
+def test_bound_worker_rejects_manifest_without_context_codecs():
+    class Echo(Module[UserMessage, AIMessage]):
+        async def forward(self, message, context):
+            return AIMessage(content=message.content), context
+
+    bound = _portable_runtime().bind(Echo())
+
+    def missing_codecs(artifact):
+        manifest = _artifact_resolver(artifact)
+        return WorkerDeploymentManifest(
+            artifact=manifest.artifact,
+            verified_digest=manifest.verified_digest,
+            entrypoint=manifest.entrypoint,
+            input_schema=manifest.input_schema,
+            output_schema=manifest.output_schema,
+            serializer=manifest.serializer,
+        )
+
+    with pytest.raises(WorkerProtocolError, match="does not verify"):
+        bound_module_worker_handler({"echo": bound}, artifact_resolver=missing_codecs)
 
 
 @pytest.mark.asyncio

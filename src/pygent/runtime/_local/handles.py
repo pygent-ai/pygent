@@ -24,6 +24,7 @@ from ..api import (
     ExecutionStatus,
 )
 from ..codec import invocation_from_dict
+from ..context_codec import ContextCodecRegistry
 from ..plan import ExecutionPlan
 from .state import _ExecutionRecord
 
@@ -244,9 +245,15 @@ class _DurableExecutionSubscription:
 class _DurableExecutionHandle(Generic[OutputMessageT]):
     """Task-independent attachment backed only by the durable journal."""
 
-    def __init__(self, history: SQLiteHistoryStore, execution_id: str) -> None:
+    def __init__(
+        self,
+        history: SQLiteHistoryStore,
+        execution_id: str,
+        context_codec_registry: ContextCodecRegistry,
+    ) -> None:
         self._history = history
         self._execution_id = execution_id
+        self._context_codec_registry = context_codec_registry
 
     @property
     def execution_id(self) -> str:
@@ -288,7 +295,9 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
                 raise KeyError(f"unknown execution {self._execution_id!r}")
             status = ExecutionStatus(stored.status)
             if status is ExecutionStatus.SUCCEEDED and stored.output is not None:
-                message, context = invocation_from_dict(stored.output)
+                message, context = invocation_from_dict(
+                    stored.output, registry=self._context_codec_registry
+                )
                 return cast(OutputMessageT, message), context
             if status.terminal:
                 raise RuntimeError(

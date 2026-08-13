@@ -15,6 +15,7 @@ from typing import cast
 from pygent import (
     AIMessage,
     Context,
+    ContextCodec,
     ExponentialBackoff,
     FallbackPolicy,
     GenerationConfig,
@@ -52,6 +53,23 @@ ROUTE_ID = "success-only"
 TOOL_NAME = "benchmark_add"
 TOOL_ID = "benchmark.add"
 TOOL_PERMISSION = "benchmark:add"
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkState:
+    request_id: str
+    mode: str
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkContext(Context):
+    context_schema = "pygent.benchmark-context"
+    context_schema_version = 1
+
+    benchmark_state: BenchmarkState = BenchmarkState("", "model")
+
+
+BENCHMARK_CONTEXT_CODEC = ContextCodec.dataclass(BenchmarkContext)
 
 
 async def _sleep_at_least_ms(duration_ms: float) -> None:
@@ -530,17 +548,21 @@ def build_resources(
 
 
 def model_context(request_id: str) -> Context:
-    return Context(metadata={"benchmark_request_id": request_id})
+    return BenchmarkContext(
+        metadata={"benchmark_request_id": request_id},
+        benchmark_state=BenchmarkState(request_id, "model"),
+    )
 
 
 def agent_context(request_id: str, definition: ToolDefinition) -> Context:
-    return Context(
+    return BenchmarkContext(
         system_prompt="Call benchmark_add exactly once for arithmetic, then answer briefly.",
         tools=(definition,),
         metadata={
             "benchmark_request_id": request_id,
             "permissions": [TOOL_PERMISSION],
         },
+        benchmark_state=BenchmarkState(request_id, "agent"),
     )
 
 
@@ -553,6 +575,7 @@ def agent_message(index: int) -> UserMessage:
 
 
 __all__ = [
+    "BENCHMARK_CONTEXT_CODEC",
     "MODEL_GROUP",
     "BenchmarkAgent",
     "ConcurrencyTracker",

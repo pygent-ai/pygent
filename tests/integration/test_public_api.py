@@ -11,6 +11,7 @@ import pygent
 from pygent import (
     AIMessage,
     Context,
+    ContextCodec,
     ExponentialBackoff,
     FallbackPolicy,
     FrozenJsonObject,
@@ -51,6 +52,7 @@ EXPECTED_TOP_LEVEL_API = {
     "AIMessage",
     "Agent",
     "Context",
+    "ContextCodec",
     "ExponentialBackoff",
     "FallbackPolicy",
     "FrozenJsonObject",
@@ -98,6 +100,7 @@ def test_minimal_example_surface_is_exported():
             CapacityScope,
             CodeArtifactSpec,
             Context,
+            ContextCodec,
             ExecutionPlan,
             ExponentialBackoff,
             FallbackPolicy,

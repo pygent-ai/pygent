@@ -13,12 +13,14 @@ from typing import Any, Self, TypeVar, cast
 
 from pygent.core import Context, JsonValue, Message, freeze_json_object
 from pygent.core._module_contracts import _execution_scope
+from pygent.core.values import validate_context
 from pygent.llm import ModelCallLayer, ModelCallOptions, ModelProfileSelectionError
 
 from .._history_types import HistoryConflictError
 from ..api import (
     ExecutionAdmissionError,
     ExecutionDeadlineExceeded,
+    ExecutionHandle,
     ExecutionOptions,
     ExecutionPhase,
     ExecutionStatus,
@@ -62,6 +64,7 @@ class _LifecycleMixin:
             raise TypeError("message must be a Message")
         if not isinstance(context, Context):
             raise TypeError("context must be a Context")
+        validate_context(context)
         options = execution or ExecutionOptions()
         deadline_requirement = _finite_deadline_requirement(bound.module)
         if deadline_requirement is not None and options.deadline is None:
@@ -70,7 +73,8 @@ class _LifecycleMixin:
                 "which requires a finite execution deadline"
             )
         request_id = options.request_id or str(uuid.uuid4())
-        invocation = invocation_to_dict(message, context)
+        registry = self.context_codec_registry
+        invocation = invocation_to_dict(message, context, registry=registry)
         execution_id = options.execution_id or str(uuid.uuid4())
         active = self._executions.get(execution_id)
         if active is not None:
@@ -241,6 +245,8 @@ class _LifecycleMixin:
         has_deferred_models: bool,
         prepared: bool = False,
     ) -> tuple[Message, Context]:
+        registry = self.context_codec_registry
+        input_codec = registry.for_value(context)
         admission = AdmissionCoordinator(self, record, has_deferred_models)
         if prepared and record.history is not None and record.model_admission is not None:
             admission.mark_model_manifest_committed()
@@ -402,10 +408,13 @@ class _LifecycleMixin:
             output, next_context = result
             if not isinstance(output, Message) or not isinstance(next_context, Context):
                 raise TypeError("Module.forward() must return (Message, Context)")
+            validate_context(next_context)
+            if registry.for_value(next_context).identity != input_codec.identity:
+                raise TypeError("Module execution changed Context schema")
             await record.finalize(
                 status=ExecutionStatus.SUCCEEDED,
                 terminal_events=(("span.completed", {}), ("execution.completed", {})),
-                output=invocation_to_dict(output, next_context),
+                output=invocation_to_dict(output, next_context, registry=registry),
             )
             return output, next_context
         except TimeoutError as exc:
@@ -579,13 +588,18 @@ class _LifecycleMixin:
 
     async def get_execution_handle(
         self, execution_id: str
-    ) -> _LocalExecutionHandle[Message] | _DurableExecutionHandle[Message]:
+    ) -> ExecutionHandle[Message]:
         active = self._executions.get(execution_id)
         if active is not None:
-            return _LocalExecutionHandle(active)
+            return cast(ExecutionHandle[Message], _LocalExecutionHandle(active))
         if self.history is None or await self.history.get_execution(execution_id) is None:
             raise KeyError(f"unknown execution {execution_id!r}")
-        return _DurableExecutionHandle(self.history, execution_id)
+        return cast(
+            ExecutionHandle[Message],
+            _DurableExecutionHandle(
+                self.history, execution_id, self.context_codec_registry
+            ),
+        )
 
     async def purge_execution(self, execution_id: str) -> None:
         """Delete durable execution history and release its recoverable model pin."""

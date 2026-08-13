@@ -51,6 +51,7 @@ from pygent.runtime import (
 from .config import LoadProfile
 from .metrics import Sample
 from .models import (
+    BENCHMARK_CONTEXT_CODEC,
     MODEL_GROUP,
     LiveModelConfig,
     ModelResources,
@@ -323,7 +324,7 @@ class ScenarioSession:
         if self.scenario == "lifecycle-cancel-deadline":
             if self.profile.backend != "synthetic":
                 raise ValueError("lifecycle pressure is synthetic-only")
-            self.runtime = LocalRuntime()
+            self.runtime = LocalRuntime(context_codecs=(BENCHMARK_CONTEXT_CODEC,))
             self.bound = self._binding(self.runtime, 1).bind(LifecycleModule())
             return self
         if self.scenario.startswith("direct-"):
@@ -337,7 +338,9 @@ class ScenarioSession:
             path = Path(self.temporary.name) / "runtime.sqlite3"
             self.sqlite_paths.append(path)
             history = await self.stack.enter_async_context(SQLiteHistoryStore(path))
-        self.runtime = LocalRuntime(history=history)
+        self.runtime = LocalRuntime(
+            history=history, context_codecs=(BENCHMARK_CONTEXT_CODEC,)
+        )
         self._configure_runtime(self.runtime, self.resources)
         module = (
             self.resources.agent
@@ -408,7 +411,10 @@ class ScenarioSession:
             runtime_history = await self.stack.enter_async_context(
                 SQLiteHistoryStore(runtime_path)
             )
-            runtime = LocalRuntime(history=runtime_history)
+            runtime = LocalRuntime(
+                history=runtime_history,
+                context_codecs=(BENCHMARK_CONTEXT_CODEC,),
+            )
             self._configure_runtime(runtime, self.resources)
             bound = self._binding(runtime, self.capacity).bind(self.resources.agent)
 

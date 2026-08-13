@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from types import NotImplementedType
 from typing import TYPE_CHECKING, ClassVar
 
 from .json_values import (
     FrozenJsonObject,
     JsonObjectInput,
+    freeze_json,
     freeze_json_object,
 )
 
@@ -121,12 +122,24 @@ class Context:
     tools: tuple[ToolDefinition, ...] = ()
     metadata: JsonObjectInput = ()
 
+    context_schema: ClassVar[str] = "pygent.context"
+    context_schema_version: ClassVar[int] = 1
+
     def __init_subclass__(cls, **kwargs: object) -> None:
         if kwargs:
             raise TypeError(f"unsupported Context subclass options: {sorted(kwargs)}")
-        raise TypeError(
-            "Context cannot be subclassed; put portable request facts in metadata"
-        )
+        schema = cls.__dict__.get("context_schema")
+        version = cls.__dict__.get("context_schema_version")
+        if not isinstance(schema, str) or not schema:
+            raise TypeError("Context subclasses must declare a non-empty context_schema")
+        if (
+            not isinstance(version, int)
+            or isinstance(version, bool)
+            or version <= 0
+        ):
+            raise TypeError(
+                "Context subclasses must declare a positive context_schema_version"
+            )
 
     def __post_init__(self) -> None:
         from pygent.tool.types import ToolDefinition
@@ -146,6 +159,8 @@ class Context:
         object.__setattr__(self, "messages", messages)
         object.__setattr__(self, "tools", tools)
         object.__setattr__(self, "metadata", freeze_json_object(self.metadata))
+        if type(self) is not Context:
+            _validate_context_extension(self)
 
     def __add__(self, message: object) -> Context | NotImplementedType:
         if not isinstance(message, Message):
@@ -156,6 +171,69 @@ class Context:
         return replace(self, messages=messages + (message,))
 
 
+def _validate_context_extension(value: Context) -> None:
+    """Reject mutable or process-local values in user Context fields."""
+
+    context_type = type(value)
+    parameters = getattr(context_type, "__dataclass_params__", None)
+    if not is_dataclass(value) or parameters is None or not parameters.frozen:
+        raise TypeError("Context subclasses must be frozen dataclasses")
+    if "__slots__" not in context_type.__dict__:
+        raise TypeError("Context subclasses must use dataclass(slots=True)")
+    base_names = {item.name for item in fields(Context)}
+    for item in fields(value):
+        if item.name not in base_names:
+            _validate_portable_context_value(getattr(value, item.name), set())
+
+
+def _validate_portable_context_value(value: object, active: set[int]) -> None:
+    from pygent.tool.types import ToolDefinition
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return
+    if isinstance(value, float):
+        freeze_json(value)
+        return
+    if isinstance(value, (Message, ToolDefinition, FrozenJsonObject)):
+        return
+    if isinstance(value, tuple):
+        identity = id(value)
+        if identity in active:
+            raise TypeError("Context fields must not contain cyclic values")
+        active.add(identity)
+        try:
+            for item in value:
+                _validate_portable_context_value(item, active)
+        finally:
+            active.remove(identity)
+        return
+    if is_dataclass(value) and not isinstance(value, type):
+        parameters = getattr(type(value), "__dataclass_params__", None)
+        if parameters is None or not parameters.frozen or "__slots__" not in type(value).__dict__:
+            raise TypeError("nested Context dataclasses must be frozen and use slots")
+        identity = id(value)
+        if identity in active:
+            raise TypeError("Context fields must not contain cyclic values")
+        active.add(identity)
+        try:
+            for item in fields(value):
+                _validate_portable_context_value(getattr(value, item.name), active)
+        finally:
+            active.remove(identity)
+        return
+    raise TypeError(
+        f"unsupported portable Context field value: {type(value).__name__}"
+    )
+
+
+def validate_context(value: Context) -> None:
+    """Validate one Context at an execution boundary."""
+
+    if not isinstance(value, Context):
+        raise TypeError("value must be a Context")
+    Context.__post_init__(value)
+
+
 __all__ = [
     "AIMessage",
     "Context",
@@ -163,4 +241,5 @@ __all__ = [
     "Message",
     "ToolMessage",
     "UserMessage",
+    "validate_context",
 ]

@@ -50,7 +50,7 @@ from .json_values import (
     freeze_json,
     freeze_json_object,
 )
-from .values import Context, Message
+from .values import Context, Message, validate_context
 
 if TYPE_CHECKING:
     from ._module_definition import Module
@@ -222,8 +222,12 @@ class _DirectExecutionScope:
             data={},
         )
         token = _direct_span.set((span_id, parent_span_id, module_path))
+        validate_context(context)
         try:
             result = _validate_result(await module.forward(message, context))
+            validate_context(result[1])
+            if type(result[1]) is not type(context):
+                raise TypeError("Module.forward() must preserve the concrete Context type")
         except asyncio.CancelledError:
             await self._record.emit(
                 span_id=span_id,

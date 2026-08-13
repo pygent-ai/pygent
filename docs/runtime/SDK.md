@@ -182,9 +182,9 @@ worker_runtime = LocalRuntime(
         digest="sha256:0123456789abcdef",
         entrypoint="support.agents:build_reviewer_worker",
     ),
-    input_schema="schema://pygent/message-context-input@0.2",
-    output_schema="schema://pygent/message-context-output@0.2",
-    serializer="pygent-json-v1",
+    input_schema="schema://pygent/message-context-input@0.3",
+    output_schema="schema://pygent/message-context-output@0.3",
+    serializer="pygent-json-v2",
 )
 worker_bound = worker_runtime.create_binding(
     name="reviewer-service",
@@ -203,7 +203,7 @@ worker_app = HTTPWorkerApp(
 
 HTTP Worker 只接纳完整可移植计划：`CodeArtifactSpec` 的 package/version/digest/entrypoint、输入 schema、输出 schema 和 serializer 都会进入 `graph_hash`。`artifact_resolver` 必须返回 `WorkerDeploymentManifest`，把已验证 digest、实际加载 callable 的 canonical entrypoint 与实际 wire schema/serializer 绑定到该计划；缺 resolver、digest/entrypoint/schema 不匹配或缺少任一字段都 fail closed。不能以 pickle、Python 类型名、未验证的本地 import 或 Worker 默认值补齐。
 
-上述 `message-context-input@0.2` 与 `message-context-output@0.2` 是稳定通用信封，不代表所有 Context 都具有相同字段。信封中的 Context 值携带 `schema`、`version`、规范 codec 名、`codec_digest` 和严格 JSON `data`。`context_codecs` 是 Worker 部署允许列表：其规范 schema 与 digest 必须进入 ExecutionPlan 和 `WorkerDeploymentManifest`，实际调用选中的精确 codec identity 进入 admission manifest。Worker 必须先验证信封、计划允许列表、部署 codec 和 digest，再解析 data；缺失、不兼容或同名同版本不同 digest 均在 `forward()` 前失败。Python Context 类只在已经验证的代码制品内作为本地构造目标，不进入 wire identity。
+上述 `message-context-input@0.3` 与 `message-context-output@0.3` 是稳定通用信封，不代表所有 Context 都具有相同字段。信封中的 Context 值携带 `schema`、`version`、规范 codec 名、`codec_digest` 和严格 JSON `data`。`context_codecs` 是 Worker 部署允许列表：其规范 schema 与 digest 必须进入 ExecutionPlan 和 `WorkerDeploymentManifest`，实际调用选中的精确 codec identity 进入 admission manifest。Worker 必须先验证信封、计划允许列表、部署 codec 和 digest，再解析 data；缺失、不兼容或同名同版本不同 digest 均在 `forward()` 前失败。Python Context 类只在已经验证的代码制品内作为本地构造目标，不进入 wire identity。0.3 信封不读取旧的无 discriminator Context wire、history 或 checkpoint；旧数据必须在部署升级前由应用显式迁移。
 
 进程优雅退出时应 `await capacity.close()` 主动释放自身 lease；进程崩溃时 heartbeat 停止，其他 coordinator 只能在 lease TTL 到期并获得更高 fencing token 后取得 coordinator permit。`max_waiters` 与 live/runnable/Model/Tool permit 一样由 deployment coordinator 全局计数，不能由每个 Worker 各维护一份整数。若 Worker 无法访问同一可靠 owner，`CapacityScope.DEPLOYMENT` 继续在 Binding 创建阶段拒绝，不能降级为进程内上限。
 

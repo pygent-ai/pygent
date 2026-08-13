@@ -116,7 +116,9 @@ class _RecoveryMixin:
                 f"bound Module graph contains {type(deadline_requirement).__name__}, "
                 "which requires a finite recovery deadline"
             )
-        message, context = invocation_from_dict(stored.input)
+        message, context = invocation_from_dict(
+            stored.input, registry=self.context_codec_registry
+        )
         last_event_index = await history.last_event_index(
             execution_id=stored.execution_id
         )

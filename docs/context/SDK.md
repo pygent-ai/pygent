@@ -1,6 +1,6 @@
 # Context SDK
 
-本文是 Context 的第二级契约，必须服从 [Context 第一原则](FEATURES.md)。框架演进应保持这些使用方式成立。本文中的用户 Context 子类是目标 SDK 契约；实现、wire codec 与 Runtime 必须收敛到该契约，不得用 pickle、类名导入或静默丢弃字段代替稳定 schema。
+本文是 Context 的第二级契约，必须服从 [Context 第一原则](FEATURES.md)。框架演进应保持这些使用方式成立。本文中的用户 Context 子类是已实现的公共 SDK 契约；实现、wire codec 与 Runtime 必须持续服从该契约，不得用 pickle、类名导入或静默丢弃字段代替稳定 schema。
 
 ## 基础 Context 与模型投影
 
@@ -84,7 +84,7 @@ runtime = LocalRuntime(
 
 注册表属于 Runtime/Worker 部署，不是全局可变 registry，也不进入 Context。`ContextCodec` 中的 Python constructor 只用于当前已验证代码制品内的本地重建；wire 上只出现 schema、version、规范 codec 名、codec digest 与严格 JSON data。基础 `Context` 使用 Pygent 内置 codec，无需应用注册。
 
-`message-context-input@0.2` 与 `message-context-output@0.2` 是稳定的通用信封 schema，不等同于某个具体 AgentContext schema。其 Context 部分固定携带 discriminator：
+`message-context-input@0.3` 与 `message-context-output@0.3` 是稳定的通用信封 schema，不等同于某个具体 AgentContext schema。其 Context 部分固定携带 discriminator：
 
 ```json
 {
@@ -98,7 +98,7 @@ runtime = LocalRuntime(
 }
 ```
 
-ExecutionPlan 和 Worker deployment manifest 必须列出该部署允许的 Context codec identities/digests；每次 Root admission 把实际选中的精确 codec identity 固定到 admission manifest。Worker 在解码 data 前同时验证通用信封、部署允许列表和精确 digest。Child 若保持同一具体 Context 类型则继承该 identity；显式改变 Context schema 的 Module 边界必须在计划中声明输入/输出 codec 转换，不能靠返回任意子类动态改变 wire 契约。
+ExecutionPlan 和 Worker deployment manifest 必须列出该部署允许的 Context codec identities/digests；每次 Root admission 把实际选中的精确 codec identity 固定到 admission manifest。Worker 在解码 data 前同时验证通用信封、部署允许列表和精确 digest。当前版本要求整个 Execution（包括 Child）保持同一具体 Context 类型，任何 Module 返回不同类型都会在边界失败。未来若开放 schema transition，必须先新增显式的计划输入/输出转换契约，不能靠返回任意子类动态改变 wire 契约。
 
 ## 不可变状态演进
 
@@ -138,7 +138,7 @@ class AgentContext(Context):
     full_history: tuple[Message, ...] = ()
 
     def __add__(self, value: object):
-        updated = super().__add__(value)
+        updated = Context.__add__(self, value)
         if updated is NotImplemented:
             return NotImplemented
         assert isinstance(value, Message)

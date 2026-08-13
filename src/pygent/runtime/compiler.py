@@ -69,6 +69,7 @@ def compile_execution_plan(
     input_schema: str | None = None,
     output_schema: str | None = None,
     serializer: str | None = None,
+    context_codecs: tuple[tuple[str, int, str, str], ...] = (),
 ) -> ExecutionPlan:
     """Compile a Module definition graph into a stable local execution plan.
 
@@ -241,7 +242,12 @@ def compile_execution_plan(
                     f"model group {requirement.group_name!r} has conflicting requirements"
                 )
             declarations[requirement.group_name] = requirement
-    return ExecutionPlan(root="root", modules=tuple(specs), artifact=artifact)
+    return ExecutionPlan(
+        root="root",
+        modules=tuple(specs),
+        artifact=artifact,
+        context_codecs=context_codecs,
+    )
 
 
 __all__ = ["compile_execution_plan"]

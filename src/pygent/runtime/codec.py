@@ -29,6 +29,12 @@ from pygent.tool import (
     ToolTaskState,
 )
 
+from .context_codec import (
+    DEFAULT_CONTEXT_CODECS,
+    ContextCodecError,
+    ContextCodecRegistry,
+)
+
 
 class WireCodecError(ValueError):
     """Raised when an untrusted Worker payload violates the public schema."""
@@ -400,44 +406,70 @@ def message_from_dict(value: object) -> Message:
     raise WireCodecError(f"unsupported Message role: {role!r}")
 
 
-def context_to_dict(value: Context) -> dict[str, object]:
-    return {
-        "system_prompt": value.system_prompt,
-        "messages": [message_to_dict(message) for message in value.messages],
-        "tools": [tool_definition_to_dict(tool) for tool in value.tools],
-        "metadata": _thaw(value.metadata),
-    }
-
-
-def context_from_dict(value: object) -> Context:
-    data = _object(value, "Context")
-    _only(data, {"system_prompt", "messages", "tools", "metadata"}, "Context")
-    messages = data.get("messages", [])
-    tools = data.get("tools", [])
-    if not isinstance(messages, (list, tuple)) or not isinstance(tools, (list, tuple)):
-        raise WireCodecError("Context messages and tools must be arrays")
+def context_to_dict(
+    value: Context, *, registry: ContextCodecRegistry = DEFAULT_CONTEXT_CODECS
+) -> dict[str, object]:
     try:
-        return Context(
-            system_prompt=data.get("system_prompt", ""),
-            messages=tuple(message_from_dict(item) for item in messages),
-            tools=tuple(tool_definition_from_dict(item) for item in tools),
-            metadata=_object(data.get("metadata", {}), "Context.metadata"),
+        codec = registry.for_value(value)
+        return {
+            "schema": codec.schema,
+            "version": codec.version,
+            "codec": codec.codec,
+            "codec_digest": codec.codec_digest,
+            "data": codec.encode(value),
+        }
+    except ContextCodecError as exc:
+        raise WireCodecError("invalid or unregistered Context") from exc
+
+
+def context_from_dict(
+    value: object, *, registry: ContextCodecRegistry = DEFAULT_CONTEXT_CODECS
+) -> Context:
+    data = _object(value, "Context")
+    _only(data, {"schema", "version", "codec", "codec_digest", "data"}, "Context")
+    try:
+        identity = (
+            cast(str, data["schema"]),
+            cast(int, data["version"]),
+            cast(str, data["codec"]),
+            cast(str, data["codec_digest"]),
         )
-    except (TypeError, ValueError) as exc:
+        if (
+            not isinstance(identity[0], str)
+            or not isinstance(identity[1], int)
+            or isinstance(identity[1], bool)
+            or not isinstance(identity[2], str)
+            or not isinstance(identity[3], str)
+        ):
+            raise ContextCodecError("invalid Context codec identity")
+        return registry.for_identity(identity).decode(data["data"])
+    except (KeyError, TypeError, ValueError, ContextCodecError) as exc:
         raise WireCodecError("invalid Context") from exc
 
 
-def invocation_to_dict(message: Message, context: Context) -> FrozenJsonObject:
+def invocation_to_dict(
+    message: Message,
+    context: Context,
+    *,
+    registry: ContextCodecRegistry = DEFAULT_CONTEXT_CODECS,
+) -> FrozenJsonObject:
     return freeze_json_object(
-        {"message": message_to_dict(message), "context": context_to_dict(context)}
+        {
+            "message": message_to_dict(message),
+            "context": context_to_dict(context, registry=registry),
+        }
     )
 
 
-def invocation_from_dict(value: object) -> tuple[Message, Context]:
+def invocation_from_dict(
+    value: object, *, registry: ContextCodecRegistry = DEFAULT_CONTEXT_CODECS
+) -> tuple[Message, Context]:
     data = _object(value, "invocation")
     _only(data, {"message", "context"}, "invocation")
     try:
-        return message_from_dict(data["message"]), context_from_dict(data["context"])
+        return message_from_dict(data["message"]), context_from_dict(
+            data["context"], registry=registry
+        )
     except KeyError as exc:
         raise WireCodecError("invocation requires message and context") from exc
 

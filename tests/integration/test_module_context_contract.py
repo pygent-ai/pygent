@@ -181,7 +181,7 @@ def test_message_rejects_unsafe_public_subclasses_and_context_docs_define_safe_e
     assert "class AgentContext(Context):" in context_sdk
     assert 'context_schema: ClassVar[str] = "example.agent-context"' in context_sdk
     assert "不包含连接、锁、Store、manager、client" in context_sdk
-    assert "本文中的用户 Context 子类是目标 SDK 契约" in context_sdk
+    assert "本文中的用户 Context 子类是已实现的公共 SDK 契约" in context_sdk
     assert "不是 Pygent 提供或预留的公共类型" in context_sdk
     assert "用户也可以显式定义 `__iadd__()`" in context_sdk
     assert "不得修改 `self`" in context_sdk
@@ -190,8 +190,9 @@ def test_message_rejects_unsafe_public_subclasses_and_context_docs_define_safe_e
     acceptance = (
         Path(__file__).resolve().parents[2] / "docs" / "runtime" / "ACCEPTANCE.md"
     ).read_text(encoding="utf-8")
-    assert "**待实现：** AgentContext 子类校验" in acceptance
-    assert "尚无可执行实现证据" in acceptance
+    assert "AgentContext 子类校验" in acceptance
+    assert "tests/integration/test_agent_context.py" in acceptance
+    assert "尚无可执行实现证据" not in acceptance
 
 
 def test_context_defensively_copies_message_and_tool_collections():

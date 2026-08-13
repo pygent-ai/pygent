@@ -36,7 +36,34 @@ _PLAN_FIELDS = {
     "modules",
     "metadata",
     "graph_hash",
+    "context_codecs",
 }
+
+
+def _context_codec_tuple(value: object) -> tuple[tuple[str, int, str, str], ...]:
+    if not isinstance(value, (list, tuple)):
+        raise PlanValidationError("context_codecs must be a sequence")
+    result: list[tuple[str, int, str, str]] = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) != 4:
+            raise PlanValidationError("context codec identity must have four values")
+        schema, version, codec, digest = item
+        if (
+            not isinstance(schema, str)
+            or not schema
+            or not isinstance(version, int)
+            or isinstance(version, bool)
+            or version <= 0
+            or not isinstance(codec, str)
+            or not codec
+            or not isinstance(digest, str)
+            or not digest.startswith("sha256:")
+        ):
+            raise PlanValidationError("invalid context codec identity")
+        result.append((schema, version, codec, digest))
+    if len(result) != len(set(result)):
+        raise PlanValidationError("context_codecs contains duplicates")
+    return tuple(sorted(result))
 
 
 class PlanValidationError(ValueError):
@@ -340,6 +367,7 @@ class ExecutionPlan:
     runtime_api_version: str = "0.2"
     artifact: CodeArtifactSpec | None = None
     metadata: tuple[tuple[str, str], ...] = ()
+    context_codecs: tuple[tuple[str, int, str, str], ...] = ()
     graph_hash: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -365,6 +393,7 @@ class ExecutionPlan:
             raise PlanValidationError("modules must contain ModuleSpec values")
         object.__setattr__(self, "modules", tuple(self.modules))
         object.__setattr__(self, "metadata", _metadata_tuple(self.metadata))
+        object.__setattr__(self, "context_codecs", _context_codec_tuple(self.context_codecs))
         if self.schema_version == 2 and any(
             module.model_requirements for module in self.modules
         ):
@@ -430,6 +459,7 @@ class ExecutionPlan:
                 module.to_dict(include_model_requirements=self.schema_version >= 3)
                 for module in sorted(self.modules, key=lambda item: item.path)
             ],
+            "context_codecs": [list(item) for item in self.context_codecs],
         }
 
     def _calculate_graph_hash(self) -> str:
@@ -485,6 +515,7 @@ class ExecutionPlan:
                 value.get("runtime_api_version"), "runtime_api_version"
             ),
             artifact=artifact,
+            context_codecs=_context_codec_tuple(value.get("context_codecs", ())),
             metadata=_metadata_tuple(value.get("metadata", ())),
         )
         expected_hash = _require_text(value.get("graph_hash"), "graph_hash")

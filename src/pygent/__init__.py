@@ -34,6 +34,7 @@ from .llm import (
     ModelRoute,
     RetryPolicy,
 )
+from .runtime.context_codec import ContextCodec
 from .tool import (
     IdempotencyPolicy,
     ToolAuthorizationDecision,
@@ -52,6 +53,7 @@ __all__ = [
     "AIMessage",
     "Agent",
     "Context",
+    "ContextCodec",
     "ExponentialBackoff",
     "FallbackPolicy",
     "FrozenJsonObject",

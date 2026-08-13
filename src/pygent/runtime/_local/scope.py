@@ -34,6 +34,7 @@ from pygent.core.json_values import (
     _freeze_json_object_with_default,
     _patch_frozen_json_object,
 )
+from pygent.core.values import validate_context
 from pygent.tool import (
     SandboxExecutorSupport,
     ToolCall,
@@ -211,7 +212,11 @@ class _ManagedScope(ExecutionScope):
             )
         token = _module_stack.set(stack + (path,))
         try:
-            return _validate_result(await module.forward(message, context))
+            result = _validate_result(await module.forward(message, context))
+            validate_context(result[1])
+            if type(result[1]) is not type(context):
+                raise TypeError("Module.forward() must preserve the concrete Context type")
+            return result
         finally:
             _module_stack.reset(token)
 

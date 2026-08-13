@@ -1,0 +1,21 @@
+[profile]
+name = "agent-context-verify"
+backend = "synthetic"
+scenarios = ["react-tool-stream"]
+concurrency = [1, 2, 4, 8]
+closed_duration_seconds = 3.0
+open_multipliers = [0.5, 1.1]
+open_duration_seconds = 3.0
+warmup_seconds = 1.0
+cooldown_seconds = 0.5
+repetitions = 3
+max_inflight = 32
+request_deadline_seconds = 60.0
+seed = 1729
+
+[model]
+latency_ms = 25.0
+jitter_ms = 3.0
+ttft_ms = 5.0
+chunks = 3
+tool_latency_ms = 2.0

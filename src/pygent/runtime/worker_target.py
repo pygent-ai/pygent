@@ -33,6 +33,7 @@ from ._worker_protocol import (
 )
 from .api import BoundModule, ExecutionOptions
 from .codec import invocation_from_dict, invocation_to_dict
+from .context_codec import ContextCodec, ContextCodecRegistry
 from .worker_client import HTTPWorkerClient
 
 
@@ -70,6 +71,7 @@ def bound_module_worker_handler(
             or manifest.input_schema != root_spec.input_schema
             or manifest.output_schema != root_spec.output_schema
             or manifest.serializer != root_spec.serializer
+            or tuple(sorted(manifest.context_codecs)) != plan.context_codecs
         ):
             raise WorkerProtocolError(
                 f"Worker deployment manifest does not verify {binding_ref!r}"
@@ -193,7 +195,8 @@ def bound_module_worker_handler(
                             "Worker model resolver uses a different capacity domain",
                         )
                     )
-        message, context = invocation_from_dict(request.input)
+        registry = cast(Any, bound).runtime.context_codec_registry
+        message, context = invocation_from_dict(request.input, registry=registry)
         handle = await bound.start(
             message,
             context,
@@ -233,7 +236,7 @@ def bound_module_worker_handler(
             raise
         else:
             await relay_task
-        return invocation_to_dict(output, next_context)
+        return invocation_to_dict(output, next_context, registry=registry)
 
     dynamic_namespaces = {
         namespace
@@ -270,6 +273,7 @@ class HTTPRemoteModuleTarget:
     graph_hash: str
     required_capabilities: tuple[str, ...] = ()
     placement: PlacementPolicy = field(default_factory=PlacementPolicy.adaptive)
+    context_codecs: tuple[ContextCodec, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.binding_ref:
@@ -346,7 +350,8 @@ class HTTPRemoteModuleTarget:
                 "registered remote target placement differs from the "
                 "RemoteModule declaration; compile a new caller ExecutionPlan"
             )
-        payload = invocation_to_dict(message, context)
+        registry = ContextCodecRegistry(self.context_codecs)
+        payload = invocation_to_dict(message, context, registry=registry)
         request_id = child_execution_id or str(uuid4())
         logical_key = idempotency_key or (
             None if trace_id is None else f"remote-child:{trace_id}:{self.binding_ref}"
@@ -399,4 +404,4 @@ class HTTPRemoteModuleTarget:
         else:
             if relay_task is not None:
                 await relay_task
-        return invocation_from_dict(result)
+        return invocation_from_dict(result, registry=registry)

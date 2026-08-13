@@ -349,9 +349,9 @@ def test_compiler_requires_complete_portable_contract_and_hashes_it():
     )
     contract = {
         "artifact": artifact,
-        "input_schema": "schema://message-context-input@0.2",
-        "output_schema": "schema://message-context-output@0.2",
-        "serializer": "pygent-json-v1",
+        "input_schema": "schema://message-context-input@0.3",
+        "output_schema": "schema://message-context-output@0.3",
+        "serializer": "pygent-json-v2",
     }
     plan = compile_execution_plan(Echo(), **contract)
     changed = compile_execution_plan(
