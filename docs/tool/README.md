@@ -20,7 +20,7 @@ async def forward(
 
 ToolCallLayer 根据自身 ToolSpec 和 `context.tools` 的可见名称交集选择候选工具，再要求用户开发的自定义授权 Module 或受信执行适配器完成实际授权。`context.tools` 本身不是授权证明。获准的 ToolCall 被接纳为 ToolTask；被拒绝的 ToolCall 不创建 ToolTask，但仍产生具有原 `call_id` 的 rejected ToolResult。同一 AIMessage 中的所有结果按原 ToolCall 顺序聚合为一个 ToolMessage，不受完成顺序影响。
 
-每个 ToolResult 显式区分成功、拒绝、失败、取消和不确定终态，并携带标准错误码、可重试性和可选的副作用提交状态。完整执行结果与再次发送给模型的安全投影分离。ToolCallLayer 原样返回 Context。
+每个 ToolResult 显式区分成功、拒绝、失败、取消和不确定终态，并携带标准错误码、可重试性和可选的副作用提交状态。完整执行结果与再次发送给模型的安全投影分离。ToolCallLayer 原样返回 Context；若输入是用户 AgentContext，不能重建基础 Context 或丢弃用户字段。
 
 ## ToolDefinition、ToolSpec 与 ToolTask/ToolResult
 

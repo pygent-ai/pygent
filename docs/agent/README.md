@@ -24,7 +24,7 @@ ModelCallLayer 和 ToolCallLayer 本身不追加历史。ReAct 拥有循环的�
 
 ReAct 负责循环控制和上下文演进，不重复模型 fallback 或工具并发。循环步数、模型调用数、工具调用数、deadline 和取消必须有界。
 
-Agent 只保存配置与子 Module。业务服务负责加载长期状态、构造 Context，并在成功后提交返回历史。
+Agent 只保存配置与子 Module。业务服务负责加载长期状态、构造 Context，并在成功后提交返回的 Agent 状态快照；模型历史只是该快照的基础投影之一。
 
 ReActLayer 直接接收模型层和工具层实例，自己的循环策略由 `max_steps` 等不可变参数声明：
 

@@ -25,7 +25,7 @@ async def forward(
 
 ModelProviderAdapter 从系统提示词、已提交历史、当前 Message、可见工具定义和 Layer 生成配置物化 Provider 请求。
 
-当前 Message 单独传入，不会被隐式追加。ModelCallLayer 返回完整 AIMessage 和原 Context；ReActLayer 或用户 Agent 决定追加时机。这避免模型成功但业务历史尚未提交时出现半完成状态。
+当前 Message 单独传入，不会被隐式追加。ModelCallLayer 返回完整 AIMessage 和原 Context；若输入是用户 AgentContext，返回值必须是同一实例及具体类型，不能只重建基础字段。Provider adapter 只读取 `system_prompt`、`messages`、`tools` 与 `metadata` 模型投影。ReActLayer 或用户 Agent 决定追加和状态演进时机。这避免模型成功但业务状态尚未提交时出现半完成状态。
 
 usage、实际 route、attempt 和耗时通过类型化 ExecutionEvent 暴露；确需保存的安全事实可以进入 AIMessage metadata。Provider 原始响应、secret、连接对象与内部异常不得进入 Message、Context 或公开事件。
 
@@ -84,7 +84,7 @@ SDK adapter 的隐式重试必须关闭，或纳入同一 attempt 与 deadline �
 
 ## 流式与非流式
 
-模型层只有一个 `forward()`。direct scope 或 managed Runtime 都可以使用 Provider 流式传输，并把文本、工具调用、usage 和 attempt 增量转成有序事件；最终仍返回完整 AIMessage 与原 Context。
+模型层只有一个 `forward()`。direct scope 或 managed Runtime 都可以使用 Provider 流式传输，并把文本、工具调用、usage 和 attempt 增量转成有序事件；最终仍返回完整 AIMessage 与原具体 Context 值。
 
 公开事件使用固定集合：
 

@@ -6,7 +6,7 @@
 2. [SDK 使用](SDK.md)
 3. 本文的详细契约
 
-Context 是随 Module 数据流传递的当前有效上下文快照，不是 Session、版本仓库、依赖容器或服务对象。它只回答“本次 Module 调用当前看见什么”，不保存这些内容的历史版本、revision、审计轨迹或持久化提交状态。
+Context 是随 Module 数据流传递的不可变 Agent 状态快照。基础 `Context` 定义当前模型可见投影；用户可以用具有稳定 schema、版本和 portable 字段的子类增加完整历史视图与领域状态。Context 不是依赖容器或服务对象，也不负责权威持久化、revision、审计和冲突提交。
 
 ## 数据形态
 
@@ -24,7 +24,7 @@ class Context:
 - `tools` 是本次上下文和模型可见的工具定义，不是可信授权证明。
 - `metadata` 是递归冻结、严格 JSON 可序列化的请求事实。
 
-Context 不提供 prompt 构造、工具调用、保存或加载等领域方法。
+这些基础字段是模型 Layer 的明确投影。用户 Context 子类的额外字段不会自动进入模型请求。Context 不提供工具调用、保存或加载等服务方法。
 
 ## 历史演进
 
@@ -47,11 +47,21 @@ Message 可以声明可选稳定槽位 `slot`：
 
 Context 只负责保存工具可见性。执行某个工具是否被允许，必须由用户开发的自定义授权 Module 或受信执行适配器判断；从 Store 或客户端加载的 `context.tools` 不能单独授予权限。
 
+## 用户 AgentContext
+
+用户 Context 子类是受约束的 portable value，而不是任意 Python 扩展点：必须是 frozen/slots dataclass，声明稳定 `context_schema` 和正整数 `context_schema_version`，全部实例字段都可由严格 JSON 编码。框架的 `replace()`、消息追加、Child、wire 和 checkpoint 必须保留具体类型与全部字段；未知或不兼容 schema 必须在 admission、发送或恢复前失败。
+
+具体字段协议由 `ContextCodec.dataclass()` 规范生成。可能进入 managed history、Worker 或 checkpoint 的 Runtime 必须显式注册允许的 codec；通用 Message/Context wire schema 只提供带 discriminator 的信封，不会抹平用户字段。完整注册和部署规则见 [Context SDK](SDK.md#schema-与-codec-注册)。
+
+用户可以重载 `__add__()`，使继承的 `context += message` 在重新绑定新值时同步演进自定义状态；也可以定义返回新值的 `__iadd__()`。两者都不得原地修改 frozen Context，且必须保持基础 Message/slot、portable 和无隐藏 I/O 契约。普通子类无需重载：基础 `__add__()` 已保留具体 Context 类型和全部字段。
+
+完整示例见 [Context SDK](SDK.md#定义用户-agentcontext)。并行 Child 各自接收同一个不可变输入，Parent 显式合并返回状态；Runtime 不提供默认 last-writer-wins 或字段级自动合并。
+
 ## JSON 值边界
 
 Message metadata、Context metadata、工具参数、工具结果和公开事件数据只接受 JSON 标量、数组和字符串键对象。构造时递归转换为不可变容器，并拒绝 NaN、Infinity、bytes、连接、锁、协程、handler、非字符串对象键和其他任意 Python 对象。业务状态如需引用外部对象，应保存稳定字符串引用，而不是把活对象放入 Context。
 
-Message 与 Context 的公开类型边界是封闭的：用户领域扩展使用 `Message(kind=..., data=...)`，不能通过伪造 Python module 名注册子类。Context 中的 ToolDefinition、ToolCall/ToolResult 等嵌套公开值同样使用封闭的精确类型，禁止子类附加 handler 或其他 codec 会丢失的字段。已冻结 JSON 子树在组合时仍重新计入整体深度、规模与循环校验。
+Message 的公开类型边界保持封闭：用户领域增量使用 `Message(kind=..., data=...)`。Context 则只允许经过 schema/codec 验证的受约束子类；Python 类名或伪造 module 名不能注册协议。Context 中的 ToolDefinition、ToolCall/ToolResult 等嵌套公开值仍使用封闭的精确类型，禁止附加 handler 或其他 codec 会丢失的字段。已冻结 JSON 子树在组合时仍重新计入整体深度、规模与循环校验。
 
 ## 与执行 checkpoint 的边界
 

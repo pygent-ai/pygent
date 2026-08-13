@@ -24,6 +24,43 @@ class MyAgent(Module[UserMessage, AIMessage]):
         return await self.react(message, context)
 ```
 
+## 自定义 AgentContext 与应用状态 Module
+
+Agent 可以声明自己的 portable 生命周期状态，而不把状态挂到 Agent 实例。以下 `ToolState`、`FileState` 和 `StateModule` 全部是应用开发者示例，不是 Pygent 提供的框架类型或固定命名：
+
+```python
+from typing import ClassVar
+
+
+@dataclass(frozen=True, slots=True)
+class AgentContext(Context):
+    context_schema: ClassVar[str] = "my-agent.context"
+    context_schema_version: ClassVar[int] = 1
+
+    tool_state: ToolState = field(default_factory=ToolState)
+    file_state: FileState = field(default_factory=FileState)
+
+
+class StateModule(Module[UserMessage, Message]):
+    async def forward(self, message: UserMessage, context: AgentContext):
+        tool_prompt = compute_tool_prompt(context.tool_state)
+        return Message(kind="tool.prompt.computed", content=tool_prompt), context
+
+
+class StatefulAgent(Module[UserMessage, AIMessage]):
+    def __init__(self, state_module: StateModule, react: ReActLayer):
+        super().__init__()
+        self.state_module = state_module
+        self.react = react
+
+    async def forward(self, message: UserMessage, context: AgentContext):
+        tool_info, context = await self.state_module(message, context)
+        message = process(message, tool_info)
+        return await self.react(message, context)
+```
+
+示例中的 `tool_state`、`file_state` 可以替换为应用需要的任意领域字段；它们及对应 State 类型不属于 Pygent API。所有字段仍必须满足 [Context SDK](../context/SDK.md) 的 schema、版本和 portable 值约束。Store、连接、锁、manager、executor 与 provider client 不得进入 AgentContext。应用若使用状态 Module，它仍使用统一二元协议；`self.state_module(context) -> value` 不是 Pygent Child 调用。AgentContext 对 `+`/`+=` 的受约束重载规则也在 Context SDK 的“自定义 `+` 与 `+=`”一节定义。
+
 ## 自定义组合 Agent
 
 ```python
@@ -139,19 +176,25 @@ answer, context = await self.reviewer(draft, context)
 
 ```python
 snapshot = await store.read(request.session_id)
-context = Context(messages=snapshot.messages)
+context = AgentContext(
+    messages=project_model_history(snapshot),
+    metadata={"session_id": request.session_id},
+    tool_state=snapshot.tool_state,
+    file_state=snapshot.file_state,
+)
 message = UserMessage(content=request.text)
 
-message, context = await agent.invoke(message, context)
+message, next_context = await agent.invoke(message, context)
 
 await store.commit(
     request.session_id,
     snapshot.revision,
-    context.messages,
+    tool_state=next_context.tool_state,
+    file_state=next_context.file_state,
 )
 ```
 
-Agent 构造函数不接收 Session 或 Store。
+Agent 构造函数不接收当前 Session 或 Store。基础 `Context` 仍适用于只需要模型投影的 Agent；用户 AgentContext 用于显式流转额外的 portable 状态。
 
 ## 自定义 handoff 与审批
 

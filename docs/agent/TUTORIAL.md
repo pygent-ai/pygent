@@ -21,7 +21,7 @@ context messages: 4
 Pygent 的 Agent 开发可以先缩减成三个概念：
 
 1. **Agent 就是 Module**：在 `forward()` 中接收 `(message, context)`，返回新的 `(message, context)`。
-2. **Context 是不可变快照**：Agent 不保存会话状态；谁加载 Context，谁就在成功后提交新 Context。
+2. **Context 是不可变 Agent 状态快照**：基础字段是模型投影；需要工具、文件或领域状态时定义 portable AgentContext 子类。Agent 实例不保存请求状态，谁加载 Context，谁就在成功后提交新 Context。
 3. **子 Module 直接调用**：模型、工具、审核 Agent 都是属性，在 `forward()` 中使用 `await self.child(...)` 组合。
 
 最小 Agent 完全不需要模型服务：
@@ -73,7 +73,7 @@ model = ModelCallLayer(
 )
 ```
 
-模型配置属于 Agent 定义，endpoint、credential、HTTP client 等活资源属于应用或部署。不要把密钥、client、会话历史或本次调用结果保存在 Agent 属性里。
+模型配置属于 Agent 定义，endpoint、credential、HTTP client 等活资源属于应用或部署。不要把密钥、client、会话历史或本次调用结果保存在 Agent 属性里；portable 历史和领域状态可以通过 AgentContext 显式流转。
 
 默认命令使用 [`OfflineModelInvoker`](../../examples/tutorial/providers.py)，但执行的仍是完整的 ModelCallLayer → ReAct → ToolCallLayer 路径，因此适合本地开发和 CI。
 
@@ -287,7 +287,7 @@ profile 在 admission 时被固定；执行中的 retry/fallback 不会重新读
 | 错误 | 正确做法 |
 |---|---|
 | 在 Root 外写 `await agent(message, context)` | Root 使用 `invoke()`/`stream()`；`await child(...)` 只用于 `forward()` 内 |
-| 把历史、client 或当前 profile 存到 Agent | 历史放 Context/业务 Store；client 与 profile 句柄由应用或 Runtime 持有 |
+| 把历史、client 或当前 profile 存到 Agent | portable 历史放 AgentContext，权威状态放业务 Store；client 与 profile 句柄由应用或 Runtime 持有 |
 | 模型能看到工具就默认允许执行 | 始终提供应用授权 Module，并把权限作为可信请求事实注入 |
 | managed 模型调用不传 deadline | 使用有限的 `ExecutionOptions.deadline` |
 | stream 未结束就关闭 client | 使用 `async with`，等待 `final_result()` 或取消清理完成后再关闭 |

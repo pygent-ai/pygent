@@ -20,6 +20,8 @@ class MyAgent(Module[UserMessage, AIMessage]):
 
 用户只实现 `forward()`。把 Module 赋给属性即声明依赖关系；同一实例可以被多个属性路径共享。
 
+`context` 可以是基础 `Context`，也可以是满足 [Context SDK](../context/SDK.md#定义用户-agentcontext) 的用户 `AgentContext` 子类。无论具体类型如何，所有 Pygent Module 都保持 `(message, context) -> (message, context)`；只接收 Context 并返回任意值的辅助计算应使用普通 Python 函数，而不是创建第二种 Module 协议。
+
 Module 图必须先完整构造，再进入执行生命周期。第一次调用 Root 的 `invoke()`、创建 `stream()` 或执行 `bind()` 时，框架会递归冻结全部原始子 Module；之后不能重新赋值或删除任何 Module 属性：
 
 ```python
@@ -78,7 +80,7 @@ approval = Message(
 )
 ```
 
-`kind` 必须是非空稳定标识；`data` 必须是 JSON 对象，并会在构造边界防御性复制和递归冻结。该形式能由 Runtime wire codec 无损往返。框架拒绝任意 `Message` 子类，因为子类字段没有稳定 schema 时会在远程或恢复边界丢失，也可能夹带连接、锁或 handler。请求事实放入 `Context.metadata`，不要继承 `Context` 添加字段。
+`kind` 必须是非空稳定标识；`data` 必须是 JSON 对象，并会在构造边界防御性复制和递归冻结。该形式能由 Runtime wire codec 无损往返。框架拒绝任意 `Message` 子类，因为 Message 是跨能力边界的统一增量信封。Agent 生命周期状态则可以使用具有稳定 schema、版本、frozen/slots 与 portable 字段的 Context 子类；请求事实仍优先放入 `Context.metadata`，领域聚合状态放入明确命名的 AgentContext 字段。
 
 内置 Module 使用仅关键字构造参数。组合 Module 直接接收子 Module，自己的策略使用不可变值或标量声明：
 

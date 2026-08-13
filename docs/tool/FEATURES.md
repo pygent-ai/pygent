@@ -5,7 +5,7 @@
 1. **工具定义是声明**：ToolDefinition 只描述模型可见的名称与 schema，不持有权限、执行策略或运行资源。
 2. **统一消息端口**：ToolCallLayer 执行 `(AIMessage, Context) -> (ToolMessage, Context)`。
 3. **批量结果单消息**：同一模型轮次的多个结果按调用顺序聚合为一个 ToolMessage。
-4. **Context 只读**：工具层默认原样返回 Context，是否进入历史由组合层决定。
+4. **Context 只读**：工具层默认原样返回 Context，包括具体 AgentContext 类型和全部用户字段；是否进入模型历史或演进领域状态由组合层决定。
 5. **授权与执行治理分离**：业务授权由用户开发的自定义授权 Module 或受信执行适配器决定；direct execution 中调用方与本地 adapter 负责资源和并发，managed Runtime 负责资源获取、并发、调度、取消、终态传播与清理；两者都不作出业务授权决策。
 6. **适配器不分叉**：本地、MCP、Shell 或远程工具遵守同一公开调用协议。
 7. **单次调用与 Binding 容量分层**：ToolCallLayer 的并发限制单次调用的工具 fan-out；direct execution 不增加跨 Root 门禁，调用方自行管理总并发。managed Binding 可以选择透传，或对其全部 Execution 增加共享工具总并发，两层限制分别生效。

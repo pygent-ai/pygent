@@ -21,7 +21,7 @@
 ## 文档范围
 
 - [Module](module/README.md)：统一计算、组合、绑定与执行接口。
-- [Context](context/README.md)：当前有效上下文、不可变 JSON 值及 Message 追加/槽位替换规则。
+- [Context](context/README.md)：基础模型投影、用户 AgentContext、不可变 portable 状态及 Message 追加/槽位替换规则。
 - [Runtime](runtime/README.md)：Binding、并发、父子调度、取消与生命周期。
 - [Durability](runtime/DURABILITY.md)：调度恢复、边界重试、持久化恢复与故障语义。
 - [透明恢复与确定性重放](runtime/REPLAY.md)：Runtime 内部默认记录点、history/snapshot、重放限制与可调整策略草案。
@@ -38,7 +38,7 @@
 
 | 层级 | 面向对象 | 需要理解的公开概念 |
 |---|---|---|
-| Core | 定义、组合和本地执行 Agent | `Module`、`Message`、`Context`、`invoke()`、`stream()` |
+| Core | 定义、组合和本地执行 Agent | `Module`、`Message`、`Context`、`ContextCodec`、`invoke()`、`stream()` |
 | Managed execution | 需要框架管理并发、取消和资源的服务 | `Runtime`、`Binding`、`BoundModule`、`ExecutionOptions` |
 | Deployment | 分布式部署和持久恢复 | capacity scope、placement、durability capability、Execution Handle |
 | Runtime SPI | Runtime 与 adapter 实现者 | `ExecutionScope`、`ExecutionPlan`、lease、checkpoint、replay |
@@ -47,7 +47,7 @@
 
 ### 公开导入边界
 
-顶层 `pygent` 只承诺日常定义和执行所需的 Application API：`Module`、`Agent`、Message/Context 值、内置 Agent/LLM/Tool Module，以及构造这些 Module 所需的高层不可变配置。以下类型不再作为顶层入门 API：
+顶层 `pygent` 只承诺日常定义和执行所需的 Application API：`Module`、`Agent`、Message/Context 值、用于声明受约束 AgentContext 的 `ContextCodec`、内置 Agent/LLM/Tool Module，以及构造这些 Module 所需的高层不可变配置。`ContextCodec` 是本次 AgentContext 升级冻结的目标 Application API，当前实现状态见 [验收矩阵](runtime/ACCEPTANCE.md)；实现交付后它只生成和验证 portable 值协议，codec 的部署注册仍由 Runtime/Worker 配置负责。以下类型不再作为顶层入门 API：
 
 - `Binding`、`BoundModule`、`ExecutionOptions`、`ExecutionEvent` 与 Runtime 接口从 `pygent.runtime` 导入；
 - `ExecutionPlan`、`ModuleSpec`、`CodeArtifactSpec`、schema version 与计划校验异常从 `pygent.runtime.plan` 导入；
@@ -111,7 +111,7 @@ bound = module.bind(runtime, binding=binding)
 
 `ExecutionOptions` 在普通托管调用中可省略，由 Runtime 生成请求身份并使用 Binding 默认策略。只有调用方需要幂等、调用身份、deadline、持久恢复或最终提交协调时才显式传入；省略不得被解释为获得这些高级保证。
 
-参数顺序类比 PyTorch/LSTM 的 `(x, h) -> (y, h')`：类型化当前增量 `message` 在前，当前有效上下文快照 `context` 在后。Message 不等同于聊天文本，检索、计划、评估、审批和领域结果由相应 Module 转换为 Message 子类型。直接与托管的 `invoke()`、`stream()` 执行同一个 Module 图并统一返回最终 `(message, context)`；两个独立调用不保证非确定性输出逐字相同。
+参数顺序类比 PyTorch/LSTM 的 `(x, h) -> (y, h')`：类型化当前增量 `message` 在前，不可变 Agent 状态快照 `context` 在后。基础 Context 定义模型可见投影，用户 AgentContext 可以增加 portable 历史视图和领域状态。Message 不等同于聊天文本，检索、计划、评估、审批和领域结果由相应 Module 转换为 Message 信封。直接与托管的 `invoke()`、`stream()` 执行同一个 Module 图并统一返回最终 `(message, context)`；两个独立调用不保证非确定性输出逐字相同。
 
 普通 `stream()` 继续把一次执行和观察组合成一个便捷入口，调用方无需感知内部 Execution/订阅分离。运行身份、状态、usage、durable 重连、后台继续执行或多观察者不进入普通返回值；支持相应 capability 的 Runtime 通过独立 Execution Handle 与事件订阅控制面提供它们。关闭订阅不等于取消 Execution，显式取消只通过 Execution 控制入口完成。
 
@@ -125,7 +125,7 @@ direct execution 中，调用方管理 Root 并发与外部资源生命周期，
 
 Binding 不与某个 Agent 一一对应。同一个服务中的 Coordinator、Worker、Reviewer 等父子 Agent 通常属于同一 Binding；它们共享部署策略和 Execution 治理域，原始子 Agent 调用默认继承当前 Binding。只有需要独立治理边界时，才使用预绑定 Child、RemoteModule 或 Binding placement，包括容量、资源、权限、安全、SLA、服务、部署策略或生命周期隔离；这不改变用户的 `forward()`。
 
-业务服务负责加载持久状态、构造本次 Context，并在 Execution 成功后显式提交新的当前有效快照或历史。Context 不保存历史版本、revision 或审计轨迹，框架不暗中维护第二个 Session 状态源。Durable Runtime 可以另行保存执行元数据、checkpoint 和重放记录，但不得把这些记录当作业务会话或领域状态的真实源。
+业务服务负责加载持久状态、构造本次 Context，并在 Execution 成功后显式提交返回的 Agent 状态快照。AgentContext 可以携带完整历史视图、领域状态和来源 revision，但不负责权威提交或冲突处理，框架不暗中维护第二个 Session 状态源。Durable Runtime 可以另行保存执行元数据、Context checkpoint 和重放记录，但不得把这些记录当作业务会话或领域状态的真实源。
 
 ## 组合与调度
 

@@ -8,7 +8,8 @@
 | Module 定义冻结、direct/managed 配置一致、plan drift fail-closed | `tests/core/test_module_direct_execution.py`、`tests/runtime/test_definition_drift.py`、`tests/runtime/test_execution_plan.py` |
 | 领域 Message 的严格 JSON、wire 往返、approval/handoff/termination 组合 | `tests/integration/test_module_context_contract.py`、`tests/runtime/test_wire_codec.py` |
 | 统一 Module、direct/managed 同源、`invoke()`/`stream()` 结果一致 | `tests/core/`、`tests/runtime/test_local_runtime.py`、`tests/runtime/test_agent_boundaries.py` |
-| Context 不可变、显式历史、slot、严格有限 JSON | `tests/integration/test_module_context_contract.py`、`tests/common_module/test_json_values.py` |
+| 基础 Context 不可变、模型投影、显式历史、slot、严格有限 JSON 与 wire 往返 | `tests/integration/test_module_context_contract.py`、`tests/common_module/test_json_values.py`、`tests/runtime/test_wire_codec.py` |
+| **待实现：** AgentContext 子类校验、`ContextCodec.dataclass()`、具体类型保留、通用信封 discriminator、计划/Worker codec allowlist、durable checkpoint 与版本拒绝 | 尚无可执行实现证据；交付时必须新增 Context、Model/Tool/ReAct、ExecutionPlan、Worker、history 和 recovery 覆盖，不得用文档断言代替 |
 | Binding、父子 lineage、取消、deadline、live/runnable、有限队列与 RESUME | `tests/runtime/test_local_runtime.py`、`tests/runtime/test_agent_boundaries.py` |
 | Model/Tool 独立共享容量、稳定资源身份、无 hold-and-wait | `tests/runtime/test_shared_capacity.py` |
 | deployment Execution/Model/Tool 跨 Runtime 与 SQLite 协调、FIFO、取消、TTL/fencing | `tests/runtime/test_shared_capacity.py` |

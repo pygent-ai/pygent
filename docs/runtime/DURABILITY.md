@@ -129,7 +129,7 @@ History backend 必须提供单个 `finalize_execution(...)` 事务，在一次�
 
 ## 代码与 Binding 兼容
 
-恢复前必须校验 checkpoint 与当前 ExecutionPlan 的兼容性，至少包括 Runtime API 版本、`graph_hash`、代码制品 digest、输入输出 schema、serializer 和 checkpoint policy。
+恢复前必须校验 checkpoint 与当前 ExecutionPlan 的兼容性，至少包括 Runtime API 版本、`graph_hash`、代码制品 digest、输入输出通用信封 schema、精确 Context schema/version/codec digest、serializer 和 checkpoint policy。
 
 默认情况下，hash 或 schema 不兼容必须拒绝自动恢复。迁移只能通过显式、版本化的 checkpoint migration 完成，不得让新代码直接解释未知旧状态。
 

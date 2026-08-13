@@ -175,7 +175,7 @@ Model Provider 不支持幂等请求时也可能重复计费或生成不同结�
 
 ## 与 Context 的关系
 
-Context 继续只表示当前有效上下文，不保存 execution cursor、attempt、history、未完成 effect 或恢复状态。Context 和 Message 可以作为 history 中的边界输入输出，但 durable history、snapshot 与业务 Store 分别拥有自己的职责和提交协议。
+Context 表示显式流转的不可变 Agent 状态快照，可以包含用户定义的 portable 历史视图和领域状态，但不保存 execution cursor、attempt、未完成 effect 或 Runtime 恢复状态。Context 和 Message 可以作为 durable history 中的边界输入输出；Runtime history、Execution snapshot 与权威业务 Store 分别拥有自己的职责和提交协议。
 
 ## 参考实现状态与扩展项
 

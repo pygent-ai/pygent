@@ -28,7 +28,7 @@ def test_first_principles_freeze_the_module_state_transition():
     ).read_text(encoding="utf-8")
 
     assert "(message, context) -> (message, context)" in principles
-    assert "Context 是显式传递的当前有效上下文快照" in principles
+    assert "Context 是显式传递、不可变且可移植的 Agent 状态快照" in principles
     assert "**可恢复执行只属于托管 Runtime**" in principles
     assert "不要求普通业务代码显式声明恢复点" in principles
     assert "不等同于序列化任意 Python coroutine" in principles
@@ -164,21 +164,34 @@ def test_portable_domain_message_freezes_data_and_requires_stable_kind():
         Message(kind="approval.requested", data={"handler": object()})
 
 
-def test_message_and_context_reject_unsafe_public_subclasses():
+def test_message_rejects_unsafe_public_subclasses_and_context_docs_define_safe_extension():
     with pytest.raises(TypeError, match="portable domain messages"):
 
         class UnsafeMessage(Message):
-            pass
-
-    with pytest.raises(TypeError, match="Context cannot be subclassed"):
-
-        class UnsafeContext(Context):
             pass
 
     with pytest.raises(TypeError, match="portable domain messages"):
 
         class ForgedFrameworkMessage(Message):
             __module__ = "pygent.user_domain"
+
+    context_sdk = (
+        Path(__file__).resolve().parents[2] / "docs" / "context" / "SDK.md"
+    ).read_text(encoding="utf-8")
+    assert "class AgentContext(Context):" in context_sdk
+    assert 'context_schema: ClassVar[str] = "example.agent-context"' in context_sdk
+    assert "不包含连接、锁、Store、manager、client" in context_sdk
+    assert "本文中的用户 Context 子类是目标 SDK 契约" in context_sdk
+    assert "不是 Pygent 提供或预留的公共类型" in context_sdk
+    assert "用户也可以显式定义 `__iadd__()`" in context_sdk
+    assert "不得修改 `self`" in context_sdk
+    assert "from pygent import ContextCodec" in context_sdk
+
+    acceptance = (
+        Path(__file__).resolve().parents[2] / "docs" / "runtime" / "ACCEPTANCE.md"
+    ).read_text(encoding="utf-8")
+    assert "**待实现：** AgentContext 子类校验" in acceptance
+    assert "尚无可执行实现证据" in acceptance
 
 
 def test_context_defensively_copies_message_and_tool_collections():
