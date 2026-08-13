@@ -280,6 +280,33 @@ class ContextCodecRegistry:
         self._by_type = by_type
         self._by_identity = by_identity
 
+    def _validate_registration(self, codec: ContextCodec) -> ContextCodec:
+        if not isinstance(codec, ContextCodec):
+            raise TypeError("codec must be a ContextCodec")
+        current = self._by_type.get(codec.context_type)
+        if current is not None:
+            if current == codec:
+                return current
+            raise ContextCodecError("duplicate or conflicting Context codec")
+        schema_key = (codec.schema, codec.version)
+        if codec.identity in self._by_identity or any(
+            (item.schema, item.version) == schema_key
+            for item in self._by_type.values()
+        ):
+            raise ContextCodecError("duplicate or conflicting Context codec")
+        return codec
+
+    def _register(self, codec: ContextCodec) -> ContextCodec:
+        """Register one deployment-local codec, accepting an identical repeat."""
+
+        codec = self._validate_registration(codec)
+        current = self._by_type.get(codec.context_type)
+        if current is not None:
+            return current
+        self._by_type[codec.context_type] = codec
+        self._by_identity[codec.identity] = codec
+        return codec
+
     @property
     def codecs(self) -> tuple[ContextCodec, ...]:
         return tuple(self._by_type.values())
@@ -287,6 +314,12 @@ class ContextCodecRegistry:
     def for_value(self, value: Context) -> ContextCodec:
         try:
             return self._by_type[type(value)]
+        except KeyError as exc:
+            raise ContextCodecError("unregistered Context type") from exc
+
+    def for_type(self, context_type: type[Context]) -> ContextCodec:
+        try:
+            return self._by_type[context_type]
         except KeyError as exc:
             raise ContextCodecError("unregistered Context type") from exc
 

@@ -175,7 +175,6 @@ capacity = SQLiteCapacityCoordinator("/var/lib/pygent/deployment-capacity.sqlite
 worker_runtime = LocalRuntime(
     history=worker_history,
     capacity_coordinator=capacity,
-    context_codecs=(agent_context_codec,),
     code_artifact=CodeArtifactSpec(
         package="support-agent",
         version="1.4.0",
@@ -200,6 +199,8 @@ worker_app = HTTPWorkerApp(
     capabilities=("model:reasoning",),
 )
 ```
+
+当 Worker Root 是声明了 `context_type = AgentContext` 的 `Agent` 时，`bind()` 自动派生并注册 codec，同时把 identity 固化进 ExecutionPlan 和部署 manifest；普通应用无需在 Worker Runtime 再传 `context_codecs=`。显式参数只用于自定义 codec 或非 Agent Root 等高级部署场景。
 
 HTTP Worker 只接纳完整可移植计划：`CodeArtifactSpec` 的 package/version/digest/entrypoint、输入 schema、输出 schema 和 serializer 都会进入 `graph_hash`。`artifact_resolver` 必须返回 `WorkerDeploymentManifest`，把已验证 digest、实际加载 callable 的 canonical entrypoint 与实际 wire schema/serializer 绑定到该计划；缺 resolver、digest/entrypoint/schema 不匹配或缺少任一字段都 fail closed。不能以 pickle、Python 类型名、未验证的本地 import 或 Worker 默认值补齐。
 

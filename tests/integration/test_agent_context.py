@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 import pytest
 
 from pygent import (
+    Agent,
     AIMessage,
     Context,
     ContextCodec,
@@ -12,7 +13,7 @@ from pygent import (
     Module,
     UserMessage,
 )
-from pygent.runtime import LocalRuntime, SQLiteHistoryStore
+from pygent.runtime import ExecutionAdmissionError, LocalRuntime, SQLiteHistoryStore
 from pygent.runtime.codec import (
     WireCodecError,
     context_from_dict,
@@ -58,7 +59,9 @@ class StateModule(Module[UserMessage, Message]):
         return Message(kind="tool.prompt.computed", content=prompt), context
 
 
-class MyAgent(Module[UserMessage, AIMessage]):
+class MyAgent(Agent[UserMessage, AIMessage]):
+    context_type = AgentContext
+
     def __init__(self) -> None:
         super().__init__()
         self.state_module = StateModule()
@@ -107,9 +110,13 @@ def test_codec_digest_is_stable_and_tampering_fails_closed():
         context_from_dict(encoded, registry=REGISTRY)
 
 
-def test_runtime_rejects_unregistered_agent_context_before_forward():
-    with pytest.raises((ContextCodecError, WireCodecError)):
-        LocalRuntime().context_codec_registry.for_value(_context())
+def test_runtime_auto_registers_declared_agent_context_at_bind():
+    runtime = LocalRuntime()
+
+    bound = runtime.bind(MyAgent())
+
+    assert runtime.context_codec_registry.for_value(_context()).identity == CODEC.identity
+    assert CODEC.identity in bound.plan.context_codecs
 
 
 def test_registry_rejects_duplicate_codec_registration():
@@ -124,7 +131,7 @@ async def test_documented_agent_context_pattern_runs_direct_and_managed():
     assert isinstance(direct_context, AgentContext)
     assert direct_context.file_state.paths == ("README.md",)
 
-    runtime = LocalRuntime(context_codecs=(CODEC,))
+    runtime = LocalRuntime()
     managed_message, managed_context = await runtime.bind(MyAgent()).invoke(
         UserMessage(content="q"), _context()
     )
@@ -133,13 +140,122 @@ async def test_documented_agent_context_pattern_runs_direct_and_managed():
 
 
 @pytest.mark.asyncio
+async def test_direct_agent_rejects_context_outside_declared_type():
+    with pytest.raises(TypeError, match="requires Context type AgentContext"):
+        await MyAgent().invoke(UserMessage(content="q"), Context())
+
+
+@pytest.mark.asyncio
 async def test_agent_context_survives_durable_result_reattach(tmp_path):
     async with SQLiteHistoryStore(tmp_path / "agent-context.sqlite3") as history:
-        runtime = LocalRuntime(history=history, context_codecs=(CODEC,))
+        runtime = LocalRuntime(history=history)
         handle = await runtime.bind(MyAgent()).start(UserMessage(content="q"), _context())
         expected = await handle.result()
         attached = await runtime.get_execution_handle(handle.execution_id)
         assert await attached.result() == expected
+
+
+@dataclass(frozen=True, slots=True)
+class OtherContext(Context):
+    context_schema = "tests.other-context"
+    context_schema_version = 1
+    value: str = "other"
+
+
+class OtherAgent(Agent[UserMessage, AIMessage]):
+    context_type = OtherContext
+
+    async def forward(self, message: UserMessage, context: OtherContext):
+        return AIMessage(content=message.content), context
+
+
+@pytest.mark.asyncio
+async def test_binding_rejects_another_registered_agent_context_before_forward():
+    runtime = LocalRuntime()
+    first = runtime.bind(MyAgent())
+    runtime.bind(OtherAgent())
+
+    with pytest.raises(ExecutionAdmissionError, match="Context codec"):
+        await first.invoke(UserMessage(content="q"), OtherContext())
+
+
+def test_binding_order_does_not_change_agent_context_plan_identity():
+    first_runtime = LocalRuntime()
+    first_plan = first_runtime.bind(MyAgent()).plan
+    first_runtime.bind(OtherAgent())
+
+    second_runtime = LocalRuntime()
+    second_runtime.bind(OtherAgent())
+    second_plan = second_runtime.bind(MyAgent()).plan
+
+    assert first_plan == second_plan
+
+
+@pytest.mark.asyncio
+async def test_later_agent_registration_does_not_drift_existing_module_plan():
+    class PlainModule(Module[UserMessage, AIMessage]):
+        async def forward(self, message, context):
+            return AIMessage(content=message.content), context
+
+    runtime = LocalRuntime(context_codecs=(CODEC,))
+    bound = runtime.bind(PlainModule())
+    runtime.bind(OtherAgent())
+
+    output, context = await bound.invoke(UserMessage(content="q"), _context())
+
+    assert output.content == "q"
+    assert type(context) is AgentContext
+
+
+def test_invalid_declared_context_type_fails_at_bind():
+    class InvalidAgent(Agent[UserMessage, AIMessage]):
+        context_type = str  # type: ignore[assignment]
+
+        async def forward(self, message, context):
+            return AIMessage(content=message.content), context
+
+    with pytest.raises(ContextCodecError, match="Context subclass"):
+        LocalRuntime().bind(InvalidAgent())
+
+
+def test_auto_registration_rejects_schema_conflict():
+    @dataclass(frozen=True, slots=True)
+    class ConflictingContext(Context):
+        context_schema = AgentContext.context_schema
+        context_schema_version = AgentContext.context_schema_version
+        different: str = "different"
+
+    class ConflictingAgent(Agent[UserMessage, AIMessage]):
+        context_type = ConflictingContext
+
+        async def forward(self, message, context):
+            return AIMessage(content=message.content), context
+
+    runtime = LocalRuntime()
+    runtime.bind(MyAgent())
+    with pytest.raises(ContextCodecError, match="conflicting"):
+        runtime.bind(ConflictingAgent())
+
+
+def test_failed_bind_does_not_leave_auto_registered_codec():
+    class UnsupportedAgent(MyAgent):
+        execution_requirements = MyAgent.execution_requirements.__class__(
+            required_capabilities=("tests.unsupported",)
+        )
+
+    runtime = LocalRuntime()
+    with pytest.raises(ExecutionAdmissionError, match="required capabilities"):
+        runtime.bind(UnsupportedAgent())
+    with pytest.raises(ContextCodecError, match="unregistered"):
+        runtime.context_codec_registry.for_value(_context())
+
+
+def test_explicit_codec_registration_remains_compatible():
+    runtime = LocalRuntime(context_codecs=(CODEC,))
+
+    bound = runtime.bind(MyAgent())
+
+    assert CODEC.identity in bound.plan.context_codecs
 
 
 def test_agent_context_rejects_mutable_or_live_values():

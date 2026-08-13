@@ -52,7 +52,11 @@ class _ToolJobsMixin:
             )
         assert history is not None
         current_plan = _apply_binding_policy(
-            self._compile_plan(bound.module), bound.binding
+            self._compile_plan(
+                bound.module,
+                context_codec_identities=bound.plan.context_codecs,
+            ),
+            bound.binding,
         )
         if current_plan.graph_hash != bound.plan.graph_hash:
             raise ExecutionAdmissionError("durable Job ExecutionPlan changed after binding")

@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from pygent import (
-    ContextCodec,
+    Agent,
     ModelCallError,
     ModelErrorKind,
 )
@@ -803,13 +803,13 @@ async def test_agent_context_crosses_http_worker_without_field_loss():
         tenant: str = ""
         history: tuple[str, ...] = ()
 
-    codec = ContextCodec.dataclass(RemoteContext)
+    class Echo(Agent[UserMessage, AIMessage]):
+        context_type = RemoteContext
 
-    class Echo(Module[UserMessage, AIMessage]):
         async def forward(self, message, context):
             return AIMessage(content=message.content.upper()), context + message
 
-    worker_runtime = _portable_runtime(context_codecs=(codec,))
+    worker_runtime = _portable_runtime()
     worker_bound = worker_runtime.bind(Echo())
 
     def resolver(artifact):
@@ -842,7 +842,6 @@ async def test_agent_context_crosses_http_worker_without_field_loss():
             worker_bound.plan.plan_id,
             worker_bound.plan.graph_hash,
             ("local",),
-            context_codecs=(codec,),
         )
         output, context = await remote.invoke(
             UserMessage(content="remote"),

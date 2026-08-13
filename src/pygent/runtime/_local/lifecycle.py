@@ -53,7 +53,11 @@ class _LifecycleMixin:
         if self._closed:
             raise RuntimeClosedError("Runtime is closed")
         current_plan = _apply_binding_policy(
-            self._compile_plan(bound.module), bound.binding
+            self._compile_plan(
+                bound.module,
+                context_codec_identities=bound.plan.context_codecs,
+            ),
+            bound.binding,
         )
         if current_plan.graph_hash != bound.plan.graph_hash:
             raise ExecutionAdmissionError(
@@ -74,6 +78,11 @@ class _LifecycleMixin:
             )
         request_id = options.request_id or str(uuid.uuid4())
         registry = self.context_codec_registry
+        input_codec = registry.for_value(context)
+        if input_codec.identity not in bound.plan.context_codecs:
+            raise ExecutionAdmissionError(
+                "Context codec is not allowed by the bound ExecutionPlan"
+            )
         invocation = invocation_to_dict(message, context, registry=registry)
         execution_id = options.execution_id or str(uuid.uuid4())
         active = self._executions.get(execution_id)

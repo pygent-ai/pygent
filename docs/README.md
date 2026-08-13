@@ -47,7 +47,7 @@
 
 ### 公开导入边界
 
-顶层 `pygent` 只承诺日常定义和执行所需的 Application API：`Module`、`Agent`、Message/Context 值、用于声明受约束 AgentContext 的 `ContextCodec`、内置 Agent/LLM/Tool Module，以及构造这些 Module 所需的高层不可变配置。`ContextCodec` 是本次 AgentContext 升级冻结的目标 Application API，当前实现状态见 [验收矩阵](runtime/ACCEPTANCE.md)；实现交付后它只生成和验证 portable 值协议，codec 的部署注册仍由 Runtime/Worker 配置负责。以下类型不再作为顶层入门 API：
+顶层 `pygent` 只承诺日常定义和执行所需的 Application API：`Module`、`Agent`、Message/Context 值、用于声明受约束 AgentContext 的 `ContextCodec`、内置 Agent/LLM/Tool Module，以及构造这些 Module 所需的高层不可变配置。普通 Agent 通过 `context_type` 声明 Context，Runtime 在 bind 阶段自动派生 codec；`ContextCodec` 与显式 Runtime/Worker codec 配置保留为高级扩展入口。当前实现状态见 [验收矩阵](runtime/ACCEPTANCE.md)。以下类型不再作为顶层入门 API：
 
 - `Binding`、`BoundModule`、`ExecutionOptions`、`ExecutionEvent` 与 Runtime 接口从 `pygent.runtime` 导入；
 - `ExecutionPlan`、`ModuleSpec`、`CodeArtifactSpec`、schema version 与计划校验异常从 `pygent.runtime.plan` 导入；

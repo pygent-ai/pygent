@@ -350,7 +350,10 @@ class HTTPRemoteModuleTarget:
                 "registered remote target placement differs from the "
                 "RemoteModule declaration; compile a new caller ExecutionPlan"
             )
-        registry = ContextCodecRegistry(self.context_codecs)
+        context_codecs = self.context_codecs
+        if not context_codecs and type(context) is not Context:
+            context_codecs = (ContextCodec.dataclass(type(context)),)
+        registry = ContextCodecRegistry(context_codecs)
         payload = invocation_to_dict(message, context, registry=registry)
         request_id = child_execution_id or str(uuid4())
         logical_key = idempotency_key or (

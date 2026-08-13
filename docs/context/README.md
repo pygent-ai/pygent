@@ -51,7 +51,7 @@ Context 只负责保存工具可见性。执行某个工具是否被允许，必
 
 用户 Context 子类是受约束的 portable value，而不是任意 Python 扩展点：必须是 frozen/slots dataclass，声明稳定 `context_schema` 和正整数 `context_schema_version`，全部实例字段都可由严格 JSON 编码。框架的 `replace()`、消息追加、Child、wire 和 checkpoint 必须保留具体类型与全部字段；未知或不兼容 schema 必须在 admission、发送或恢复前失败。
 
-具体字段协议由 `ContextCodec.dataclass()` 规范生成。可能进入 managed history、Worker 或 checkpoint 的 Runtime 必须显式注册允许的 codec；通用 Message/Context wire schema 只提供带 discriminator 的信封，不会抹平用户字段。完整注册和部署规则见 [Context SDK](SDK.md#schema-与-codec-注册)。
+具体字段协议由 `ContextCodec.dataclass()` 规范生成。Agent 通过 `context_type` 显式声明 Context 类型后，`LocalRuntime.bind()` 在编译阶段自动派生并注册 codec；自定义 codec、非 Agent Root 和部署控制面仍可使用低层显式注册。通用 Message/Context wire schema 只提供带 discriminator 的信封，不会抹平用户字段。完整注册和部署规则见 [Context SDK](SDK.md#schema-与-codec-注册)。
 
 用户可以重载 `__add__()`，使继承的 `context += message` 在重新绑定新值时同步演进自定义状态；也可以定义返回新值的 `__iadd__()`。两者都不得原地修改 frozen Context，且必须保持基础 Message/slot、portable 和无隐藏 I/O 契约。普通子类无需重载：基础 `__add__()` 已保留具体 Context 类型和全部字段。
 

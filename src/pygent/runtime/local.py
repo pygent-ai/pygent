@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, TypeVar
 
-from pygent.core import CapacityPermit, JsonValue, Message, Module
+from pygent.core import Agent, CapacityPermit, Context, JsonValue, Message, Module
 from pygent.core._module_contracts import _capacity_permit
 from pygent.llm import (
     ModelDeploymentUnavailableError,
@@ -58,7 +58,7 @@ from .api import (
     RuntimeClosedError,
 )
 from .compiler import compile_execution_plan
-from .context_codec import ContextCodec, ContextCodecRegistry
+from .context_codec import ContextCodec, ContextCodecError, ContextCodecRegistry
 from .model_deployment import InMemoryModelDeploymentStore, ModelDeploymentStore
 from .plan import CodeArtifactSpec, ExecutionPlan
 
@@ -366,16 +366,36 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
             )
         return gate
 
-    def _compile_plan(self, module: Module[Any, Any]) -> ExecutionPlan:
+    def _context_codecs_for(self, module: Module[Any, Any]) -> tuple[ContextCodec, ...]:
+        context_type = getattr(module, "context_type", None)
+        if not isinstance(module, Agent) or context_type is None:
+            return self.context_codec_registry.codecs
+        if not isinstance(context_type, type) or not issubclass(context_type, Context):
+            raise ContextCodecError("Agent.context_type must be a Context subclass")
+        try:
+            codec = self.context_codec_registry.for_type(context_type)
+        except ContextCodecError:
+            codec = ContextCodec.dataclass(context_type)
+        return (codec,)
+
+    def _compile_plan(
+        self,
+        module: Module[Any, Any],
+        *,
+        context_codec_identities: tuple[tuple[str, int, str, str], ...] | None = None,
+    ) -> ExecutionPlan:
+        identities = (
+            tuple(codec.identity for codec in self._context_codecs_for(module))
+            if context_codec_identities is None
+            else context_codec_identities
+        )
         return compile_execution_plan(
             module,
             artifact=self.code_artifact,
             input_schema=self.input_schema,
             output_schema=self.output_schema,
             serializer=self.serializer,
-            context_codecs=tuple(
-                codec.identity for codec in self.context_codec_registry.codecs
-            ),
+            context_codecs=identities,
         )
 
     def bind(
@@ -463,7 +483,26 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
                 "Binding cannot satisfy required durability eligibility: "
                 + "; ".join(gaps)
             )
+        pending_context_codecs: list[ContextCodec] = []
+        for identity in plan.context_codecs:
+            try:
+                self.context_codec_registry.for_identity(identity)
+            except ContextCodecError:
+                context_type = getattr(module, "context_type", None)
+                if not isinstance(context_type, type) or not issubclass(
+                    context_type, Context
+                ):
+                    raise
+                codec = ContextCodec.dataclass(context_type)
+                if codec.identity != identity:
+                    raise ContextCodecError(
+                        "Agent Context codec changed during binding"
+                    )
+                self.context_codec_registry._validate_registration(codec)
+                pending_context_codecs.append(codec)
         binding_state = self._state_for(binding)
+        for codec in pending_context_codecs:
+            self.context_codec_registry._register(codec)
         return _LocalBoundModule(
             self,
             module,

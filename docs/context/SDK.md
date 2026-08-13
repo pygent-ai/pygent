@@ -74,15 +74,20 @@ assert agent_context_codec.version == 1
 
 生成过程必须包含基础 Context 字段和全部用户实例字段，并拒绝未支持的 annotation、可变默认值、非 portable 字段、重复 schema/version 和递归不封闭的类型。相同 `(schema, version)` 只能对应一个规范 schema 与 codec digest；同名同版本但字段结构或 codec 不同必须 fail closed，不能以后注册者覆盖。
 
-普通 direct execution 不经过序列化，可以从实际 AgentContext 类使用同一 dataclass validator 校验输入和返回值，不要求进程全局注册。任何可能经过 managed history、Worker、checkpoint 或恢复边界的部署都必须显式注册 codec：
+普通 direct execution 不经过序列化，可以从实际 AgentContext 类使用同一 dataclass validator 校验输入和返回值，不要求进程全局注册。普通 Agent 在类上显式声明 `context_type` 后，`LocalRuntime.bind()` 会在编译阶段生成并注册 dataclass codec，并把精确 identity 固化到该 Binding 的 ExecutionPlan：
 
 ```python
-runtime = LocalRuntime(
-    context_codecs=(agent_context_codec,),
-)
+class MyAgent(Agent[UserMessage, AIMessage]):
+    context_type = AgentContext
+
+
+runtime = LocalRuntime()
+bound = runtime.bind(MyAgent())
 ```
 
-注册表属于 Runtime/Worker 部署，不是全局可变 registry，也不进入 Context。`ContextCodec` 中的 Python constructor 只用于当前已验证代码制品内的本地重建；wire 上只出现 schema、version、规范 codec 名、codec digest 与严格 JSON data。基础 `Context` 使用 Pygent 内置 codec，无需应用注册。
+`context_type` 只从 Root `Agent` 的显式类声明读取；框架不从 `forward()` 注解猜测，也不在第一次请求到达时学习类型。相同 Runtime 绑定多个 Agent 时，每个 ExecutionPlan 只允许该 Agent 声明的 Context codec，绑定顺序不改变 plan identity。非法类型、同 schema/version 不同结构以及跨 Binding Context 混用都在 `forward()` 前 fail closed。
+
+`ContextCodec.dataclass()` 与 `LocalRuntime(context_codecs=(...))` 继续作为高级 API，供自定义 codec、非 Agent Root 或部署控制面显式装配使用。注册表属于 Runtime/Worker 部署，不是进程全局 registry，也不进入 Context。`ContextCodec` 中的 Python constructor 只用于当前已验证代码制品内的本地重建；wire 上只出现 schema、version、规范 codec 名、codec digest 与严格 JSON data。基础 `Context` 使用 Pygent 内置 codec，无需应用注册。
 
 `message-context-input@0.3` 与 `message-context-output@0.3` 是稳定的通用信封 schema，不等同于某个具体 AgentContext schema。其 Context 部分固定携带 discriminator：
 
@@ -183,7 +188,9 @@ tool_info, context = await self.state_module(message, context)
 ## 在 Agent 中使用
 
 ```python
-class MyAgent(Module[UserMessage, AIMessage]):
+class MyAgent(Agent[UserMessage, AIMessage]):
+    context_type = AgentContext
+
     def __init__(self, state_module: StateModule, react: ReActLayer):
         super().__init__()
         self.state_module = state_module

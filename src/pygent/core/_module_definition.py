@@ -276,6 +276,17 @@ class Module(Generic[InputMessageT, OutputMessageT]):
                 "start() cannot create a Root inside an execution scope; "
                 "call the Module directly to create a Child"
             )
+        context_type = getattr(self, "context_type", None)
+        if context_type is not None:
+            if not isinstance(context_type, type) or not issubclass(
+                context_type, Context
+            ):
+                raise TypeError("Agent.context_type must be a Context subclass")
+            if type(context) is not context_type:
+                raise TypeError(
+                    f"{type(self).__name__} requires Context type "
+                    f"{context_type.__name__}"
+                )
         self._freeze_definition()
         options = execution or ExecutionOptions()
         if options.model_calls:
@@ -405,3 +416,5 @@ class Agent(
     Generic[InputMessageT, OutputMessageT],
 ):
     """Optional semantic name with exactly the same contract as Module."""
+
+    context_type: type[Context] | None = None
