@@ -415,39 +415,8 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                 )
                 return outcome.value
 
-            effect = thaw_json(await execute_effect())
-            if not isinstance(effect, Mapping):
-                raise TypeError("replayed tool effect must be a JSON object")
-            task_id = effect.get("task_id")
-            if not isinstance(task_id, str) or not task_id:
-                raise TypeError("replayed tool effect task_id must be non-empty")
-            task = replace(task, task_id=task_id)
-            if effect.get("outcome") == "failed":
-                raw_result = effect.get("result")
-                if not isinstance(raw_result, Mapping):
-                    raise TypeError("replayed tool failure must be a JSON object")
-                return _result_from_effect(raw_result, spec, call, task)
-            if effect.get("outcome") != "succeeded":
-                raise TypeError("replayed tool effect has an invalid outcome")
-            output = freeze_json(effect.get("output"))
-            if spec.definition.output_schema is not None:
-                Draft202012Validator(
-                    cast(
-                        dict[str, Any],
-                        thaw_json(
-                            cast(FrozenJsonObject, spec.definition.output_schema)
-                        ),
-                    )
-                ).validate(thaw_json(output))
-            return ToolResult(
-                call_id=call.call_id,
-                name=call.name,
-                status="succeeded",
-                task=replace(task, state=ToolTaskState.SUCCEEDED),
-                output=freeze_json(output),
-                side_effect_committed=True,
-                tool_id=spec.tool_id,
-                tool_version=spec.version,
+            return _result_from_replayed_effect(
+                thaw_json(await execute_effect()), spec, call, task
             )
         except ValidationError as exc:
             return ToolResult(
@@ -573,6 +542,42 @@ def _result_effect_value(result: ToolResult) -> dict[str, object]:
         "side_effect_committed": result.side_effect_committed,
         "missing_capabilities": list(result.missing_capabilities),
     }
+
+
+def _result_from_replayed_effect(
+    effect: object, spec: ToolSpec, call: ToolCall, task: ToolTask
+) -> ToolResult:
+    if not isinstance(effect, Mapping):
+        raise TypeError("replayed tool effect must be a JSON object")
+    task_id = effect.get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        raise TypeError("replayed tool effect task_id must be non-empty")
+    task = replace(task, task_id=task_id)
+    if effect.get("outcome") == "failed":
+        raw_result = effect.get("result")
+        if not isinstance(raw_result, Mapping):
+            raise TypeError("replayed tool failure must be a JSON object")
+        return _result_from_effect(raw_result, spec, call, task)
+    if effect.get("outcome") != "succeeded":
+        raise TypeError("replayed tool effect has an invalid outcome")
+    output = freeze_json(effect.get("output"))
+    if spec.definition.output_schema is not None:
+        Draft202012Validator(
+            cast(
+                dict[str, Any],
+                thaw_json(cast(FrozenJsonObject, spec.definition.output_schema)),
+            )
+        ).validate(thaw_json(output))
+    return ToolResult(
+        call_id=call.call_id,
+        name=call.name,
+        status="succeeded",
+        task=replace(task, state=ToolTaskState.SUCCEEDED),
+        output=freeze_json(output),
+        side_effect_committed=True,
+        tool_id=spec.tool_id,
+        tool_version=spec.version,
+    )
 
 
 def _result_from_effect(

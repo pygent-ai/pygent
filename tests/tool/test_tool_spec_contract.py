@@ -1,4 +1,4 @@
-"""Portable ToolSpec and result-safety contracts."""
+"""Portable ToolSpec and result-safety contracts owned by Tool."""
 
 import pytest
 

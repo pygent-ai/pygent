@@ -1,4 +1,4 @@
-"""Strict immutable JSON value contract."""
+"""Strict immutable JSON value contract owned by Core."""
 
 import math
 

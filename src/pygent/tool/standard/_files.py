@@ -21,6 +21,12 @@ from pygent.tool.executors import ToolExecutionError
 from pygent.tool.functional import tool
 from pygent.tool.types import IdempotencyPolicy, ToolSideEffect
 
+from ._file_services import (
+    FileDiagnosticsService,
+    FileIOService,
+    FileSearchService,
+    NotebookService,
+)
 from ._paths import (
     ToolPathContext,
     is_absolute_tool_path,
@@ -418,6 +424,20 @@ class FileTools:
         self.max_read_bytes = max_read_bytes
         self.max_search_files = max_search_files
         self._mutation_locks = tuple(threading.Lock() for _ in range(64))
+        self._io_service = FileIOService(
+            lambda *args: self._read(*args),
+            lambda *args: self._write(*args),
+            lambda *args: self._edit(*args),
+        )
+        self._notebook_service = NotebookService(
+            lambda *args: self._edit_notebook(*args)
+        )
+        self._diagnostics_service = FileDiagnosticsService(
+            lambda *args: self._read_lints(*args)
+        )
+        self._search_service = FileSearchService(
+            lambda *args: self._glob(*args), lambda *args: self._grep(*args)
+        )
 
     def _mutation_lock(self, path: Path) -> threading.Lock:
         return self._mutation_locks[hash(path) % len(self._mutation_locks)]
@@ -459,7 +479,9 @@ class FileTools:
     ) -> str:
         """Read text ranges, optional PDF pages, or a bounded binary description."""
 
-        return await _run_owned_thread(self._read, file_path, limit, offset, pages)
+        return await _run_owned_thread(
+            self._io_service.read, file_path, limit, offset, pages
+        )
 
     def _read(
         self, file_path: str, limit: int | None, offset: int | None, pages: str | None
@@ -519,7 +541,7 @@ class FileTools:
     ) -> str:
         """Replace a UTF-8 file atomically enough for a single local process."""
 
-        return await _run_owned_thread(self._write, file_path, content)
+        return await _run_owned_thread(self._io_service.write, file_path, content)
 
     def _write(self, file_path: str, content: str) -> str:
         path = resolve_file_path(file_path, self.path_context)
@@ -564,7 +586,7 @@ class FileTools:
         """Replace exact text once, or all occurrences when explicitly requested."""
 
         return await _run_owned_thread(
-            self._edit, file_path, old_string, new_string, replace_all
+            self._io_service.edit, file_path, old_string, new_string, replace_all
         )
 
     def _edit(
@@ -618,7 +640,7 @@ class FileTools:
         """Insert or edit one Jupyter notebook cell."""
 
         return await _run_owned_thread(
-            self._edit_notebook,
+            self._notebook_service.edit,
             target_notebook,
             cell_idx,
             is_new_cell,
@@ -724,7 +746,7 @@ class FileTools:
     async def read_lints(self, paths: list[str] | None = None) -> str:
         """Return bounded Python syntax diagnostics for files or directories."""
 
-        return await _run_owned_thread(self._read_lints, paths)
+        return await _run_owned_thread(self._diagnostics_service.read_lints, paths)
 
     def _read_lints(self, paths: list[str] | None) -> str:
         requested = paths or ["."]
@@ -791,7 +813,7 @@ class FileTools:
     ) -> str:
         """Search for files by glob pattern while respecting ignore files."""
 
-        return await self._glob(pattern, path, limit)
+        return await self._search_service.glob(pattern, path, limit)
 
     async def _glob(self, pattern: str, path: str | None, limit: int) -> str:
         root = resolve_dir_path(path, self.path_context)
@@ -972,7 +994,9 @@ class FileTools:
     ) -> str:
         """Search file contents with ripgrep while respecting ignore files."""
 
-        return await self._grep(pattern, path, glob, ignoreCase, literal, context, limit)
+        return await self._search_service.grep(
+            pattern, path, glob, ignoreCase, literal, context, limit
+        )
 
     async def _grep(
         self,

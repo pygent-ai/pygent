@@ -4,18 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass, replace
 from types import NotImplementedType
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
+from ._tool_values import ToolCall, ToolDefinition, ToolResult
 from .json_values import (
     FrozenJsonObject,
     JsonObjectInput,
     freeze_json,
     freeze_json_object,
 )
-
-if TYPE_CHECKING:
-    from pygent.tool.types import ToolCall, ToolDefinition, ToolResult
-
 
 _MESSAGE_SUBCLASS_TOKEN = object()
 _PENDING_MESSAGE_TYPES: set[tuple[str, str]] = set()
@@ -88,8 +85,6 @@ class AIMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
 
     def __post_init__(self) -> None:
         Message.__post_init__(self)
-        from pygent.tool.types import ToolCall
-
         tool_calls = tuple(self.tool_calls)
         if any(type(call) is not ToolCall for call in tool_calls):
             raise TypeError("AIMessage.tool_calls must contain only ToolCall values")
@@ -105,8 +100,6 @@ class ToolMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
 
     def __post_init__(self) -> None:
         Message.__post_init__(self)
-        from pygent.tool.types import ToolResult
-
         results = tuple(self.results)
         if any(type(result) is not ToolResult for result in results):
             raise TypeError("ToolMessage.results must contain only ToolResult values")
@@ -142,8 +135,6 @@ class Context:
             )
 
     def __post_init__(self) -> None:
-        from pygent.tool.types import ToolDefinition
-
         if not isinstance(self.system_prompt, str):
             raise TypeError("context system_prompt must be a string")
         messages = tuple(self.messages)
@@ -187,8 +178,6 @@ def _validate_context_extension(value: Context) -> None:
 
 
 def _validate_portable_context_value(value: object, active: set[int]) -> None:
-    from pygent.tool.types import ToolDefinition
-
     if value is None or isinstance(value, (str, bool, int)):
         return
     if isinstance(value, float):

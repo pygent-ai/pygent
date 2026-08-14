@@ -2,19 +2,24 @@
 .idea/
 .venv/
 .venv_smoke/
+.venv-release-*/
 
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
 coverage.xml
 htmlcov/
 .benchmarks/
+.release-artifacts-*/
 
 build/
 dist/
 target/
 *.egg-info/
+/pygent/
 src/pygent/_native.pyd
 src/pygent/_native.pdb
 

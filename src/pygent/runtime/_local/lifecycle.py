@@ -243,6 +243,172 @@ class _LifecycleMixin:
             )
         return admission
 
+    async def _establish_execution_claim(
+        self,
+        record: _ExecutionRecord,
+        bound: _LocalBoundModule[Any, Any],
+        options: ExecutionOptions,
+        invocation: Mapping[str, JsonValue],
+        has_deferred_models: bool,
+    ) -> asyncio.Task[None] | None:
+        if record.history is not None and not record.history_started:
+            stored, created = await self._await_with_deadline(
+                record,
+                record.history.begin_execution(
+                    execution_id=record.execution_id,
+                    request_id=record.request_id,
+                    plan_id=bound.plan.plan_id,
+                    input=invocation,
+                    binding_id=bound.binding.name,
+                    identity=options.identity or "",
+                    idempotency_key=options.idempotency_key,
+                    model_calls=options.model_calls,
+                    model_admission_status=(
+                        "preparing" if has_deferred_models else "none"
+                    ),
+                    trace_id=record.trace_id,
+                    phase=ExecutionPhase.PREPARING.value,
+                    attempt_id=record.attempt_id,
+                ),
+            )
+            if not created:
+                raise ExecutionAdmissionError(
+                    f"execution {stored.execution_id!r} already exists; attach to it"
+                )
+            record.history_started = True
+            record.owner_id = f"{self._recovery_owner_id}:{record.attempt_id}"
+            record.fencing_token = await self._await_with_deadline(
+                record,
+                record.history.claim_execution(
+                    execution_id=record.execution_id,
+                    owner_id=record.owner_id,
+                    lease_ttl=self._recovery_lease_ttl,
+                ),
+            )
+            if record.fencing_token is None:
+                raise ExecutionAdmissionError("execution already has an active owner")
+        if record.history is None or record.fencing_token is None:
+            return None
+        claim_history = record.history
+        owner_task = asyncio.current_task()
+
+        async def heartbeat() -> None:
+            while True:
+                await asyncio.sleep(self._recovery_lease_ttl / 3)
+                renewed = await claim_history.renew_execution_claim(
+                    execution_id=record.execution_id,
+                    owner_id=cast(str, record.owner_id),
+                    fencing_token=cast(int, record.fencing_token),
+                    lease_ttl=self._recovery_lease_ttl,
+                )
+                if not renewed:
+                    if owner_task is not None:
+                        owner_task.cancel()
+                    return
+
+        return asyncio.create_task(
+            heartbeat(), name=f"pygent-execution-claim-{record.execution_id}"
+        )
+
+    async def _prepare_root_admission(
+        self,
+        record: _ExecutionRecord,
+        bound: _LocalBoundModule[Any, Any],
+        options: ExecutionOptions,
+        admission: AdmissionCoordinator,
+    ) -> None:
+        await record.emit(
+            parent_execution_id=record.parent_execution_id,
+            module_path=record.plan.root,
+            kind="execution.submitted",
+            data={"request_id": record.request_id, "plan_id": record.plan.plan_id},
+        )
+        record.model_admission = await self._await_with_deadline(
+            record,
+            self._prepare_model_admission(
+                bound, options, admission_id=record.execution_id
+            ),
+        )
+        if record.history is not None and record.model_admission is not None:
+            await self._await_with_deadline(
+                record,
+                record.history.commit_model_admission(
+                    record.execution_id,
+                    admission_id=record.model_admission.admission_id,
+                    manifest_digest=record.model_admission.digest,
+                ),
+            )
+            admission.mark_model_manifest_committed()
+
+    async def _admit_root(
+        self, record: _ExecutionRecord, admission: AdmissionCoordinator
+    ) -> None:
+        record.phase = ExecutionPhase.WAITING_ADMISSION
+        await self._await_with_deadline(record, record.binding_state.admit())
+        admission.mark_live()
+        await self._await_with_deadline(record, record.binding_state.runnable.acquire())
+        record.runnable_held = True
+        admission.mark_runnable()
+        record.status = ExecutionStatus.RUNNING
+        record.phase = ExecutionPhase.STARTING
+        if record.history is not None:
+            await self._await_with_deadline(
+                record,
+                record.history.update_execution(
+                    record.execution_id,
+                    status=ExecutionStatus.RUNNING.value,
+                    phase=ExecutionPhase.STARTING.value,
+                ),
+            )
+        for kind, data in (
+            ("execution.admitted", {"attempt_id": record.attempt_id}),
+            (
+                "execution.started",
+                {"request_id": record.request_id, "plan_id": record.plan.plan_id},
+            ),
+            ("span.started", {}),
+        ):
+            await record.emit(
+                parent_execution_id=record.parent_execution_id,
+                module_path=record.plan.root,
+                kind=kind,
+                data=data,
+            )
+        record.phase = ExecutionPhase.RUNNING
+
+    async def _invoke_root_module(
+        self,
+        record: _ExecutionRecord,
+        bound: _LocalBoundModule[Any, Any],
+        message: Message,
+        context: Context,
+    ) -> tuple[Message, Context]:
+        scope = _ManagedScope(self, record)
+        token = _execution_scope.set(scope)
+        root_frame = _ExecutionFrame(
+            execution_id=record.execution_id,
+            parent_execution_id=record.parent_execution_id,
+            span_id=record.root_span_id,
+            parent_span_id=record.parent_span_id,
+            module_path=record.plan.root,
+            module_occurrence=scope._next_module_occurrence(record.plan.root),
+            runtime=self,
+            binding_state=record.binding_state,
+            deadline=record.deadline,
+            runnable_held=True,
+            model_calls=record.model_calls,
+            model_admission=record.model_admission,
+        )
+        frame_token = _execution_frame.set(root_frame)
+        try:
+            return await self._await_with_deadline(
+                record, scope.invoke_module(bound.module, message, context)
+            )
+        finally:
+            record.runnable_held = root_frame.runnable_held
+            _execution_frame.reset(frame_token)
+            _execution_scope.reset(token)
+
     async def _run_root(
         self,
         record: _ExecutionRecord,
@@ -270,151 +436,17 @@ class _LifecycleMixin:
         )
         try:
             record.phase = ExecutionPhase.PREPARING
-            if record.history is not None and not prepared:
-                stored, created = await self._await_with_deadline(
-                    record,
-                    record.history.begin_execution(
-                        execution_id=record.execution_id,
-                        request_id=record.request_id,
-                        plan_id=bound.plan.plan_id,
-                        input=invocation,
-                        binding_id=bound.binding.name,
-                        identity=options.identity or "",
-                        idempotency_key=options.idempotency_key,
-                        model_calls=options.model_calls,
-                        model_admission_status=(
-                            "preparing" if has_deferred_models else "none"
-                        ),
-                        trace_id=record.trace_id,
-                        phase=ExecutionPhase.PREPARING.value,
-                        attempt_id=record.attempt_id,
-                    ),
-                )
-                if not created:
-                    raise ExecutionAdmissionError(
-                        f"execution {stored.execution_id!r} already exists; attach to it"
-                    )
-                record.history_started = True
-                record.owner_id = f"{self._recovery_owner_id}:{record.attempt_id}"
-                record.fencing_token = await self._await_with_deadline(
-                    record,
-                    record.history.claim_execution(
-                        execution_id=record.execution_id,
-                        owner_id=record.owner_id,
-                        lease_ttl=self._recovery_lease_ttl,
-                    ),
-                )
-                if record.fencing_token is None:
-                    raise ExecutionAdmissionError("execution already has an active owner")
-            if record.history is not None and record.fencing_token is not None:
-                claim_history = record.history
-                owner_task = asyncio.current_task()
-
-                async def heartbeat() -> None:
-                    while True:
-                        await asyncio.sleep(self._recovery_lease_ttl / 3)
-                        renewed = await claim_history.renew_execution_claim(
-                            execution_id=record.execution_id,
-                            owner_id=cast(str, record.owner_id),
-                            fencing_token=cast(int, record.fencing_token),
-                            lease_ttl=self._recovery_lease_ttl,
-                        )
-                        if not renewed:
-                            if owner_task is not None:
-                                owner_task.cancel()
-                            return
-
-                claim_heartbeat = asyncio.create_task(
-                    heartbeat(), name=f"pygent-execution-claim-{record.execution_id}"
+            if not prepared or record.history is not None and record.fencing_token is not None:
+                claim_heartbeat = await self._establish_execution_claim(
+                    record, bound, options, invocation, has_deferred_models
                 )
             if not prepared:
-                await record.emit(
-                    parent_execution_id=record.parent_execution_id,
-                    module_path=record.plan.root,
-                    kind="execution.submitted",
-                    data={"request_id": record.request_id, "plan_id": record.plan.plan_id},
-                )
-                record.model_admission = await self._await_with_deadline(
-                    record,
-                    self._prepare_model_admission(
-                        bound, options, admission_id=record.execution_id
-                    ),
-                )
-                if record.history is not None and record.model_admission is not None:
-                    await self._await_with_deadline(
-                        record,
-                        record.history.commit_model_admission(
-                            record.execution_id,
-                            admission_id=record.model_admission.admission_id,
-                            manifest_digest=record.model_admission.digest,
-                        ),
-                    )
-                    admission.mark_model_manifest_committed()
-            record.phase = ExecutionPhase.WAITING_ADMISSION
-            await self._await_with_deadline(record, record.binding_state.admit())
-            admission.mark_live()
-            await self._await_with_deadline(
-                record, record.binding_state.runnable.acquire()
-            )
-            record.runnable_held = True
-            admission.mark_runnable()
-            record.status = ExecutionStatus.RUNNING
-            record.phase = ExecutionPhase.STARTING
-            if record.history is not None:
-                await self._await_with_deadline(
-                    record,
-                    record.history.update_execution(
-                        record.execution_id,
-                        status=ExecutionStatus.RUNNING.value,
-                        phase=ExecutionPhase.STARTING.value,
-                    ),
-                )
-            await record.emit(
-                parent_execution_id=record.parent_execution_id,
-                module_path=record.plan.root,
-                kind="execution.admitted",
-                data={"attempt_id": record.attempt_id},
-            )
-            await record.emit(
-                parent_execution_id=record.parent_execution_id,
-                module_path=record.plan.root,
-                kind="execution.started",
-                data={"request_id": record.request_id, "plan_id": record.plan.plan_id},
-            )
-            await record.emit(
-                parent_execution_id=record.parent_execution_id,
-                module_path=record.plan.root,
-                kind="span.started",
-                data={},
-            )
+                await self._prepare_root_admission(record, bound, options, admission)
+            await self._admit_root(record, admission)
             span_started = True
-            record.phase = ExecutionPhase.RUNNING
-            scope = _ManagedScope(self, record)
-            token = _execution_scope.set(scope)
-            root_frame = _ExecutionFrame(
-                execution_id=record.execution_id,
-                parent_execution_id=record.parent_execution_id,
-                span_id=record.root_span_id,
-                parent_span_id=record.parent_span_id,
-                module_path=record.plan.root,
-                module_occurrence=scope._next_module_occurrence(record.plan.root),
-                runtime=self,
-                binding_state=record.binding_state,
-                deadline=record.deadline,
-                runnable_held=True,
-                model_calls=record.model_calls,
-                model_admission=record.model_admission,
+            output, next_context = await self._invoke_root_module(
+                record, bound, message, context
             )
-            frame_token = _execution_frame.set(root_frame)
-            try:
-                result = await self._await_with_deadline(
-                    record, scope.invoke_module(bound.module, message, context)
-                )
-            finally:
-                record.runnable_held = root_frame.runnable_held
-                _execution_frame.reset(frame_token)
-                _execution_scope.reset(token)
-            output, next_context = result
             if not isinstance(output, Message) or not isinstance(next_context, Context):
                 raise TypeError("Module.forward() must return (Message, Context)")
             validate_context(next_context)

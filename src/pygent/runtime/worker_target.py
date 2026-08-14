@@ -37,14 +37,10 @@ from .context_codec import ContextCodec, ContextCodecRegistry
 from .worker_client import HTTPWorkerClient
 
 
-def bound_module_worker_handler(
-    bindings: Mapping[str, BoundModule[Any, Any]],
-    *,
-    artifact_resolver: WorkerArtifactResolver | None = None,
-) -> WorkerHandler:
-    """Adapt declared BoundModules to the portable HTTP Worker payload."""
-
-    declared = dict(bindings)
+def _validate_worker_bindings(
+    declared: Mapping[str, BoundModule[Any, Any]],
+    artifact_resolver: WorkerArtifactResolver | None,
+) -> None:
     for binding_ref, bound in declared.items():
         plan = getattr(bound, "plan", None)
         if plan is None or not plan.is_portable:
@@ -54,15 +50,11 @@ def bound_module_worker_handler(
                 "artifact, entrypoint, schemas, and serializer"
             )
         if artifact_resolver is None or plan.artifact is None:
-            raise WorkerProtocolError(
-                "HTTP Worker requires a deployment artifact resolver"
-            )
+            raise WorkerProtocolError("HTTP Worker requires a deployment artifact resolver")
         manifest = artifact_resolver(plan.artifact)
         if not isinstance(manifest, WorkerDeploymentManifest):
             raise WorkerProtocolError("artifact resolver returned an invalid manifest")
-        entrypoint_name = (
-            f"{manifest.entrypoint.__module__}:{manifest.entrypoint.__qualname__}"
-        )
+        entrypoint_name = f"{manifest.entrypoint.__module__}:{manifest.entrypoint.__qualname__}"
         root_spec = next(spec for spec in plan.modules if spec.path == plan.root)
         if (
             manifest.artifact != plan.artifact
@@ -77,124 +69,168 @@ def bound_module_worker_handler(
                 f"Worker deployment manifest does not verify {binding_ref!r}"
             )
 
+
+def _resolve_worker_binding(
+    declared: Mapping[str, BoundModule[Any, Any]], request: WorkerInvocation
+) -> BoundModule[Any, Any]:
+    try:
+        bound = declared[request.binding_ref]
+    except KeyError as exc:
+        raise WorkerRemoteError(
+            _worker_failure(
+                "binding_not_found",
+                f"undeclared Worker binding_ref {request.binding_ref!r}",
+            )
+        ) from exc
+    plan = getattr(bound, "plan", None)
+    if plan is None:
+        raise WorkerRemoteError(
+            _worker_failure(
+                "invalid_execution_plan",
+                f"Worker binding {request.binding_ref!r} has no ExecutionPlan",
+            )
+        )
+    if request.plan_id != plan.plan_id or request.graph_hash != plan.graph_hash:
+        raise WorkerRemoteError(
+            _worker_failure(
+                "invalid_execution_plan",
+                "remote ExecutionPlan identity does not match the declared "
+                f"Worker binding {request.binding_ref!r}",
+            )
+        )
+    return bound
+
+
+async def _validate_worker_model_admission(
+    bound: BoundModule[Any, Any], request: WorkerInvocation
+) -> None:
+    plan = cast(Any, bound).plan
+    if not any(spec.model_requirements for spec in plan.modules):
+        return
+    if "model.deferred.exact-pin.v1" not in request.required_capabilities:
+        raise WorkerRemoteError(
+            _worker_failure(
+                "capability_mismatch",
+                "dynamic model execution requires model.deferred.exact-pin.v1",
+            )
+        )
+    if request.model_admission_ref != request.request_id:
+        raise WorkerRemoteError(
+            _worker_failure(
+                "invalid_model_admission",
+                "dynamic model admission reference must equal the stable request identity",
+            )
+        )
+    runtime = getattr(bound, "runtime", None)
+    scope_id = getattr(bound, "deployment_scope_id", None)
+    store = getattr(runtime, "model_deployment_store", None)
+    ensure_open = getattr(runtime, "_ensure_model_store_open", None)
+    resolvers = getattr(runtime, "_model_resource_resolvers", None)
+    if (
+        not isinstance(scope_id, str)
+        or store is None
+        or not callable(ensure_open)
+        or not isinstance(resolvers, dict)
+    ):
+        raise WorkerRemoteError(
+            _worker_failure(
+                "model_deployment_unavailable",
+                "Worker cannot validate an exact model deployment manifest",
+            )
+        )
+    store_namespace = getattr(store, "namespace_id", None)
+    if not isinstance(store_namespace, str) or request.model_store_namespace != store_namespace:
+        raise WorkerRemoteError(
+            _worker_failure(
+                "model_store_namespace_mismatch",
+                "Worker model deployment store namespace does not match the coordinator",
+            )
+        )
+    requirements = tuple(
+        sorted(
+            {
+                requirement.group_name
+                for spec in plan.modules
+                for requirement in spec.model_requirements
+            }
+        )
+    )
+    selections: dict[str, str | None] = {}
+    for group_name in requirements:
+        raw = request.model_calls.get(group_name)
+        options = (
+            ModelCallOptions()
+            if raw is None
+            else ModelCallOptions.from_dict(cast(Mapping[str, object], raw))
+        )
+        selections[group_name] = options.profile
+    await ensure_open()
+    admission = await store.admit(
+        scope_id,
+        requirements,
+        selections,
+        admission_id=request.model_admission_ref,
+    )
+    for _, snapshot in admission.snapshots:
+        resources = snapshot.resources
+        if resources is None or resources.resolver_id not in resolvers:
+            raise WorkerRemoteError(
+                _worker_failure(
+                    "model_deployment_unavailable",
+                    "Worker cannot reconstruct the exact model deployment",
+                )
+            )
+        resolver = resolvers[resources.resolver_id]
+        resolver_domain = getattr(resolver, "coordinator_domain", None)
+        if resolver_domain is not None and resolver_domain != resources.coordinator_domain:
+            raise WorkerRemoteError(
+                _worker_failure(
+                    "model_capacity_domain_mismatch",
+                    "Worker model resolver uses a different capacity domain",
+                )
+            )
+
+
+async def _relay_worker_execution(
+    handle: Any, event_sink: WorkerEventSink
+) -> tuple[Message, Context]:
+    async def relay() -> None:
+        async with handle.subscribe() as events:
+            async for event in events:
+                await event_sink(event)
+
+    relay_task = asyncio.create_task(relay(), name="pygent-worker-event-relay")
+    try:
+        result = await handle.result()
+    except asyncio.CancelledError:
+        await handle.cancel()
+        relay_task.cancel()
+        await asyncio.gather(relay_task, return_exceptions=True)
+        raise
+    except BaseException:
+        relay_task.cancel()
+        await asyncio.gather(relay_task, return_exceptions=True)
+        raise
+    else:
+        await relay_task
+    return cast(tuple[Message, Context], result)
+
+
+def bound_module_worker_handler(
+    bindings: Mapping[str, BoundModule[Any, Any]],
+    *,
+    artifact_resolver: WorkerArtifactResolver | None = None,
+) -> WorkerHandler:
+    """Adapt declared BoundModules to the portable HTTP Worker payload."""
+
+    declared = dict(bindings)
+    _validate_worker_bindings(declared, artifact_resolver)
+
     async def invoke(
         request: WorkerInvocation, event_sink: WorkerEventSink
     ) -> JsonValue:
-        try:
-            bound = declared[request.binding_ref]
-        except KeyError as exc:
-            raise WorkerRemoteError(
-                _worker_failure(
-                    "binding_not_found",
-                    f"undeclared Worker binding_ref {request.binding_ref!r}",
-                )
-            ) from exc
-        plan = getattr(bound, "plan", None)
-        if plan is None:
-            raise WorkerRemoteError(
-                _worker_failure(
-                    "invalid_execution_plan",
-                    f"Worker binding {request.binding_ref!r} has no ExecutionPlan",
-                )
-            )
-        if request.plan_id != plan.plan_id or request.graph_hash != plan.graph_hash:
-            raise WorkerRemoteError(
-                _worker_failure(
-                    "invalid_execution_plan",
-                    "remote ExecutionPlan identity does not match the declared "
-                    f"Worker binding {request.binding_ref!r}",
-                )
-            )
-        has_deferred_models = any(spec.model_requirements for spec in plan.modules)
-        if has_deferred_models:
-            if "model.deferred.exact-pin.v1" not in request.required_capabilities:
-                raise WorkerRemoteError(
-                    _worker_failure(
-                        "capability_mismatch",
-                        "dynamic model execution requires model.deferred.exact-pin.v1",
-                    )
-                )
-            if request.model_admission_ref != request.request_id:
-                raise WorkerRemoteError(
-                    _worker_failure(
-                        "invalid_model_admission",
-                        "dynamic model admission reference must equal the stable request identity",
-                    )
-                )
-            runtime = getattr(bound, "runtime", None)
-            scope_id = getattr(bound, "deployment_scope_id", None)
-            store = getattr(runtime, "model_deployment_store", None)
-            ensure_open = getattr(runtime, "_ensure_model_store_open", None)
-            resolvers = getattr(runtime, "_model_resource_resolvers", None)
-            if (
-                not isinstance(scope_id, str)
-                or store is None
-                or not callable(ensure_open)
-                or not isinstance(resolvers, dict)
-            ):
-                raise WorkerRemoteError(
-                    _worker_failure(
-                        "model_deployment_unavailable",
-                        "Worker cannot validate an exact model deployment manifest",
-                    )
-                )
-            store_namespace = getattr(store, "namespace_id", None)
-            if (
-                not isinstance(store_namespace, str)
-                or request.model_store_namespace != store_namespace
-            ):
-                raise WorkerRemoteError(
-                    _worker_failure(
-                        "model_store_namespace_mismatch",
-                        "Worker model deployment store namespace does not match the coordinator",
-                    )
-                )
-            requirements = tuple(
-                sorted(
-                    {
-                        requirement.group_name
-                        for spec in plan.modules
-                        for requirement in spec.model_requirements
-                    }
-                )
-            )
-            selections: dict[str, str | None] = {}
-            for group_name in requirements:
-                raw = request.model_calls.get(group_name)
-                options = (
-                    ModelCallOptions()
-                    if raw is None
-                    else ModelCallOptions.from_dict(cast(Mapping[str, object], raw))
-                )
-                selections[group_name] = options.profile
-            await ensure_open()
-            admission = await store.admit(
-                scope_id,
-                requirements,
-                selections,
-                admission_id=request.model_admission_ref,
-            )
-            for _, snapshot in admission.snapshots:
-                resources = snapshot.resources
-                if resources is None or resources.resolver_id not in resolvers:
-                    raise WorkerRemoteError(
-                        _worker_failure(
-                            "model_deployment_unavailable",
-                            "Worker cannot reconstruct the exact model deployment",
-                        )
-                    )
-                resolver = resolvers[resources.resolver_id]
-                resolver_domain = getattr(resolver, "coordinator_domain", None)
-                if (
-                    resolver_domain is not None
-                    and resolver_domain != resources.coordinator_domain
-                ):
-                    raise WorkerRemoteError(
-                        _worker_failure(
-                            "model_capacity_domain_mismatch",
-                            "Worker model resolver uses a different capacity domain",
-                        )
-                    )
+        bound = _resolve_worker_binding(declared, request)
+        await _validate_worker_model_admission(bound, request)
         registry = cast(Any, bound).runtime.context_codec_registry
         message, context = invocation_from_dict(request.input, registry=registry)
         handle = await bound.start(
@@ -217,25 +253,7 @@ def bound_module_worker_handler(
             ),
         )
 
-        async def relay() -> None:
-            async with handle.subscribe() as events:
-                async for event in events:
-                    await event_sink(event)
-
-        relay_task = asyncio.create_task(relay(), name="pygent-worker-event-relay")
-        try:
-            output, next_context = await handle.result()
-        except asyncio.CancelledError:
-            await handle.cancel()
-            relay_task.cancel()
-            await asyncio.gather(relay_task, return_exceptions=True)
-            raise
-        except BaseException:
-            relay_task.cancel()
-            await asyncio.gather(relay_task, return_exceptions=True)
-            raise
-        else:
-            await relay_task
+        output, next_context = await _relay_worker_execution(handle, event_sink)
         return invocation_to_dict(output, next_context, registry=registry)
 
     dynamic_namespaces = {

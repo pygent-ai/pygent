@@ -62,6 +62,167 @@ def _resource_keys(module: Module[Any, Any]) -> tuple[str, ...]:
     return tuple(sorted(keys))
 
 
+def _discover_graph(
+    root: Module[Any, Any],
+) -> tuple[dict[str, object], dict[str, tuple[str, ...]]]:
+    """Discover canonical definition paths and their child edges."""
+
+    canonical: dict[int, str] = {id(root): "root"}
+    objects: dict[str, object] = {"root": root}
+    pending: deque[str] = deque(("root",))
+    child_edges: dict[str, tuple[str, ...]] = {}
+    while pending:
+        path = pending.popleft()
+        current = objects[path]
+        definition = (
+            current if isinstance(current, Module) else getattr(current, "module", None)
+        )
+        edges: list[str] = []
+        dependencies = definition.named_dependencies() if isinstance(definition, Module) else ()
+        for name, child in sorted(dependencies, key=lambda item: item[0]):
+            candidate = f"{path}.{name}"
+            child_path = canonical.get(id(child))
+            if child_path is None:
+                child_path = candidate
+                canonical[id(child)] = child_path
+                objects[child_path] = child
+                pending.append(child_path)
+            if child_path not in edges:
+                edges.append(child_path)
+        child_edges[path] = tuple(edges)
+    return objects, child_edges
+
+
+def _remote_module_spec(
+    path: str,
+    dependency: RemoteModule[Any, Any],
+    children: tuple[str, ...],
+    *,
+    input_schema: str | None,
+    output_schema: str | None,
+    serializer: str | None,
+) -> ModuleSpec:
+    requirements = dependency.required_capabilities
+    definition_id = (
+        f"remote:{dependency.binding_ref}"
+        if dependency.graph_hash is None
+        else f"remote:{dependency.binding_ref}@{dependency.graph_hash}"
+    )
+    encoded = json.dumps(
+        {
+            "binding_ref": dependency.binding_ref,
+            "plan_id": dependency.plan_id,
+            "graph_hash": dependency.graph_hash,
+            "required_capabilities": list(requirements),
+            "placement": dependency.placement.mode.value,
+            "pinned_target_id": dependency.placement.target_id,
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    placement_constraints = (
+        f"mode={dependency.placement.mode.value}",
+        *((f"target_id={dependency.placement.target_id}",) if dependency.placement.target_id is not None else ()),
+    )
+    metadata = tuple(
+        (key, value)
+        for key, value in (
+            ("binding_ref", dependency.binding_ref),
+            ("remote_plan_id", dependency.plan_id),
+            ("remote_graph_hash", dependency.graph_hash),
+            ("recovery_safety", "undeclared"),
+            ("effect_safety", "undeclared"),
+        )
+        if value is not None
+    )
+    return ModuleSpec(
+        path=path,
+        type_name="RemoteModule",
+        children=children,
+        definition_id=definition_id,
+        config_ref=f"sha256:{hashlib.sha256(encoded).hexdigest()}",
+        resource_keys=(),
+        placement_constraints=placement_constraints,
+        required_capabilities=requirements,
+        input_schema=input_schema,
+        output_schema=output_schema,
+        serializer=serializer,
+        metadata=metadata,
+        model_requirements=(),
+    )
+
+
+def _local_module_spec(
+    path: str,
+    dependency: object,
+    definition: Module[Any, Any],
+    children: tuple[str, ...],
+    *,
+    input_schema: str | None,
+    output_schema: str | None,
+    serializer: str | None,
+) -> ModuleSpec:
+    binding = getattr(dependency, "binding", None)
+    placement_constraints = (
+        ("mode=pinned", f"binding={binding.name}")
+        if binding is not None
+        else (("mode=inherit",) if path != "root" else ())
+    )
+    metadata: tuple[tuple[str, str], ...] = (
+        (("binding", str(binding.name)),) if binding is not None else ()
+    )
+    metadata += (
+        ("recovery_safety", definition.execution_requirements.recovery_safety.value),
+        ("effect_safety", definition.execution_requirements.effect_safety.value),
+    )
+    model_group = getattr(definition, "model_group", None)
+    policy = getattr(definition, "policy", None)
+    model_requirements = (
+        (
+            ModelRequirement(
+                group_name=model_group.name,
+                capacity_key=model_group.capacity_key or model_group.name,
+                max_concurrency=model_group.max_concurrency,
+                allow_profile_override=bool(getattr(policy, "allow_profile_override", False)),
+                overridable_generation=tuple(
+                    sorted(getattr(policy, "overridable_generation", ()))
+                ),
+            ),
+        )
+        if isinstance(model_group, ModelGroupConfig) and model_group.is_deferred
+        else ()
+    )
+    return ModuleSpec(
+        path=path,
+        type_name=type(definition).__name__,
+        children=children,
+        definition_id=f"{type(definition).__module__}.{type(definition).__qualname__}",
+        config_ref=_config_ref(definition),
+        resource_keys=_resource_keys(definition),
+        placement_constraints=placement_constraints,
+        required_capabilities=definition.execution_requirements.required_capabilities,
+        input_schema=input_schema,
+        output_schema=output_schema,
+        serializer=serializer,
+        metadata=metadata,
+        model_requirements=model_requirements,
+    )
+
+
+def _validate_model_requirements(specs: list[ModuleSpec]) -> None:
+    declarations: dict[str, ModelRequirement] = {}
+    for spec in specs:
+        for requirement in spec.model_requirements:
+            previous = declarations.get(requirement.group_name)
+            if previous is not None and previous != requirement:
+                raise ValueError(
+                    f"model group {requirement.group_name!r} has conflicting requirements"
+                )
+            declarations[requirement.group_name] = requirement
+
+
 def compile_execution_plan(
     module: Module[Any, Any],
     *,
@@ -88,160 +249,36 @@ def compile_execution_plan(
             "portable execution requires input_schema, output_schema, and serializer"
         )
 
-    canonical: dict[int, str] = {id(module): "root"}
-    objects: dict[str, object] = {"root": module}
-    pending: deque[str] = deque(("root",))
-    child_edges: dict[str, tuple[str, ...]] = {}
-
-    while pending:
-        path = pending.popleft()
-        current = objects[path]
-        definition = (
-            current
-            if isinstance(current, Module)
-            else getattr(current, "module", None)
-        )
-        edges: list[str] = []
-        dependencies = (
-            definition.named_dependencies()
-            if isinstance(definition, Module)
-            else ()
-        )
-        for name, child in sorted(dependencies, key=lambda item: item[0]):
-            candidate = f"{path}.{name}"
-            child_path = canonical.get(id(child))
-            if child_path is None:
-                child_path = candidate
-                canonical[id(child)] = child_path
-                objects[child_path] = child
-                pending.append(child_path)
-            if child_path not in edges:
-                edges.append(child_path)
-        child_edges[path] = tuple(edges)
-
+    objects, child_edges = _discover_graph(module)
     specs: list[ModuleSpec] = []
     for path in sorted(objects):
         dependency = objects[path]
-        model_requirements: tuple[ModelRequirement, ...] = ()
         definition = (
-            dependency
-            if isinstance(dependency, Module)
-            else getattr(dependency, "module", None)
+            dependency if isinstance(dependency, Module) else getattr(dependency, "module", None)
         )
-        metadata: tuple[tuple[str, str], ...]
         if isinstance(dependency, RemoteModule):
-            type_name = "RemoteModule"
-            definition_id = (
-                f"remote:{dependency.binding_ref}"
-                if dependency.graph_hash is None
-                else f"remote:{dependency.binding_ref}@{dependency.graph_hash}"
-            )
-            requirements = dependency.required_capabilities
-            encoded = json.dumps(
-                {
-                    "binding_ref": dependency.binding_ref,
-                    "plan_id": dependency.plan_id,
-                    "graph_hash": dependency.graph_hash,
-                    "required_capabilities": list(requirements),
-                    "placement": dependency.placement.mode.value,
-                    "pinned_target_id": dependency.placement.target_id,
-                },
-                ensure_ascii=False,
-                allow_nan=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-            config_ref = f"sha256:{hashlib.sha256(encoded).hexdigest()}"
-            resource_keys: tuple[str, ...] = ()
-            placement_constraints = (
-                f"mode={dependency.placement.mode.value}",
-                *(
-                    (f"target_id={dependency.placement.target_id}",)
-                    if dependency.placement.target_id is not None
-                    else ()
-                ),
-            )
-            metadata = tuple(
-                (key, value)
-                for key, value in (
-                    ("binding_ref", dependency.binding_ref),
-                    ("remote_plan_id", dependency.plan_id),
-                    ("remote_graph_hash", dependency.graph_hash),
-                    ("recovery_safety", "undeclared"),
-                    ("effect_safety", "undeclared"),
-                )
-                if value is not None
-            )
-        elif isinstance(definition, Module):
-            type_name = type(definition).__name__
-            definition_id = (
-                f"{type(definition).__module__}.{type(definition).__qualname__}"
-            )
-            requirements = definition.execution_requirements.required_capabilities
-            config_ref = _config_ref(definition)
-            resource_keys = _resource_keys(definition)
-            binding = getattr(dependency, "binding", None)
-            placement_constraints = (
-                ("mode=pinned", f"binding={binding.name}")
-                if binding is not None
-                else (("mode=inherit",) if path != "root" else ())
-            )
-            metadata = (
-                (("binding", str(binding.name)),)
-                if binding is not None
-                else ()
-            ) + (
-                ("recovery_safety", definition.execution_requirements.recovery_safety.value),
-                ("effect_safety", definition.execution_requirements.effect_safety.value),
-            )
-            model_group = getattr(definition, "model_group", None)
-            policy = getattr(definition, "policy", None)
-            model_requirements = (
-                (
-                    ModelRequirement(
-                        group_name=model_group.name,
-                        capacity_key=model_group.capacity_key or model_group.name,
-                        max_concurrency=model_group.max_concurrency,
-                        allow_profile_override=bool(
-                            getattr(policy, "allow_profile_override", False)
-                        ),
-                        overridable_generation=tuple(
-                            sorted(getattr(policy, "overridable_generation", ()))
-                        ),
-                    ),
-                )
-                if isinstance(model_group, ModelGroupConfig)
-                and model_group.is_deferred
-                else ()
-            )
-        else:  # pragma: no cover - dependency registration invariant
-            raise TypeError(f"unsupported Module dependency at {path!r}")
-        specs.append(
-            ModuleSpec(
-                path=path,
-                type_name=type_name,
-                children=child_edges[path],
-                definition_id=definition_id,
-                config_ref=config_ref,
-                resource_keys=resource_keys,
-                placement_constraints=placement_constraints,
-                required_capabilities=requirements,
+            spec = _remote_module_spec(
+                path,
+                dependency,
+                child_edges[path],
                 input_schema=input_schema,
                 output_schema=output_schema,
                 serializer=serializer,
-                metadata=metadata,
-                model_requirements=model_requirements,
             )
-        )
-    declarations: dict[str, ModelRequirement] = {}
-    for spec in specs:
-        for requirement in spec.model_requirements:
-            previous = declarations.get(requirement.group_name)
-            if previous is not None and previous != requirement:
-                raise ValueError(
-                    f"model group {requirement.group_name!r} has conflicting requirements"
-                )
-            declarations[requirement.group_name] = requirement
+        elif isinstance(definition, Module):
+            spec = _local_module_spec(
+                path,
+                dependency,
+                definition,
+                child_edges[path],
+                input_schema=input_schema,
+                output_schema=output_schema,
+                serializer=serializer,
+            )
+        else:  # pragma: no cover - dependency registration invariant
+            raise TypeError(f"unsupported Module dependency at {path!r}")
+        specs.append(spec)
+    _validate_model_requirements(specs)
     return ExecutionPlan(
         root="root",
         modules=tuple(specs),

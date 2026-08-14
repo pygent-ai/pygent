@@ -8,16 +8,13 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, cast
 
-import jsonschema  # type: ignore[import-untyped]
-
 from pygent.core import (
-    AIMessage,
     Context,
     FrozenJsonObject,
     Message,
     freeze_json_object,
 )
-from pygent.tool import ToolCall, ToolDefinition
+from pygent.tool import ToolDefinition
 
 from ._adapter_contracts import (
     EventSink,
@@ -31,15 +28,11 @@ from ._adapter_contracts import (
     ModelProviderStreamPart,
     _attempt_failed_payload,
     _emit,
-    _normalized_finish_reason,
-    _raise_invalid_model_response,
-    _tool_delta_payload,
-    _tool_item_payload,
     _usage_event_payload,
     _validated_canonical_usage,
 )
 from ._model_execution import ModelExecution, _ProviderStreamOwner
-from .openai_compatible import _original_tool_name
+from ._stream_accumulator import ModelStreamAccumulator
 from .types import (
     GenerationConfig,
     ModelAttempt,
@@ -470,13 +463,7 @@ class DefaultModelInvoker:
         cancel_event: asyncio.Event | None,
         event_sink: EventSink | None,
     ) -> ModelProviderResponse:
-        text_parts: list[str] = []
-        usage = freeze_json_object()
-        calls: dict[int, dict[str, str]] = {}
-        selected_route: str | None = None
-        selected_attempt: int | None = None
-        finish_reason = "other"
-        provider_request_id: str | None = None
+        accumulator = ModelStreamAccumulator(generation=generation, tools=tools)
         async for part in self._stream_events(
             model_group=model_group,
             retry_policy=retry_policy,
@@ -488,156 +475,8 @@ class DefaultModelInvoker:
             cancel_event=cancel_event,
             event_sink=event_sink,
         ):
-            data = freeze_json_object(part.data)
-            route_value = data.get("route_id")
-            if isinstance(route_value, str):
-                selected_route = route_value
-            attempt_value = data.get("attempt")
-            if isinstance(attempt_value, int) and not isinstance(attempt_value, bool):
-                selected_attempt = attempt_value
-            if part.kind == ModelProviderStreamKind.REASONING:
-                await _emit(event_sink, ModelEventKind.REASONING_DELTA, data)
-            elif part.kind == ModelProviderStreamKind.TEXT:
-                value = data.get("text", "")
-                if isinstance(value, str):
-                    text_parts.append(value)
-                await _emit(event_sink, ModelEventKind.TEXT_DELTA, data)
-            elif part.kind == ModelProviderStreamKind.TOOL_CALL:
-                index = data.get("index", 0)
-                if not isinstance(index, int) or isinstance(index, bool) or index < 0:
-                    await _raise_invalid_model_response(
-                        event_sink,
-                        "model stream returned an invalid tool-call index",
-                        route_id=selected_route,
-                        attempt=selected_attempt,
-                        usage=usage,
-                    )
-                if index not in calls:
-                    calls[index] = {"call_id": "", "name": "", "arguments": ""}
-                    await _emit(
-                        event_sink,
-                        ModelEventKind.TOOL_CALL_STARTED,
-                        _tool_item_payload(data, index=index),
-                    )
-                current = calls[index]
-                for source, target in (
-                    ("call_id_delta", "call_id"),
-                    ("name_delta", "name"),
-                    ("arguments_delta", "arguments"),
-                ):
-                    value = data.get(source, "")
-                    if isinstance(value, str):
-                        current[target] += value
-                await _emit(
-                    event_sink,
-                    ModelEventKind.TOOL_CALL_DELTA,
-                    _tool_delta_payload(data, index=index),
-                )
-            elif part.kind == ModelProviderStreamKind.USAGE:
-                usage_data = data.to_dict()
-                usage_data.pop("route_id", None)
-                usage_data.pop("attempt", None)
-                usage = _validated_canonical_usage(usage_data)
-            elif part.kind == ModelProviderStreamKind.FINISH:
-                raw_reason = data.get("finish_reason")
-                if isinstance(raw_reason, str):
-                    normalized_reason = _normalized_finish_reason(raw_reason)
-                    if normalized_reason != "other" or finish_reason == "other":
-                        finish_reason = normalized_reason
-                raw_request_id = data.get("provider_request_id")
-                if isinstance(raw_request_id, str) and raw_request_id:
-                    provider_request_id = raw_request_id
-
-        content = "".join(text_parts)
-        if generation.response_schema is not None:
-            try:
-                jsonschema.validate(
-                    json.loads(content),
-                    freeze_json_object(generation.response_schema).to_dict(),
-                )
-            except (json.JSONDecodeError, jsonschema.ValidationError):
-                await _raise_invalid_model_response(
-                    event_sink,
-                    "model output does not match the declared JSON schema",
-                    route_id=selected_route,
-                    attempt=selected_attempt,
-                    usage=usage,
-                )
-        tool_calls: list[ToolCall] = []
-        for index in sorted(calls):
-            call = calls[index]
-            try:
-                arguments = json.loads(call["arguments"] or "{}")
-                if not isinstance(arguments, Mapping):
-                    raise TypeError
-                tool_calls.append(
-                    ToolCall(
-                        call_id=call["call_id"],
-                        name=_original_tool_name(call["name"], tools),
-                        arguments=cast(Mapping[str, object], arguments),
-                    )
-                )
-                await _emit(
-                    event_sink,
-                    ModelEventKind.TOOL_CALL_COMPLETED,
-                    {
-                        "item_id": f"tool-{index}",
-                        "index": index,
-                        "call_id": call["call_id"],
-                        "name": _original_tool_name(call["name"], tools),
-                        "arguments": cast(Mapping[str, object], arguments),
-                        "route_id": selected_route,
-                        "attempt": selected_attempt,
-                    },
-                )
-            except (json.JSONDecodeError, TypeError, ValueError):
-                await _raise_invalid_model_response(
-                    event_sink,
-                    "model stream returned an invalid tool call",
-                    route_id=selected_route,
-                    attempt=selected_attempt,
-                    usage=usage,
-                )
-        if selected_route is None or selected_attempt is None:
-            raise ModelCallError(
-                "model stream completed without attempt identity",
-                kind=ModelErrorKind.INVALID_RESPONSE,
-            )
-        if finish_reason == "other":
-            finish_reason = "tool_calls" if tool_calls else "stop"
-        await _emit(
-            event_sink,
-            ModelEventKind.USAGE,
-            _usage_event_payload(
-                usage,
-                route_id=selected_route,
-                attempt=selected_attempt,
-                final=True,
-            ),
-        )
-        await _emit(
-            event_sink,
-            ModelEventKind.ATTEMPT_SUCCEEDED,
-            {"route_id": selected_route, "attempt": selected_attempt},
-        )
-        await _emit(
-            event_sink,
-            ModelEventKind.COMPLETED,
-            {
-                "route_id": selected_route,
-                "attempt": selected_attempt,
-                "finish_reason": finish_reason,
-                "provider_request_id": provider_request_id,
-            },
-        )
-        metadata = {"route_id": selected_route}
-        return ModelProviderResponse(
-            message=AIMessage(
-                content=content, tool_calls=tuple(tool_calls), metadata=metadata
-            ),
-            usage=usage,
-            provider_request_id=provider_request_id,
-        )
+            await accumulator.consume(part, event_sink)
+        return await accumulator.finish(event_sink)
 
     def _resolve(
         self, route: ModelRoute
