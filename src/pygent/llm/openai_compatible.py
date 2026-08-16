@@ -46,6 +46,109 @@ _DEFAULT_HTTP1_POOL_SHARDS = 8
 _DEFAULT_MAX_CONNECTIONS_PER_SHARD = 7
 _DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD = 7
 _SSE_DRAIN_GRACE_SECONDS = 0.05
+_OPENAI_RESERVED_PROVIDER_FIELDS = frozenset(
+    {
+        "model",
+        "messages",
+        "temperature",
+        "max_tokens",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "stream",
+    }
+)
+_FORBIDDEN_PROVIDER_OPTION_KEYS = frozenset(
+    {
+        "apikey",
+        "apitoken",
+        "token",
+        "bearertoken",
+        "accesstoken",
+        "refreshtoken",
+        "secret",
+        "secrets",
+        "password",
+        "credential",
+        "credentials",
+        "cookie",
+        "auth",
+        "authentication",
+        "authorization",
+        "headers",
+        "httpheaders",
+        "endpoint",
+        "baseurl",
+        "proxy",
+        "proxyurl",
+        "proxyauthentication",
+        "proxycredentials",
+        "tlsprivatekey",
+        "privatekey",
+        "client",
+        "session",
+        "connection",
+        "connectionstring",
+        "connectionpool",
+        "dsn",
+        "lock",
+        "task",
+        "coroutine",
+        "callback",
+        "retry",
+        "retries",
+        "backoff",
+        "attempttimeout",
+        "timeout",
+        "deadline",
+        "stream",
+        "runtime",
+        "binding",
+        "execution",
+        "resourceresolver",
+        "rawresponse",
+        "internalexception",
+    }
+)
+
+
+def _normalized_option_key(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
+
+
+def _validate_no_forbidden_option_keys(value: object) -> None:
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, FrozenJsonObject):
+            for key, item in current.items():
+                if _normalized_option_key(key) in _FORBIDDEN_PROVIDER_OPTION_KEYS:
+                    raise ValueError(f"provider option field {key!r} is not portable")
+                pending.append(item)
+        elif isinstance(current, tuple):
+            pending.extend(current)
+
+
+def _validate_openai_provider_options(route: ModelRoute) -> None:
+    options = cast(FrozenJsonObject, route.provider_options)
+    conflicts = set(options) & _OPENAI_RESERVED_PROVIDER_FIELDS
+    if conflicts:
+        raise ValueError(
+            "provider options cannot override reserved fields: "
+            + ", ".join(sorted(conflicts))
+        )
+    _validate_no_forbidden_option_keys(options)
+    if route.provider != "deepseek" or "thinking" not in options:
+        return
+    thinking = options["thinking"]
+    if not isinstance(thinking, FrozenJsonObject):
+        raise TypeError("provider option 'thinking' must be an object")
+    if set(thinking) != {"type"}:
+        raise ValueError("provider option 'thinking' accepts only the 'type' field")
+    if thinking["type"] not in ("enabled", "disabled"):
+        raise ValueError(
+            "provider option 'thinking.type' must be 'enabled' or 'disabled'"
+        )
 
 
 class _ShardAdmission:
@@ -487,7 +590,16 @@ class OpenAICompatibleAdapter:
             raise ValueError("provider must be non-empty")
         self.provider = provider
 
+    def validate_route(self, route: ModelRoute) -> None:
+        """Validate portable provider options without performing provider I/O."""
+
+        _validate_openai_provider_options(route)
+
     def build_request(self, request: ModelProviderRequest) -> FrozenJsonObject:
+        try:
+            self.validate_route(request.route)
+        except (TypeError, ValueError) as exc:
+            raise ModelProviderError(ModelErrorKind.INVALID_REQUEST, str(exc)) from None
         messages: list[dict[str, object]] = []
         wire_names = {tool.name: _openai_tool_name(tool.name) for tool in request.tools}
         if request.context.system_prompt:
@@ -535,6 +647,7 @@ class OpenAICompatibleAdapter:
                 ModelErrorKind.INVALID_REQUEST,
                 "tool_choice requires at least one visible tool",
             )
+        body.update(cast(FrozenJsonObject, request.route.provider_options).to_dict())
         return freeze_json_object(body)
 
     def parse_response(
@@ -692,7 +805,10 @@ class OpenAICompatibleAdapter:
 def openai_compatible_adapters() -> dict[str, OpenAICompatibleAdapter]:
     """Return codecs for the initially supported compatible provider names."""
 
-    return {name: OpenAICompatibleAdapter(name) for name in ("openai", "glm", "qwen")}
+    return {
+        name: OpenAICompatibleAdapter(name)
+        for name in ("openai", "glm", "qwen", "deepseek")
+    }
 
 
 def _validate_catalog_timeout(timeout: float | None) -> None:

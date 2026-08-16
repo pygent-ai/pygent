@@ -105,13 +105,15 @@ def portable_definition_value(
         parameters = getattr(type(value), "__dataclass_params__", None)
         if parameters is None or not parameters.frozen:
             return UNSUPPORTED_DEFINITION_VALUE
-        converted_fields = {
-            item.name: portable_definition_value(
-                getattr(value, item.name),
+        converted_fields: dict[str, object] = {}
+        for item in fields(value):
+            field_value = getattr(value, item.name)
+            if item.metadata.get("pygent_omit_if_empty") and not field_value:
+                continue
+            converted_fields[item.name] = portable_definition_value(
+                field_value,
                 allow_snapshot_containers=allow_snapshot_containers,
             )
-            for item in fields(value)
-        }
         if any(
             item is UNSUPPORTED_DEFINITION_VALUE
             for item in converted_fields.values()

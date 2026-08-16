@@ -62,6 +62,30 @@ from .context_codec import ContextCodec, ContextCodecError, ContextCodecRegistry
 from .model_deployment import InMemoryModelDeploymentStore, ModelDeploymentStore
 from .plan import CodeArtifactSpec, ExecutionPlan
 
+
+def _validate_deployment_invoker(
+    deployment: ModelProfileSnapshot, invoker: object
+) -> None:
+    routes = tuple(
+        route for route in deployment.model_group.routes if route.provider_options
+    )
+    if not routes:
+        return
+    validate_route = getattr(invoker, "validate_route", None)
+    if not callable(validate_route):
+        raise ModelDeploymentUnavailableError(
+            "current model invoker cannot validate pinned provider options"
+        )
+    for route in routes:
+        try:
+            validate_route(route)
+        except Exception:  # noqa: BLE001 - deployment SPI boundary
+            raise ModelDeploymentUnavailableError(
+                "current model adapter no longer supports pinned options for route "
+                f"{route.route_id!r}"
+            ) from None
+
+
 InputMessageT = TypeVar("InputMessageT", bound=Message)
 OutputMessageT = TypeVar("OutputMessageT", bound=Message)
 
@@ -126,7 +150,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
         self._model_store_opened = False
         self._model_store_open_task: asyncio.Task[None] | None = None
         self._profile_publications: dict[
-            tuple[str, str, str, str], asyncio.Task[Any]
+            tuple[object, ...], asyncio.Task[Any]
         ] = {}
         self._model_resource_resolvers: dict[str, Any] = {}
         self._resident_model_invokers: dict[
@@ -222,6 +246,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
             raise TypeError("deployment must be a ModelProfileSnapshot")
         resident = self._resident_model_invokers.get(deployment.snapshot_id)
         if resident is not None:
+            _validate_deployment_invoker(deployment, resident[0])
             yield resident[0]
             return
         resources = deployment.resources
@@ -236,6 +261,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
             )
         lease = resolver.acquire(deployment.model_group, resources)
         async with lease as invoker:
+            _validate_deployment_invoker(deployment, invoker)
             yield invoker
 
     def _state_for(self, binding: Binding) -> _BindingState:

@@ -218,6 +218,10 @@ The LLM/application deployment layer prepares:
 Runtime publishes an immutable record containing the complete deployment key, opaque
 snapshot ID, canonical digest, prepared portable content, and exact resource source.
 
+The canonical route projection always contains `route_id`, `provider`, and `model`,
+and contains `provider_options` only when non-empty. Missing options in legacy
+records decode as an empty object; non-empty options are part of snapshot identity.
+
 ### 5.5 Pinned deployment reference
 
 A portable pin contains at least:
@@ -486,6 +490,11 @@ Before producing a prepared deployment, the LLM/application layer MUST validate:
 8. the capacity owner identity is stable and is enforced in its declared
    coordinator domain.
 
+Route validation completes before canonical digest generation. A resident invoker
+validates through `ModelProviderRouteValidator`; a reconstructable resource uses
+`ModelResourceResolver.validate()` under the same contract. Non-empty options with
+no validating path fail publication before Provider I/O.
+
 A model catalog lookup may be used as preflight but does not prove future
 availability and does not mutate a deployment.
 
@@ -648,6 +657,11 @@ A capable Worker validates plan identity, admission scope, snapshot/resource dig
 exact resource revisions, capacity owner/domain, deployment-store namespace, and the
 `model.deferred.exact-pin.v1` capability. It never discards a pin to query local
 current. Failover is limited to Workers advertising the same store namespace.
+
+When any pinned route has non-empty provider options, remote deployment also requires
+`model.route.provider-options.v1`. The Worker codec preserves the canonical route
+projection losslessly, and a Worker lacking that capability rejects placement or
+admission before resource acquisition and Provider I/O.
 
 Secrets, raw credential configuration, clients, invokers, transport exception
 bodies, callbacks, locks, tasks, and leases never enter Agent state or portable

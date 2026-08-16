@@ -30,6 +30,7 @@ from pygent.core import (
 from pygent.tool import ToolCall, ToolDefinition
 
 from ._adapter_contracts import ModelInvoker
+from ._route_codec import model_route_value
 from .types import (
     GenerationConfig,
     ModelCallError,
@@ -298,14 +299,7 @@ def _model_effect_request(
             {
                 "model_group": {
                     "name": model_group.name,
-                    "routes": [
-                        {
-                            "route_id": route.route_id,
-                            "provider": route.provider,
-                            "model": route.model,
-                        }
-                        for route in model_group.routes
-                    ],
+                    "routes": [model_route_value(route) for route in model_group.routes],
                     "fallback": list(model_group.fallback.order),
                     "capacity_key": model_group.capacity_key,
                     "profile": getattr(deployment, "profile", None),

@@ -17,6 +17,8 @@ from pygent.core import (
 from .api import BoundModule
 from .plan import CodeArtifactSpec
 
+MODEL_ROUTE_PROVIDER_OPTIONS_CAPABILITY = "model.route.provider-options.v1"
+
 
 class WorkerProtocolError(RuntimeError):
     """Base class for remote Worker protocol failures."""

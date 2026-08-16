@@ -64,6 +64,19 @@ run = ExecutionOptions(deadline=monotonic() + 30.0)
 
 这些对象都是不可变、可移植的声明值。只有 `ModelCallLayer` 是 Module 定义；`ModelGroupConfig`、`RetryPolicy`、`FallbackPolicy` 和 `GenerationConfig` 是该 Module 引用的配置值，不具有独立 Module 身份或调用身份。ModelCallLayer 使用仅关键字构造参数，避免把模型组、重试与生成策略按位置传错。需要两种稳定语义时声明两个 ModelCallLayer 子 Module；延迟托管模型组可以按下文的显式 policy 开放少量请求级生成参数。
 
+Provider 私有但稳定的路由语义使用 `ModelRoute.provider_options`，例如关闭 DeepSeek thinking：
+
+```python
+route = ModelRoute(
+    route_id="primary",
+    provider="deepseek",
+    model="deepseek-chat",
+    provider_options={"thinking": {"type": "disabled"}},
+)
+```
+
+`provider_options` 是仅关键字、严格 JSON、递归不可变的 route 定义值；原字典后续修改不会影响 route。它不能承载 secret、endpoint、client、连接、认证头、retry、deadline、stream 或框架保留请求字段，也不能由单次调用覆盖。OpenAI-compatible adapter 对未知 Provider 默认只做非保留严格 JSON 的结构透传，这不表示 Provider 能力已经验证；DeepSeek `thinking` 则使用严格子 schema。第三方 adapter 只有实现公开的 `ModelProviderRouteValidator` 后才能接受非空选项，空选项调用保持原行为。
+
 `ModelGroupConfig.max_concurrency` 是模型物理资源约束声明，不是 Layer 私有 semaphore。`capacity_key` 是多个逻辑模型组共享同一物理 endpoint/credential/model 配额时使用的稳定身份；省略时退回模型组名称。direct execution 不负责跨 Root 协调该声明，调用方或本地 adapter 自行限流；managed execution 中，相同 `capacity_key` 的 Layer 共享同一 Runtime 容量所有者，不得将各 Layer 的数值累加成更高物理并发。
 
 `GenerationConfig.tool_choice` 为 `None`、`"auto"`、`"required"`、`"none"` 或当前可见工具名；指定名称但该工具不在 Layer 声明与 `Context.tools` 的交集中时，adapter 在发请求前拒绝。OpenAI-compatible adapter 会把 portable 工具名稳定映射为 Provider 允许的 wire name，并在 ToolCall 返回时还原，应用不必把 `weather.lookup` 之类的业务名称改成 Provider 私有格式。

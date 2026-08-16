@@ -21,6 +21,7 @@ from pygent.core import (
 from pygent.llm import ModelCallOptions
 
 from ._worker_protocol import (
+    MODEL_ROUTE_PROVIDER_OPTIONS_CAPABILITY,
     WorkerArtifactResolver,
     WorkerDeploymentManifest,
     WorkerEventSink,
@@ -171,6 +172,23 @@ async def _validate_worker_model_admission(
         selections,
         admission_id=request.model_admission_ref,
     )
+    has_provider_options = any(
+        route.provider_options
+        for _, snapshot in admission.snapshots
+        for route in snapshot.model_group.routes
+    )
+    if (
+        has_provider_options
+        and MODEL_ROUTE_PROVIDER_OPTIONS_CAPABILITY
+        not in request.required_capabilities
+    ):
+        raise WorkerRemoteError(
+            _worker_failure(
+                "capability_mismatch",
+                "model route provider options require "
+                + MODEL_ROUTE_PROVIDER_OPTIONS_CAPABILITY,
+            )
+        )
     for _, snapshot in admission.snapshots:
         resources = snapshot.resources
         if resources is None or resources.resolver_id not in resolvers:

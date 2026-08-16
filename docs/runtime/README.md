@@ -47,6 +47,8 @@ Binding 与 Runtime 支持三种 Child 放置语义：
 
 `RemoteModule(binding_ref=..., plan_id=..., graph_hash=..., required_capabilities=..., placement=...)` 用于只有远程部署契约、没有本地 Module 定义实例的场景。远程计划身份必须来自受信部署控制面并在调用端与 Worker 两侧校验；Registry 声明只是第一道筛选，每次启动前还必须请求 endpoint 的 `/health` 复核实时 capability，并由 Worker 对启动请求携带的 required capabilities 再校验。注册 target 的 placement 必须与编译声明完全一致，不能用 adaptive target 覆盖 pinned 声明。只有实时健康、属于已声明逻辑目标且满足 capability 的 endpoint 才能参与 adaptive 选择，pinned 模式不能故障转移到其他 target。预绑定 Child、RemoteModule 与 Binding placement 最终编译成同一种 Child target 描述，共享取消、deadline、事件、错误和结果语义。
 
+动态模型 admission 含非空 `ModelRoute.provider_options` 时，远程部署的 required capabilities 必须包含 `model.route.provider-options.v1`。新 Worker 会声明并无损校验该能力；旧 Worker 在 placement/admission 前因 capability mismatch 被拒绝，不能省略选项后继续执行。
+
 ### 受约束的动态 Agent 解析
 
 Pygent 不支持绕过 Binding 和 ExecutionPlan 的开放式动态 Agent Registry：`forward()` 不能根据任意字符串发现并调用一个未在当前计划中声明的 Agent，也不能让 Registry 在运行时引入新的逻辑 Child。逻辑依赖、稳定 `binding_ref`、输入输出 schema、授权边界、容量归属和必需 Runtime capability 必须在 bind/compile 阶段确定，并进入 ExecutionPlan 的身份或兼容性检查。

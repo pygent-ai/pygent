@@ -57,23 +57,23 @@ class ModelGroupHandle:
         if resource_ref is not None and resource_bundle is not None:
             raise ValueError("provide resource_ref or resource_bundle, not both")
         resources = resource_bundle
+        prepared_routes = tuple(routes)
         if resource_ref is not None:
-            resources = ModelResourceBundle.shared(tuple(routes), resource_ref)
+            resources = ModelResourceBundle.shared(prepared_routes, resource_ref)
         if invoker is None and resources is None:
             raise ModelGroupConfigurationError(
                 "a dynamic profile requires an invoker or reconstructable resources"
             )
-        snapshot = build_snapshot(
-            scope_id=self._scope_id,
-            requirement=self.requirement,
-            profile=profile,
-            routes=tuple(routes),
+        prepared_group = ModelGroupConfig(
+            name=self.requirement.name,
+            routes=prepared_routes,
             fallback=fallback,
-            resources=resources,
+            max_concurrency=self.requirement.max_concurrency,
+            capacity_key=self.requirement.capacity_key,
         )
         if isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
             raise TypeError("deadline must be an absolute monotonic timestamp")
-        key = (self._scope_id, self.requirement.name, profile, snapshot.digest)
+        key = (self._scope_id, self.requirement.name, profile, prepared_group, resources)
         task = self._runtime._profile_publications.get(key)
         if task is None:
             async def publish_once() -> ModelProfileSnapshot:
@@ -82,6 +82,16 @@ class ModelGroupHandle:
                     raise TimeoutError("model profile configuration deadline exceeded")
                 async with asyncio.timeout(remaining):
                     await self._runtime._ensure_model_store_open()
+                    if invoker is not None:
+                        validate_route = getattr(invoker, "validate_route", None)
+                        for route in prepared_group.routes:
+                            if not route.provider_options:
+                                continue
+                            if not callable(validate_route):
+                                raise ModelGroupConfigurationError(
+                                    "non-empty provider options require an invoker route validator"
+                                )
+                            validate_route(route)
                     if resources is not None:
                         resolver = self._runtime._model_resource_resolvers.get(
                             resources.resolver_id
@@ -91,8 +101,20 @@ class ModelGroupHandle:
                                 f"no model resource resolver {resources.resolver_id!r} is registered"
                             )
                         validate = getattr(resolver, "validate", None)
+                        if any(route.provider_options for route in prepared_group.routes) and not callable(validate):
+                            raise ModelGroupConfigurationError(
+                                "non-empty provider options require resource validation"
+                            )
                         if callable(validate):
-                            await validate(snapshot.model_group, resources)
+                            await validate(prepared_group, resources)
+                    snapshot = build_snapshot(
+                        scope_id=self._scope_id,
+                        requirement=self.requirement,
+                        profile=profile,
+                        routes=prepared_routes,
+                        fallback=fallback,
+                        resources=resources,
+                    )
                     result = await self._runtime.model_deployment_store.ensure_profile(
                         snapshot, make_default=make_default
                     )

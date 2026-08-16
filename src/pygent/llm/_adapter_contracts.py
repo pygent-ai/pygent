@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, NoReturn, Protocol
+from typing import TYPE_CHECKING, NoReturn, Protocol, runtime_checkable
 
 from pygent.core import (
     AIMessage,
@@ -174,6 +174,13 @@ class ModelProviderAdapter(Protocol):
     ) -> tuple[ModelProviderStreamPart, ...]: ...
 
     def normalize_error(self, error: BaseException) -> ModelErrorKind: ...
+
+
+@runtime_checkable
+class ModelProviderRouteValidator(Protocol):
+    """Optional provider-owned validation for non-empty route options."""
+
+    def validate_route(self, route: ModelRoute) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)

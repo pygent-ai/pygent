@@ -115,6 +115,7 @@ Runtime 默认只能提供 at-least-once 执行语义。只有底层 Provider、
 
 - Model 调用可能在响应丢失后重复产生费用和非确定性输出；Runtime 应记录 route、attempt、请求关联身份和已提交结果。
 - 延迟模型组还必须把 admission 时选择的具体部署 manifest 与不可变资源 revision 作为恢复事实保存；已提交 effect 可以脱离 live invoker 重放，尚未提交的模型工作只能重新取得原 revision，不能改用当前最新部署。完整契约见 [延迟与动态模型组规范](../llm/DYNAMIC_MODEL_GROUP_SPEC.md)。
+- 模型 route 的非空 `provider_options` 同时进入 profile snapshot、admission manifest 与 effect request 身份；JSON key 顺序不改变身份。旧记录缺少该字段按空对象恢复，非空记录若字段丢失、digest 不符或原 adapter 已不支持则 fail closed。已提交 effect 仍可直接重放，未提交工作必须使用原 pin，不能删除选项后降级执行。
 - Tool 调用必须声明幂等、可查询、可补偿或不可安全重试；不可安全重试的调用在状态不明时必须进入人工或业务决策状态。
 - `emit()` 事件必须携带稳定事件身份。新 attempt 重放相同逻辑事件时，事件系统必须能够去重或明确标记为新 attempt。
 - 流式 token 在故障边界前可能已被客户端观察但尚未成为最终结果；重连协议必须说明是否重放、截断或从持久游标继续。
@@ -126,6 +127,8 @@ History backend 必须提供单个 `finalize_execution(...)` 事务，在一次�
 `terminal_sequence` 是订阅结束的唯一依据。live observer 与断线重连 observer 都必须持续读取，直到自己的 cursor 已经交付该 sequence；不得因为并发状态查询先读到 terminal status 而停止。Local 与 durable backend 服从同一规则，只允许存储事务实现不同。
 
 准入也必须有明确提交点。模型 pins、资源 leases、容量 tickets、attempt claim 与 history 状态由一个 admission transaction 协调；取消、deadline 或任一步骤失败时按逆序释放，并把失败写为同一逻辑 Execution 的结构化 outcome。崩溃恢复只能采用已提交 manifest，不能保留孤儿 pin 或重新读取 current profile。
+
+远程 pin 含非空 Provider 选项时，required capabilities 必须包含 `model.route.provider-options.v1`；不声明该能力的旧 Worker 在 placement/admission 阶段被拒绝，不能静默丢弃字段。
 
 ## 代码与 Binding 兼容
 

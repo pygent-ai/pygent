@@ -32,6 +32,7 @@ from pygent.core import (
 from ._history_store import SQLiteHistoryStore
 from ._history_types import StoredTask
 from ._worker_protocol import (
+    MODEL_ROUTE_PROVIDER_OPTIONS_CAPABILITY,
     WorkerHandler,
     WorkerInvocation,
     WorkerProtocolError,
@@ -88,7 +89,13 @@ class HTTPWorkerApp:
         )
         if self.model_store_namespace is not None and not self.model_store_namespace:
             raise ValueError("model_store_namespace must be non-empty")
-        self.capabilities = tuple(capabilities)
+        advertised_capabilities = list(capabilities)
+        if (
+            self.model_store_namespace is not None
+            and MODEL_ROUTE_PROVIDER_OPTIONS_CAPABILITY not in advertised_capabilities
+        ):
+            advertised_capabilities.append(MODEL_ROUTE_PROVIDER_OPTIONS_CAPABILITY)
+        self.capabilities = tuple(advertised_capabilities)
         self.max_retained_events = max_retained_events
         self.max_retained_executions = max_retained_executions
         self.history = history

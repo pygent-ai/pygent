@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from pygent.core import (
     ExecutionFailure,
     ExecutionFailureError,
+    FrozenJsonObject,
     JsonObjectInput,
+    JsonValueError,
     freeze_json_object,
 )
 
@@ -42,12 +44,26 @@ class ModelRoute:
     route_id: str
     provider: str
     model: str
+    provider_options: JsonObjectInput = field(
+        default_factory=dict,
+        kw_only=True,
+        repr=False,
+        metadata={"pygent_omit_if_empty": True},
+    )
 
     def __post_init__(self) -> None:
         for name in ("route_id", "provider", "model"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must be a non-empty string")
+        if not isinstance(self.provider_options, Mapping):
+            raise JsonValueError("provider_options must be a JSON object")
+        options = (
+            self.provider_options
+            if isinstance(self.provider_options, FrozenJsonObject)
+            else freeze_json_object(self.provider_options)
+        )
+        object.__setattr__(self, "provider_options", options)
 
 
 @dataclass(frozen=True, slots=True)

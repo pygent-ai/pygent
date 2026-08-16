@@ -24,6 +24,7 @@ from ._adapter_contracts import (
     ModelProviderClient,
     ModelProviderRequest,
     ModelProviderResponse,
+    ModelProviderRouteValidator,
     ModelProviderStreamKind,
     ModelProviderStreamPart,
     _attempt_failed_payload,
@@ -39,6 +40,7 @@ from .types import (
     ModelCallError,
     ModelErrorKind,
     ModelGroupConfig,
+    ModelGroupConfigurationError,
     ModelProviderError,
     ModelRoute,
     RetryPolicy,
@@ -65,6 +67,26 @@ class DefaultModelInvoker:
         self._stream_owner_tasks: set[asyncio.Task[None]] = set()
         self._close_task: asyncio.Task[None] | None = None
         self._closing = False
+
+    def validate_route(self, route: ModelRoute) -> None:
+        """Validate one route during LLM/application deployment preparation."""
+
+        adapter = self._adapters.get(route.provider)
+        client = self._clients.get(route.route_id, self._clients.get(route.provider))
+        if adapter is None or client is None:
+            raise ModelGroupConfigurationError(
+                f"model route {route.route_id!r} has no local provider binding"
+            )
+        if not route.provider_options:
+            return
+        if not isinstance(adapter, ModelProviderRouteValidator):
+            raise ModelGroupConfigurationError(
+                f"provider adapter for route {route.route_id!r} does not validate provider options"
+            )
+        try:
+            adapter.validate_route(route)
+        except (TypeError, ValueError, ModelProviderError) as exc:
+            raise ModelGroupConfigurationError(str(exc)) from None
 
     def execute(
         self,
@@ -263,6 +285,7 @@ class DefaultModelInvoker:
         for route_id in order:
             route = routes[route_id]
             adapter, client = self._resolve(route)
+            _validate_route_for_request(adapter, route)
             request = ModelProviderRequest(
                 route=route,
                 message=message,
@@ -489,6 +512,24 @@ class DefaultModelInvoker:
                 kind=ModelErrorKind.INVALID_REQUEST,
             )
         return adapter, client
+
+
+def _validate_route_for_request(
+    adapter: ModelProviderAdapter, route: ModelRoute
+) -> None:
+    if not route.provider_options:
+        return
+    if not isinstance(adapter, ModelProviderRouteValidator):
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "provider adapter does not support route options",
+        )
+    try:
+        adapter.validate_route(route)
+    except ModelProviderError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise ModelProviderError(ModelErrorKind.INVALID_REQUEST, str(exc)) from None
 
 
 def _earliest_deadline(

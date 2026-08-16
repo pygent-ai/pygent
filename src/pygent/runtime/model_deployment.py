@@ -25,6 +25,7 @@ from pygent.llm import (
     ModelResourceRef,
     ModelRoute,
 )
+from pygent.llm._route_codec import model_route_from_value, model_route_value
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -59,10 +60,7 @@ def _digest(value: object) -> str:
 def _group_value(group: ModelGroupConfig) -> dict[str, object]:
     return {
         "name": group.name,
-        "routes": [
-            {"route_id": route.route_id, "provider": route.provider, "model": route.model}
-            for route in group.routes
-        ],
+        "routes": [model_route_value(route) for route in group.routes],
         "fallback": list(group.fallback.order),
         "max_concurrency": group.max_concurrency,
         "capacity_key": group.capacity_key,
@@ -125,8 +123,10 @@ def _snapshot_from_value(value: Mapping[str, object]) -> ModelProfileSnapshot:
     routes_value = raw_group.get("routes")
     if not isinstance(routes_value, list):
         raise TypeError("stored model routes must be an array")
+    if any(not isinstance(item, Mapping) for item in routes_value):
+        raise TypeError("stored model route must be an object")
     routes = tuple(
-        ModelRoute(str(item["route_id"]), provider=str(item["provider"]), model=str(item["model"]))
+        model_route_from_value(item)
         for item in routes_value
         if isinstance(item, Mapping)
     )
@@ -137,6 +137,23 @@ def _snapshot_from_value(value: Mapping[str, object]) -> ModelProfileSnapshot:
         max_concurrency=raw_group.get("max_concurrency"),  # type: ignore[arg-type]
         capacity_key=raw_group.get("capacity_key"),  # type: ignore[arg-type]
     )
+    resources = _bundle_from_value(value.get("resources"))
+    expected_digest = _digest(
+        {
+            "scope_id": value.get("deployment_scope_id"),
+            "group": _group_value(group),
+            "profile": value.get("profile"),
+            "resources": _bundle_value(resources),
+        }
+    )
+    if value.get("digest") != expected_digest:
+        raise ValueError("stored model profile digest does not match its content")
+    resource_digest = value.get("resource_bundle_digest")
+    expected_resource_digest = (
+        None if resources is None else _digest(resources.to_dict())
+    )
+    if resource_digest != expected_resource_digest:
+        raise ValueError("stored model resource digest does not match its content")
     return ModelProfileSnapshot(
         deployment_scope_id=str(value["deployment_scope_id"]),
         group_name=str(value["group_name"]),
@@ -147,7 +164,41 @@ def _snapshot_from_value(value: Mapping[str, object]) -> ModelProfileSnapshot:
             None if value.get("resource_bundle_digest") is None else str(value["resource_bundle_digest"])
         ),
         model_group=group,
-        resources=_bundle_from_value(value.get("resources")),
+        resources=resources,
+    )
+
+
+def _admission_from_value(value: Mapping[str, object]) -> ModelAdmission:
+    raw_snapshots = value.get("snapshots")
+    if not isinstance(raw_snapshots, list):
+        raise TypeError("stored model admission snapshots must be an array")
+    snapshots: list[tuple[str, ModelProfileSnapshot]] = []
+    for item in raw_snapshots:
+        if not isinstance(item, Mapping) or not isinstance(item.get("snapshot"), Mapping):
+            raise TypeError("stored model admission snapshot must be an object")
+        snapshots.append(
+            (
+                str(item["group_name"]),
+                _snapshot_from_value(item["snapshot"]),
+            )
+        )
+    expected_digest = _digest(
+        [
+            {
+                "group_name": name,
+                "snapshot_id": snapshot.snapshot_id,
+                "digest": snapshot.digest,
+            }
+            for name, snapshot in snapshots
+        ]
+    )
+    if value.get("digest") != expected_digest:
+        raise ValueError("stored model admission digest does not match its content")
+    return ModelAdmission(
+        admission_id=str(value["admission_id"]),
+        deployment_scope_id=str(value["deployment_scope_id"]),
+        snapshots=tuple(snapshots),
+        digest=expected_digest,
     )
 
 
@@ -401,16 +452,10 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
             "SELECT admission_id,admission_json FROM pygent_model_admissions"
         )).fetchall():
             value = json.loads(payload)
-            snapshots = tuple(
-                (str(item["group_name"]), _snapshot_from_value(item["snapshot"]))
-                for item in value["snapshots"]
-            )
-            self._admissions[admission_id] = ModelAdmission(
-                admission_id=admission_id,
-                deployment_scope_id=str(value["deployment_scope_id"]),
-                snapshots=snapshots,
-                digest=str(value["digest"]),
-            )
+            admission = _admission_from_value(value)
+            if admission.admission_id != admission_id:
+                raise ValueError("stored model admission identity does not match its key")
+            self._admissions[admission_id] = admission
 
     def _connection(self) -> aiosqlite.Connection:
         if self._db is None:
@@ -649,15 +694,9 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
         if existing is not None:
             await db.commit()
             value = json.loads(existing[0])
-            admission = ModelAdmission(
-                admission_id=identity,
-                deployment_scope_id=str(value["deployment_scope_id"]),
-                snapshots=tuple(
-                    (str(item["group_name"]), _snapshot_from_value(item["snapshot"]))
-                    for item in value["snapshots"]
-                ),
-                digest=str(value["digest"]),
-            )
+            admission = _admission_from_value(value)
+            if admission.admission_id != identity:
+                raise ValueError("stored model admission identity does not match its key")
             if admission.deployment_scope_id != scope_id:
                 raise ModelDeploymentConflictError(
                     "admission identity belongs to another deployment scope"
@@ -719,15 +758,10 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
         if row is None:
             return None
         value = json.loads(row[0])
-        return ModelAdmission(
-            admission_id=admission_id,
-            deployment_scope_id=str(value["deployment_scope_id"]),
-            snapshots=tuple(
-                (str(item["group_name"]), _snapshot_from_value(item["snapshot"]))
-                for item in value["snapshots"]
-            ),
-            digest=str(value["digest"]),
-        )
+        admission = _admission_from_value(value)
+        if admission.admission_id != admission_id:
+            raise ValueError("stored model admission identity does not match its key")
+        return admission
 
     @_sqlite_serialized
     async def release_admission(self, admission_id: str, *, recoverable: bool = False) -> None:

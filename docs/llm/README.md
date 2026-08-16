@@ -5,7 +5,7 @@
 1. [第一原则](FEATURES.md)
 2. [SDK 使用](SDK.md)
 3. 本文的详细契约
-4. 按需阅读 [延迟与动态模型组规范](DYNAMIC_MODEL_GROUP_SPEC.md)；实现设计见 [独立实现文档](DYNAMIC_MODEL_GROUP_IMPLEMENTATION.md)
+4. 按需阅读 [Provider 路由选项规范](PROVIDER_OPTIONS_SPEC.md) 与 [延迟及动态模型组规范](DYNAMIC_MODEL_GROUP_SPEC.md)；动态模型组实现设计见 [独立实现文档](DYNAMIC_MODEL_GROUP_IMPLEMENTATION.md)
 
 LLM 域向用户提供 ModelCallLayer、ModelInvoker 与 ModelProviderAdapter。Layer 声明调用哪个模型组以及如何调用；Invoker 负责 route、retry、fallback 和标准化结果；Provider adapter 负责请求/响应转换与错误归一。Runtime 只拥有 Provider client/连接池的生命周期、容量计数、deadline、取消与执行调度，不拥有 Provider 协议逻辑。
 
@@ -32,6 +32,7 @@ usage、实际 route、attempt 和耗时通过类型化 ExecutionEvent 暴露；
 ## 配置边界
 
 - ModelGroupConfig 描述逻辑模型组、解析状态和组级最大并发声明；固定组同时包含候选 route 与 fallback 顺序，延迟组只包含托管部署需求。
+- ModelRoute 的仅关键字 `provider_options` 描述 Provider 私有但稳定的严格 JSON 路由语义；值会防御性复制并递归冻结，非空值参与定义、部署和 effect 身份，空值保持原 canonical payload。
 - RetryPolicy 描述同一 route 内的重试条件、次数与退避，不决定 fallback 顺序。
 - GenerationConfig 描述与一个 ModelCallLayer 定义绑定的生成行为。
 
@@ -56,6 +57,7 @@ ModelCallLayer
 ```
 
 - ModelInvoker 选择 route，并在统一 attempt/deadline 预算内执行 retry 与 fallback。
+- ModelProviderRouteValidator 是 adapter 的公开预检 SPI；第三方 adapter 若未实现它，只能继续处理空 `provider_options`，非空选项在 Provider I/O 前 fail closed。
 - ModelProviderAdapter 构造 Provider JSON 请求、解析完整或流式响应，并把 Provider 错误归一为 ModelErrorKind。
 - ModelProviderClient 只负责实际网络传输；Runtime 可以创建、缓存和关闭 client，但不解释 Provider payload。
 - LLM 域产生 route、attempt、usage 和错误事实，Runtime 将它们包装为当前 Execution 的有序事件。
@@ -63,6 +65,8 @@ ModelCallLayer
 ModelCatalog 是与 ModelProviderClient 分离的可选协议。OpenAICompatibleClient 同时提供 `client.models.list()` 便利入口，但自定义推理 client 不需要实现模型目录；目录请求不创建 ModelExecution，不消耗 Model permit，也不发布 `model.*` 事件。
 
 Provider adapter、client 和 invoker 都不得写入 Context，也不得把 secret、连接或 Provider 原始对象放入公开值。
+
+内置 OpenAI-compatible adapter 会再次验证 route，并把选项浅合并到请求顶层。框架保留字段以及 secret、认证、连接、endpoint、retry、deadline、stream 等类别始终拒绝；DeepSeek `thinking.type` 只接受 `enabled` 或 `disabled`。未知 OpenAI-compatible Provider 默认允许其余严格 JSON 结构透传，但这不是 Provider 能力证明。
 
 ## 调度、重试与 fallback
 
