@@ -23,7 +23,7 @@ from pygent.core import (
     UserMessage,
     thaw_json,
 )
-from pygent.llm import ModelAttempt
+from pygent.llm import ModelAttempt, ModelFailureReason
 from pygent.runtime import (
     CapacityPolicy,
     CapacityScope,
@@ -543,7 +543,14 @@ async def test_worker_preserves_model_failure_kind_attempts_and_partial_output()
         "model capacity exhausted",
         kind=ModelErrorKind.RATE_LIMIT,
         attempts=(
-            ModelAttempt("glm", "failed", ModelErrorKind.RATE_LIMIT, 1),
+            ModelAttempt(
+                "glm",
+                "failed",
+                ModelErrorKind.RATE_LIMIT,
+                1,
+                reason_code=ModelFailureReason.QUOTA_EXHAUSTED,
+                http_status=429,
+            ),
             ModelAttempt("glm", "failed", ModelErrorKind.RATE_LIMIT, 2),
         ),
         partial_output=True,
@@ -576,6 +583,8 @@ async def test_worker_preserves_model_failure_kind_attempts_and_partial_output()
     assert remote.failure.retryable is True
     assert remote.failure.partial_output is True
     assert len(remote.failure.details["attempts"]) == 2
+    assert remote.failure.details["attempts"][0]["reason_code"] == "quota_exhausted"
+    assert remote.failure.details["attempts"][0]["http_status"] == 429
     assert events[-1].kind == "execution.failed"
     assert events[-1].data["failure"]["kind"] == "rate_limit"
 

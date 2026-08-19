@@ -39,6 +39,7 @@ from .types import (
     ModelAttempt,
     ModelCallError,
     ModelErrorKind,
+    ModelFailureReason,
     ModelGroupConfig,
     ModelGroupConfigurationError,
     ModelProviderError,
@@ -342,8 +343,16 @@ class DefaultModelInvoker:
                 except Exception as exc:  # noqa: BLE001 - provider SPI boundary
                     kind = adapter.normalize_error(exc)
                     last_kind = kind
+                    reason_code, http_status = _safe_failure_diagnostics(exc, kind)
                     attempts.append(
-                        ModelAttempt(route_id, "failed", kind, attempt=number)
+                        ModelAttempt(
+                            route_id,
+                            "failed",
+                            kind,
+                            attempt=number,
+                            reason_code=reason_code,
+                            http_status=http_status,
+                        )
                     )
                     await _emit(
                         event_sink,
@@ -388,7 +397,7 @@ class DefaultModelInvoker:
                         cancel_event=cancel_event,
                     )
         raise ModelCallError(
-            "model stream failed after retry and fallback",
+            _terminal_failure_message(attempts),
             kind=last_kind,
             attempts=tuple(attempts),
         )
@@ -530,6 +539,27 @@ def _validate_route_for_request(
         raise
     except (TypeError, ValueError) as exc:
         raise ModelProviderError(ModelErrorKind.INVALID_REQUEST, str(exc)) from None
+
+
+def _safe_failure_diagnostics(
+    error: BaseException, kind: ModelErrorKind
+) -> tuple[ModelFailureReason | None, int | None]:
+    if isinstance(error, ModelProviderError) and error.kind is kind:
+        return error.reason_code, error.http_status
+    return None, None
+
+
+def _terminal_failure_message(attempts: list[ModelAttempt]) -> str:
+    message = "model stream failed after retry and fallback"
+    if not attempts:
+        return message
+    last = attempts[-1]
+    if last.reason_code is None:
+        return message
+    diagnostic = last.reason_code.value
+    if last.http_status is not None:
+        diagnostic += f" (HTTP {last.http_status})"
+    return f"{message}: {diagnostic}"
 
 
 def _earliest_deadline(

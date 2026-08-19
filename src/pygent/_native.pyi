@@ -12,6 +12,7 @@ class NativeHttpClient:
         headers: Mapping[str, str],
         trust_environment: bool,
         max_connections: int,
+        verify_ssl: bool = True,
     ) -> None: ...
     async def request_json(
         self,

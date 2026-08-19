@@ -313,14 +313,14 @@ model.route.provider-options.v1
 `provider_options` 是 portable semantic configuration，不是资源容器。禁止包含：
 
 - API key、token、cookie、Authorization header；
-- endpoint、代理认证或 TLS 私钥；
+- endpoint、代理认证、TLS 私钥、CA 或证书校验策略（包括 `verify_ssl`）；
 - client、session、连接池、锁、Task、协程或 callback；
 - retry 次数、backoff、attempt timeout 或总 deadline；
 - stream 开关；
 - Runtime、Binding、Execution 或 resource resolver 对象；
 - Provider 原始响应或内部异常。
 
-Credential、endpoint、headers 和连接仍通过精确 `ModelResourceRef`、resolver、client 与 invoker 部署边界提供。配置界面、日志、异常、事件和诊断输出不得打印完整 `provider_options`；只允许经过策略批准的字段名或摘要。
+Credential、endpoint、headers、TLS/CA 策略和连接仍通过精确 `ModelResourceRef`、resolver、client 与 invoker 部署边界提供。配置界面、日志、异常、事件和诊断输出不得打印完整 `provider_options`；只允许经过策略批准的字段名或摘要。
 
 框架无法仅凭字符串内容可靠判断 secret，因此发布方仍承担不把 secret 放入 portable metadata 的责任。受信准备层可以实施额外 denylist、schema 和大小限制，但不能把扫描成功描述为 secret-free 证明。
 

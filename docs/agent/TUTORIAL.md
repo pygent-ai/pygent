@@ -182,7 +182,9 @@ export PYGENT_MODEL_NAME="your-model"
 uv run python -m examples.tutorial live
 ```
 
-[`build_live_invoker()`](../../examples/tutorial/providers.py) 使用 `OpenAICompatibleClient`、`OpenAICompatibleAdapter` 和 `DefaultModelInvoker`。调用结束后 runner 显式执行 `aclose()`；配置对象的 `repr` 不包含密钥。
+`PYGENT_VERIFY_SSL` 默认为 `true`。只有在受控的本地开发环境中需要连接临时自签名服务时，才显式设置为 `false`；生产环境应保持校验开启，并通过自定义 CA trust store 解决私有证书链问题。
+
+[`build_live_invoker()`](../../examples/tutorial/providers.py) 使用 `OpenAICompatibleClient`、`OpenAICompatibleAdapter` 和 `DefaultModelInvoker`，并在构造 client 时传入 TLS 校验策略。调用结束后 runner 显式执行 `aclose()`；配置对象的 `repr` 不包含密钥。
 
 ## 7. 什么时候使用 Runtime
 

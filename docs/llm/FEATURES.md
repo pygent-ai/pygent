@@ -8,7 +8,7 @@
 4. **预算统一**：重试、fallback、deadline、attempt 与取消清理必须处于同一有界预算。只有上一 attempt 已确认结束后才能启动下一 attempt；若取消清理无法在预算内确认，结果为 `OUTCOME_UNKNOWN`，必须 fail closed，不得 retry 或 fallback。
 5. **容量责任按模式划分**：direct execution 不提供跨调用的框架容量治理；managed execution 中，多个 Layer 指向同一资源时共享 Runtime 容量所有者。
 6. **执行同源**：流式与非流式运行同一个 `forward()`，只改变事件观察方式。
-7. **边界安全**：secret、连接、Provider 原始响应和内部异常不得泄露到公开值。
+7. **边界安全且可诊断**：secret、连接、Provider 原始响应和内部异常不得泄露到公开值。Provider adapter 必须把失败投影为 Provider 无关的稳定错误类别和封闭的脱敏原因码；允许附带 HTTP status 等经过严格验证的非敏感标量，但不得转发 Provider 任意 message、code、header、请求/响应正文或异常链。公开诊断必须在 direct、managed、Worker 与 durable 边界保持相同语义。TLS 校验、CA、代理和 endpoint 属于 Provider client 或 resolver 拥有的部署资源策略，不能进入 ModelRoute、GenerationConfig、Context、ExecutionOptions 或单次 Provider 请求体；策略变化必须创建新的 client，managed 部署还必须使用新的资源 revision。
 8. **Binding 模型门禁只属于托管执行**：Binding 可以选择透传模型流量，或增加 Binding/资源组级共享上限；两种托管模式都必须服从 deadline、取消和有界 live execution 约束。direct execution 的限流与外部 deadline 由调用方或 adapter 负责。
 9. **Provider 逻辑不进入 Runtime**：Runtime 不构造 OpenAI、Anthropic 或其他 Provider 请求，也不解释其响应；Provider 差异只能存在于 LLM adapter。
 10. **中间事件是固定协议**：reasoning、正文、ToolCall 生成、usage、attempt 与模型终态只能通过封闭的 `model.*` 事件集合输出；未知 Provider 增量必须被拒绝或显式忽略，不能伪装成完成事件。`model.completed` 只能在最终 Message、ToolCall、结构化输出和 usage 完成校验后发布。

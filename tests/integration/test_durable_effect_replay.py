@@ -16,7 +16,7 @@ from pygent import (
     RetryPolicy,
     UserMessage,
 )
-from pygent.llm import ModelExecution
+from pygent.llm import ModelAttempt, ModelExecution, ModelFailureReason
 from pygent.runtime import (
     ExecutionOptions,
     ExecutionStatus,
@@ -32,7 +32,19 @@ class FailingInvoker:
     def execute(self, **kwargs):
         async def operation(emit):
             self.calls += 1
-            raise ModelCallError("provider unavailable", kind=ModelErrorKind.UNAVAILABLE)
+            raise ModelCallError(
+                "provider unavailable",
+                kind=ModelErrorKind.UNAVAILABLE,
+                attempts=(
+                    ModelAttempt(
+                        "primary",
+                        "failed",
+                        ModelErrorKind.UNAVAILABLE,
+                        reason_code=ModelFailureReason.PROVIDER_UNAVAILABLE,
+                        http_status=503,
+                    ),
+                ),
+            )
 
         return ModelExecution(operation)
 
@@ -75,6 +87,10 @@ async def test_terminal_model_failure_and_event_cursor_replay_without_provider_c
         attached = await runtime.get_execution_handle(execution_id)
         outcome = await attached.outcome()
         assert outcome.status is ExecutionStatus.FAILED
+        with pytest.raises(ModelCallError) as replayed:
+            await attached.result()
+        assert replayed.value.attempts[0].reason_code is ModelFailureReason.PROVIDER_UNAVAILABLE
+        assert replayed.value.attempts[0].http_status == 503
         events = await history.events_after(execution_id=execution_id)
         await runtime.close()
 

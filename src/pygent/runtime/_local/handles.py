@@ -7,9 +7,17 @@ from collections.abc import AsyncIterator
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
-from pygent.core import Context, ExecutionFailure, JsonValue, Message, Module, thaw_json
+from pygent.core import (
+    Context,
+    ExecutionFailure,
+    ExecutionFailureError,
+    JsonValue,
+    Message,
+    Module,
+    thaw_json,
+)
 from pygent.core._module_contracts import _execution_scope
-from pygent.llm import ModelGroupConfig
+from pygent.llm import ModelCallError, ModelGroupConfig
 
 from .._history_store import SQLiteHistoryStore
 from ..api import (
@@ -300,9 +308,14 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
                 )
                 return cast(OutputMessageT, message), context
             if status.terminal:
-                raise RuntimeError(
-                    f"execution {self._execution_id} ended with {status.value}: {stored.error!r}"
-                )
+                if stored.error is None:
+                    raise RuntimeError(
+                        f"execution {self._execution_id} ended with {status.value}"
+                    )
+                failure = ExecutionFailure.from_dict(thaw_json(stored.error))
+                if failure.domain == "model":
+                    raise ModelCallError.from_failure(failure)
+                raise ExecutionFailureError(failure)
             await asyncio.sleep(0.02)
 
     async def outcome(self) -> ExecutionOutcome:

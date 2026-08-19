@@ -75,7 +75,7 @@ route = ModelRoute(
 )
 ```
 
-`provider_options` 是仅关键字、严格 JSON、递归不可变的 route 定义值；原字典后续修改不会影响 route。它不能承载 secret、endpoint、client、连接、认证头、retry、deadline、stream 或框架保留请求字段，也不能由单次调用覆盖。OpenAI-compatible adapter 对未知 Provider 默认只做非保留严格 JSON 的结构透传，这不表示 Provider 能力已经验证；DeepSeek `thinking` 则使用严格子 schema。第三方 adapter 只有实现公开的 `ModelProviderRouteValidator` 后才能接受非空选项，空选项调用保持原行为。
+`provider_options` 是仅关键字、严格 JSON、递归不可变的 route 定义值；原字典后续修改不会影响 route。它不能承载 secret、endpoint、client、连接、认证头、TLS/证书校验策略、retry、deadline、stream 或框架保留请求字段，也不能由单次调用覆盖。OpenAI-compatible adapter 对未知 Provider 默认只做非保留严格 JSON 的结构透传，这不表示 Provider 能力已经验证；DeepSeek `thinking` 则使用严格子 schema。第三方 adapter 只有实现公开的 `ModelProviderRouteValidator` 后才能接受非空选项，空选项调用保持原行为。
 
 `ModelGroupConfig.max_concurrency` 是模型物理资源约束声明，不是 Layer 私有 semaphore。`capacity_key` 是多个逻辑模型组共享同一物理 endpoint/credential/model 配额时使用的稳定身份；省略时退回模型组名称。direct execution 不负责跨 Root 协调该声明，调用方或本地 adapter 自行限流；managed execution 中，相同 `capacity_key` 的 Layer 共享同一 Runtime 容量所有者，不得将各 Layer 的数值累加成更高物理并发。
 
@@ -100,11 +100,45 @@ finally:
     await client.aclose()
 ```
 
-默认 OpenAI-compatible transport 使用八个有界 HTTP/1.1 连接池，总计最多 256 个连接、
-64 个 keep-alive 连接，并以无等待轮询分配请求。这样在高并发下避免单个大连接池的
-线性扫描，同时保持 direct 模式的连接资源有界。需要 HTTP/2、代理、证书或不同连接
-上限时，应用可以通过现有 `client=httpx.AsyncClient(...)` 注入部署客户端；注入客户端
-的关闭责任仍属于调用方，`OpenAICompatibleClient.aclose()` 只关闭自己创建的连接池。
+默认 OpenAI-compatible native transport 使用一个有界连接池，总计最多 56 个请求准入和
+32 个并发连接。证书和 hostname 校验默认开启；只有受控开发环境才应在 client 构造期显式
+传入 `verify_ssl=False`。该参数是部署资源策略，不能放入 `ModelRoute.provider_options`，也不能
+在连接池建立后修改：
+
+```python
+client = OpenAICompatibleClient(
+    base_url="https://development-model.internal/v1",
+    api_key="token",
+    verify_ssl=False,
+)
+```
+
+生产环境使用私有 CA 时不应关闭校验，而应创建严格 `SSLContext` 并通过 caller-owned HTTPX
+client 注入。注入 client 与 `verify_ssl` 互斥，TLS 与关闭责任都属于调用方：
+
+```python
+import ssl
+
+import httpx
+
+ssl_context = ssl.create_default_context(cafile="/etc/company/model-ca.pem")
+http_client = httpx.AsyncClient(verify=ssl_context)
+client = OpenAICompatibleClient(
+    base_url="https://model.internal/v1",
+    api_key="token",
+    client=http_client,
+)
+
+try:
+    available = await client.models.list()
+finally:
+    await client.aclose()
+    await http_client.aclose()
+```
+
+需要 HTTP/2、代理、自定义 CA 或不同连接上限时同样使用注入 client。`OpenAICompatibleClient.aclose()`
+不会关闭调用方注入的 client。managed 部署由 `ModelResourceResolver` 构造相同策略的 client/invoker；
+切换 TLS 校验或 CA 时必须发布新的 resource revision，Runtime 不读取或解释 TLS 字段。
 
 `list()` 默认使用独立的十秒有限超时，可以通过 `timeout=<positive seconds>` 调整，或显式传 `None` 交给调用方取消边界。返回顺序与 Provider 一致；每个 ModelInfo 只保留稳定的 `id` 以及可选 `created`、`owned_by`。认证、限流、超时、不可用和非法响应通过脱敏的 ModelProviderError/ModelErrorKind 报告。
 
@@ -131,6 +165,8 @@ route = ModelRoute(
 所有 route、retry、fallback、容量等待和 attempt 必须消耗同一有限 effective deadline 与取消预算；adapter 不得建立隐藏的第二套重试或 deadline 预算。`ModelCallLayer` 声明 `requires_finite_deadline=True`，因此 managed Root 或任意包含它的 Module 图在没有有限 `ExecutionOptions.deadline` 时必须于 admission 阶段 fail closed，不能等到 Provider I/O 后才失败。direct execution 不启用该 Runtime 门禁，外部 deadline 仍由调用方或 adapter 负责。
 
 attempt timeout 取消 Provider task 后，ModelInvoker 最多使用内部 1 秒 cleanup grace，并进一步受剩余 effective deadline 限制。只有 task 已确认退出，`TIMEOUT` 才能按 `RetryPolicy` 进入 retry/fallback；清理未确认时公开错误为 `ModelErrorKind.OUTCOME_UNKNOWN`，`model.attempt.failed` 固定携带脱敏的 `reason="cancellation_cleanup_timeout"`，本次模型调用立即终止。Invoker 按 client 对象身份隔离仍未退出的 task；隔离期间同一 client 的新逻辑 attempt fail-fast，不发送 Provider 请求，后台 task 退出并被安全回收后自动解除隔离。调用方显式取消仍传播 `CancelledError`，不会转换为模型失败。
+
+Provider 请求失败时，`ModelCallError.attempts` 保留每次 attempt 的 `error_kind`、封闭脱敏 `reason_code` 和可选的数字 `http_status`。`reason_code` 用于区分 `model_not_found`、`quota_exhausted`、`context_length_exceeded` 等可操作原因；它由 Provider adapter 基于受支持的 Provider code/type 白名单映射，不是 Provider message 的原样或清洗后转发。未识别的响应使用通用脱敏原因；Provider 任意 message、code、header、body、endpoint、credential 和内部异常链都不进入 Message、Context、ExecutionEvent 或公开失败值。managed effect、durable replay 和 Worker 传输必须原样保留这些脱敏字段。
 
 `ModelCallLayer` 通过公开 `pygent.core.current_infrastructure()` 获取 effective deadline、Model permit、部署 `ModelInvoker` resolver 和 managed effect replay；它不导入私有 execution ContextVar。用户自定义模型基础设施 Module 可以使用同一 SPI。Runtime 只解析部署注入的 invoker 并治理执行，不拥有 route、retry、fallback、HTTP client 或 Provider 解析逻辑。
 

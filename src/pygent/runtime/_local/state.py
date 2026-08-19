@@ -245,21 +245,24 @@ class _ExecutionRecord:
         failure: ExecutionFailure | None = None
         stored_error = error
         if status is not ExecutionStatus.SUCCEEDED:
-            error_value = error if isinstance(error, Mapping) else {}
-            kind = str(error_value.get("type", status.value))
-            message = str(
-                error_value.get("message", f"execution ended with {status.value}")
-            )
-            failure = ExecutionFailure(
-                domain="runtime",
-                kind=kind,
-                message=message,
-                details={
-                    key: value
-                    for key, value in error_value.items()
-                    if key not in {"type", "message"}
-                },
-            )
+            if isinstance(error, ExecutionFailure):
+                failure = error
+            else:
+                error_value = error if isinstance(error, Mapping) else {}
+                kind = str(error_value.get("type", status.value))
+                message = str(
+                    error_value.get("message", f"execution ended with {status.value}")
+                )
+                failure = ExecutionFailure(
+                    domain="runtime",
+                    kind=kind,
+                    message=message,
+                    details={
+                        key: value
+                        for key, value in error_value.items()
+                        if key not in {"type", "message"}
+                    },
+                )
             stored_error = failure.to_dict()
         self.phase = ExecutionPhase.FINALIZING
         async with self.event_lock:
