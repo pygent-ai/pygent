@@ -66,9 +66,7 @@ async def test_managed_tutorial_uses_default_or_explicit_profile_and_closes_reso
     selected_profile: str | None,
     expected: str,
 ) -> None:
-    result, quick, quality = await run_managed_demo(
-        selected_profile=selected_profile
-    )
+    result, quick, quality = await run_managed_demo(selected_profile=selected_profile)
 
     assert result.answer == expected
     assert quick.closed
@@ -85,6 +83,7 @@ def test_live_config_is_explicit_and_does_not_repr_the_secret() -> None:
     )
 
     assert config.model_name == "example-model"
+    assert config.verify_ssl is True
     assert "very-secret" not in repr(config)
 
     with pytest.raises(RuntimeError, match="PYGENT_API_KEY"):
@@ -94,3 +93,18 @@ def test_live_config_is_explicit_and_does_not_repr_the_secret() -> None:
                 "PYGENT_MODEL_NAME": "example-model",
             }
         )
+
+
+def test_live_config_accepts_only_explicit_tls_verification_booleans() -> None:
+    environment = {
+        "PYGENT_API_BASE": "https://models.example/v1",
+        "PYGENT_API_KEY": "very-secret",
+        "PYGENT_MODEL_NAME": "example-model",
+        "PYGENT_VERIFY_SSL": "false",
+    }
+
+    assert LiveModelConfig.from_environment(environment).verify_ssl is False
+
+    environment["PYGENT_VERIFY_SSL"] = "disabled"
+    with pytest.raises(RuntimeError, match="PYGENT_VERIFY_SSL"):
+        LiveModelConfig.from_environment(environment)

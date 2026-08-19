@@ -53,10 +53,12 @@ struct NativeHttpClient {
 #[pymethods]
 impl NativeHttpClient {
     #[new]
+    #[pyo3(signature = (headers, trust_environment, max_connections, verify_ssl=true))]
     fn new(
         headers: HashMap<String, String>,
         trust_environment: bool,
         max_connections: usize,
+        verify_ssl: bool,
     ) -> PyResult<Self> {
         let mut header_map = HeaderMap::with_capacity(headers.len());
         for (name, value) in headers {
@@ -69,7 +71,8 @@ impl NativeHttpClient {
         let mut builder = reqwest::Client::builder()
             .default_headers(header_map)
             .pool_max_idle_per_host(max_connections)
-            .tcp_nodelay(true);
+            .tcp_nodelay(true)
+            .danger_accept_invalid_certs(!verify_ssl);
         if !trust_environment {
             builder = builder.no_proxy();
         }

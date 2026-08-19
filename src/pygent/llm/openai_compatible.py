@@ -37,6 +37,7 @@ from ._adapter_contracts import (
 from .catalog import ModelCatalog, ModelInfo
 from .types import (
     ModelErrorKind,
+    ModelFailureReason,
     ModelProviderError,
     ModelRoute,
 )
@@ -46,6 +47,19 @@ _DEFAULT_HTTP1_POOL_SHARDS = 8
 _DEFAULT_MAX_CONNECTIONS_PER_SHARD = 7
 _DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD = 7
 _SSE_DRAIN_GRACE_SECONDS = 0.05
+_MAX_PROVIDER_ERROR_BYTES = 64 * 1024
+_PROVIDER_ERROR_REASONS = {
+    "authentication_error": ModelFailureReason.AUTHENTICATION_FAILED,
+    "invalid_api_key": ModelFailureReason.AUTHENTICATION_FAILED,
+    "permission_denied": ModelFailureReason.PERMISSION_DENIED,
+    "rate_limit_exceeded": ModelFailureReason.RATE_LIMITED,
+    "insufficient_quota": ModelFailureReason.QUOTA_EXHAUSTED,
+    "quota_exceeded": ModelFailureReason.QUOTA_EXHAUSTED,
+    "model_not_found": ModelFailureReason.MODEL_NOT_FOUND,
+    "context_length_exceeded": ModelFailureReason.CONTEXT_LENGTH_EXCEEDED,
+    "content_policy_violation": ModelFailureReason.CONTENT_POLICY_REJECTED,
+    "content_filter": ModelFailureReason.CONTENT_POLICY_REJECTED,
+}
 _OPENAI_RESERVED_PROVIDER_FIELDS = frozenset(
     {
         "model",
@@ -84,6 +98,7 @@ _FORBIDDEN_PROVIDER_OPTION_KEYS = frozenset(
         "proxyauthentication",
         "proxycredentials",
         "tlsprivatekey",
+        "verifyssl",
         "privatekey",
         "client",
         "session",
@@ -234,9 +249,14 @@ class OpenAICompatibleClient:
         api_key: str | None = None,
         headers: Mapping[str, str] | None = None,
         client: httpx.AsyncClient | None = None,
+        verify_ssl: bool | None = None,
     ) -> None:
         if not base_url:
             raise ValueError("base_url must be non-empty")
+        if verify_ssl is not None and not isinstance(verify_ssl, bool):
+            raise TypeError("verify_ssl must be a bool or None")
+        if client is not None and verify_ssl is not None:
+            raise ValueError("verify_ssl cannot be set with an injected HTTP client")
         request_headers = dict(headers or {})
         if api_key is not None:
             request_headers.setdefault("Authorization", f"Bearer {api_key}")
@@ -258,6 +278,7 @@ class OpenAICompatibleClient:
                 request_headers,
                 trust_env,
                 _DEFAULT_HTTP1_POOL_SHARDS * _DEFAULT_MAX_CONNECTIONS_PER_SHARD,
+                True if verify_ssl is None else verify_ssl,
             )
             self._clients = ()
             self._admissions = None
@@ -288,7 +309,7 @@ class OpenAICompatibleClient:
                 raise
             except RuntimeError as exc:
                 raise httpx.TransportError(str(exc)) from exc
-            _raise_for_native_status(status, "POST", self._endpoint)
+            _raise_for_native_status(status, "POST", self._endpoint, raw_body=raw_body)
             try:
                 body = json.loads(raw_body)
             except (TypeError, ValueError) as exc:
@@ -309,7 +330,8 @@ class OpenAICompatibleClient:
                 json=payload.to_dict(),
                 headers=self._request_headers or None,
             )
-            response.raise_for_status()
+            if not response.is_success:
+                raise _provider_status_error(response.status_code, response.content)
             try:
                 body = response.json()
             except (TypeError, ValueError) as exc:
@@ -335,9 +357,7 @@ class OpenAICompatibleClient:
             self._ensure_open()
             body = payload.to_dict()
             body["stream"] = True
-            native_stream = native_client.stream_sse(
-                self._endpoint, _wire_json(body)
-            )
+            native_stream = native_client.stream_sse(self._endpoint, _wire_json(body))
             completed = False
             try:
                 async for kind, value in native_stream:
@@ -382,7 +402,9 @@ class OpenAICompatibleClient:
                 json=body,
                 headers={**self._request_headers, "Accept": "text/event-stream"},
             ) as response:
-                response.raise_for_status()
+                if not response.is_success:
+                    raw_error = await _read_bounded_error_body(response)
+                    raise _provider_status_error(response.status_code, raw_error)
                 lines = response.aiter_lines()
                 async for line in lines:
                     line = line.strip()
@@ -464,9 +486,7 @@ class OpenAICompatibleClient:
         admission = None if self._admissions is None else self._admissions[index]
         return self._clients[index], admission
 
-    async def _list_models_payload(
-        self, *, timeout: float | None
-    ) -> FrozenJsonObject:
+    async def _list_models_payload(self, *, timeout: float | None) -> FrozenJsonObject:
         self._ensure_open()
         native_client = self._native_client
         if native_client is not None:
@@ -478,7 +498,9 @@ class OpenAICompatibleClient:
                 raise
             except RuntimeError as exc:
                 raise httpx.TransportError(str(exc)) from exc
-            _raise_for_native_status(status, "GET", self._models_endpoint)
+            _raise_for_native_status(
+                status, "GET", self._models_endpoint, raw_body=raw_body
+            )
             try:
                 body = json.loads(raw_body)
             except (TypeError, ValueError) as exc:
@@ -500,7 +522,8 @@ class OpenAICompatibleClient:
                     headers=self._request_headers or None,
                     timeout=timeout,
                 )
-                response.raise_for_status()
+                if not response.is_success:
+                    raise _provider_status_error(response.status_code, response.content)
                 body = response.json()
             finally:
                 if admission is not None:
@@ -512,6 +535,8 @@ class OpenAICompatibleClient:
                 ModelErrorKind.INVALID_RESPONSE,
                 "model catalog returned invalid JSON",
             ) from exc
+        except ModelProviderError:
+            raise
         except Exception as exc:  # noqa: BLE001 - provider transport boundary
             kind = _normalize_openai_error(exc)
             raise ModelProviderError(kind, "model catalog request failed") from None
@@ -527,9 +552,7 @@ class _OpenAICompatibleModelCatalog:
     def __init__(self, client: OpenAICompatibleClient) -> None:
         self._client = client
 
-    async def list(
-        self, *, timeout: float | None = 10.0
-    ) -> tuple[ModelInfo, ...]:
+    async def list(self, *, timeout: float | None = 10.0) -> tuple[ModelInfo, ...]:
         _validate_catalog_timeout(timeout)
         payload = (await self._client._list_models_payload(timeout=timeout)).to_dict()
         object_type = payload.get("object")
@@ -625,8 +648,7 @@ class OpenAICompatibleAdapter:
             )
         if request.tools:
             body["tools"] = [
-                _tool_projection(tool, wire_names[tool.name])
-                for tool in request.tools
+                _tool_projection(tool, wire_names[tool.name]) for tool in request.tools
             ]
             choice = generation.tool_choice
             if choice in ("auto", "required", "none"):
@@ -839,14 +861,98 @@ def _wire_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def _raise_for_native_status(status: int, method: str, url: str) -> None:
+def _raise_for_native_status(
+    status: int,
+    method: str,
+    url: str,
+    *,
+    raw_body: str | bytes | None = None,
+) -> None:
     if 200 <= status < 300:
         return
-    request = httpx.Request(method, url)
-    response = httpx.Response(status, request=request)
-    raise httpx.HTTPStatusError(
-        f"provider returned HTTP {status}", request=request, response=response
+    del method, url
+    raise _provider_status_error(status, raw_body)
+
+
+async def _read_bounded_error_body(response: httpx.Response) -> bytes:
+    try:
+        return response.content[:_MAX_PROVIDER_ERROR_BYTES]
+    except httpx.ResponseNotRead:
+        body = bytearray()
+        async for chunk in response.aiter_bytes():
+            remaining = _MAX_PROVIDER_ERROR_BYTES - len(body)
+            if remaining <= 0:
+                break
+            body.extend(chunk[:remaining])
+            if len(chunk) > remaining:
+                break
+        return bytes(body)
+
+
+def _provider_status_error(
+    status: int, raw_body: str | bytes | None
+) -> ModelProviderError:
+    kind = _kind_for_http_status(status)
+    reason = _reason_for_provider_failure(status, raw_body)
+    return ModelProviderError(
+        kind,
+        f"model provider request failed: {reason.value}",
+        reason_code=reason,
+        http_status=status,
     )
+
+
+def _kind_for_http_status(status: int) -> ModelErrorKind:
+    if status in (401, 403):
+        return ModelErrorKind.AUTHENTICATION
+    if status == 429:
+        return ModelErrorKind.RATE_LIMIT
+    if status in (408, 504):
+        return ModelErrorKind.TIMEOUT
+    if 400 <= status < 500:
+        return ModelErrorKind.INVALID_REQUEST
+    if status >= 500:
+        return ModelErrorKind.UNAVAILABLE
+    return ModelErrorKind.UNKNOWN
+
+
+def _reason_for_provider_failure(
+    status: int, raw_body: str | bytes | None
+) -> ModelFailureReason:
+    if raw_body:
+        body_bytes = (
+            raw_body.encode("utf-8", errors="replace")
+            if isinstance(raw_body, str)
+            else raw_body
+        )[:_MAX_PROVIDER_ERROR_BYTES]
+        try:
+            payload = json.loads(body_bytes)
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, Mapping):
+            error = payload.get("error")
+            if isinstance(error, Mapping):
+                for key in ("code", "type"):
+                    value = error.get(key)
+                    if isinstance(value, str):
+                        reason = _PROVIDER_ERROR_REASONS.get(value.strip().lower())
+                        if reason is not None:
+                            return reason
+    if status == 401:
+        return ModelFailureReason.AUTHENTICATION_FAILED
+    if status == 403:
+        return ModelFailureReason.PERMISSION_DENIED
+    if status == 404:
+        return ModelFailureReason.RESOURCE_NOT_FOUND
+    if status == 429:
+        return ModelFailureReason.RATE_LIMITED
+    if status in (408, 504):
+        return ModelFailureReason.PROVIDER_TIMEOUT
+    if 400 <= status < 500:
+        return ModelFailureReason.INVALID_PARAMETER
+    if status >= 500:
+        return ModelFailureReason.PROVIDER_UNAVAILABLE
+    return ModelFailureReason.UNKNOWN_PROVIDER_FAILURE
 
 
 def _normalize_openai_error(error: BaseException) -> ModelErrorKind:

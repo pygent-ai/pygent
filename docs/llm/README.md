@@ -66,6 +66,8 @@ ModelCatalog 是与 ModelProviderClient 分离的可选协议。OpenAICompatible
 
 Provider adapter、client 和 invoker 都不得写入 Context，也不得把 secret、连接或 Provider 原始对象放入公开值。
 
+TLS 校验属于 Provider client 的构造期部署策略。内置 client 默认严格校验；受控开发环境可显式设置 `verify_ssl=False`，生产私有 CA 使用注入的 caller-owned HTTP client。TLS 策略不得进入 `provider_options` 或单次调用，且连接池建立后不可变；managed resolver 改变该策略时必须发布新的资源 revision。
+
 内置 OpenAI-compatible adapter 会再次验证 route，并把选项浅合并到请求顶层。框架保留字段以及 secret、认证、连接、endpoint、retry、deadline、stream 等类别始终拒绝；DeepSeek `thinking.type` 只接受 `enabled` 或 `disabled`。未知 OpenAI-compatible Provider 默认允许其余严格 JSON 结构透传，但这不是 Provider 能力证明。
 
 ## 调度、重试与 fallback

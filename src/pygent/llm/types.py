@@ -29,6 +29,38 @@ class ModelErrorKind(str, Enum):
     UNKNOWN = "unknown"
 
 
+class ModelFailureReason(str, Enum):
+    """Closed, Provider-neutral reasons safe to expose at public boundaries."""
+
+    PROVIDER_TIMEOUT = "provider_timeout"
+    PROVIDER_OUTCOME_UNKNOWN = "provider_outcome_unknown"
+    RATE_LIMITED = "rate_limited"
+    QUOTA_EXHAUSTED = "quota_exhausted"
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+    AUTHENTICATION_FAILED = "authentication_failed"
+    PERMISSION_DENIED = "permission_denied"
+    MODEL_NOT_FOUND = "model_not_found"
+    RESOURCE_NOT_FOUND = "resource_not_found"
+    CONTEXT_LENGTH_EXCEEDED = "context_length_exceeded"
+    INVALID_PARAMETER = "invalid_parameter"
+    CONTENT_POLICY_REJECTED = "content_policy_rejected"
+    INVALID_PROVIDER_RESPONSE = "invalid_provider_response"
+    UNKNOWN_PROVIDER_FAILURE = "unknown_provider_failure"
+
+
+def _default_failure_reason(kind: ModelErrorKind) -> ModelFailureReason:
+    return {
+        ModelErrorKind.TIMEOUT: ModelFailureReason.PROVIDER_TIMEOUT,
+        ModelErrorKind.OUTCOME_UNKNOWN: ModelFailureReason.PROVIDER_OUTCOME_UNKNOWN,
+        ModelErrorKind.RATE_LIMIT: ModelFailureReason.RATE_LIMITED,
+        ModelErrorKind.UNAVAILABLE: ModelFailureReason.PROVIDER_UNAVAILABLE,
+        ModelErrorKind.AUTHENTICATION: ModelFailureReason.AUTHENTICATION_FAILED,
+        ModelErrorKind.INVALID_REQUEST: ModelFailureReason.INVALID_PARAMETER,
+        ModelErrorKind.INVALID_RESPONSE: ModelFailureReason.INVALID_PROVIDER_RESPONSE,
+        ModelErrorKind.UNKNOWN: ModelFailureReason.UNKNOWN_PROVIDER_FAILURE,
+    }[kind]
+
+
 class ModelGroupResolution(str, Enum):
     CONCRETE = "concrete"
     DEFERRED = "deferred"
@@ -449,6 +481,8 @@ class ModelAttempt:
     status: Literal["succeeded", "failed", "cancelled"]
     error_kind: ModelErrorKind | None = None
     attempt: int = 1
+    reason_code: ModelFailureReason | None = None
+    http_status: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.route_id, str) or not self.route_id:
@@ -465,6 +499,23 @@ class ModelAttempt:
             self.error_kind, ModelErrorKind
         ):
             raise TypeError("error_kind must be a ModelErrorKind or None")
+        if self.reason_code is not None and not isinstance(
+            self.reason_code, ModelFailureReason
+        ):
+            raise TypeError("reason_code must be a ModelFailureReason or None")
+        if self.status == "failed" and self.error_kind is not None:
+            if self.reason_code is None:
+                object.__setattr__(
+                    self, "reason_code", _default_failure_reason(self.error_kind)
+                )
+        elif self.reason_code is not None or self.http_status is not None:
+            raise ValueError("only failed model attempts may contain diagnostics")
+        if self.http_status is not None and (
+            not isinstance(self.http_status, int)
+            or isinstance(self.http_status, bool)
+            or not 100 <= self.http_status <= 599
+        ):
+            raise ValueError("http_status must be an HTTP status integer")
 
 
 class ModelCallError(ExecutionFailureError):
@@ -509,6 +560,12 @@ class ModelCallError(ExecutionFailureError):
                                 else attempt.error_kind.value
                             ),
                             "attempt": attempt.attempt,
+                            "reason_code": (
+                                None
+                                if attempt.reason_code is None
+                                else attempt.reason_code.value
+                            ),
+                            "http_status": attempt.http_status,
                         }
                         for attempt in self.attempts
                     ]
@@ -536,6 +593,12 @@ class ModelCallError(ExecutionFailureError):
                         None if raw_kind is None else ModelErrorKind(cast(str, raw_kind))
                     ),
                     attempt=cast(int, item.get("attempt", 1)),
+                    reason_code=(
+                        None
+                        if item.get("reason_code") is None
+                        else ModelFailureReason(cast(str, item.get("reason_code")))
+                    ),
+                    http_status=cast(int | None, item.get("http_status")),
                 )
             )
         return cls(
@@ -549,9 +612,28 @@ class ModelCallError(ExecutionFailureError):
 class ModelProviderError(RuntimeError):
     """Sanitized adapter failure with a normalized kind."""
 
-    def __init__(self, kind: ModelErrorKind, message: str = "model provider failed") -> None:
+    def __init__(
+        self,
+        kind: ModelErrorKind,
+        message: str = "model provider failed",
+        *,
+        reason_code: ModelFailureReason | None = None,
+        http_status: int | None = None,
+    ) -> None:
+        if not isinstance(kind, ModelErrorKind):
+            raise TypeError("kind must be a ModelErrorKind")
+        if reason_code is not None and not isinstance(reason_code, ModelFailureReason):
+            raise TypeError("reason_code must be a ModelFailureReason or None")
+        if http_status is not None and (
+            not isinstance(http_status, int)
+            or isinstance(http_status, bool)
+            or not 100 <= http_status <= 599
+        ):
+            raise ValueError("http_status must be an HTTP status integer")
         super().__init__(message)
         self.kind = kind
+        self.reason_code = reason_code or _default_failure_reason(kind)
+        self.http_status = http_status
 
 
 __all__ = [
@@ -565,6 +647,7 @@ __all__ = [
     "ModelDeploymentConflictError",
     "ModelDeploymentUnavailableError",
     "ModelErrorKind",
+    "ModelFailureReason",
     "ModelGroupConfig",
     "ModelGroupConfigurationError",
     "ModelGroupError",

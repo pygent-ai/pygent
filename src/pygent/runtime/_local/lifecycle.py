@@ -11,7 +11,13 @@ from collections.abc import Mapping
 from types import TracebackType
 from typing import Any, Self, TypeVar, cast
 
-from pygent.core import Context, JsonValue, Message, freeze_json_object
+from pygent.core import (
+    Context,
+    ExecutionFailureError,
+    JsonValue,
+    Message,
+    freeze_json_object,
+)
 from pygent.core._module_contracts import _execution_scope
 from pygent.core.values import validate_context
 from pygent.llm import ModelCallLayer, ModelCallOptions, ModelProfileSelectionError
@@ -490,7 +496,11 @@ class _LifecycleMixin:
             await record.finalize(
                 status=ExecutionStatus.FAILED,
                 terminal_events=events,
-                error={"type": type(exc).__name__, "message": str(exc)},
+                error=(
+                    exc.failure
+                    if isinstance(exc, ExecutionFailureError)
+                    else {"type": type(exc).__name__, "message": str(exc)}
+                ),
             )
             raise
         finally:

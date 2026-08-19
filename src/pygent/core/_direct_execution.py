@@ -36,6 +36,7 @@ from .execution import (
     EffectOutcome,
     ExecutionEvent,
     ExecutionFailure,
+    ExecutionFailureError,
     ExecutionOptions,
     ExecutionOutcome,
     ExecutionOwnerState,
@@ -633,10 +634,14 @@ async def _run_direct_execution(
         )
         await record.notify_terminal(
             ExecutionStatus.FAILED,
-            ExecutionFailure(
-                domain="runtime",
-                kind=type(exc).__name__,
-                message=str(exc) or type(exc).__name__,
+            (
+                exc.failure
+                if isinstance(exc, ExecutionFailureError)
+                else ExecutionFailure(
+                    domain="runtime",
+                    kind=type(exc).__name__,
+                    message=str(exc) or type(exc).__name__,
+                )
             ),
         )
         raise

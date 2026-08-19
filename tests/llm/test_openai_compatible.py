@@ -17,6 +17,7 @@ from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import (
     GenerationConfig,
     ModelErrorKind,
+    ModelFailureReason,
     ModelInfo,
     ModelProviderError,
     ModelProviderRequest,
@@ -162,6 +163,50 @@ def test_provider_raw_diagnostics_are_not_projected_through_usage() -> None:
     assert dict(stream_parts[0].data) == {"output_tokens": 1}
     public = repr((response.message, response.usage, stream_parts))
     assert all(canary not in public for canary in canaries)
+
+
+@pytest.mark.asyncio
+async def test_provider_http_errors_expose_only_closed_sanitized_diagnostics() -> None:
+    canaries = (
+        "synthetic-api-key-canary",
+        "https://synthetic-endpoint.invalid/private",
+        "provider-internal-stack-canary",
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            json={
+                "error": {
+                    "code": "insufficient_quota",
+                    "type": "provider-private-type",
+                    "message": " ".join(canaries),
+                    "internal": {"trace": canaries[2]},
+                }
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = OpenAICompatibleClient(
+        base_url=canaries[1], api_key=canaries[0], client=http_client
+    )
+    route = ModelRoute("main", "openai", "gpt-test")
+    payload = OpenAICompatibleAdapter().build_request(_request())
+    try:
+        with pytest.raises(ModelProviderError) as invoked:
+            await client.invoke(route, payload)
+        with pytest.raises(ModelProviderError) as streamed:
+            async for _ in client.stream(route, payload):
+                pass
+    finally:
+        await client.aclose()
+        await http_client.aclose()
+
+    for error in (invoked.value, streamed.value):
+        assert error.kind is ModelErrorKind.RATE_LIMIT
+        assert error.reason_code is ModelFailureReason.QUOTA_EXHAUSTED
+        assert error.http_status == 429
+        assert all(canary not in repr(error) for canary in canaries)
 
 
 def test_stream_accepts_openai_usage_only_chunk_with_empty_choices() -> None:
@@ -371,8 +416,7 @@ async def test_http_and_sse_transport_use_openai_compatible_endpoint():
 
 
 @pytest.mark.asyncio
-async def test_completed_sse_response_reuses_http1_connection(
-) -> None:
+async def test_completed_sse_response_reuses_http1_connection() -> None:
     connection_count = 0
 
     async def serve_connection(
@@ -560,7 +604,7 @@ async def test_owned_client_honors_system_proxy_bypass(
     trust_environment = []
 
     class RecordingNativeClient:
-        def __init__(self, _headers, trust_env, _limit):
+        def __init__(self, _headers, trust_env, _limit, _verify_ssl):
             trust_environment.append(trust_env)
 
         async def close(self):
@@ -571,7 +615,9 @@ async def test_owned_client_honors_system_proxy_bypass(
         lambda _: bypass,
     )
 
-    monkeypatch.setattr(openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient)
+    monkeypatch.setattr(
+        openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient
+    )
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
 
     assert trust_environment == [not bypass]
@@ -585,7 +631,7 @@ async def test_owned_client_keeps_environment_when_proxy_bypass_fails(
     trust_environment = []
 
     class RecordingNativeClient:
-        def __init__(self, _headers, trust_env, _limit):
+        def __init__(self, _headers, trust_env, _limit, _verify_ssl):
             trust_environment.append(trust_env)
 
         async def close(self):
@@ -599,7 +645,9 @@ async def test_owned_client_keeps_environment_when_proxy_bypass_fails(
         fail_bypass,
     )
 
-    monkeypatch.setattr(openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient)
+    monkeypatch.setattr(
+        openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient
+    )
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
 
     assert trust_environment == [True]
@@ -643,25 +691,39 @@ async def test_owned_close_rejects_new_native_requests():
 
 @pytest.mark.asyncio
 async def test_owned_transport_uses_native_strict_tls_client(monkeypatch):
-    contexts = []
-    original_create_ssl_context = httpx.create_ssl_context
+    verify_values = []
 
-    def recording_create_ssl_context(*args, **kwargs):
-        context = original_create_ssl_context(*args, **kwargs)
-        contexts.append(context)
-        return context
+    class RecordingNativeClient:
+        def __init__(self, _headers, _trust_env, _limit, verify_ssl):
+            verify_values.append(verify_ssl)
 
-    monkeypatch.setattr(httpx, "create_ssl_context", recording_create_ssl_context)
-    client = OpenAICompatibleClient(
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient
+    )
+    strict = OpenAICompatibleClient(
         base_url="https://models.example/v1",
         api_key="secret",
     )
-    try:
-        assert contexts == []
-        assert client._native_client is not None
-        assert client._clients == ()
-    finally:
-        await client.aclose()
+    insecure = OpenAICompatibleClient(
+        base_url="https://development-model.internal/v1",
+        verify_ssl=False,
+    )
+
+    assert verify_values == [True, False]
+    await strict.aclose()
+    await insecure.aclose()
+
+
+@pytest.mark.parametrize("verify_ssl", [0, 1, "false", object()])
+def test_owned_client_rejects_non_boolean_verify_ssl(verify_ssl) -> None:
+    with pytest.raises(TypeError, match="verify_ssl"):
+        OpenAICompatibleClient(
+            base_url="https://models.example/v1",
+            verify_ssl=verify_ssl,
+        )
 
 
 @pytest.mark.asyncio
@@ -684,6 +746,23 @@ async def test_injected_http_client_does_not_create_or_take_over_ssl_context(
 
     assert not injected.is_closed
     await injected.aclose()
+
+
+@pytest.mark.parametrize("verify_ssl", [True, False])
+@pytest.mark.asyncio
+async def test_injected_http_client_rejects_verify_ssl(verify_ssl: bool) -> None:
+    injected = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200))
+    )
+    try:
+        with pytest.raises(ValueError, match="injected HTTP client"):
+            OpenAICompatibleClient(
+                base_url="https://models.example/v1",
+                client=injected,
+                verify_ssl=verify_ssl,
+            )
+    finally:
+        await injected.aclose()
 
 
 @pytest.mark.asyncio

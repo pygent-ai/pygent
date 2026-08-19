@@ -26,6 +26,7 @@ from pygent.llm import (
     ModelCallError,
     ModelCallLayer,
     ModelExecution,
+    ModelFailureReason,
     ModelGroupConfig,
     ModelProviderCapabilities,
     ModelProviderResponse,
@@ -385,8 +386,13 @@ async def test_provider_errors_are_sanitized_for_invoke_stream_and_run_events() 
         calls += 1
         if calls % 2:
             return httpx.Response(
-                503,
-                text=f"raw body {secret} {endpoint} {internal}",
+                429,
+                json={
+                    "error": {
+                        "code": "insufficient_quota",
+                        "message": f"raw body {secret} {endpoint} {internal}",
+                    }
+                },
             )
         raise RuntimeError(f"transport exploded: {secret} {endpoint} {internal}")
 
@@ -456,6 +462,10 @@ async def test_provider_errors_are_sanitized_for_invoke_stream_and_run_events() 
         sort_keys=True,
     )
     assert all(canary not in public for canary in canaries)
+    for error in (invoke_error.value, stream_error.value):
+        first_attempt = error.attempts[0]
+        assert first_attempt.reason_code is ModelFailureReason.QUOTA_EXHAUSTED
+        assert first_attempt.http_status == 429
     assert [
         event.kind for event in streamed_events if event.kind.startswith("model.")
     ] == [

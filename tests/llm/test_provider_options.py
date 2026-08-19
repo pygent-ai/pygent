@@ -43,9 +43,7 @@ def test_model_route_provider_options_are_keyword_only_frozen_and_hidden() -> No
         "thinking": {"type": "disabled"},
         "items": [1, {"ok": True}],
     }
-    route = ModelRoute(
-        "main", "deepseek", "deepseek-chat", provider_options=raw
-    )
+    route = ModelRoute("main", "deepseek", "deepseek-chat", provider_options=raw)
     cast(dict[str, str], raw["thinking"])["type"] = "enabled"
     cast(list[object], raw["items"]).append(2)
 
@@ -108,6 +106,7 @@ def test_openai_compatible_projects_deepseek_and_generic_options() -> None:
         {"secret": "not-allowed"},
         {"retry": 3},
         {"endpoint": "https://example.invalid"},
+        {"verify_ssl": False},
     ],
 )
 def test_openai_compatible_rejects_reserved_or_nonportable_options(
@@ -206,9 +205,7 @@ async def test_third_party_adapter_without_validator_fails_closed_before_io() ->
         invoker.validate_route(route)
 
     execution = invoker.execute(
-        model_group=ModelGroupConfig(
-            "custom", (route,), FallbackPolicy(("main",))
-        ),
+        model_group=ModelGroupConfig("custom", (route,), FallbackPolicy(("main",))),
         retry_policy=RetryPolicy(),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
@@ -224,9 +221,7 @@ async def test_third_party_adapter_without_validator_fails_closed_before_io() ->
 async def test_fallback_routes_receive_only_their_own_provider_options() -> None:
     primary = _OutcomeClient(httpx.ConnectError("offline"))
     fallback = _OutcomeClient(
-        freeze_json_object(
-            {"choices": [{"message": {"content": "fallback"}}]}
-        )
+        freeze_json_object({"choices": [{"message": {"content": "fallback"}}]})
     )
     routes = (
         ModelRoute(

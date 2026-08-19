@@ -62,7 +62,9 @@ class OfflineModelInvoker:
             if isinstance(message, ToolMessage):
                 result = message.results[0]
                 output = result.output
-                total = output.get("sum") if isinstance(output, FrozenJsonObject) else None
+                total = (
+                    output.get("sum") if isinstance(output, FrozenJsonObject) else None
+                )
                 content = f"{self.label}: 2 + 3 = {total}"
                 response = AIMessage(content=content)
                 await publish(
@@ -130,6 +132,7 @@ class LiveModelConfig:
     api_base: str
     api_key: str
     model_name: str
+    verify_ssl: bool = True
 
     @classmethod
     def from_environment(
@@ -144,14 +147,29 @@ class LiveModelConfig:
                 raise RuntimeError(f"missing required environment variable {name}")
             return value
 
+        def optional_bool(name: str, *, default: bool) -> bool:
+            value = values.get(name)
+            if value is None or not value.strip():
+                return default
+            normalized = value.strip().lower()
+            if normalized == "true":
+                return True
+            if normalized == "false":
+                return False
+            raise RuntimeError(f"{name} must be 'true' or 'false'")
+
         return cls(
             api_base=required("PYGENT_API_BASE"),
             api_key=required("PYGENT_API_KEY"),
             model_name=required("PYGENT_MODEL_NAME"),
+            verify_ssl=optional_bool("PYGENT_VERIFY_SSL", default=True),
         )
 
     def __repr__(self) -> str:
-        return "LiveModelConfig(api_configured=True, model_configured=True)"
+        return (
+            "LiveModelConfig(api_configured=True, model_configured=True, "
+            f"verify_ssl={self.verify_ssl!r})"
+        )
 
 
 def build_live_invoker(config: LiveModelConfig) -> ModelInvoker:
@@ -160,6 +178,7 @@ def build_live_invoker(config: LiveModelConfig) -> ModelInvoker:
     client = OpenAICompatibleClient(
         base_url=config.api_base,
         api_key=config.api_key,
+        verify_ssl=config.verify_ssl,
     )
     return DefaultModelInvoker(
         adapters={"openai": OpenAICompatibleAdapter()},
