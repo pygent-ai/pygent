@@ -39,6 +39,28 @@ from ._paths import (
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
 _SEARCH_MAX_BYTES = 50 * 1024
 _GREP_MAX_LINE_LENGTH = 500
+_WRITE_TOOL_DESCRIPTION = (
+    "Create a new UTF-8 file or completely replace an existing file.\n\n"
+    "Usage:\n"
+    "- Use this tool only when creating a new file or intentionally replacing the "
+    "whole file.\n"
+    "- Prefer edit for focused changes to an existing file. For complex or long "
+    "changes to an existing file, you MUST use multiple smaller atomic edit calls "
+    "instead of rewriting the whole file.\n"
+    "- Provide the complete literal file content. Do not use omission placeholders "
+    'such as "...", "rest of file", or "unchanged code".'
+)
+_EDIT_TOOL_DESCRIPTION = (
+    "Replace exact literal text in an existing UTF-8 file.\n\n"
+    "Usage:\n"
+    "- Read the current file before editing and preserve exact whitespace, "
+    "indentation, and newlines.\n"
+    "- Keep every edit focused. For complex or long changes, you MUST split the "
+    "work into multiple smaller atomic edit calls.\n"
+    "- Include only enough unchanged surrounding context to target the intended "
+    "occurrence; do not include long runs of unchanged text.\n"
+    "- Use write instead when intentionally replacing the whole file."
+)
 _DEFAULT_SEARCH_IGNORES = frozenset(
     {
         ".git",
@@ -515,8 +537,9 @@ class FileTools:
 
     @tool(
         tool_id="standard.files.write",
-        version="2.0.0",
+        version="2.1.0",
         side_effect=ToolSideEffect.WRITE,
+        description=_WRITE_TOOL_DESCRIPTION,
         idempotency=IdempotencyPolicy.INHERENT,
         timeout=30,
         resource_key="filesystem",
@@ -531,9 +554,18 @@ class FileTools:
                 description="Destination resolved from workspace_root and restricted to it by default."
             ),
         ],
-        content: str,
+        content: Annotated[
+            str,
+            Field(
+                description=(
+                    "Complete literal UTF-8 content for the entire file. Do not use "
+                    "omission placeholders such as '...', 'rest of file', or "
+                    "'unchanged code'."
+                )
+            ),
+        ],
     ) -> str:
-        """Replace a UTF-8 file atomically enough for a single local process."""
+        """Create or completely replace a UTF-8 file."""
 
         return await _run_owned_thread(self._io_service.write, file_path, content)
 
@@ -557,8 +589,9 @@ class FileTools:
 
     @tool(
         tool_id="standard.files.edit",
-        version="2.0.0",
+        version="2.1.0",
         side_effect=ToolSideEffect.WRITE,
+        description=_EDIT_TOOL_DESCRIPTION,
         idempotency=IdempotencyPolicy.NOT_IDEMPOTENT,
         timeout=30,
         resource_key="filesystem",
@@ -573,11 +606,38 @@ class FileTools:
                 description="File resolved from workspace_root and restricted to it by default."
             ),
         ],
-        old_string: str,
-        new_string: str,
-        replace_all: bool = False,
+        old_string: Annotated[
+            str,
+            Field(
+                description=(
+                    "Exact literal text to replace, including whitespace and "
+                    "indentation. Include only enough unchanged surrounding context "
+                    "to target the intended occurrence; do not include long runs of "
+                    "unchanged text. For complex or long changes, you MUST split the "
+                    "work into multiple smaller atomic edit calls."
+                )
+            ),
+        ],
+        new_string: Annotated[
+            str,
+            Field(
+                description=(
+                    "Exact literal replacement text, including whitespace and "
+                    "indentation."
+                )
+            ),
+        ],
+        replace_all: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Replace every exact occurrence when true; otherwise replace only "
+                    "the first occurrence."
+                )
+            ),
+        ] = False,
     ) -> str:
-        """Replace exact text once, or all occurrences when explicitly requested."""
+        """Replace exact literal text in an existing file."""
 
         return await _run_owned_thread(
             self._io_service.edit, file_path, old_string, new_string, replace_all

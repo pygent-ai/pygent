@@ -317,11 +317,19 @@ async def test_write_uses_workspace_path_schema_and_resolves_relative_paths(tmp_
     await succeeded(tools.write, file_path="strict/out.txt", content="hello\n")
     assert target.read_text(encoding="utf-8") == "hello\n"
 
-    parameters = _parameters(tools.write)
+    toolkit = ToolKit(tools.write)
+    definition = toolkit.definitions[0]
+    parameters = definition.parameters.to_dict()
     assert parameters["additionalProperties"] is False
     assert parameters["required"] == ["file_path", "content"]
     assert set(parameters["properties"]) == {"file_path", "content"}
     assert "workspace_root" in parameters["properties"]["file_path"]["description"]
+    assert toolkit.specs[0].version == "2.1.0"
+    assert "\n\nUsage:\n" in definition.description
+    assert "MUST use multiple smaller atomic edit calls" in definition.description
+    assert "Do not use omission placeholders" in parameters["properties"]["content"][
+        "description"
+    ]
 
 
 @pytest.mark.asyncio
@@ -381,7 +389,9 @@ async def test_edit_uses_workspace_path_schema_and_exact_replacement(tmp_path):
     )
     assert same.error_code == "identical_replacement"
 
-    parameters = _parameters(tools.edit)
+    toolkit = ToolKit(tools.edit)
+    definition = toolkit.definitions[0]
+    parameters = definition.parameters.to_dict()
     assert parameters["additionalProperties"] is False
     assert parameters["required"] == ["file_path", "old_string", "new_string"]
     assert set(parameters["properties"]) == {
@@ -391,6 +401,13 @@ async def test_edit_uses_workspace_path_schema_and_exact_replacement(tmp_path):
         "replace_all",
     }
     assert parameters["properties"]["replace_all"]["default"] is False
+    assert toolkit.specs[0].version == "2.1.0"
+    assert "\n\nUsage:\n" in definition.description
+    assert "MUST split" in definition.description
+    assert "smaller atomic edit calls" in definition.description
+    assert "do not include long runs" in parameters["properties"]["old_string"][
+        "description"
+    ]
 
 
 @pytest.mark.asyncio

@@ -124,6 +124,8 @@ grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=10
 | `edit`, `edit_notebook` | `WRITE / NOT_IDEMPOTENT` | `filesystem:write` | 同一实例内串行 read-modify-write 并原子提交；取消在所属写线程退出后返回；不确定失败不谎报未提交 |
 | `web_search`, `web_fetch` | `READ / INHERENT` | `web:search`, `web:fetch` | 公开 HTTP(S)；限制响应大小；默认 fetcher 连接已验证 IP、保留 Host/SNI，并逐跳重新验证重定向 |
 
+`write@2.1.0` 的模型可见契约只把它用于新建或刻意整文件替换，要求提供完整字面内容并禁止省略占位符。已有文件的局部、复杂或较长修改必须改用多个更小的原子 `edit` 调用，不能借整文件重写规避拆分。`edit@2.1.0` 要求先读取当前文件并保持精确空白、缩进和换行；`old_string` 只携带定位所需的未变上下文，不应包含长段未修改文本。
+
 所有标准工具的 `sandbox_profile` 为 `workspace`（Web 工具除外，它们通过 URL/DNS 边界限制访问）。该字段只是隔离需求，不是标准工具或 Runtime 已经实施宿主机沙箱的证明。在 managed/durable 部署中，应用必须为精确工具版本注册实际支持 `workspace` 的 sandbox-aware executor，Runtime 据此派生并验证 capability；应用不得通过重复 ToolSpec 声明或手工添加 capability 绕过该验证。Direct 模式不会因为工具名是“标准工具”而自动获得沙箱、授权或跨 Root 容量治理。
 
 `bash(is_background=True)` 是显式外部进程启动：返回 PID 后，该进程不再属于当前同步 ToolTask，调用方负责自己的进程监督与关闭策略。需要 Runtime 管理的独立生命周期时，应使用授权决定选择的 managed detach/Job，而不是把后台进程误当作 durable ToolTask。
