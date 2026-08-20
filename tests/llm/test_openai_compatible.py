@@ -71,6 +71,131 @@ def test_openai_codec_parses_usage_tools_and_structured_output():
     assert response.usage["output_tokens"] == 2
 
 
+@pytest.mark.parametrize(
+    ("choice", "expected"),
+    [
+        ({"message": "plain"}, "plain"),
+        ({"text": "legacy"}, "legacy"),
+        (
+            {
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "part-"},
+                        {"type": "output_text", "text": "answer"},
+                        {"type": "audio", "audio": "ignored"},
+                    ]
+                }
+            },
+            "part-answer",
+        ),
+        ({"message": {"content": None, "refusal": "declined"}}, "declined"),
+    ],
+)
+def test_non_streaming_accepts_recoverable_completion_shapes(
+    choice: dict[str, object], expected: str
+) -> None:
+    response = OpenAICompatibleAdapter().parse_response(
+        _request(), freeze_json_object({"choices": [choice], "unknown": True})
+    )
+
+    assert response.message.content == expected
+
+
+def test_non_streaming_synthesizes_missing_tool_id_and_decodes_fenced_arguments():
+    tool = ToolDefinition(
+        name="double",
+        description="double",
+        parameters={"type": "object"},
+    )
+    request = _request(tools=(tool,))
+    payload = freeze_json_object(
+        {
+            "id": "req-1",
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "double",
+                                    "arguments": "```json\n{\"value\":2}\n```",
+                                },
+                            }
+                        ],
+                    }
+                }
+            ],
+        }
+    )
+
+    first = OpenAICompatibleAdapter().parse_response(request, payload)
+    second = OpenAICompatibleAdapter().parse_response(request, payload)
+
+    call = first.message.tool_calls[0]
+    assert call.call_id.startswith("call_")
+    assert call.call_id == second.message.tool_calls[0].call_id
+    assert call.arguments.to_dict() == {"value": 2}
+
+
+def test_non_streaming_invalid_tool_call_has_a_specific_closed_reason():
+    with pytest.raises(ModelProviderError) as raised:
+        OpenAICompatibleAdapter().parse_response(
+            _request(),
+            freeze_json_object(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "usable text",
+                                "tool_calls": [
+                                    {"function": {"name": "broken", "arguments": "[]"}}
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ),
+        )
+
+    assert raised.value.reason_code is ModelFailureReason.TOOL_CALL_INVALID
+
+
+def test_structured_output_accepts_a_complete_json_fence_and_canonicalizes():
+    request = _request(
+        generation=GenerationConfig(
+            response_schema={
+                "type": "object",
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+                "additionalProperties": False,
+            }
+        )
+    )
+
+    response = OpenAICompatibleAdapter().parse_response(
+        request, adapter_request_payload(content='```json\n{ "answer": "ok" }\n```')
+    )
+
+    assert response.message.content == '{"answer":"ok"}'
+
+
+def test_structured_output_failure_has_a_specific_closed_reason():
+    request = _request(
+        generation=GenerationConfig(
+            response_schema={"type": "object", "required": ["answer"]}
+        )
+    )
+
+    with pytest.raises(ModelProviderError) as raised:
+        OpenAICompatibleAdapter().parse_response(
+            request, adapter_request_payload(content="explanation {\"answer\":\"ok\"}")
+        )
+
+    assert raised.value.reason_code is ModelFailureReason.GENERATION_SCHEMA_INVALID
+
+
 def test_tool_result_error_classification_is_visible_to_the_model() -> None:
     request = ModelProviderRequest(
         route=ModelRoute("main", "openai", "gpt-test"),
@@ -231,6 +356,84 @@ def test_stream_accepts_openai_usage_only_chunk_with_empty_choices() -> None:
         "output_tokens": 2,
         "total_tokens": 5,
     }
+
+
+def test_stream_ignores_empty_auxiliary_chunks_and_accepts_null_delta_finish():
+    adapter = OpenAICompatibleAdapter()
+
+    assert adapter.parse_stream_events(
+        _request(), freeze_json_object({"choices": [], "vendor": "keepalive"})
+    ) == ()
+    parts = adapter.parse_stream_events(
+        _request(),
+        freeze_json_object(
+            {"choices": [{"delta": None, "finish_reason": "stop"}]}
+        ),
+    )
+
+    assert [part.kind for part in parts] == ["finish"]
+
+
+def test_stream_normalizes_content_parts_and_compatible_tool_deltas():
+    parts = OpenAICompatibleAdapter().parse_stream_events(
+        _request(),
+        freeze_json_object(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "content": [
+                                {"type": "text", "text": "hel"},
+                                {"type": "text", "text": "lo"},
+                            ],
+                            "tool_calls": [
+                                {
+                                    "index": "1",
+                                    "id": None,
+                                    "function": {
+                                        "name": None,
+                                        "arguments": {"value": 2},
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert [part.kind for part in parts] == ["text", "tool_call"]
+    assert parts[0].data["text"] == "hello"
+    assert parts[1].data["index"] == 1
+    assert parts[1].data["call_id_delta"] == ""
+    assert parts[1].data["name_delta"] == ""
+    assert parts[1].data["arguments_delta"] == '{"value":2}'
+
+
+def test_stream_accepts_legacy_function_call_delta():
+    parts = OpenAICompatibleAdapter().parse_stream_events(
+        _request(),
+        freeze_json_object(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "function_call": {
+                                "name": "double",
+                                "arguments": {"value": 2},
+                            }
+                        }
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert len(parts) == 1
+    assert parts[0].kind == "tool_call"
+    assert parts[0].data["name_delta"] == "double"
+    assert parts[0].data["arguments_delta"] == '{"value":2}'
 
 
 def test_optional_generation_fields_are_omitted_but_zero_is_preserved():

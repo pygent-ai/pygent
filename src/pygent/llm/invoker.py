@@ -335,6 +335,7 @@ class DefaultModelInvoker:
                         raise ModelProviderError(
                             ModelErrorKind.INVALID_RESPONSE,
                             "model stream ended before a completion marker",
+                            reason_code=ModelFailureReason.STREAM_INCOMPLETE,
                         )
                     return
                 except asyncio.CancelledError:

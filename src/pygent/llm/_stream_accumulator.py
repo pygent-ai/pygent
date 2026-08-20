@@ -26,8 +26,18 @@ from ._adapter_contracts import (
     _usage_event_payload,
     _validated_canonical_usage,
 )
-from .openai_compatible import _original_tool_name
-from .types import GenerationConfig, ModelCallError, ModelErrorKind
+from .openai_compatible import (
+    _decode_json,
+    _original_tool_name,
+    _synthetic_tool_call_id,
+    _wire_json,
+)
+from .types import (
+    GenerationConfig,
+    ModelCallError,
+    ModelErrorKind,
+    ModelFailureReason,
+)
 
 
 @dataclass(slots=True)
@@ -116,6 +126,7 @@ class ModelStreamAccumulator:
     async def finish(self, event_sink: EventSink | None) -> ModelProviderResponse:
         content = "".join(self.text_parts)
         await self._validate_content(content, event_sink)
+        content = "".join(self.text_parts)
         tool_calls = await self._finish_tool_calls(event_sink)
         if self.selected_route is None or self.selected_attempt is None:
             raise ModelCallError(
@@ -165,10 +176,12 @@ class ModelStreamAccumulator:
         if self.generation.response_schema is None:
             return
         try:
+            value = _decode_json(content)
             jsonschema.validate(
-                json.loads(content),
+                value,
                 freeze_json_object(self.generation.response_schema).to_dict(),
             )
+            self.text_parts[:] = [_wire_json(value)]
         except (json.JSONDecodeError, jsonschema.ValidationError):
             await _raise_invalid_model_response(
                 event_sink,
@@ -176,6 +189,7 @@ class ModelStreamAccumulator:
                 route_id=self.selected_route,
                 attempt=self.selected_attempt,
                 usage=self.usage,
+                reason_code=ModelFailureReason.GENERATION_SCHEMA_INVALID,
             )
 
     async def _finish_tool_calls(
@@ -185,13 +199,20 @@ class ModelStreamAccumulator:
         for index in sorted(self.calls):
             call = self.calls[index]
             try:
-                arguments = json.loads(call["arguments"] or "{}")
+                arguments = _decode_json(call["arguments"] or "{}")
                 if not isinstance(arguments, Mapping):
                     raise TypeError
                 name = _original_tool_name(call["name"], self.tools)
+                call_id = call["call_id"] or _synthetic_tool_call_id(
+                    route_id=self.selected_route or "provider",
+                    provider_request_id=self.provider_request_id,
+                    index=index,
+                    name=name,
+                    arguments=cast(Mapping[str, object], arguments),
+                )
                 tool_calls.append(
                     ToolCall(
-                        call_id=call["call_id"],
+                        call_id=call_id,
                         name=name,
                         arguments=cast(Mapping[str, object], arguments),
                     )
@@ -202,7 +223,7 @@ class ModelStreamAccumulator:
                     {
                         "item_id": f"tool-{index}",
                         "index": index,
-                        "call_id": call["call_id"],
+                        "call_id": call_id,
                         "name": name,
                         "arguments": cast(Mapping[str, object], arguments),
                         "route_id": self.selected_route,
@@ -216,6 +237,7 @@ class ModelStreamAccumulator:
                     route_id=self.selected_route,
                     attempt=self.selected_attempt,
                     usage=self.usage,
+                    reason_code=ModelFailureReason.TOOL_CALL_INVALID,
                 )
         return tool_calls
 

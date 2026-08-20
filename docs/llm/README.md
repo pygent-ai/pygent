@@ -33,14 +33,14 @@ usage、实际 route、attempt 和耗时通过类型化 ExecutionEvent 暴露；
 
 - ModelGroupConfig 描述逻辑模型组、解析状态和组级最大并发声明；固定组同时包含候选 route 与 fallback 顺序，延迟组只包含托管部署需求。
 - ModelRoute 的仅关键字 `provider_options` 描述 Provider 私有但稳定的严格 JSON 路由语义；值会防御性复制并递归冻结，非空值参与定义、部署和 effect 身份，空值保持原 canonical payload。
-- RetryPolicy 描述同一 route 内的重试条件、次数与退避，不决定 fallback 顺序。
+- RetryPolicy 描述同一 route 内的重试条件、次数与退避，不决定 fallback 顺序；默认每条 route 最多两个总 attempt，且只对声明的可重试错误生效。
 - GenerationConfig 描述与一个 ModelCallLayer 定义绑定的生成行为。
 
 这些值必须在绑定前完成确定性校验：
 
 - 模型组名称非空；route ID 唯一，fallback 只能引用本组 route，且不能重复。
 - 固定组 routes 非空；显式延迟组 routes 和 fallback 都为空；`max_concurrency` 为空或大于零。
-- `max_attempts_per_route` 至少为一；退避满足 `0 <= initial <= maximum`。
+- `max_attempts_per_route` 至少为一，默认值为二；退避满足 `0 <= initial <= maximum`。
 - temperature 为空或为有限的非负数；`max_output_tokens` 为空或大于零。
 
 校验只验证定义自身，不探测网络、credential 或 Provider 能力。Provider 支持的 temperature 上限等部署相关验证属于 Runtime 的 bind/prepare 阶段。
@@ -68,11 +68,11 @@ Provider adapter、client 和 invoker 都不得写入 Context，也不得把 sec
 
 TLS 校验属于 Provider client 的构造期部署策略。内置 client 默认严格校验；受控开发环境可显式设置 `verify_ssl=False`，生产私有 CA 使用注入的 caller-owned HTTP client。TLS 策略不得进入 `provider_options` 或单次调用，且连接池建立后不可变；managed resolver 改变该策略时必须发布新的资源 revision。
 
-内置 OpenAI-compatible adapter 会再次验证 route，并把选项浅合并到请求顶层。框架保留字段以及 secret、认证、连接、endpoint、retry、deadline、stream 等类别始终拒绝；DeepSeek `thinking.type` 只接受 `enabled` 或 `disabled`。未知 OpenAI-compatible Provider 默认允许其余严格 JSON 结构透传，但这不是 Provider 能力证明。
+内置 OpenAI-compatible adapter 会再次验证 route，并把选项浅合并到请求顶层。框架保留字段以及 secret、认证、连接、endpoint、retry、deadline、stream 等类别始终拒绝；DeepSeek `thinking.type` 只接受 `enabled` 或 `disabled`。`max_tokens` 与 `max_completion_tokens` 是受控例外：route 可以提供其中一个正整数，但不能同时提供，也不能与本次有效 `GenerationConfig.max_output_tokens` 并存。未知 OpenAI-compatible Provider 默认允许其余严格 JSON 结构透传，但这不是 Provider 能力证明。
 
 ## 调度、重试与 fallback
 
-ModelInvoker 在当前执行模式提供的总 deadline、取消信号和资源边界内执行一次模型调用。direct execution 使用调用方 deadline 与本地 adapter，managed execution 使用 Runtime scope：
+ModelInvoker 在当前执行模式提供的总 deadline、取消信号和资源边界内执行一次模型调用。direct execution 使用调用方 deadline 与本地 adapter，managed execution 使用 Runtime scope。OpenAI-compatible adapter 在 wire 边界宽容接收可恢复的文本 parts、辅助空 chunk、兼容 ToolCall 增量和终止表达，再投影为以下严格执行路径：
 
 1. 按 FallbackPolicy 选择 route。
 2. direct execution 从本地 adapter 获得 client；managed execution 请求 Runtime 获取物理资源对应的容量和 client。

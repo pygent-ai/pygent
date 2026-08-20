@@ -23,6 +23,7 @@ from .types import (
     ModelAttempt,
     ModelCallError,
     ModelErrorKind,
+    ModelFailureReason,
     ModelGroupConfig,
     ModelRoute,
     RetryPolicy,
@@ -432,6 +433,7 @@ async def _raise_invalid_model_response(
     route_id: str | None,
     attempt: int | None,
     usage: JsonObjectInput,
+    reason_code: ModelFailureReason = ModelFailureReason.INVALID_PROVIDER_RESPONSE,
 ) -> NoReturn:
     attempts: tuple[ModelAttempt, ...] = ()
     if route_id is not None and attempt is not None:
@@ -455,6 +457,7 @@ async def _raise_invalid_model_response(
                 "failed",
                 ModelErrorKind.INVALID_RESPONSE,
                 attempt=attempt,
+                reason_code=reason_code,
             ),
         )
     raise ModelCallError(

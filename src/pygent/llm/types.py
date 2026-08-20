@@ -45,6 +45,12 @@ class ModelFailureReason(str, Enum):
     INVALID_PARAMETER = "invalid_parameter"
     CONTENT_POLICY_REJECTED = "content_policy_rejected"
     INVALID_PROVIDER_RESPONSE = "invalid_provider_response"
+    PROVIDER_PAYLOAD_INVALID = "provider_payload_invalid"
+    COMPLETION_SHAPE_INVALID = "completion_shape_invalid"
+    STREAM_EVENT_INVALID = "stream_event_invalid"
+    GENERATION_SCHEMA_INVALID = "generation_schema_invalid"
+    TOOL_CALL_INVALID = "tool_call_invalid"
+    STREAM_INCOMPLETE = "stream_incomplete"
     UNKNOWN_PROVIDER_FAILURE = "unknown_provider_failure"
 
 
@@ -410,7 +416,7 @@ class ExponentialBackoff:
 
 @dataclass(frozen=True, slots=True)
 class RetryPolicy:
-    max_attempts_per_route: int = 1
+    max_attempts_per_route: int = 2
     retry_on: tuple[ModelErrorKind, ...] = (
         ModelErrorKind.TIMEOUT,
         ModelErrorKind.RATE_LIMIT,

@@ -29,12 +29,14 @@ from pygent.llm import (
 )
 
 
-def _request(route: ModelRoute) -> ModelProviderRequest:
+def _request(
+    route: ModelRoute, generation: GenerationConfig | None = None
+) -> ModelProviderRequest:
     return ModelProviderRequest(
         route=route,
         message=UserMessage(content="hello"),
         context=Context(),
-        generation=GenerationConfig(),
+        generation=generation or GenerationConfig(),
     )
 
 
@@ -95,6 +97,51 @@ def test_openai_compatible_projects_deepseek_and_generic_options() -> None:
     payload = OpenAICompatibleAdapter("custom").build_request(_request(custom))
     assert payload["vendor_feature"] == freeze_json_object({"mode": "fast"})
     assert "deepseek" in openai_compatible_adapters()
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
+def test_openai_compatible_accepts_one_route_token_limit(field: str) -> None:
+    route = ModelRoute(
+        "main", "custom", "model", provider_options={field: 4096}
+    )
+
+    payload = OpenAICompatibleAdapter("custom").build_request(_request(route))
+
+    assert payload[field] == 4096
+    assert set(payload) & {"max_tokens", "max_completion_tokens"} == {field}
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "4096"])
+def test_openai_compatible_rejects_invalid_route_token_limit(value: object) -> None:
+    route = ModelRoute(
+        "main", "custom", "model", provider_options={"max_tokens": value}
+    )
+
+    with pytest.raises(ModelProviderError) as raised:
+        OpenAICompatibleAdapter("custom").build_request(_request(route))
+
+    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
+
+
+def test_openai_compatible_rejects_ambiguous_or_conflicting_token_limits() -> None:
+    adapter = OpenAICompatibleAdapter("custom")
+    both = ModelRoute(
+        "main",
+        "custom",
+        "model",
+        provider_options={"max_tokens": 1024, "max_completion_tokens": 1024},
+    )
+    with pytest.raises(ModelProviderError):
+        adapter.build_request(_request(both))
+
+    configured = ModelRoute(
+        "main", "custom", "model", provider_options={"max_completion_tokens": 1024}
+    )
+    with pytest.raises(ModelProviderError) as raised:
+        adapter.build_request(
+            _request(configured, GenerationConfig(max_output_tokens=2048))
+        )
+    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
 
 
 @pytest.mark.parametrize(

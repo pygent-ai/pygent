@@ -77,6 +77,25 @@ route = ModelRoute(
 
 `provider_options` 是仅关键字、严格 JSON、递归不可变的 route 定义值；原字典后续修改不会影响 route。它不能承载 secret、endpoint、client、连接、认证头、TLS/证书校验策略、retry、deadline、stream 或框架保留请求字段，也不能由单次调用覆盖。OpenAI-compatible adapter 对未知 Provider 默认只做非保留严格 JSON 的结构透传，这不表示 Provider 能力已经验证；DeepSeek `thinking` 则使用严格子 schema。第三方 adapter 只有实现公开的 `ModelProviderRouteValidator` 后才能接受非空选项，空选项调用保持原行为。
 
+OpenAI-compatible route 可以在 `provider_options` 中显式选择一个 token-limit 字段和值；这用于仍要求旧字段或只接受新字段的兼容服务：
+
+```python
+legacy_route = ModelRoute(
+    "legacy",
+    provider="custom",
+    model="legacy-chat",
+    provider_options={"max_tokens": 2048},
+)
+modern_route = ModelRoute(
+    "modern",
+    provider="custom",
+    model="modern-chat",
+    provider_options={"max_completion_tokens": 2048},
+)
+```
+
+只能提供其中一个正整数。使用 route token-limit 时，Layer 的 `GenerationConfig.max_output_tokens` 必须为 `None`，本次调用也不能通过 `ModelCallOptions.max_output_tokens` 覆盖；冲突会在 Provider I/O 前明确失败。普通跨 Provider 配置继续优先使用 `GenerationConfig.max_output_tokens`，它保持投影为 `max_tokens`。
+
 `ModelGroupConfig.max_concurrency` 是模型物理资源约束声明，不是 Layer 私有 semaphore。`capacity_key` 是多个逻辑模型组共享同一物理 endpoint/credential/model 配额时使用的稳定身份；省略时退回模型组名称。direct execution 不负责跨 Root 协调该声明，调用方或本地 adapter 自行限流；managed execution 中，相同 `capacity_key` 的 Layer 共享同一 Runtime 容量所有者，不得将各 Layer 的数值累加成更高物理并发。
 
 `GenerationConfig.tool_choice` 为 `None`、`"auto"`、`"required"`、`"none"` 或当前可见工具名；指定名称但该工具不在 Layer 声明与 `Context.tools` 的交集中时，adapter 在发请求前拒绝。OpenAI-compatible adapter 会把 portable 工具名稳定映射为 Provider 允许的 wire name，并在 ToolCall 返回时还原，应用不必把 `weather.lookup` 之类的业务名称改成 Provider 私有格式。
@@ -167,6 +186,8 @@ route = ModelRoute(
 attempt timeout 取消 Provider task 后，ModelInvoker 最多使用内部 1 秒 cleanup grace，并进一步受剩余 effective deadline 限制。只有 task 已确认退出，`TIMEOUT` 才能按 `RetryPolicy` 进入 retry/fallback；清理未确认时公开错误为 `ModelErrorKind.OUTCOME_UNKNOWN`，`model.attempt.failed` 固定携带脱敏的 `reason="cancellation_cleanup_timeout"`，本次模型调用立即终止。Invoker 按 client 对象身份隔离仍未退出的 task；隔离期间同一 client 的新逻辑 attempt fail-fast，不发送 Provider 请求，后台 task 退出并被安全回收后自动解除隔离。调用方显式取消仍传播 `CancelledError`，不会转换为模型失败。
 
 Provider 请求失败时，`ModelCallError.attempts` 保留每次 attempt 的 `error_kind`、封闭脱敏 `reason_code` 和可选的数字 `http_status`。`reason_code` 用于区分 `model_not_found`、`quota_exhausted`、`context_length_exceeded` 等可操作原因；它由 Provider adapter 基于受支持的 Provider code/type 白名单映射，不是 Provider message 的原样或清洗后转发。未识别的响应使用通用脱敏原因；Provider 任意 message、code、header、body、endpoint、credential 和内部异常链都不进入 Message、Context、ExecutionEvent 或公开失败值。managed effect、durable replay 和 Worker 传输必须原样保留这些脱敏字段。
+
+响应兼容失败进一步使用 `provider_payload_invalid`、`completion_shape_invalid`、`stream_event_invalid`、`generation_schema_invalid`、`tool_call_invalid` 或 `stream_incomplete`，以便在不暴露原始 payload 的前提下区分失败阶段。可恢复的未知字段、文本 content-parts、辅助空 chunk 和兼容 ToolCall 增量会先由 adapter 规范化；这些 reason 只表示最终仍无法形成严格 canonical 结果。
 
 `ModelCallLayer` 通过公开 `pygent.core.current_infrastructure()` 获取 effective deadline、Model permit、部署 `ModelInvoker` resolver 和 managed effect replay；它不导入私有 execution ContextVar。用户自定义模型基础设施 Module 可以使用同一 SPI。Runtime 只解析部署注入的 invoker 并治理执行，不拥有 route、retry、fallback、HTTP client 或 Provider 解析逻辑。
 

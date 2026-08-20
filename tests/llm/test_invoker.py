@@ -21,6 +21,7 @@ from pygent.llm import (
     GenerationConfig,
     ModelCallError,
     ModelErrorKind,
+    ModelFailureReason,
     ModelGroupConfig,
     ModelProviderCapabilities,
     ModelProviderError,
@@ -174,6 +175,27 @@ async def test_retry_then_fallback_and_usage_events():
     assert fallback.calls == 1
     assert [event.kind for event in events].count("model.attempt.failed") == 2
     assert "model.usage" in [event.kind for event in events]
+
+
+@pytest.mark.asyncio
+async def test_default_retry_policy_allows_two_total_attempts():
+    primary = FakeClient([httpx.ConnectError("offline"), completion("recovered")])
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": primary, "fallback": FakeClient([completion("unused")])},
+        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+    )
+
+    result = await invoker.execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(backoff=ExponentialBackoff(0, 0)),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    ).result()
+
+    assert result.message.content == "recovered"
+    assert primary.calls == 2
 
 
 @pytest.mark.asyncio
@@ -569,6 +591,7 @@ async def test_stream_rejects_transport_eof_without_completion_marker():
         ).result()
 
     assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
+    assert raised.value.attempts[-1].reason_code is ModelFailureReason.STREAM_INCOMPLETE
 
 
 @pytest.mark.asyncio
@@ -784,6 +807,50 @@ async def test_stream_emits_fixed_reasoning_and_multiple_tool_call_events():
 
 
 @pytest.mark.asyncio
+async def test_stream_synthesizes_a_missing_tool_call_id():
+    client = FakeClient(
+        [
+            freeze_json_object(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": "0",
+                                        "function": {
+                                            "name": "double",
+                                            "arguments": {"value": 2},
+                                        },
+                                    }
+                                ]
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                    "id": "req-tool",
+                }
+            )
+        ]
+    )
+    result = await DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"openai": client},
+    ).execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    ).result()
+
+    call = result.message.tool_calls[0]
+    assert call.call_id.startswith("call_")
+    assert call.name == "double"
+    assert call.arguments.to_dict() == {"value": 2}
+
+
+@pytest.mark.asyncio
 async def test_invalid_tool_arguments_never_emit_model_completed():
     client = FakeClient(
         [
@@ -827,6 +894,7 @@ async def test_invalid_tool_arguments_never_emit_model_completed():
         events = [event async for event in subscription]
 
     assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
+    assert raised.value.attempts[-1].reason_code is ModelFailureReason.TOOL_CALL_INVALID
     assert "model.completed" not in [event.kind for event in events]
     assert [event.kind for event in events][-3:] == [
         "model.usage",

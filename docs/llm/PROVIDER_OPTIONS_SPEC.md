@@ -100,7 +100,7 @@ route = ModelRoute(
 
 `GenerationConfig` 继续承载 Pygent 已标准化且跨 route 共享的生成策略。`provider_options` 只承载对应 adapter 定义的私有扩展。
 
-两者冲突时不得用 merge 顺序决定结果。Provider adapter 必须拒绝让 `provider_options` 覆盖框架拥有的字段。
+两者冲突时不得用 merge 顺序决定结果。Provider adapter 必须拒绝让 `provider_options` 覆盖框架拥有的字段。OpenAI-compatible 的 `max_tokens` 与 `max_completion_tokens` 是受控例外：route 可以声明其中一个正整数作为完整 token-limit 请求字段，但此时本次有效 `GenerationConfig.max_output_tokens` 必须为空；两边同时配置属于请求构造错误，不定义覆盖优先级。
 
 若某个私有选项以后形成稳定、可验证的跨 Provider 语义，未来版本可以将其提升为类型化的 `GenerationConfig` 字段。提升必须有独立规范、兼容策略和 adapter capability 规则；本规范不自动执行该提升。
 
@@ -211,6 +211,8 @@ tools
 tool_choice
 stream
 ```
+
+其中 `max_tokens` 与 `max_completion_tokens` 按上一节的互斥规则从普通保留字段中豁免；其他字段仍无条件保留。两种 token-limit 选项只能位于请求体顶层、只能出现一个，且会随 route 进入 definition、profile digest、admission pin 和 effect identity。
 
 `provider_options` 包含任一保留字段时必须拒绝，即使该字段当前没有由 `GenerationConfig` 或可见工具实际发出。
 

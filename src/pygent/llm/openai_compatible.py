@@ -65,12 +65,16 @@ _OPENAI_RESERVED_PROVIDER_FIELDS = frozenset(
         "model",
         "messages",
         "temperature",
-        "max_tokens",
         "response_format",
         "tools",
         "tool_choice",
         "stream",
     }
+)
+_TOKEN_LIMIT_PROVIDER_FIELDS = frozenset({"max_tokens", "max_completion_tokens"})
+_JSON_FENCE = re.compile(
+    r"\A\s*```(?:json)?\s*(.*?)\s*```\s*\Z",
+    flags=re.IGNORECASE | re.DOTALL,
 )
 _FORBIDDEN_PROVIDER_OPTION_KEYS = frozenset(
     {
@@ -153,6 +157,16 @@ def _validate_openai_provider_options(route: ModelRoute) -> None:
             + ", ".join(sorted(conflicts))
         )
     _validate_no_forbidden_option_keys(options)
+    token_fields = set(options) & _TOKEN_LIMIT_PROVIDER_FIELDS
+    if len(token_fields) > 1:
+        raise ValueError(
+            "provider options accept only one of max_tokens and "
+            "max_completion_tokens"
+        )
+    for key in token_fields:
+        value = options[key]
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ValueError(f"provider option {key!r} must be a positive integer")
     if route.provider != "deepseek" or "thinking" not in options:
         return
     thinking = options["thinking"]
@@ -316,11 +330,13 @@ class OpenAICompatibleClient:
                 raise ModelProviderError(
                     ModelErrorKind.INVALID_RESPONSE,
                     "provider returned invalid JSON",
+                    reason_code=ModelFailureReason.PROVIDER_PAYLOAD_INVALID,
                 ) from exc
             if not isinstance(body, Mapping):
                 raise ModelProviderError(
                     ModelErrorKind.INVALID_RESPONSE,
                     "provider response must be an object",
+                    reason_code=ModelFailureReason.PROVIDER_PAYLOAD_INVALID,
                 )
             return freeze_json_object(cast(Mapping[str, object], body))
         client, admission = await self._acquire_http_client()
@@ -338,11 +354,13 @@ class OpenAICompatibleClient:
                 raise ModelProviderError(
                     ModelErrorKind.INVALID_RESPONSE,
                     "provider returned invalid JSON",
+                    reason_code=ModelFailureReason.PROVIDER_PAYLOAD_INVALID,
                 ) from exc
             if not isinstance(body, Mapping):
                 raise ModelProviderError(
                     ModelErrorKind.INVALID_RESPONSE,
                     "provider response must be an object",
+                    reason_code=ModelFailureReason.PROVIDER_PAYLOAD_INVALID,
                 )
             return freeze_json_object(cast(Mapping[str, object], body))
         finally:
@@ -380,11 +398,13 @@ class OpenAICompatibleClient:
                         raise ModelProviderError(
                             ModelErrorKind.INVALID_RESPONSE,
                             "provider returned an invalid SSE event",
+                            reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
                         ) from exc
                     if not isinstance(item, Mapping):
                         raise ModelProviderError(
                             ModelErrorKind.INVALID_RESPONSE,
                             "provider SSE event must be an object",
+                            reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
                         )
                     yield freeze_json_object(cast(Mapping[str, object], item))
             finally:
@@ -430,11 +450,13 @@ class OpenAICompatibleClient:
                         raise ModelProviderError(
                             ModelErrorKind.INVALID_RESPONSE,
                             "provider returned an invalid SSE event",
+                            reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
                         ) from exc
                     if not isinstance(item, Mapping):
                         raise ModelProviderError(
                             ModelErrorKind.INVALID_RESPONSE,
                             "provider SSE event must be an object",
+                            reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
                         )
                     yield freeze_json_object(cast(Mapping[str, object], item))
         finally:
@@ -637,6 +659,13 @@ class OpenAICompatibleAdapter:
             "messages": messages,
         }
         generation = request.generation
+        options = cast(FrozenJsonObject, request.route.provider_options)
+        token_fields = set(options) & _TOKEN_LIMIT_PROVIDER_FIELDS
+        if generation.max_output_tokens is not None and token_fields:
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_REQUEST,
+                "provider token limit options conflict with max_output_tokens",
+            )
         if generation.temperature is not None:
             body["temperature"] = generation.temperature
         if generation.max_output_tokens is not None:
@@ -669,13 +698,16 @@ class OpenAICompatibleAdapter:
                 ModelErrorKind.INVALID_REQUEST,
                 "tool_choice requires at least one visible tool",
             )
-        body.update(cast(FrozenJsonObject, request.route.provider_options).to_dict())
+        body.update(options.to_dict())
         return freeze_json_object(body)
 
     def parse_response(
         self, request: ModelProviderRequest, payload: FrozenJsonObject
     ) -> ModelProviderResponse:
         body = payload.to_dict()
+        request_id = body.get("id")
+        if request_id is not None and not isinstance(request_id, str):
+            request_id = None
         try:
             choices = body["choices"]
             if not isinstance(choices, list) or not choices:
@@ -683,41 +715,66 @@ class OpenAICompatibleAdapter:
             choice = choices[0]
             if not isinstance(choice, dict):
                 raise TypeError
-            raw_message = choice["message"]
-            if not isinstance(raw_message, dict):
+            raw_message = choice.get("message")
+            if isinstance(raw_message, str):
+                content = raw_message
+                raw_tool_calls: object = []
+            elif isinstance(raw_message, dict):
+                content_value = raw_message.get("content")
+                if content_value is None and isinstance(
+                    raw_message.get("refusal"), str
+                ):
+                    content_value = raw_message["refusal"]
+                if content_value is None and "text" in choice:
+                    content_value = choice["text"]
+                content = _decode_text_content(content_value)
+                raw_tool_calls = raw_message.get("tool_calls")
+                if raw_tool_calls is None and raw_message.get("function_call") is not None:
+                    raw_tool_calls = [
+                        {"type": "function", "function": raw_message["function_call"]}
+                    ]
+            elif isinstance(choice.get("text"), str):
+                content = cast(str, choice["text"])
+                raw_tool_calls = []
+            else:
                 raise TypeError
-            content_value = raw_message.get("content")
-            content = "" if content_value is None else content_value
-            if not isinstance(content, str):
-                raise TypeError
-            tool_calls = _decode_tool_calls(
-                raw_message.get("tool_calls", []),
-                {_openai_tool_name(tool.name): tool.name for tool in request.tools},
-            )
         except (KeyError, TypeError, ValueError) as exc:
             raise ModelProviderError(
                 ModelErrorKind.INVALID_RESPONSE,
                 "provider response has an invalid completion shape",
+                reason_code=ModelFailureReason.COMPLETION_SHAPE_INVALID,
+            ) from exc
+        try:
+            tool_calls = _decode_tool_calls(
+                raw_tool_calls,
+                {_openai_tool_name(tool.name): tool.name for tool in request.tools},
+                route_id=request.route.route_id,
+                provider_request_id=cast(str | None, request_id),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_RESPONSE,
+                "provider response contains an invalid tool call",
+                reason_code=ModelFailureReason.TOOL_CALL_INVALID,
             ) from exc
 
         if request.generation.response_schema is not None:
             try:
-                value = json.loads(content)
+                value = _decode_json(content)
                 jsonschema.validate(
                     value,
                     _schema_projection(
                         cast(FrozenJsonObject, request.generation.response_schema)
                     ),
                 )
+                content = _wire_json(value)
             except (json.JSONDecodeError, jsonschema.ValidationError) as exc:
                 raise ModelProviderError(
                     ModelErrorKind.INVALID_RESPONSE,
                     "model output does not match the declared JSON schema",
+                    reason_code=ModelFailureReason.GENERATION_SCHEMA_INVALID,
                 ) from exc
 
-        request_id = body.get("id")
-        if request_id is not None and not isinstance(request_id, str):
-            request_id = None
         usage = _canonical_usage(body.get("usage"))
         message = AIMessage(
             content=content,
@@ -747,13 +804,13 @@ class OpenAICompatibleAdapter:
             if not isinstance(choices, list):
                 raise TypeError
             if not choices:
-                if isinstance(usage, Mapping):
-                    return tuple(parts)
-                raise TypeError
+                return tuple(parts)
             choice = choices[0]
             if not isinstance(choice, dict):
                 raise TypeError
-            delta = choice.get("delta", {})
+            delta = choice.get("delta")
+            if delta is None:
+                delta = {}
             if not isinstance(delta, dict):
                 raise TypeError
             reasoning = next(
@@ -766,22 +823,37 @@ class OpenAICompatibleAdapter:
             )
             if isinstance(reasoning, str):
                 parts.append(ModelProviderStreamPart("reasoning", {"text": reasoning}))
-            content = delta.get("content")
-            if isinstance(content, str) and content:
+            content_value = delta.get("content")
+            if content_value is None and isinstance(delta.get("refusal"), str):
+                content_value = delta["refusal"]
+            content = _decode_text_content(content_value)
+            if content:
                 parts.append(ModelProviderStreamPart("text", {"text": content}))
             tool_calls = delta.get("tool_calls")
             if tool_calls is not None and not isinstance(tool_calls, list):
                 raise TypeError
-            for call in tool_calls or ():
+            for position, call in enumerate(tool_calls or ()):
                 if not isinstance(call, dict):
                     raise TypeError
-                function = call.get("function", {})
+                function = call.get("function")
+                if function is None:
+                    function = {}
                 if not isinstance(function, dict):
                     raise TypeError
-                index = call.get("index", 0)
+                index = call.get("index", position)
+                if isinstance(index, str) and index.isdecimal():
+                    index = int(index)
                 call_id = call.get("id", "")
                 name = function.get("name", "")
                 arguments = function.get("arguments", "")
+                if call_id is None:
+                    call_id = ""
+                if name is None:
+                    name = ""
+                if arguments is None:
+                    arguments = ""
+                elif isinstance(arguments, Mapping):
+                    arguments = _wire_json(arguments)
                 if (
                     not isinstance(index, int)
                     or isinstance(index, bool)
@@ -802,6 +874,31 @@ class OpenAICompatibleAdapter:
                         },
                     )
                 )
+            legacy_call = delta.get("function_call")
+            if legacy_call is not None:
+                if not isinstance(legacy_call, dict):
+                    raise TypeError
+                name = legacy_call.get("name", "")
+                arguments = legacy_call.get("arguments", "")
+                if name is None:
+                    name = ""
+                if arguments is None:
+                    arguments = ""
+                elif isinstance(arguments, Mapping):
+                    arguments = _wire_json(arguments)
+                if not isinstance(name, str) or not isinstance(arguments, str):
+                    raise TypeError
+                parts.append(
+                    ModelProviderStreamPart(
+                        "tool_call",
+                        {
+                            "index": 0,
+                            "call_id_delta": "",
+                            "name_delta": name,
+                            "arguments_delta": arguments,
+                        },
+                    )
+                )
             finish_reason = choice.get("finish_reason")
             if finish_reason is not None:
                 if not isinstance(finish_reason, str):
@@ -817,6 +914,7 @@ class OpenAICompatibleAdapter:
             raise ModelProviderError(
                 ModelErrorKind.INVALID_RESPONSE,
                 "provider SSE event has an invalid completion shape",
+                reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
             ) from exc
         return tuple(parts)
 
@@ -1023,31 +1121,110 @@ def _encode_tool_result_content(result: ToolResult) -> str:
     return json.dumps(content, ensure_ascii=False, separators=(",", ":"))
 
 
+def _decode_text_content(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        raise TypeError("message content must be text or text parts")
+    parts: list[str] = []
+    recognized = False
+    for item in value:
+        if isinstance(item, str):
+            parts.append(item)
+            recognized = True
+            continue
+        if not isinstance(item, Mapping):
+            continue
+        text = item.get("text")
+        if isinstance(text, str):
+            parts.append(text)
+            recognized = True
+    if value and not recognized:
+        raise TypeError("message content parts contain no text")
+    return "".join(parts)
+
+
+def _decode_json(value: str) -> object:
+    candidate = value.strip()
+    fenced = _JSON_FENCE.fullmatch(candidate)
+    if fenced is not None:
+        candidate = fenced.group(1).strip()
+    return json.loads(candidate)
+
+
+def _decode_tool_arguments(value: object) -> Mapping[str, object]:
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        value = _decode_json(value or "{}")
+    if not isinstance(value, Mapping):
+        raise TypeError("tool call arguments must be an object")
+    return cast(Mapping[str, object], value)
+
+
+def _synthetic_tool_call_id(
+    *,
+    route_id: str,
+    provider_request_id: str | None,
+    index: int,
+    name: str,
+    arguments: Mapping[str, object],
+) -> str:
+    seed = _wire_json(
+        {
+            "request": provider_request_id or route_id,
+            "index": index,
+            "name": name,
+            "arguments": arguments,
+        }
+    )
+    return f"call_{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
+
+
 def _decode_tool_calls(
-    value: object, wire_names: Mapping[str, str] | None = None
+    value: object,
+    wire_names: Mapping[str, str] | None = None,
+    *,
+    route_id: str = "provider",
+    provider_request_id: str | None = None,
 ) -> tuple[ToolCall, ...]:
     if value is None:
         return ()
     if not isinstance(value, list):
         raise TypeError("tool_calls must be a list")
     calls: list[ToolCall] = []
-    for item in value:
+    for index, item in enumerate(value):
         if not isinstance(item, dict):
             raise TypeError("tool call must be an object")
         function = item.get("function")
+        if function is None and (
+            "name" in item or "arguments" in item
+        ):
+            function = item
         if not isinstance(function, dict):
             raise TypeError("tool call function must be an object")
-        arguments = function.get("arguments", "{}")
-        if isinstance(arguments, str):
-            arguments = json.loads(arguments)
-        if not isinstance(arguments, Mapping):
-            raise TypeError("tool call arguments must be an object")
-        raw_name = cast(str, function["name"])
+        arguments = _decode_tool_arguments(function.get("arguments"))
+        raw_name = function["name"]
+        if not isinstance(raw_name, str) or not raw_name:
+            raise TypeError("tool call name must be non-empty")
+        call_id = item.get("id")
+        if call_id is None or call_id == "":
+            call_id = _synthetic_tool_call_id(
+                route_id=route_id,
+                provider_request_id=provider_request_id,
+                index=index,
+                name=raw_name,
+                arguments=arguments,
+            )
+        if not isinstance(call_id, str):
+            raise TypeError("tool call id must be a string")
         calls.append(
             ToolCall(
-                call_id=cast(str, item["id"]),
+                call_id=call_id,
                 name=(wire_names or {}).get(raw_name, raw_name),
-                arguments=cast(Mapping[str, object], arguments),
+                arguments=arguments,
             )
         )
     return tuple(calls)
