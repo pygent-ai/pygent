@@ -874,12 +874,12 @@ class OpenAICompatibleAdapter:
                         },
                     )
                 )
-            legacy_call = delta.get("function_call")
-            if legacy_call is not None:
-                if not isinstance(legacy_call, dict):
+            compatible_call = delta.get("function_call")
+            if compatible_call is not None:
+                if not isinstance(compatible_call, dict):
                     raise TypeError
-                name = legacy_call.get("name", "")
-                arguments = legacy_call.get("arguments", "")
+                name = compatible_call.get("name", "")
+                arguments = compatible_call.get("arguments", "")
                 if name is None:
                     name = ""
                 if arguments is None:

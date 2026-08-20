@@ -32,7 +32,7 @@ usage、实际 route、attempt 和耗时通过类型化 ExecutionEvent 暴露；
 ## 配置边界
 
 - ModelGroupConfig 描述逻辑模型组、解析状态和组级最大并发声明；固定组同时包含候选 route 与 fallback 顺序，延迟组只包含托管部署需求。
-- ModelRoute 的仅关键字 `provider_options` 描述 Provider 私有但稳定的严格 JSON 路由语义；值会防御性复制并递归冻结，非空值参与定义、部署和 effect 身份，空值保持原 canonical payload。
+- ModelRoute 的仅关键字 `provider_options` 描述 Provider 私有但稳定的严格 JSON 路由语义；值会防御性复制并递归冻结，并始终以对象形式进入当前定义、部署和 effect route schema。
 - RetryPolicy 描述同一 route 内的重试条件、次数与退避，不决定 fallback 顺序；默认每条 route 最多两个总 attempt，且只对声明的可重试错误生效。
 - GenerationConfig 描述与一个 ModelCallLayer 定义绑定的生成行为。
 

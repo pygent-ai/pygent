@@ -1,5 +1,4 @@
 from .client import (
-    MCPSseTransport,
     MCPStdioTransport,
     MCPToolExecutor,
     MCPTransport,
@@ -8,7 +7,6 @@ from .client import (
 )
 
 __all__ = [
-    "MCPSseTransport",
     "MCPStdioTransport",
     "MCPToolExecutor",
     "MCPTransport",

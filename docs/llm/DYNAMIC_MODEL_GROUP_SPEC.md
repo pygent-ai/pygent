@@ -218,9 +218,9 @@ The LLM/application deployment layer prepares:
 Runtime publishes an immutable record containing the complete deployment key, opaque
 snapshot ID, canonical digest, prepared portable content, and exact resource source.
 
-The canonical route projection always contains `route_id`, `provider`, and `model`,
-and contains `provider_options` only when non-empty. Missing options in legacy
-records decode as an empty object; non-empty options are part of snapshot identity.
+The canonical route projection always contains `route_id`, `provider`, `model`, and
+`provider_options`, using an empty object when unset. The decoder no longer supplies
+the historical missing-field default, and options are part of snapshot identity.
 
 ### 5.5 Pinned deployment reference
 

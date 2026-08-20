@@ -1,4 +1,4 @@
-"""MCP stdio and SSE adapters implementing the common ToolExecutor protocol."""
+"""MCP stdio adapter implementing the common ToolExecutor protocol."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from typing import Any, Protocol, cast
 
 from mcp import ClientSession, StdioServerParameters
 from mcp import types as mcp_types
-from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 
 from pygent.core import FrozenJsonObject, thaw_json
@@ -58,43 +57,8 @@ class MCPStdioTransport:
             yield session
 
 
-class MCPSseTransport:
-    """Cold-connect legacy MCP SSE transport."""
-
-    def __init__(
-        self,
-        url: str,
-        *,
-        headers: Mapping[str, str] | None = None,
-        timeout: float = 5.0,
-        sse_read_timeout: float = 300.0,
-    ) -> None:
-        if not url:
-            raise ValueError("url must be non-empty")
-        if timeout <= 0 or sse_read_timeout <= 0:
-            raise ValueError("MCP timeouts must be greater than zero")
-        self._url = url
-        self._headers = None if headers is None else dict(headers)
-        self._timeout = timeout
-        self._sse_read_timeout = sse_read_timeout
-
-    @asynccontextmanager
-    async def session(self) -> AsyncIterator[ClientSession]:
-        async with (
-            sse_client(
-                self._url,
-                headers=self._headers,
-                timeout=self._timeout,
-                sse_read_timeout=self._sse_read_timeout,
-            ) as (read_stream, write_stream),
-            ClientSession(read_stream, write_stream) as session,
-        ):
-            await session.initialize()
-            yield session
-
-
 class MCPToolExecutor:
-    """Execute a named MCP tool through stdio or SSE without a parallel API."""
+    """Execute a named MCP tool through stdio without a parallel API."""
 
     def __init__(
         self, transport: MCPTransport, *, remote_name: str | None = None
@@ -122,10 +86,7 @@ class MCPToolExecutor:
                 retryable=True,
                 side_effect_committed=None,
             ) from exc
-        is_error = (
-            result.is_error if hasattr(result, "is_error") else result.isError  # type: ignore[attr-defined]
-        )
-        if is_error:
+        if result.is_error:
             raise ToolExecutionError(
                 "MCP tool reported an error",
                 kind="remote_error",
@@ -133,11 +94,8 @@ class MCPToolExecutor:
                 retryable=False,
                 side_effect_committed=None,
             )
-        structured_content = getattr(result, "structured_content", None)
-        if structured_content is None and hasattr(result, "structuredContent"):
-            structured_content = result.structuredContent  # type: ignore[attr-defined]
-        if structured_content is not None:
-            return structured_content
+        if result.structured_content is not None:
+            return result.structured_content
         return {
             "content": [
                 item.model_dump(mode="json", by_alias=True, exclude_none=True)
@@ -167,29 +125,11 @@ async def discover_mcp_tools(
             for tool in page.tools:
                 annotations = tool.annotations
                 read_only = bool(
-                    annotations is not None
-                    and (
-                        getattr(annotations, "read_only_hint", None)
-                        if hasattr(annotations, "read_only_hint")
-                        else getattr(annotations, "readOnlyHint", None)
-                    )
-                    is True
+                    annotations is not None and annotations.read_only_hint is True
                 )
                 idempotent = bool(
-                    annotations is not None
-                    and (
-                        getattr(annotations, "idempotent_hint", None)
-                        if hasattr(annotations, "idempotent_hint")
-                        else getattr(annotations, "idempotentHint", None)
-                    )
-                    is True
+                    annotations is not None and annotations.idempotent_hint is True
                 )
-                input_schema = getattr(tool, "input_schema", None)
-                if input_schema is None:
-                    input_schema = tool.inputSchema  # type: ignore[attr-defined]
-                output_schema = getattr(tool, "output_schema", None)
-                if output_schema is None and hasattr(tool, "outputSchema"):
-                    output_schema = tool.outputSchema  # type: ignore[attr-defined]
                 discovered.append(
                     ToolSpec(
                         tool_id=f"{namespace}.{tool.name}",
@@ -197,8 +137,8 @@ async def discover_mcp_tools(
                         definition=ToolDefinition(
                             name=tool.name,
                             description=tool.description or "",
-                            parameters=input_schema,
-                            output_schema=output_schema,
+                            parameters=tool.input_schema,
+                            output_schema=tool.output_schema,
                         ),
                         side_effect=(
                             ToolSideEffect.READ
@@ -213,7 +153,7 @@ async def discover_mcp_tools(
                         timeout=timeout,
                     )
                 )
-            cursor = getattr(page, "next_cursor", None)
+            cursor = page.next_cursor
             if cursor is None:
                 break
     return tuple(discovered)
@@ -235,7 +175,6 @@ def register_mcp_tools(
 
 
 __all__ = [
-    "MCPSseTransport",
     "MCPStdioTransport",
     "MCPToolExecutor",
     "MCPTransport",

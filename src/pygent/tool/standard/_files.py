@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Never
 
 from pydantic import Field
+from pypdf import PdfReader
 
 from pygent.tool.executors import ToolExecutionError
 from pygent.tool.functional import tool
@@ -109,13 +110,6 @@ def _parse_pdf_page_range(pages: str | None, total_pages: int) -> list[int]:
 
 
 def _read_pdf_text(path: Path, pages: str | None) -> str:
-    try:
-        try:
-            from pypdf import PdfReader  # type: ignore[import-not-found]
-        except ImportError:
-            from PyPDF2 import PdfReader  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        _fail("reading PDFs requires pypdf or PyPDF2", "pdf_backend_missing")
     try:
         reader = PdfReader(str(path))
         output = []

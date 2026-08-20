@@ -75,7 +75,7 @@ def test_openai_codec_parses_usage_tools_and_structured_output():
     ("choice", "expected"),
     [
         ({"message": "plain"}, "plain"),
-        ({"text": "legacy"}, "legacy"),
+        ({"text": "completion text"}, "completion text"),
         (
             {
                 "message": {
@@ -411,7 +411,7 @@ def test_stream_normalizes_content_parts_and_compatible_tool_deltas():
     assert parts[1].data["arguments_delta"] == '{"value":2}'
 
 
-def test_stream_accepts_legacy_function_call_delta():
+def test_stream_accepts_compatible_function_call_delta():
     parts = OpenAICompatibleAdapter().parse_stream_events(
         _request(),
         freeze_json_object(

@@ -1,9 +1,4 @@
-import argparse
-
-try:
-    from mcp.server.mcpserver import MCPServer
-except ImportError:  # pragma: no cover - older MCP SDK
-    from mcp.server.fastmcp import FastMCP as MCPServer
+from mcp.server.mcpserver import MCPServer
 
 server = MCPServer("pygent-test")
 
@@ -16,11 +11,4 @@ def double(value: int) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--sse", action="store_true")
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
-    if args.sse:
-        server.run(transport="sse", host="127.0.0.1", port=args.port)
-    else:
-        server.run(transport="stdio")
+    server.run(transport="stdio")

@@ -126,14 +126,6 @@ def test_authorization_messages_and_context_round_trip_without_field_loss():
     assert context_from_dict(context_to_dict(context)) == context
 
 
-def test_wire_codec_accepts_legacy_message_without_domain_fields():
-    restored = message_from_dict(
-        {"role": "message", "content": "legacy", "slot": None, "metadata": {}}
-    )
-
-    assert restored == Message(content="legacy")
-
-
 @pytest.mark.parametrize(
     "payload",
     [

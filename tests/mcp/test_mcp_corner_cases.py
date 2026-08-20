@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
+from mcp import types as mcp_types
 
 from pygent.tool import (
     ExecutorRegistry,
@@ -13,8 +14,8 @@ from pygent.tool import (
     ToolExecutionError,
     ToolSideEffect,
 )
+from pygent.tool import mcp as mcp_module
 from pygent.tool.mcp import (
-    MCPSseTransport,
     MCPToolExecutor,
     discover_mcp_tools,
     register_mcp_tools,
@@ -30,6 +31,10 @@ class FakeTransport:
         yield self._session
 
 
+def test_mcp_public_surface_has_no_legacy_sse_transport() -> None:
+    assert not hasattr(mcp_module, "MCPSseTransport")
+
+
 class PaginatedSession:
     def __init__(self) -> None:
         self.cursors: list[str | None] = []
@@ -37,35 +42,35 @@ class PaginatedSession:
     async def list_tools(self, *, params):
         self.cursors.append(params.cursor)
         if params.cursor is None:
-            return SimpleNamespace(
-                tools=(
-                    SimpleNamespace(
+            return mcp_types.ListToolsResult(
+                tools=[
+                    mcp_types.Tool(
                         name="read",
                         description=None,
-                        inputSchema={"type": "object"},
-                        outputSchema={"type": "string"},
-                        annotations=SimpleNamespace(readOnlyHint=True),
+                        input_schema={"type": "object"},
+                        output_schema={"type": "string"},
+                        annotations=mcp_types.ToolAnnotations(read_only_hint=True),
                     ),
-                ),
+                ],
                 next_cursor="page-2",
             )
-        return SimpleNamespace(
-            tools=(
-                SimpleNamespace(
+        return mcp_types.ListToolsResult(
+            tools=[
+                mcp_types.Tool(
                     name="write",
                     description="write data",
-                    inputSchema={"type": "object"},
-                    outputSchema=None,
-                    annotations=SimpleNamespace(idempotentHint=True),
+                    input_schema={"type": "object"},
+                    output_schema=None,
+                    annotations=mcp_types.ToolAnnotations(idempotent_hint=True),
                 ),
-                SimpleNamespace(
+                mcp_types.Tool(
                     name="notify",
                     description="notify once",
-                    inputSchema={"type": "object"},
-                    outputSchema=None,
+                    input_schema={"type": "object"},
+                    output_schema=None,
                     annotations=None,
                 ),
-            ),
+            ],
             next_cursor=None,
         )
 
@@ -131,7 +136,9 @@ async def test_mcp_executor_prefers_structured_content_and_falls_back_to_blocks(
     executor = MCPToolExecutor(transport, remote_name="remote_read")
     call = ToolCall("mcp", "read", {"path": "notes.txt"})
 
-    assert await executor.execute(spec, call, ToolExecutionContext()) == {"text": "hello"}
+    assert await executor.execute(spec, call, ToolExecutionContext()) == {
+        "text": "hello"
+    }
     session.structured = False
     assert await executor.execute(spec, call, ToolExecutionContext()) == {
         "content": [{"type": "text", "text": "hello"}]
@@ -188,17 +195,3 @@ async def test_registration_is_versioned_and_collision_safe() -> None:
     assert registry.resolve("test.read", "1") is not None
     with pytest.raises(ValueError, match="already registered"):
         register_mcp_tools(registry, transport, specs)
-
-
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        {"timeout": 0},
-        {"timeout": -1},
-        {"sse_read_timeout": 0},
-        {"sse_read_timeout": -1},
-    ],
-)
-def test_sse_transport_rejects_unbounded_or_invalid_timeouts(kwargs) -> None:
-    with pytest.raises(ValueError, match="timeouts"):
-        MCPSseTransport("https://mcp.example/sse", **kwargs)

@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import pytest
+from pypdf import PdfWriter
 
 from pygent import IdempotencyPolicy, ToolKit, ToolSideEffect
 from pygent.tool.standard import _files as file_module
@@ -27,6 +28,15 @@ def _to_msys_path(path: Path) -> str:
 
 def _parameters(handler) -> dict:
     return ToolKit(handler).definitions[0].parameters.to_dict()
+
+
+def test_pdf_reader_uses_current_pypdf_backend(tmp_path) -> None:
+    path = tmp_path / "blank.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with path.open("wb") as stream:
+        writer.write(stream)
+    assert file_module._read_pdf_text(path, "1") == "--- page 1 ---"
 
 
 def test_resolve_path_handles_relative_and_desktop_alias(tmp_path):
@@ -182,9 +192,7 @@ async def test_cancelled_file_write_finishes_before_cancellation_returns(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_concurrent_edits_to_one_file_do_not_lose_updates(
-    tmp_path, monkeypatch
-):
+async def test_concurrent_edits_to_one_file_do_not_lose_updates(tmp_path, monkeypatch):
     target = tmp_path / "shared.txt"
     target.write_text("alpha beta\n", encoding="utf-8")
     tools = FileTools(workspace_root=tmp_path)
@@ -248,9 +256,7 @@ async def test_file_tools_accept_git_bash_msys_paths_on_windows(tmp_path):
     assert (
         await succeeded(tools.glob, pattern="**/*.txt", path=msys_root)
     ).splitlines() == ["docs/example.txt"]
-    grep_output = await succeeded(
-        tools.grep, pattern="beta", path=msys_root
-    )
+    grep_output = await succeeded(tools.grep, pattern="beta", path=msys_root)
     assert grep_output == "docs/example.txt:2: beta"
     await succeeded(
         tools.edit,
@@ -566,9 +572,10 @@ async def test_glob_and_grep_fall_back_without_external_search_binaries(
     tools = FileTools(workspace_root=tmp_path)
 
     assert await succeeded(tools.glob, pattern="**/*.py") == "src/visible.py"
-    assert await succeeded(
-        tools.grep, pattern="needle", ignoreCase=True, glob="*.py"
-    ) == "src/visible.py:1: Needle"
+    assert (
+        await succeeded(tools.grep, pattern="needle", ignoreCase=True, glob="*.py")
+        == "src/visible.py:1: Needle"
+    )
 
 
 @pytest.mark.asyncio

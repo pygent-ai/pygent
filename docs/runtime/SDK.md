@@ -281,7 +281,7 @@ assert restored.graph_hash == plan.graph_hash
 
 `type_name` 只是诊断与可读 metadata，不参与 Module 解析、远程加载或权威身份判断。远程 Worker 必须依据已验证的 `definition_id`、代码制品、entrypoint、schema 与策略引用重建 Module，不得仅凭 Python 类型名或 pickle。
 
-`graph_hash` 覆盖会影响执行的图、代码制品和契约引用，但不覆盖描述性 metadata。`from_dict()` 拒绝未知 schema version、非法图和哈希不匹配的内容。Runtime 必须在调度远程执行前另外验证代码制品签名、Worker capability 和策略引用。
+`graph_hash` 覆盖会影响执行的图、代码制品和契约引用，但不覆盖描述性 metadata。`from_dict()` 只支持当前 `PLAN_SCHEMA_VERSION`，随后验证图与哈希。Pygent 不为历史 Plan 或 Message wire 保留别名、迁移和专用拒绝分支；旧值若无法被当前构造路径读取会自然失败，但框架不要求它必须失败。Runtime 必须在调度远程执行前另外验证代码制品签名、Worker capability 和策略引用。
 
 ## Root 托管执行
 
@@ -461,7 +461,7 @@ job: JobSnapshot | None = await runtime.get_job(job_id)
 recovered: tuple[JobSnapshot, ...] = await runtime.recover_tool_jobs(bound_module)
 ```
 
-`JobSnapshot` 包含稳定 `job_id`、所承载的 `task_id`、稳定 `logical_key`、`JobState`、`binding_id`、`plan_id`、`resource_key`、required capabilities 与 attempt。logical key 由 run/Root/Module path、确定性 Module occurrence、call/idempotency identity 派生；SQLite admission 按该 key 原子 get-or-create，同时提交 Job 身份和所承载 ToolTask 的稳定身份/请求。Parent 在 Job commit 与 Execution commit 的夹缝崩溃时，恢复重建相同 occurrence 并只能取回原 Job；不同 occurrence 即使复用 `call_id` 也必须产生独立 Job。记录中不得出现 callback、handler、registry 或连接。恢复不是 `DurableToolTaskManager.recover()` 后直接执行 registry：调用方必须重建并提供兼容 BoundModule，Runtime 校验所有治理身份后注入受管 execution path，新 attempt 才能经过原 Binding 的 Tool gates 执行。
+`JobSnapshot` 包含稳定 `job_id`、所承载的 `task_id`、稳定 `logical_key`、`JobState`、`binding_id`、`plan_id`、`resource_key`、required capabilities 与 attempt。logical key 由 run/Root/Module path、确定性 Module occurrence、call/idempotency identity 派生；SQLite admission 按该 key 原子 get-or-create，同时提交 Job 身份和所承载 ToolTask 的稳定身份/请求。Parent 在 Job commit 与 Execution commit 的夹缝崩溃时，恢复重建相同 occurrence 并只能取回原 Job；不同 occurrence 即使复用 `call_id` 也必须产生独立 Job。记录中不得出现 callback、handler、registry 或连接。恢复只有 `LocalRuntime.recover_tool_jobs(...)` 一个公共入口：调用方必须重建并提供兼容 BoundModule，Runtime 校验所有治理身份后注入受管 execution path，新 attempt 才能经过原 Binding 的 Tool gates 执行。
 
 ## `max_concurrency=1` 的父子阻塞
 

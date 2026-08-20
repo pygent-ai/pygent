@@ -106,14 +106,6 @@ class DurableToolTaskManager:
         self._executions: dict[str, ToolTaskExecution] = {}
         self._lock = asyncio.Lock()
 
-    async def recover(self) -> None:
-        """Reject legacy recovery that has no Runtime governance identity."""
-
-        raise RuntimeError(
-            "durable ToolTask recovery requires an independent Job and "
-            "LocalRuntime.recover_tool_jobs(compatible_bound_module)"
-        )
-
     @staticmethod
     def _retry_safe(spec: ToolSpec, call: ToolCall | None = None) -> bool:
         return (

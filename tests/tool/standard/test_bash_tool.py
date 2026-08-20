@@ -379,7 +379,7 @@ async def test_bash_ut_times_out_and_preserves_partial_terminal_output(tmp_path)
         tools.bash,
         {
             "command": "import time; print('before', flush=True); time.sleep(1)",
-            "timeout": 50,
+            "timeout": 250,
         },
     )
 

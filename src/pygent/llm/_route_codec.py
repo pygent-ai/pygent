@@ -13,21 +13,19 @@ _ROUTE_FIELDS = frozenset({"route_id", "provider", "model", "provider_options"})
 
 
 def model_route_value(route: ModelRoute) -> dict[str, object]:
-    """Return the one compatibility-preserving portable route projection."""
+    """Return the current portable route projection."""
 
-    value: dict[str, object] = {
+    options = cast(FrozenJsonObject, route.provider_options)
+    return {
         "route_id": route.route_id,
         "provider": route.provider,
         "model": route.model,
+        "provider_options": thaw_json(options),
     }
-    options = cast(FrozenJsonObject, route.provider_options)
-    if options:
-        value["provider_options"] = thaw_json(options)
-    return value
 
 
 def model_route_from_value(value: Mapping[str, object]) -> ModelRoute:
-    """Decode a portable route, treating the legacy missing field as empty."""
+    """Decode the current portable route projection."""
 
     unknown = set(value) - _ROUTE_FIELDS
     if unknown:
@@ -37,7 +35,7 @@ def model_route_from_value(value: Mapping[str, object]) -> ModelRoute:
     model = value.get("model")
     if not isinstance(route_id, str) or not isinstance(provider, str) or not isinstance(model, str):
         raise TypeError("stored model route identity fields must be strings")
-    options = value.get("provider_options", {})
+    options = value["provider_options"]
     if not isinstance(options, Mapping):
         raise TypeError("stored provider_options must be an object")
     return ModelRoute(

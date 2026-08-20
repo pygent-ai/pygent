@@ -216,7 +216,7 @@ ToolDefinition 只描述模型可见接口；ToolSpec 描述可移植执行语�
 
 Python DSL 中的 dict、list、tuple 和 Enum 在构造时必须被防御性复制、规范化为严格 JSON 并递归冻结；构造后修改原 schema dict 不得改变 ToolDefinition 或 ToolSpec。NaN、Infinity、bytes、handler 和其他任意 Python 对象必须在构造边界被拒绝。
 
-ToolDefinition、ToolSpec、ToolCall、ToolTask 与 ToolResult 是封闭的 portable value 类型，不支持 Python 子类追加字段。领域扩展放入已有的严格 JSON schema、arguments、metadata 或 output 槽位；codec 对未知 subtype fail-closed，不能静默丢弃 handler 或自定义字段。
+ToolDefinition、ToolSpec、ToolCall、ToolTask 与 ToolResult 是封闭的 portable value 类型，不支持 Python 子类追加字段。领域扩展放入已有的严格 JSON schema、arguments、metadata 或 output 槽位；codec 对未知 subtype fail-closed，不能静默丢弃 handler 或自定义字段。Pygent 不维护历史 wire 的别名、迁移或专用拒绝逻辑；能否被当前构造路径自然读取不构成兼容承诺。
 
 ## 外部沙箱 executor
 

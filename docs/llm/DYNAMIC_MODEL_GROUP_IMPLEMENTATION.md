@@ -448,7 +448,7 @@ failure. Purging a durable execution record releases its recoverable reference a
 the corresponding resource-retention obligation.
 
 Close failures are observable and never reactivate a retired version. Shared owner
-records prevent double close across deployment snapshots and legacy registrations.
+records prevent double close across deployment snapshots and retained pinned work.
 
 ### 10.4 Runtime close
 

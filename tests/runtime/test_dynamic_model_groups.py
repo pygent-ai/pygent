@@ -567,7 +567,7 @@ async def test_independent_binding_child_uses_its_own_model_admission() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.spec("dynamic-model-group", "DMG-WORKER-001")
-async def test_worker_exact_pin_extension_round_trips_and_old_worker_rejects() -> None:
+async def test_worker_exact_pin_requires_declared_capability() -> None:
     observed: dict[str, object] = {}
 
     async def handler(invocation: object, event_sink: object) -> object:
@@ -603,14 +603,14 @@ async def test_worker_exact_pin_extension_round_trips_and_old_worker_rejects() -
     assert observed["admission"] == "stable-request"
     assert observed["model_calls"]["assistant"]["profile"] == "quality"  # type: ignore[index]
 
-    old_worker = HTTPWorkerApp(handler, capabilities=("local",))
-    old_registry = WorkerRegistry()
-    old_registry.publish(
+    incapable_worker = HTTPWorkerApp(handler, capabilities=("local",))
+    incapable_registry = WorkerRegistry()
+    incapable_registry.publish(
         "dynamic",
-        (WorkerTarget("old", "http://old", ("local", capability)),),
+        (WorkerTarget("incapable", "http://incapable", ("local", capability)),),
     )
     async with HTTPWorkerClient(
-        old_registry, transport=httpx.ASGITransport(app=old_worker.app)
+        incapable_registry, transport=httpx.ASGITransport(app=incapable_worker.app)
     ) as client:
         with pytest.raises(WorkerUnavailableError):
             await client.start(

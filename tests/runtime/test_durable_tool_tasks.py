@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from pygent.runtime import LocalRuntime, SQLiteHistoryStore
-from pygent.runtime.tasks import DurableToolTaskManager, _request_to_dict
+from pygent.runtime.tasks import DurableToolTaskManager
 from pygent.tool import (
     ExecutorRegistry,
     IdempotencyPolicy,
@@ -67,57 +67,6 @@ async def test_durable_tool_task_persists_admission_and_terminal_result(tmp_path
         result = await manager.get_result(snapshot.task_id)
         assert snapshot is not None and snapshot.state is ToolTaskState.SUCCEEDED
         assert result is not None and result.output["echo"] == 1
-
-
-@pytest.mark.asyncio
-async def test_legacy_recovery_refuses_pending_task_without_runtime_validation(tmp_path):
-    executed = asyncio.Event()
-    registry = ExecutorRegistry()
-    spec = tool()
-
-    def execute(arguments):
-        executed.set()
-        return "done"
-
-    registry.register(spec.tool_id, spec.version, LocalToolExecutor(execute))
-    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
-        await history.put_task(
-            task_id="tool-pending",
-            kind="tool_task",
-            status="pending",
-            request=_request_to_dict(spec, call()),
-        )
-        manager = DurableToolTaskManager(history, registry)
-        with pytest.raises(RuntimeError, match="LocalRuntime.recover_tool_jobs"):
-            await manager.recover()
-        result = await manager.get_result("tool-pending")
-
-    assert not executed.is_set()
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_legacy_recovery_refuses_running_task_without_runtime_validation(tmp_path):
-    registry = ExecutorRegistry()
-    spec = tool(
-        side_effect=ToolSideEffect.EXTERNAL,
-        idempotency=IdempotencyPolicy.NOT_IDEMPOTENT,
-    )
-    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
-        await history.put_task(
-            task_id="tool-running",
-            kind="tool_task",
-            status="running",
-            request=_request_to_dict(spec, call()),
-        )
-        manager = DurableToolTaskManager(history, registry)
-        with pytest.raises(RuntimeError, match="LocalRuntime.recover_tool_jobs"):
-            await manager.recover()
-        result = await manager.get_result("tool-running")
-        stored = await history.get_task("tool-running")
-
-    assert result is None
-    assert stored is not None and stored.status == "running"
 
 
 @pytest.mark.asyncio

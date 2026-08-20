@@ -126,7 +126,7 @@ def test_graph_hash_covers_executable_contract_but_not_metadata():
     assert changed_artifact.graph_hash != plan.graph_hash
 
 
-def test_legacy_minimal_plan_remains_valid_but_is_not_portable():
+def test_local_minimal_plan_remains_valid_but_is_not_portable():
     plan = ExecutionPlan(
         root="agent",
         modules=(ModuleSpec(path="agent", type_name="Agent"),),

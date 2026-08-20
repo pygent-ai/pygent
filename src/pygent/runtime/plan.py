@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 PLAN_SCHEMA_VERSION = 3
-SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({2, 3})
 
 _ARTIFACT_FIELDS = {"package", "version", "digest", "entrypoint"}
 _MODULE_FIELDS = {
@@ -283,8 +282,8 @@ class ModuleSpec:
             )
         )
 
-    def to_dict(self, *, include_model_requirements: bool = True) -> dict[str, object]:
-        result: dict[str, object] = {
+    def to_dict(self) -> dict[str, object]:
+        return {
             "path": self.path,
             "type_name": self.type_name,
             "children": list(self.children),
@@ -299,12 +298,10 @@ class ModuleSpec:
             "retry_policy_ref": self.retry_policy_ref,
             "checkpoint_policy_ref": self.checkpoint_policy_ref,
             "metadata": [list(item) for item in self.metadata],
-        }
-        if include_model_requirements:
-            result["model_requirements"] = [
+            "model_requirements": [
                 item.to_dict() for item in self.model_requirements
-            ]
-        return result
+            ],
+        }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> ModuleSpec:
@@ -375,11 +372,11 @@ class ExecutionPlan:
         if (
             not isinstance(self.schema_version, int)
             or isinstance(self.schema_version, bool)
-            or self.schema_version not in SUPPORTED_PLAN_SCHEMA_VERSIONS
+            or self.schema_version != PLAN_SCHEMA_VERSION
         ):
             raise PlanVersionError(
                 f"unsupported plan schema version {self.schema_version}; "
-                f"expected one of {sorted(SUPPORTED_PLAN_SCHEMA_VERSIONS)}"
+                f"expected {PLAN_SCHEMA_VERSION}"
             )
         _require_text(self.runtime_api_version, "runtime_api_version")
         if self.runtime_api_version != "0.2":
@@ -394,12 +391,6 @@ class ExecutionPlan:
         object.__setattr__(self, "modules", tuple(self.modules))
         object.__setattr__(self, "metadata", _metadata_tuple(self.metadata))
         object.__setattr__(self, "context_codecs", _context_codec_tuple(self.context_codecs))
-        if self.schema_version == 2 and any(
-            module.model_requirements for module in self.modules
-        ):
-            raise PlanValidationError(
-                "plan schema v2 cannot contain dynamic model requirements"
-            )
         self._validate_graph()
         object.__setattr__(self, "graph_hash", self._calculate_graph_hash())
 
@@ -456,7 +447,7 @@ class ExecutionPlan:
             "root": self.root,
             "artifact": self.artifact.to_dict() if self.artifact else None,
             "modules": [
-                module.to_dict(include_model_requirements=self.schema_version >= 3)
+                module.to_dict()
                 for module in sorted(self.modules, key=lambda item: item.path)
             ],
             "context_codecs": [list(item) for item in self.context_codecs],
@@ -484,10 +475,10 @@ class ExecutionPlan:
         schema_version = value.get("schema_version")
         if not isinstance(schema_version, int) or isinstance(schema_version, bool):
             raise PlanVersionError("schema_version must be an integer")
-        if schema_version not in SUPPORTED_PLAN_SCHEMA_VERSIONS:
+        if schema_version != PLAN_SCHEMA_VERSION:
             raise PlanVersionError(
                 f"unsupported plan schema version {schema_version}; "
-                f"expected one of {sorted(SUPPORTED_PLAN_SCHEMA_VERSIONS)}"
+                f"expected {PLAN_SCHEMA_VERSION}"
             )
 
         raw_modules = value.get("modules")

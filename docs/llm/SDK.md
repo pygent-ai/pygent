@@ -80,14 +80,14 @@ route = ModelRoute(
 OpenAI-compatible route 可以在 `provider_options` 中显式选择一个 token-limit 字段和值；这用于仍要求旧字段或只接受新字段的兼容服务：
 
 ```python
-legacy_route = ModelRoute(
-    "legacy",
+max_tokens_route = ModelRoute(
+    "max-tokens-service",
     provider="custom",
-    model="legacy-chat",
+    model="custom-chat",
     provider_options={"max_tokens": 2048},
 )
-modern_route = ModelRoute(
-    "modern",
+max_completion_tokens_route = ModelRoute(
+    "max-completion-tokens-service",
     provider="custom",
     model="modern-chat",
     provider_options={"max_completion_tokens": 2048},

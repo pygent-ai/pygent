@@ -255,7 +255,7 @@ thinking 不接受未知字段
 }
 ```
 
-空 `provider_options` 在 0.2.x 兼容编码中必须省略。解码缺失字段时恢复为空对象。这样现有无选项 route 的 canonical payload 和 digest 保持不变。
+当前 canonical route 编码始终包含 `provider_options`，空配置编码为 `{}`。解码器只验证完整的当前 route schema；字段是否为空不改变其参与 schema 的事实。
 
 任何非空选项及其嵌套值变化都必须改变：
 
@@ -356,7 +356,7 @@ ModelRoute("primary", "openai", "gpt-5")
 
 ### 11.2 持久数据
 
-解码器必须接受旧 route 对象缺少 `provider_options`，并恢复为空对象。编码器对空对象省略字段，以保持现有 canonical digest。
+编码器必须始终输出 `provider_options`，解码器只接受字段集合与当前 canonical route schema 完全一致的对象。
 
 对非空选项的支持是新的持久语义。所有保存或转发 route 的 codec 必须在同一升级中完成；不能发布只支持写入、不支持恢复或远程往返的部分实现。
 

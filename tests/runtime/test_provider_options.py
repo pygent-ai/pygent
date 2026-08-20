@@ -24,6 +24,7 @@ from pygent.llm import (
     ModelGroupConfigurationError,
     ModelResourceRef,
 )
+from pygent.llm._route_codec import model_route_value
 from pygent.llm.layer import _model_effect_request
 from pygent.runtime import (
     LocalRuntime,
@@ -112,8 +113,14 @@ def test_provider_options_change_definition_and_effect_identity_but_empty_does_n
     effect_group = cast(FrozenJsonObject, empty_effect["model_group"])
     effect_routes = cast(tuple[object, ...], effect_group["routes"])
     empty_route = cast(FrozenJsonObject, effect_routes[0])
-    assert "provider_options" not in empty_route
+    assert empty_route["provider_options"] == freeze_json_object({})
     assert empty_effect != configured_effect
+
+
+def test_model_route_codec_emits_the_current_complete_shape() -> None:
+    route = ModelRoute("primary", "openai", "gpt-5")
+
+    assert model_route_value(route)["provider_options"] == {}
 
 
 @pytest.mark.asyncio
