@@ -21,6 +21,7 @@ from ._module_definition import (
     Module,
     PlacementMode,
     PlacementPolicy,
+    RecurrentModule,
     RemoteModule,
 )
 from .execution import (
@@ -86,6 +87,7 @@ __all__ = [
     "PlacementMode",
     "PlacementPolicy",
     "RecoverySafety",
+    "RecurrentModule",
     "RemoteModule",
     "ToolMessage",
     "UserMessage",

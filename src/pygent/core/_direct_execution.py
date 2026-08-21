@@ -17,6 +17,7 @@ from typing import (
     Any,
     Generic,
     Self,
+    TypeVar,
     cast,
 )
 from uuid import uuid4
@@ -26,7 +27,6 @@ from ._module_contracts import (
     DirectExecutionError,
     EffectSpec,
     ModuleDependency,
-    OutputMessageT,
     _capacity_permit,
     _execution_scope,
 )
@@ -58,17 +58,18 @@ if TYPE_CHECKING:
 _direct_span: ContextVar[tuple[str, str | None, str] | None] = ContextVar(
     "pygent_direct_span", default=None
 )
+ResultT = TypeVar("ResultT")
 
 @dataclass(slots=True)
-class _DirectExecutionRecord(Generic[OutputMessageT]):
+class _DirectExecutionRecord(Generic[ResultT]):
     """Single owner of direct execution state and its non-blocking journal."""
 
     execution_id: str
     trace_id: str
     root_span_id: str
-    module: Module[Any, OutputMessageT]
-    message: Message
-    context: Context
+    module: Module[Any, Any]
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
     options: ExecutionOptions
     attempt_id: str = field(default_factory=lambda: str(uuid4()))
     status: ExecutionStatus = ExecutionStatus.PENDING
@@ -80,7 +81,7 @@ class _DirectExecutionRecord(Generic[OutputMessageT]):
     events: list[ExecutionEvent] = field(default_factory=list)
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     active_subscribers: int = 0
-    task: asyncio.Task[tuple[OutputMessageT, Context]] | None = None
+    task: asyncio.Task[ResultT] | None = None
     module_paths: dict[int, str] = field(default_factory=dict)
 
     @property
@@ -194,7 +195,20 @@ class _DirectExecutionScope:
         message: Message,
         context: Context,
     ) -> tuple[Message, Context]:
-        from ._module_definition import Module, RemoteModule
+        """Preserve the fixed Message/Context infrastructure protocol."""
+
+        result = await self.invoke_module_call(module, message, context)
+        return _validate_result(result)
+
+    async def invoke_module_call(
+        self,
+        module: object,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Invoke one local Module with its declared Python call shape."""
+
+        from ._module_definition import Agent, Module, RemoteModule
 
         if not self._active:
             raise RuntimeError("the direct execution scope is already closed")
@@ -223,12 +237,27 @@ class _DirectExecutionScope:
             data={},
         )
         token = _direct_span.set((span_id, parent_span_id, module_path))
-        validate_context(context)
         try:
-            result = _validate_result(await module.forward(message, context))
-            validate_context(result[1])
-            if type(result[1]) is not type(context):
-                raise TypeError("Module.forward() must preserve the concrete Context type")
+            if isinstance(module, Agent):
+                if len(args) > 2 or any(
+                    name not in {"message", "context"} for name in kwargs
+                ):
+                    raise TypeError(
+                        "Agent.forward() requires a (message, context) call"
+                    )
+                context = cast(
+                    Context,
+                    args[1] if len(args) > 1 else kwargs.get("context"),
+                )
+                validate_context(context)
+            result = await module.forward(*args, **kwargs)
+            if isinstance(module, Agent):
+                result = _validate_result(result)
+                validate_context(result[1])
+                if type(result[1]) is not type(context):
+                    raise TypeError(
+                        "Agent.forward() must preserve the concrete Context type"
+                    )
         except asyncio.CancelledError:
             await self._record.emit(
                 span_id=span_id,
@@ -486,10 +515,10 @@ class _DirectExecutionSubscription:
             self._deactivate()
 
 
-class _DirectExecutionHandle(Generic[OutputMessageT]):
+class _DirectExecutionHandle(Generic[ResultT]):
     """Control plane for one direct execution owner."""
 
-    def __init__(self, record: _DirectExecutionRecord[OutputMessageT]) -> None:
+    def __init__(self, record: _DirectExecutionRecord[ResultT]) -> None:
         self._record = record
 
     @property
@@ -515,7 +544,7 @@ class _DirectExecutionHandle(Generic[OutputMessageT]):
             raise RuntimeError("execution has no terminal outcome")
         return self._record.outcome
 
-    async def result(self) -> tuple[OutputMessageT, Context]:
+    async def result(self) -> ResultT:
         self._record.ensure_started()
         assert self._record.task is not None
         return await self._record.task
@@ -536,16 +565,16 @@ class _DirectExecutionHandle(Generic[OutputMessageT]):
         return _DirectExecutionSubscription(self._record, after)
 
 
-class DirectExecutionStream(Generic[OutputMessageT]):
+class DirectExecutionStream(Generic[ResultT]):
     """Owned stream projection over one direct ExecutionHandle."""
 
-    def __init__(self, handle: _DirectExecutionHandle[OutputMessageT]) -> None:
+    def __init__(self, handle: _DirectExecutionHandle[ResultT]) -> None:
         self._handle = handle
         self._subscription = handle.subscribe()
         self._result_consumed = False
         self._closed = False
 
-    async def __aenter__(self) -> DirectExecutionStream[OutputMessageT]:
+    async def __aenter__(self) -> DirectExecutionStream[ResultT]:
         self._handle._record.ensure_started()
         return self
 
@@ -564,7 +593,7 @@ class DirectExecutionStream(Generic[OutputMessageT]):
             raise RuntimeError("the execution stream is closed")
         return self._subscription.__aiter__()
 
-    async def final_result(self) -> tuple[OutputMessageT, Context]:
+    async def final_result(self) -> ResultT:
         if self._closed:
             raise RuntimeError("the execution stream is closed")
         try:
@@ -589,8 +618,8 @@ def _direct_module_paths(root: Module[Any, Any]) -> dict[int, str]:
 
 
 async def _run_direct_execution(
-    record: _DirectExecutionRecord[OutputMessageT],
-) -> tuple[OutputMessageT, Context]:
+    record: _DirectExecutionRecord[ResultT],
+) -> ResultT:
     record.module._freeze_definition()
     scope = _DirectExecutionScope(record)
     token = _execution_scope.set(scope)
@@ -604,8 +633,8 @@ async def _run_direct_execution(
         data={},
     )
     try:
-        message, context = await scope.invoke_module(
-            record.module, record.message, record.context
+        result = await scope.invoke_module_call(
+            record.module, *record.args, **record.kwargs
         )
     except asyncio.CancelledError:
         await record.emit(
@@ -654,7 +683,7 @@ async def _run_direct_execution(
             data={},
         )
         await record.notify_terminal(ExecutionStatus.SUCCEEDED)
-        return cast(OutputMessageT, message), context
+        return cast(ResultT, result)
     finally:
         scope.close()
         _execution_scope.reset(token)

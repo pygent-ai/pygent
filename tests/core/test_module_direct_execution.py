@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from pygent.core import Module, RemoteModule
+from pygent.core import Agent, Module, RecurrentModule, RemoteModule
 from pygent.core._module_contracts import _execution_scope
 from pygent.core.values import AIMessage, Context, UserMessage
 from pygent.runtime import LocalRuntime
@@ -42,6 +42,97 @@ async def test_direct_invoke_executes_children_and_restores_scope() -> None:
     assert output == AIMessage(content="child:hello")
     assert context.messages == (UserMessage(content="hello"), output)
     assert _execution_scope.get() is None
+
+
+@pytest.mark.asyncio
+async def test_direct_module_preserves_user_defined_args_kwargs_and_result() -> None:
+    class Normalize(Module):
+        async def forward(
+            self, value: float, *extras: float, scale: float = 1.0
+        ) -> dict[str, float]:
+            return {"value": (value + sum(extras)) * scale}
+
+    module = Normalize()
+
+    assert await module.invoke(2.0, 3.0, 5.0, scale=0.5) == {"value": 5.0}
+    handle = await module.start(4.0, scale=2.0)
+    assert await handle.result() == {"value": 8.0}
+    async with module.stream(6.0, scale=0.25) as stream:
+        assert await stream.final_result() == {"value": 1.5}
+
+
+@pytest.mark.asyncio
+async def test_direct_local_child_uses_its_own_call_contract() -> None:
+    class Join(Module):
+        async def forward(self, *parts: str, separator: str = ":") -> str:
+            return separator.join(parts)
+
+    class Pipeline(Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.join = Join()
+
+        async def forward(self, values: tuple[str, ...]) -> str:
+            return await self.join(*values, separator="/")
+
+    assert await Pipeline().invoke(("a", "b", "c")) == "a/b/c"
+
+
+@pytest.mark.asyncio
+async def test_recurrent_module_is_optional_and_context_is_independent() -> None:
+    class Accumulate(RecurrentModule):
+        async def forward(self, value: int, state: int) -> tuple[int, int]:
+            next_state = state + value
+            return next_state * 2, next_state
+
+    class ContextSize(Module):
+        async def forward(self, context: Context) -> int:
+            return len(context.messages)
+
+    assert issubclass(RecurrentModule, Module)
+    assert await Accumulate().invoke(3, 4) == (14, 7)
+    assert await ContextSize().invoke(Context()) == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_keeps_its_existing_message_context_contract() -> None:
+    class EchoAgent(Agent[UserMessage, AIMessage]):
+        async def forward(self, message: UserMessage, context: Context):
+            return AIMessage(content=message.content), context
+
+    class InvalidAgent(Agent[UserMessage, AIMessage]):
+        async def forward(self, message: UserMessage, context: Context):
+            return "not-a-message", context
+
+    assert await EchoAgent().invoke(
+        message=UserMessage(content="keyword"), context=Context()
+    ) == (AIMessage(content="keyword"), Context())
+    with pytest.raises(TypeError, match="result message"):
+        await InvalidAgent().invoke(UserMessage(), Context())
+
+
+@pytest.mark.asyncio
+async def test_managed_execution_rejects_an_unsupported_free_child_call() -> None:
+    class FreeChild(Module):
+        async def forward(self, value: int, *, scale: int) -> int:
+            return value * scale
+
+    class ManagedParent(Module[UserMessage, AIMessage]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.child = FreeChild()
+
+        async def forward(self, message: UserMessage, context: Context):
+            value = await self.child(2, scale=3)
+            return AIMessage(content=str(value)), context
+
+    runtime = LocalRuntime()
+    try:
+        bound = runtime.bind(ManagedParent())
+        with pytest.raises(TypeError, match="managed execution currently requires"):
+            await bound.invoke(UserMessage(), Context())
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -250,13 +341,14 @@ async def test_root_and_remote_calls_fail_with_actionable_scope_errors() -> None
 
 
 @pytest.mark.asyncio
-async def test_invalid_forward_result_is_rejected_at_execution_boundary() -> None:
-    class Invalid(Module[UserMessage, AIMessage]):
+async def test_direct_execution_returns_the_module_declared_result_unchanged() -> None:
+    class CustomResult(Module):
         async def forward(self, message: UserMessage, context: Context):
             return "not-a-message", context
 
-    with pytest.raises(TypeError, match="result message"):
-        await Invalid().invoke(UserMessage(), Context())
+    result = await CustomResult().invoke(UserMessage(), Context())
+
+    assert result == ("not-a-message", Context())
 
 
 @pytest.mark.asyncio

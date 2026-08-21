@@ -7,7 +7,7 @@
 | --- | --- |
 | Module 定义冻结、direct/managed 配置一致、plan drift fail-closed | `tests/core/test_module_direct_execution.py`、`tests/runtime/test_definition_drift.py`、`tests/runtime/test_execution_plan.py` |
 | 领域 Message 的严格 JSON、wire 往返、approval/handoff/termination 组合 | `tests/integration/test_module_context_contract.py`、`tests/runtime/test_wire_codec.py` |
-| Module 自由参数/结果、RecurrentModule 显式 state、本地 direct 调用保持用户声明的结果类型 | **待实现与补充可执行证据**；当前测试只覆盖旧 Message/Context 二元路径，通用 managed/remote call contract 不在本次变更范围内 |
+| Module 自由参数/结果、RecurrentModule 显式 state、本地 direct Root/Child 保持用户声明的结果类型 | `tests/core/test_module_direct_execution.py`、`tests/integration/test_public_api.py`；managed/remote call contract 仍保持既有 Message/Context 范围 |
 | 基础 Context 不可变、模型投影、显式历史、slot、严格有限 JSON 与 wire 往返 | `tests/integration/test_module_context_contract.py`、`tests/common_module/test_json_values.py`、`tests/runtime/test_wire_codec.py` |
 | AgentContext 子类校验、`ContextCodec.dataclass()`、具体类型保留、通用信封 discriminator、计划/Worker codec allowlist、durable history/reattach 与版本拒绝 | `tests/integration/test_agent_context.py`、`tests/runtime/test_wire_codec.py`、`tests/runtime/test_execution_plan.py`、`tests/runtime/test_http_worker.py`、`tests/runtime/test_durable_runtime.py` |
 | Binding、父子 lineage、取消、deadline、live/runnable、有限队列与 RESUME | `tests/runtime/test_local_runtime.py`、`tests/runtime/test_agent_boundaries.py` |

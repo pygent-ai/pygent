@@ -126,7 +126,7 @@ class RemoteModule(Generic[InputMessageT, OutputMessageT]):
 
 
 class Module(Generic[InputMessageT, OutputMessageT]):
-    """Reusable definition whose subclasses implement one ``forward`` method."""
+    """Reusable definition whose ``forward`` declares its local call contract."""
 
     _children: dict[str, Module[Any, Any]]
     _dependencies: dict[str, ModuleDependency[Any, Any]]
@@ -237,38 +237,42 @@ class Module(Generic[InputMessageT, OutputMessageT]):
 
         return tuple(self._dependencies.items())
 
-    async def __call__(
-        self, message: InputMessageT, context: Context
-    ) -> tuple[OutputMessageT, Context]:
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
         scope = _execution_scope.get()
         if scope is None:
             raise RuntimeError(
                 "Module calls require an active execution scope; "
                 "use module.invoke() or module.stream() for a Root call"
             )
-        output, next_context = await scope.invoke_module(self, message, context)
-        return cast(OutputMessageT, output), next_context
+        invoke_module_call = getattr(scope, "invoke_module_call", None)
+        if callable(invoke_module_call):
+            return await invoke_module_call(self, *args, **kwargs)
+        if kwargs or len(args) != 2:
+            raise TypeError(
+                "managed execution currently requires Module calls as "
+                "(message, context)"
+            )
+        return await scope.invoke_module(self, args[0], args[1])
 
     async def invoke(
         self,
-        message: InputMessageT,
-        context: Context,
-        *,
+        *args: Any,
         execution: ExecutionOptions | None = None,
-    ) -> tuple[OutputMessageT, Context]:
+        **kwargs: Any,
+    ) -> Any:
         """Return the result projection of one direct execution."""
 
-        handle = await self.start(message, context, execution=execution)
+        handle = await self.start(*args, execution=execution, **kwargs)
         return await handle.result()
 
     def _start_direct(
         self,
-        message: InputMessageT,
-        context: Context,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
         execution: ExecutionOptions | None,
         *,
         start_now: bool = True,
-    ) -> _DirectExecutionHandle[OutputMessageT]:
+    ) -> _DirectExecutionHandle[Any]:
         """Create the direct owner synchronously for stream() and start()."""
 
         if _execution_scope.get() is not None:
@@ -282,6 +286,7 @@ class Module(Generic[InputMessageT, OutputMessageT]):
                 context_type, Context
             ):
                 raise TypeError("Agent.context_type must be a Context subclass")
+            context = args[1] if len(args) > 1 else kwargs.get("context")
             if type(context) is not context_type:
                 raise TypeError(
                     f"{type(self).__name__} requires Context type "
@@ -315,13 +320,13 @@ class Module(Generic[InputMessageT, OutputMessageT]):
                 )
         execution_id = options.execution_id or f"direct-{uuid4()}"
         trace_id = options.trace_id or str(uuid4())
-        record = _DirectExecutionRecord(
+        record: _DirectExecutionRecord[Any] = _DirectExecutionRecord(
             execution_id=execution_id,
             trace_id=trace_id,
             root_span_id=str(uuid4()),
             module=self,
-            message=message,
-            context=context,
+            args=args,
+            kwargs=kwargs,
             options=options,
             module_paths=_direct_module_paths(self),
         )
@@ -331,31 +336,27 @@ class Module(Generic[InputMessageT, OutputMessageT]):
 
     async def start(
         self,
-        message: InputMessageT,
-        context: Context,
-        *,
+        *args: Any,
         execution: ExecutionOptions | None = None,
-    ) -> _DirectExecutionHandle[OutputMessageT]:
+        **kwargs: Any,
+    ) -> _DirectExecutionHandle[Any]:
         """Start one unbound Module execution and return its control plane."""
 
-        return self._start_direct(message, context, execution)
+        return self._start_direct(args, kwargs, execution)
 
     def stream(
         self,
-        message: InputMessageT,
-        context: Context,
-        *,
+        *args: Any,
         execution: ExecutionOptions | None = None,
-    ) -> DirectExecutionStream[OutputMessageT]:
+        **kwargs: Any,
+    ) -> DirectExecutionStream[Any]:
         """Return an owned event projection over one direct execution."""
 
         return DirectExecutionStream(
-            self._start_direct(message, context, execution, start_now=False)
+            self._start_direct(args, kwargs, execution, start_now=False)
         )
 
-    async def forward(
-        self, message: InputMessageT, context: Context
-    ) -> tuple[OutputMessageT, Context]:
+    async def forward(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError
 
     async def emit(self, *, kind: str, data: JsonObjectInput) -> None:
@@ -411,10 +412,14 @@ class Module(Generic[InputMessageT, OutputMessageT]):
         return runtime.bind(self, binding=binding)
 
 
+class RecurrentModule(Module[Any, Any]):
+    """Optional standard Module for computations with explicit recurrent state."""
+
+
 class Agent(
-    Module[InputMessageT, OutputMessageT],
+    RecurrentModule,
     Generic[InputMessageT, OutputMessageT],
 ):
-    """Optional semantic name with exactly the same contract as Module."""
+    """Agent semantic base retaining the Message/Context recurrent contract."""
 
     context_type: type[Context] | None = None
