@@ -247,11 +247,14 @@ async def test_cancellation_cleanup_timeout_is_terminal_and_quarantines_client(
     started = time.monotonic()
     execution = invoker.execute(
         model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_route=3),
+        retry_policy=RetryPolicy(
+            max_attempts_per_route=3,
+            attempt_timeout_seconds=0.01,
+        ),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
         context=Context(),
-        deadline=time.monotonic() + 0.02,
+        deadline=time.monotonic() + 1,
     )
     with pytest.raises(ModelCallError) as raised:
         await execution.result()
