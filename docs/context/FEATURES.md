@@ -2,7 +2,7 @@
 
 本文从属于 [Pygent 0.2 第一原则](../FEATURES.md)。只能澄清，不能与其冲突。
 
-1. **Agent 状态快照**：Context 作为 Module 的第二个输入和输出显式传递，是本次数据流的不可变 Agent 状态快照。基础字段表示当前模型可见投影；用户 Context 子类可以增加完整历史视图、工具状态、文件状态和其他领域数据。
+1. **Agent 上下文值**：Context 是框架提供的不可变 Agent 上下文值。它可以作为普通 Module 的输入或输出，也可以被 RecurrentModule 选作 state；Context 本身不依赖 RecurrentModule。基础字段表示当前模型可见投影；用户 Context 子类可以增加完整历史视图、工具状态、文件状态和其他领域数据。
 2. **受约束扩展**：用户 Context 子类必须声明稳定 schema 和版本，保持 frozen、slots 与值语义；全部实例字段必须可由严格、有限、递归冻结的 JSON 数据编码。继承不会开放任意 Python 对象旁路。
 3. **不可变值**：任何状态或历史演进都产生同一具体 Context 类型的新值，旧值永不改变；`replace()`、消息追加、Child 调用和最终结果不得静默降级为基础 Context。用户可以重载 `+`/`+=` 的值转换，但只能返回新的同类型 portable 值，不得原地修改、执行隐藏 I/O 或改变基础 Message/slot 契约。
 4. **数据而非服务**：Context 不持有连接、锁、Store、handler、manager、provider client 或运行资源。

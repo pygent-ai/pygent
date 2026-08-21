@@ -1,11 +1,16 @@
 # Module SDK
 
-本文是 Module 的第二级契约，必须服从 [Module 第一原则](FEATURES.md)。框架演进应保持这些使用方式成立。
+本文是 Module 的第二级契约，必须服从 [Module 第一原则](FEATURES.md)与[调用与递推状态原则](CALL_CONTRACT_SPEC.md)。框架演进应保持这些使用方式成立。
 
 ## 定义和组合
 
 ```python
-class MyAgent(Module[UserMessage, AIMessage]):
+class Normalize(Module):
+    async def forward(self, value: float, *, scale: float = 1.0) -> float:
+        return value * scale
+
+
+class MyAgent(RecurrentModule):
     def __init__(self, react: ReActLayer):
         super().__init__()
         self.react = react
@@ -20,7 +25,7 @@ class MyAgent(Module[UserMessage, AIMessage]):
 
 用户只实现 `forward()`。把 Module 赋给属性即声明依赖关系；同一实例可以被多个属性路径共享。
 
-`context` 可以是基础 `Context`，也可以是满足 [Context SDK](../context/SDK.md#定义用户-agentcontext) 的用户 `AgentContext` 子类。无论具体类型如何，所有 Pygent Module 都保持 `(message, context) -> (message, context)`；只接收 Context 并返回任意值的辅助计算应使用普通 Python 函数，而不是创建第二种 Module 协议。
+普通 Module 的参数和结果由自己的 `forward()` 定义。需要显式状态递推时可以继承标准 RecurrentModule；state 可以是任意用户类型，内置 Agent/LLM 组合通常使用基础 `Context` 或满足 [Context SDK](../context/SDK.md#定义用户-agentcontext) 的 `AgentContext`。普通辅助计算可以建模为 Module，不需要伪装成 Message/Context 转移。
 
 Module 图必须先完整构造，再进入执行生命周期。第一次调用 Root 的 `invoke()`、创建 `stream()` 或执行 `bind()` 时，框架会递归冻结全部原始子 Module；之后不能重新赋值或删除任何 Module 属性：
 
@@ -80,7 +85,7 @@ approval = Message(
 )
 ```
 
-`kind` 必须是非空稳定标识；`data` 必须是 JSON 对象，并会在构造边界防御性复制和递归冻结。该形式能由 Runtime wire codec 无损往返。框架拒绝任意 `Message` 子类，因为 Message 是跨能力边界的统一增量信封。Agent 生命周期状态则可以使用具有稳定 schema、版本、frozen/slots 与 portable 字段的 Context 子类；请求事实仍优先放入 `Context.metadata`，领域聚合状态放入明确命名的 AgentContext 字段。
+`kind` 必须是非空稳定标识；`data` 必须是 JSON 对象，并会在构造边界防御性复制和递归冻结。该形式能由 Runtime wire codec 无损往返。框架拒绝任意 Message 子类作为 portable 扩展；普通本地 Module 可以传递其他 Python 值，但跨进程边界必须使用显式 schema 与 codec。Agent 生命周期状态可以使用具有稳定 schema、版本、frozen/slots 与 portable 字段的 Context 子类。
 
 内置 Module 使用仅关键字构造参数。组合 Module 直接接收子 Module，自己的策略使用不可变值或标量声明：
 
@@ -110,7 +115,7 @@ message, context = await agent.invoke(
 
 调用方不创建 Runtime、Binding 或 ExecutionOptions。框架只在本次调用内部建立 direct execution scope，使子 Module 调用、事件和本地取消传播使用同一个 `forward()` 图；Root 并发、外部 deadline 和资源生命周期由调用方使用 `asyncio` 或服务设施管理。
 
-`await module(message, context)` 只表示活动 execution scope 内的 Child 调用；Root 必须使用 `module.invoke()` 或 `module.stream()`。这样同一调用语法不会在 scope 内外分别表示 Child 和 Root。
+`await module(*args, **kwargs)` 只表示活动 execution scope 内的 Child 调用；Root 必须使用 `module.invoke()` 或 `module.stream()`。这样同一调用语法不会在 scope 内外分别表示 Child 和 Root。
 
 直接执行只承诺本地、瞬时语义，不承诺 Binding 容量、远程 placement、durable retry、跨进程恢复或可重连事件。需要这些能力时使用托管执行。
 
@@ -141,7 +146,7 @@ bound = MyAgent(react).bind(runtime, binding=binding)
 
 两种形式都只创建可执行的绑定句柄，不立即创建 Execution。该句柄在执行树外通过 `.invoke()` 或 `.stream()` 调用时创建托管 Root；作为 `ModuleDependency` 在 Parent `forward()` 中直接调用时创建托管 Child。`forward()` 中调用的原始子 Module 默认继承当前 Binding，不创建新的 Root；显式预绑定 Child 与 placement policy 的隔离形式见下文。
 
-普通调用可以省略 `ExecutionOptions`；Runtime 生成请求身份并使用 Binding 默认策略。只有需要显式 deadline、调用身份、幂等或 durable 协调时才传入 `execution=ExecutionOptions(...)`。
+普通调用可以省略 `ExecutionOptions`；Runtime 生成请求身份并使用 Binding 默认策略。只有需要显式 deadline、调用身份、幂等或 durable 协调时才传入 `execution=ExecutionOptions(...)`。`execution` 是现有 Root 执行入口的框架控制参数，不属于 `forward()` 的业务参数。
 
 ## 原始与预绑定 Child
 
@@ -177,9 +182,9 @@ bound = pipeline.bind(main_runtime, binding=binding_main)
 
 `forward()` 内只直接调用依赖；`.invoke()` 和 `.stream()` 只用于在执行树外创建 Root。三种 placement 与 RemoteModule 的完整示例见 [Runtime SDK](../runtime/SDK.md#child-的三种放置方式)。
 
-未绑定 Parent 以 direct 模式执行时，显式预绑定 Child 保留其 Runtime/Binding，并作为该部署域中的独立 managed Root 执行；direct Parent 等待其普通 `(message, context)` 结果并在取消时清理 Child Execution。该桥接不会为 direct Parent 本身创建 Binding。
+未绑定 Parent 以 direct 模式执行时，显式预绑定 Child 保留其 Runtime/Binding，并作为该部署域中的独立 managed Root 执行；direct Parent 等待该 Child 声明的结果并在取消时清理 Child Execution。该桥接不会为 direct Parent 本身创建 Binding。
 
-## 统一结果与流式执行
+## 同型结果与流式执行
 
 ```python
 # direct execution
@@ -197,7 +202,7 @@ async with bound.stream(message, context) as stream:
     message, context = await stream.final_result()
 ```
 
-直接或托管的 `invoke()`、Child 调用和 `stream().final_result()` 都返回 `(message, context)`。`stream()` 只额外暴露中间事件，不引入另一种业务结果类型。
+direct `invoke()`、本地 Child 调用和 `stream().final_result()` 返回具体 Module 声明的结果类型。上例使用当前 managed Runtime 已支持的 Message/Context 具体契约，因此托管结果仍是 `(message, context)`；普通 Module 可以在本地返回其他类型，但本次变更不扩展 managed/remote 结果协议。
 
 托管执行的 `execution_id`、attempt、状态、usage、取消、后台继续和可重连订阅属于独立 Execution Handle 控制面。需要这些信息的调用方显式进入该高级 API；普通 `invoke()` 不因运行元数据而返回 `ExecutionResult` 包装。
 

@@ -22,16 +22,22 @@ from pygent import (
 from pygent.runtime import LocalRuntime
 
 
-def test_first_principles_freeze_the_module_state_transition():
-    principles = (
-        Path(__file__).resolve().parents[2] / "docs" / "FEATURES.md"
-    ).read_text(encoding="utf-8")
+def test_first_principles_define_free_calls_and_explicit_recurrence():
+    docs_root = Path(__file__).resolve().parents[2] / "docs"
+    principles = (docs_root / "FEATURES.md").read_text(encoding="utf-8")
+    call_spec = (docs_root / "module" / "CALL_CONTRACT_SPEC.md").read_text(
+        encoding="utf-8"
+    )
 
-    assert "(message, context) -> (message, context)" in principles
-    assert "Context 是显式传递、不可变且可移植的 Agent 状态快照" in principles
-    assert "**可恢复执行只属于托管 Runtime**" in principles
-    assert "不要求普通业务代码显式声明恢复点" in principles
-    assert "不等同于序列化任意 Python coroutine" in principles
+    assert "**调用自由**" in principles
+    assert "RecurrentModule" in principles
+    assert "Message 与 Context 是可选公开值" in principles
+    assert "**无隐藏调用状态**" in principles
+    assert "**普通 Module 的业务输入输出由用户定义**" in call_spec
+    assert "**RecurrentModule 是可选的标准 Module**" in call_spec
+    assert "不预先限制业务值类型、附加参数、返回结构或泛型参数数量" in call_spec
+    assert "Context 本身不依赖 RecurrentModule" in call_spec
+    assert "**本次变更不扩展可移植执行协议**" in call_spec
 
 
 def test_module_document_defines_custom_events_without_a_stream_forward():

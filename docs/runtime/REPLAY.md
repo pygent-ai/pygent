@@ -4,7 +4,7 @@
 
 ## 定位
 
-透明恢复不新增 Agent 或业务能力域。普通 Module 仍只实现：
+透明恢复不新增 Agent 或业务能力域。当前 durable Runtime 的业务调用契约仍是：
 
 ```python
 async def forward(message, context) -> tuple[Message, Context]: ...

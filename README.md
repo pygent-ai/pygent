@@ -1,6 +1,6 @@
 # Pygent 0.2
 
-Pygent is a PyTorch-like framework for composing stateless LLM agents from reusable `Module` graphs. Version 0.2 provides a single Execution owner for direct and managed calls, an asyncio Runtime, observable model/tool events, OpenAI-compatible adapters, portable tools and MCP adapters, ReAct, SQLite recovery, and HTTP/SSE workers.
+Pygent is a PyTorch-like framework for composing LLM agents with no hidden per-call state from reusable `Module` graphs. Version 0.2 provides a single Execution owner for direct and managed calls, an asyncio Runtime, observable model/tool events, OpenAI-compatible adapters, portable tools and MCP adapters, ReAct, SQLite recovery, and HTTP/SSE workers.
 
 ## First principles
 
@@ -9,10 +9,10 @@ Pygent is a PyTorch-like framework for composing stateless LLM agents from reusa
 ## Quickstart
 
 ```python
-from pygent import AIMessage, Context, Module, UserMessage
+from pygent import AIMessage, Context, RecurrentModule, UserMessage
 
 
-class Echo(Module[UserMessage, AIMessage]):
+class Echo(RecurrentModule):
     async def forward(self, message, context):
         output = AIMessage(content=message.content.upper())
         return output, context + message + output
@@ -21,7 +21,7 @@ class Echo(Module[UserMessage, AIMessage]):
 message, context = await Echo().invoke(UserMessage(content="hello"), Context())
 ```
 
-Direct `invoke()`, `stream()`, and `start()` need no Runtime. Bind the same graph to `LocalRuntime` when the application needs bounded concurrency, cancellation, deadlines, remote placement, durable history, or advanced Execution control. Both modes execute the same `forward()` graph and return `(message, context)`; see the [0.2 Execution contract](docs/EXECUTION.md).
+Direct `invoke()`, `stream()`, and `start()` need no Runtime. Bind a Module to `LocalRuntime` when its call contract is supported and the application needs bounded concurrency, cancellation, deadlines, remote placement, durable history, or advanced Execution control. This standard recurrent example returns `(message, context)`; ordinary Module inputs and results are user-defined. See the [Execution contract](docs/EXECUTION.md).
 
 ## Documentation
 

@@ -52,7 +52,7 @@ Context 扩展必须满足以下条件：
 - 继承 `Context`，使用 frozen 与 slots 值语义；
 - `context_schema` 是稳定的应用协议标识，`context_schema_version` 是正整数；
 - 所有实例字段都能规范化为有限、递归冻结的 JSON 值；
-- 不覆盖基础字段的语义，不改变 `(message, context)` 的调用顺序；
+- 不覆盖基础字段的语义；Context 作为普通输入、输出或 recurrent state 由具体 Module 契约决定；
 - 不包含连接、锁、Store、manager、client、handler、coroutine 或其他 live object；
 - wire、ExecutionPlan 和 durable checkpoint 依据注册的 schema/codec 验证，不依据 Python 类名或 pickle。
 
@@ -164,7 +164,7 @@ assert previous.full_history != context.full_history
 
 ## 应用自定义状态 Module 示例
 
-下面的 `StateModule` 只是应用开发者如何读取自定义 AgentContext 的示例，不是 Pygent 内置 Module、基类或约定名称。开发者选择把该计算建模为 Pygent Module 时，必须保持统一的二元输入输出协议：
+下面的 `StateModule` 只是应用开发者如何读取自定义 AgentContext 的示例，不是 Pygent 内置 Module、基类或约定名称。它选择现有的 Message/Context 递推形状；这只是具体 Module 的契约，不是普通 Module 的统一协议：
 
 ```python
 class StateModule(Module[UserMessage, Message]):
@@ -183,7 +183,7 @@ class StateModule(Module[UserMessage, Message]):
 tool_info, context = await self.state_module(message, context)
 ```
 
-`forward(context) -> value` 可以是普通 Python 纯函数，但不是 Pygent Module。保持统一协议才能让 Child lineage、事件、取消、placement 和 direct/managed 行为继续一致。
+普通 Module 也可以声明 `forward(context) -> value` 等其他形状。本地 direct execution 可以直接使用；进入 managed、remote 或 durable 边界时仍受对应 Runtime 当前支持的调用契约约束。
 
 ## 在 Agent 中使用
 

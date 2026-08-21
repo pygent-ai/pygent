@@ -5,7 +5,7 @@ Pygent has one logical identity for every business execution and one fenced owne
 ## Control, result, and observation
 
 ```python
-handle = await module.start(message, context)
+handle = await module.start(*args, **kwargs)
 
 async def observe():
     async with handle.subscribe(after=None) as events:
@@ -45,6 +45,6 @@ Managed effects return `EffectOutcome(value, disposition, effect_id, attempt)`. 
 
 ## Contract boundary
 
-There are no aliases, adapters, dual state models, or history migrations for superseded Runtime control-plane contracts. The stable business contract remains `forward(message, context) -> (message, context)`, with direct execution still excluding Binding capacity, remote placement, and durable recovery.
+There are no aliases, adapters, dual state models, or history migrations for superseded Runtime control-plane contracts. Each Module keeps the business call contract declared by its own `forward()`; RecurrentModule additionally declares explicit state recurrence. Direct execution may use free Python values. Managed, remote, and durable execution accept only call contracts supported by that Runtime; this change does not define a universal wire codec for arbitrary Module values.
 
 Trace persistence, trace queries, cost aggregation, and reasoning capture are deliberately outside this release. The event and span identities added here are their foundation, not a TraceStore product.

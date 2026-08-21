@@ -63,7 +63,7 @@ class StatefulAgent(Agent[UserMessage, AIMessage]):
 
 `context_type` 是 managed、Worker 与 durable 部署的显式 Context 契约。`LocalRuntime.bind()` 自动派生并注册规范 dataclass codec；普通应用不需要手写 `ContextCodec.dataclass()` 或向 `LocalRuntime` 传 `context_codecs=`。低层入口仍保留给自定义 codec、非 Agent Root 与部署控制面。
 
-示例中的 `tool_state`、`file_state` 可以替换为应用需要的任意领域字段；它们及对应 State 类型不属于 Pygent API。所有字段仍必须满足 [Context SDK](../context/SDK.md) 的 schema、版本和 portable 值约束。Store、连接、锁、manager、executor 与 provider client 不得进入 AgentContext。应用若使用状态 Module，它仍使用统一二元协议；`self.state_module(context) -> value` 不是 Pygent Child 调用。AgentContext 对 `+`/`+=` 的受约束重载规则也在 Context SDK 的“自定义 `+` 与 `+=`”一节定义。
+示例中的 `tool_state`、`file_state` 可以替换为应用需要的任意领域字段；它们及对应 State 类型不属于 Pygent API。所有字段仍必须满足 [Context SDK](../context/SDK.md) 的 schema、版本和 portable 值约束。Store、连接、锁、manager、executor 与 provider client 不得进入 AgentContext。上例选择现有的 Message/Context 递推形状；这只是该 Module 的具体契约，不是普通 Module 的统一二元协议。只读取 Context 并返回其他值的本地辅助计算也可以建模为普通 Module。
 
 ## 自定义组合 Agent
 

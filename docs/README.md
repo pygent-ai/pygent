@@ -20,7 +20,7 @@
 
 ## 文档范围
 
-- [Module](module/README.md)：统一计算、组合、绑定与执行接口。
+- [Module](module/README.md)：自由调用、显式 RecurrentModule 状态递推、组合、绑定与执行接口。
 - [Context](context/README.md)：基础模型投影、用户 AgentContext、不可变 portable 状态及 Message 追加/槽位替换规则。
 - [Runtime](runtime/README.md)：Binding、并发、父子调度、取消与生命周期。
 - [Durability](runtime/DURABILITY.md)：调度恢复、边界重试、持久化恢复与故障语义。
@@ -38,7 +38,7 @@
 
 | 层级 | 面向对象 | 需要理解的公开概念 |
 |---|---|---|
-| Core | 定义、组合和本地执行 Agent | `Module`、`Message`、`Context`、`ContextCodec`、`invoke()`、`stream()` |
+| Core | 定义、组合和本地执行计算图 | `Module`、`RecurrentModule`、`Message`、`Context`、`ContextCodec`、`invoke()`、`stream()` |
 | Managed execution | 需要框架管理并发、取消和资源的服务 | `Runtime`、`Binding`、`BoundModule`、`ExecutionOptions` |
 | Deployment | 分布式部署和持久恢复 | capacity scope、placement、durability capability、Execution Handle |
 | Runtime SPI | Runtime 与 adapter 实现者 | `ExecutionScope`、`ExecutionPlan`、lease、checkpoint、replay |
@@ -47,7 +47,7 @@
 
 ### 公开导入边界
 
-顶层 `pygent` 只承诺日常定义和执行所需的 Application API：`Module`、`Agent`、Message/Context 值、用于声明受约束 AgentContext 的 `ContextCodec`、内置 Agent/LLM/Tool Module，以及构造这些 Module 所需的高层不可变配置。普通 Agent 通过 `context_type` 声明 Context，Runtime 在 bind 阶段自动派生 codec；`ContextCodec` 与显式 Runtime/Worker codec 配置保留为高级扩展入口。当前实现状态见 [验收矩阵](runtime/ACCEPTANCE.md)。以下类型不再作为顶层入门 API：
+顶层 `pygent` 承诺日常定义和执行所需的 Application API：自由调用的 `Module`、可选的标准 `RecurrentModule`、`Agent`、Message/Context 值、用于声明受约束 AgentContext 的 `ContextCodec`、内置 Agent/LLM/Tool Module，以及构造这些 Module 所需的高层不可变配置。普通 Agent 通过 `context_type` 声明 Context，Runtime 在 bind 阶段自动派生 codec；`ContextCodec` 与显式 Runtime/Worker codec 配置保留为高级扩展入口。当前实现状态见 [验收矩阵](runtime/ACCEPTANCE.md)。以下类型不再作为顶层入门 API：
 
 - `Binding`、`BoundModule`、`ExecutionOptions`、`ExecutionEvent` 与 Runtime 接口从 `pygent.runtime` 导入；
 - `ExecutionPlan`、`ModuleSpec`、`CodeArtifactSpec`、schema version 与计划校验异常从 `pygent.runtime.plan` 导入；
@@ -62,25 +62,30 @@
 ## Core：直接执行
 
 ```python
-class Module(Generic[InputMessageT, OutputMessageT]):
-    async def forward(
-        self,
-        message: InputMessageT,
-        context: Context,
-    ) -> tuple[OutputMessageT, Context]: ...
+class Normalize(Module):
+    async def forward(self, value: float, *, scale: float = 1.0) -> float:
+        return value * scale
 
-agent = MyAgent()
-message, context = await agent.invoke(message, context)
 
-async with agent.stream(message, context) as stream:
+class Echo(RecurrentModule):
+    async def forward(self, message, context):
+        output = AIMessage(content=message.content.upper())
+        return output, context + message + output
+
+normalized = await Normalize().invoke(3.0, scale=0.5)
+message, context = await Echo().invoke(message, context)
+
+async with Echo().stream(message, context) as stream:
     async for event in stream:
         ...
     message, context = await stream.final_result()
 ```
 
-直接执行不要求调用方创建 Runtime、Binding 或 ExecutionOptions。`invoke()`/`stream()` 在当前进程中建立框架内部的 direct execution scope，使 `forward()` 内的 `await self.child(message, context)` 与事件发送保持统一；该 scope 不是用户可配置的 Runtime，也不提供框架级容量治理、远程 placement、跨进程恢复或多 Execution 调度。调用方使用 `asyncio`、服务限流器或外部设施自行管理 Root 并发、deadline 与进程生命周期。
+第一个示例说明普通 Module 的参数、关键字和结果完全由自己的 `forward()` 定义；第二个示例才是显式 `(input, state) -> (output, next_state)` 的 RecurrentModule。
 
-Root 只通过 `invoke()` 或 `stream()` 启动。`await module(message, context)` 保留为活动 execution scope 内的 Child 调用；在 Root 外直接使用 `__call__()` 必须给出明确错误并引导调用 `invoke()`，从而避免同一个语法同时表示 Root 和 Child。
+直接执行不要求调用方创建 Runtime、Binding 或 ExecutionOptions。`invoke()`/`stream()` 在当前进程中建立框架内部的 direct execution scope，使 `forward()` 内的 `await self.child(*args, **kwargs)` 与事件发送保持统一；该 scope 不是用户可配置的 Runtime，也不提供框架级容量治理、远程 placement、跨进程恢复或多 Execution 调度。调用方使用 `asyncio`、服务限流器或外部设施自行管理 Root 并发、deadline 与进程生命周期。
+
+Root 只通过 `invoke()` 或 `stream()` 启动。`await module(*args, **kwargs)` 保留为活动 execution scope 内的 Child 调用；在 Root 外直接使用 `__call__()` 必须给出明确错误并引导调用 `invoke()`，从而避免同一个语法同时表示 Root 和 Child。
 
 直接执行必须支持普通用户 Module 和声明为 direct-capable 的本地 Agent、LLM、Tool 依赖。需要托管资源解析、远程目标、共享容量或持久能力的 Module 在未绑定执行时必须明确拒绝，不得静默伪装为已治理执行。
 
@@ -109,9 +114,9 @@ async with bound.stream(message, context) as stream:
 bound = module.bind(runtime, binding=binding)
 ```
 
-`ExecutionOptions` 在普通托管调用中可省略，由 Runtime 生成请求身份并使用 Binding 默认策略。只有调用方需要幂等、调用身份、deadline、持久恢复或最终提交协调时才显式传入；省略不得被解释为获得这些高级保证。
+`ExecutionOptions` 在普通托管调用中可省略，由 Runtime 生成请求身份并使用 Binding 默认策略。只有调用方需要幂等、调用身份、deadline、持久恢复或最终提交协调时才显式传入；省略不得被解释为获得这些高级保证。当前 `execution` 是 Root 执行入口的框架控制参数，不属于 `forward()` 的业务参数。
 
-参数顺序类比 PyTorch/LSTM 的 `(x, h) -> (y, h')`：类型化当前增量 `message` 在前，不可变 Agent 状态快照 `context` 在后。基础 Context 定义模型可见投影，用户 AgentContext 可以增加 portable 历史视图和领域状态。Message 不等同于聊天文本，检索、计划、评估、审批和领域结果由相应 Module 转换为 Message 信封。直接与托管的 `invoke()`、`stream()` 执行同一个 Module 图并统一返回最终 `(message, context)`；两个独立调用不保证非确定性输出逐字相同。
+普通 Module 像 PyTorch Module 一样由自己的 `forward()` 定义参数和结果。需要显式状态递推时可以使用标准 RecurrentModule，其语义类比 `(x, h) -> (y, h')`。Message 与 Context 是 Agent/LLM 组合常用的 portable input/state/output，但不是所有 Module 的强制端口。本地 direct execution 和本地 Child 调用保持用户声明的结果；当前 managed、Worker 与 durable Runtime 继续使用已支持的 Message/Context contract。
 
 普通 `stream()` 继续把一次执行和观察组合成一个便捷入口，调用方无需感知内部 Execution/订阅分离。运行身份、状态、usage、durable 重连、后台继续执行或多观察者不进入普通返回值；支持相应 capability 的 Runtime 通过独立 Execution Handle 与事件订阅控制面提供它们。关闭订阅不等于取消 Execution，显式取消只通过 Execution 控制入口完成。
 
