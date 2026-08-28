@@ -134,7 +134,9 @@ def test_message_and_context_validate_typed_elements():
         name="search", description="Search", parameters={"type": "object"}
     )
 
-    assert AIMessage(tool_calls=[call]).tool_calls == (call,)
+    ai = AIMessage(tool_calls=[call], usage={"input_tokens": 3})
+    assert ai.tool_calls == (call,)
+    assert ai.usage["input_tokens"] == 3
     assert ToolMessage(results=[result]).results == (result,)
     assert Context(messages=[UserMessage(content="hi")], tools=[definition]).tools == (
         definition,
@@ -142,6 +144,10 @@ def test_message_and_context_validate_typed_elements():
 
     with pytest.raises(TypeError, match="tool_calls"):
         AIMessage(tool_calls=[object()])  # type: ignore[list-item]
+    with pytest.raises(ValueError, match="unsupported AIMessage usage"):
+        AIMessage(usage={"provider_tokens": 1})
+    with pytest.raises(ValueError, match="non-negative integers"):
+        AIMessage(usage={"input_tokens": -1})
     with pytest.raises(TypeError, match="results"):
         ToolMessage(results=[object()])  # type: ignore[list-item]
     with pytest.raises(TypeError, match="messages"):

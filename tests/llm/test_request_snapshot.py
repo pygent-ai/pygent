@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pygent import Context, GenerationConfig, ToolDefinition, UserMessage
+from pygent import AIMessage, Context, GenerationConfig, ToolDefinition, UserMessage
 from pygent.llm import (
     DefaultModelInvoker,
     FallbackPolicy,
@@ -66,6 +66,38 @@ def test_prepared_request_is_stable_allowlisted_and_validated() -> None:
 
     event = ModelStreamEvent("model.request.prepared", first)
     assert event.kind == "model.request.prepared"
+
+
+def test_historical_message_usage_does_not_change_the_request_snapshot() -> None:
+    without_usage = request()
+    with_usage = ModelProviderRequest(
+        route=without_usage.route,
+        message=without_usage.message,
+        context=Context(
+            system_prompt=without_usage.context.system_prompt,
+            messages=(
+                AIMessage(content="history", usage={"input_tokens": 900}),
+            ),
+            projection_revision=without_usage.context.projection_revision,
+        ),
+        generation=without_usage.generation,
+        tools=without_usage.tools,
+    )
+    baseline = ModelProviderRequest(
+        route=without_usage.route,
+        message=without_usage.message,
+        context=Context(
+            system_prompt=without_usage.context.system_prompt,
+            messages=(AIMessage(content="history"),),
+            projection_revision=without_usage.context.projection_revision,
+        ),
+        generation=without_usage.generation,
+        tools=without_usage.tools,
+    )
+
+    assert prepared_request_event(with_usage, attempt=1)["request_digest"] == (
+        prepared_request_event(baseline, attempt=1)["request_digest"]
+    )
 
 
 def test_prepared_request_fails_closed_above_one_mib() -> None:

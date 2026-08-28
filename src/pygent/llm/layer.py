@@ -391,11 +391,15 @@ def _message_from_effect(value: JsonValue) -> AIMessage:
     metadata = raw_message.get("metadata", {})
     if not isinstance(metadata, Mapping):
         raise TypeError("replayed model metadata must be a JSON object")
+    usage = decoded.get("usage", {})
+    if not isinstance(usage, Mapping):
+        raise TypeError("replayed model usage must be a JSON object")
     return AIMessage(
         content=cast(str, raw_message.get("content", "")),
         slot=cast(str | None, raw_message.get("slot")),
         metadata=cast(Mapping[str, object], metadata),
         tool_calls=tuple(calls),
+        usage=cast(Mapping[str, object], usage),
     )
 
 

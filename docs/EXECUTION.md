@@ -41,6 +41,8 @@ Terminal model failures expose Provider-neutral diagnostics through `ModelCallEr
 
 `model.usage` is an attempt-scoped cumulative snapshot. Its fixed counters are `input_tokens`, `output_tokens`, `total_tokens`, `cached_input_tokens`, and `reasoning_tokens`; unavailable counters are `null`. Consumers take the last snapshot for one `(span_id, route_id, attempt)` and sum final snapshots across attempts. Provider-specific usage objects never cross this boundary.
 
+The successful attempt's available canonical counters are also frozen onto the returned `AIMessage.usage` so ordinary Module composition and durable replay can use request accounting without consuming their own event stream. Adapters and request snapshots never project historical message usage back to a Provider.
+
 `ToolRunner.execute(...) -> ToolExecution` is the only tool-operation owner. It owns timeout, cancellation, executor failure normalization, output freezing, and `ToolResult`. `ToolCallLayer` continues to own visibility, schema validation, authorization, detach choice, and batch ordering. Executors receive `ToolExecutionContext` with the effective deadline and event emitter.
 
 Managed effects return `EffectOutcome(value, disposition, effect_id, attempt)`. `disposition` is `executed`, `replayed`, or `retried`. Replay returns the committed value and emits an effect replay event; it never fabricates provider/tool deltas or counts usage again.

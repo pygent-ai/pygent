@@ -339,6 +339,7 @@ def message_to_dict(value: Message) -> dict[str, object]:
     }
     if isinstance(value, AIMessage):
         data["tool_calls"] = [_tool_call_to_dict(call) for call in value.tool_calls]
+        data["usage"] = _thaw(value.usage)
     elif isinstance(value, ToolMessage):
         data["results"] = [_tool_result_to_dict(result) for result in value.results]
     elif isinstance(value, ToolAuthorizationRequest):
@@ -379,7 +380,9 @@ def message_from_dict(value: object) -> Message:
             "lifecycle",
         }
     else:
-        expected = common | ({"tool_calls"} if role == "assistant" else set())
+        expected = common | (
+            {"tool_calls", "usage"} if role == "assistant" else set()
+        )
         expected |= {"results"} if role == "tool" else set()
     _only(data, expected, "Message")
     kwargs = {
@@ -419,7 +422,9 @@ def message_from_dict(value: object) -> Message:
             if not isinstance(calls, (list, tuple)):
                 raise TypeError
             return AIMessage(
-                **kwargs, tool_calls=tuple(_tool_call_from_dict(item) for item in calls)
+                **kwargs,
+                tool_calls=tuple(_tool_call_from_dict(item) for item in calls),
+                usage=_object(data["usage"], "Message.usage"),
             )
         if role == "tool":
             results = data.get("results", [])

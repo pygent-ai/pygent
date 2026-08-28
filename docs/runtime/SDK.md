@@ -240,7 +240,7 @@ from pygent.runtime.plan import (
 
 plan = ExecutionPlan(
     root="agent",
-    runtime_api_version="0.2",
+    runtime_api_version="0.4",
     artifact=CodeArtifactSpec(
         package="support-agent",
         version="1.4.0",

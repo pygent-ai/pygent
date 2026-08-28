@@ -116,6 +116,7 @@ async def test_managed_model_call_requires_a_finite_deadline() -> None:
         execution=ExecutionOptions(deadline=time.monotonic() + 1),
     )
     assert answer.content == "done"
+    assert answer.usage["total_tokens"] == 1
     await runtime.close()
 
 

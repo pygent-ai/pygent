@@ -54,7 +54,11 @@ def test_message_and_context_wire_round_trip_all_public_variants():
             slot="approval/current",
         ),
         UserMessage(content="hello", metadata={"request": 1}),
-        AIMessage(content="calling", tool_calls=(call,)),
+        AIMessage(
+            content="calling",
+            tool_calls=(call,),
+            usage={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+        ),
         ToolMessage(
             results=(
                 ToolResult(
@@ -80,6 +84,14 @@ def test_message_and_context_wire_round_trip_all_public_variants():
         values[0],
         context,
     )
+
+
+def test_assistant_wire_requires_usage() -> None:
+    value = message_to_dict(AIMessage(content="answer"))
+    value.pop("usage")
+
+    with pytest.raises(WireCodecError, match="invalid Message"):
+        message_from_dict(value)
 
 
 def test_authorization_messages_and_context_round_trip_without_field_loss():

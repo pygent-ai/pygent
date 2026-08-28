@@ -81,6 +81,7 @@ class UserMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AIMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
     tool_calls: tuple[ToolCall, ...] = ()
+    usage: JsonObjectInput = ()
     role: ClassVar[str] = "assistant"
 
     def __post_init__(self) -> None:
@@ -89,6 +90,23 @@ class AIMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
         if any(type(call) is not ToolCall for call in tool_calls):
             raise TypeError("AIMessage.tool_calls must contain only ToolCall values")
         object.__setattr__(self, "tool_calls", tool_calls)
+        usage = freeze_json_object(self.usage)
+        allowed = {
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "cached_input_tokens",
+            "reasoning_tokens",
+        }
+        unknown = set(usage) - allowed
+        if unknown:
+            raise ValueError(f"unsupported AIMessage usage counters: {sorted(unknown)}")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in usage.values()
+        ):
+            raise ValueError("AIMessage usage counters must be non-negative integers")
+        object.__setattr__(self, "usage", usage)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -1,4 +1,4 @@
-"""Ready-to-use foreground ReAct Agent with bounded context compression."""
+"""Ready-to-use foreground ReAct Agent with token-window compression."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ from .react import ReActLayer
 
 _CONTEXT_SNAPSHOT_KIND = "pygent.context.snapshot"
 _CONTEXT_SNAPSHOT_SLOT = "pygent.context.snapshot"
+_TOKEN_SCALE_BASE = 1_000_000
+_INITIAL_TOKEN_SCALE_PPM = 1_100_000
 
 
 class ContextCompressionLimitExceeded(RuntimeError):
@@ -39,10 +41,12 @@ class PygentAgentContext(Context):
     """Portable foreground-Agent state with an uncompressed committed history."""
 
     context_schema: ClassVar[str] = "pygent.agent-context"
-    context_schema_version: ClassVar[int] = 1
+    context_schema_version: ClassVar[int] = 2
 
     full_history: tuple[Message, ...] = ()
     compression_count: int = 0
+    input_token_scale_ppm: int = _INITIAL_TOKEN_SCALE_PPM
+    last_input_tokens: int | None = None
 
     def __post_init__(self) -> None:
         super(PygentAgentContext, self).__post_init__()
@@ -55,6 +59,18 @@ class PygentAgentContext(Context):
             or self.compression_count < 0
         ):
             raise ValueError("compression_count must be non-negative")
+        if (
+            isinstance(self.input_token_scale_ppm, bool)
+            or not isinstance(self.input_token_scale_ppm, int)
+            or self.input_token_scale_ppm <= 0
+        ):
+            raise ValueError("input_token_scale_ppm must be positive")
+        if self.last_input_tokens is not None and (
+            isinstance(self.last_input_tokens, bool)
+            or not isinstance(self.last_input_tokens, int)
+            or self.last_input_tokens < 0
+        ):
+            raise ValueError("last_input_tokens must be non-negative when provided")
         object.__setattr__(self, "full_history", history)
 
     def __add__(self, value: object):
@@ -70,75 +86,105 @@ class _ContextCompressionLayer(Module[Message, AIMessage]):
         self,
         *,
         model: Module[Message, AIMessage],
-        compression_model: Module[Message, AIMessage],
+        compressor: Module[Message, AIMessage],
         compression_prompt: str,
-        compression_threshold_bytes: int,
-        keep_recent_units: int,
+        context_window_tokens: int,
+        compression_trigger_ratio: float,
+        compression_context_window_tokens: int,
         max_compressions: int,
     ) -> None:
         super().__init__()
         self.model = model
-        self.compression_model = compression_model
+        self.compressor = compressor
         self.compression_prompt = compression_prompt
-        self.compression_threshold_bytes = compression_threshold_bytes
-        self.keep_recent_units = keep_recent_units
+        self.context_window_tokens = context_window_tokens
+        self.compression_trigger_ratio = compression_trigger_ratio
+        self.compression_context_window_tokens = compression_context_window_tokens
         self.max_compressions = max_compressions
 
     async def forward(
         self, message: Message, context: Context
     ) -> tuple[AIMessage, Context]:
-        current, prepared = await self._compress_if_needed(message, context)
-        return await self.model(current, prepared)
+        current, prepared, raw_units = await self._compress_if_needed(message, context)
+        answer, returned = await self.model(current, prepared)
+        if not isinstance(returned, PygentAgentContext):
+            raise TypeError("PygentAgent model must preserve PygentAgentContext")
+        actual = answer.usage.get("input_tokens")
+        if isinstance(actual, int) and not isinstance(actual, bool):
+            observed_ppm = _ceil_div(actual * _TOKEN_SCALE_BASE, raw_units)
+            calibrated_ppm = _ceil_div(observed_ppm * 11, 10)
+            returned = replace(
+                returned,
+                input_token_scale_ppm=max(
+                    returned.input_token_scale_ppm,
+                    calibrated_ppm,
+                ),
+                last_input_tokens=actual,
+            )
+        return answer, returned
 
     async def _compress_if_needed(
         self, current: Message, context: Context
-    ) -> tuple[Message, Context]:
+    ) -> tuple[Message, PygentAgentContext, int]:
+        if not isinstance(context, PygentAgentContext):
+            raise TypeError("PygentAgent requires PygentAgentContext")
         resolve_tools = getattr(self.model, "effective_tools", None)
         effective_tools = (
             tuple(resolve_tools(context))
             if callable(resolve_tools)
             else context.tools
         )
+        foreground_units = _request_token_units(current, context, effective_tools)
+        foreground_estimate = _scaled_token_estimate(
+            foreground_units,
+            context.input_token_scale_ppm,
+        )
+        foreground_trigger = int(
+            self.context_window_tokens * self.compression_trigger_ratio
+        )
+        compression_request = UserMessage(
+            content=self.compression_prompt,
+            kind="pygent.context.compression_request",
+        )
+        compression_units = _request_token_units(compression_request, context, ())
+        compression_estimate = _scaled_token_estimate(
+            compression_units,
+            _INITIAL_TOKEN_SCALE_PPM,
+        )
+        compression_trigger = int(
+            self.compression_context_window_tokens
+            * self.compression_trigger_ratio
+        )
         if (
-            _projection_size_bytes(current, context, effective_tools)
-            < self.compression_threshold_bytes
+            foreground_estimate < foreground_trigger
+            and compression_estimate < compression_trigger
         ):
-            return current, context
-        if not isinstance(context, PygentAgentContext):
-            raise TypeError("PygentAgent requires PygentAgentContext")
+            return current, context, foreground_units
         if context.compression_count >= self.max_compressions:
             raise ContextCompressionLimitExceeded(
                 "foreground context compression budget exhausted"
             )
-
-        projected = context.messages + (current,)
-        units = _conversation_units(projected)
-        if len(units) <= self.keep_recent_units:
+        if not context.messages:
             raise ContextCompressionUnavailable(
-                "oversized context has no complete compressible prefix"
+                "oversized request has no projected history to compress"
             )
-        split = len(units) - self.keep_recent_units
-        compressible = tuple(message for unit in units[:split] for message in unit)
-        preserved = tuple(message for unit in units[split:] for message in unit)
-        if not compressible or not preserved or preserved[-1] != current:
+        if compression_estimate >= self.compression_context_window_tokens:
             raise ContextCompressionUnavailable(
-                "oversized context cannot preserve the current message"
+                "compression request exceeds the compression context window"
             )
 
-        request = UserMessage(
-            content=self.compression_prompt,
-            kind="pygent.context.compression_request",
+        compression_context = replace(context, tools=())
+        summary, returned_context = await self.compressor(
+            compression_request,
+            compression_context,
         )
-        compression_context = replace(
-            context,
-            system_prompt="",
-            messages=compressible,
-            tools=(),
-        )
-        summary, _ = await self.compression_model(request, compression_context)
+        if returned_context != compression_context:
+            raise ContextCompressionUnavailable(
+                "compressor must preserve its fork context"
+            )
         if not summary.content.strip() or summary.tool_calls:
             raise ContextCompressionUnavailable(
-                "compression model must return non-empty text without tool calls"
+                "compressor must return non-empty text without tool calls"
             )
 
         snapshot = UserMessage(
@@ -150,12 +196,22 @@ class _ContextCompressionLayer(Module[Message, AIMessage]):
                 "source_projection_revision": context.projection_revision,
             },
         )
-        return preserved[-1], replace(
+        prepared = replace(
             context,
-            messages=(snapshot,) + preserved[:-1],
+            messages=(snapshot,),
             compression_count=context.compression_count + 1,
             projection_revision=context.projection_revision + 1,
         )
+        compressed_units = _request_token_units(current, prepared, effective_tools)
+        compressed_estimate = _scaled_token_estimate(
+            compressed_units,
+            prepared.input_token_scale_ppm,
+        )
+        if compressed_estimate >= foreground_trigger:
+            raise ContextCompressionUnavailable(
+                "compressed foreground request remains oversized"
+            )
+        return current, prepared, compressed_units
 
 
 class PygentAgent(Agent[UserMessage, AIMessage]):
@@ -169,10 +225,11 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
         system_prompt: str,
         compression_prompt: str,
         model: Module[Message, AIMessage],
-        compression_model: Module[Message, AIMessage],
+        compressor: Module[Message, AIMessage],
         tools: Module[AIMessage, ToolMessage],
-        compression_threshold_bytes: int,
-        keep_recent_units: int = 8,
+        context_window_tokens: int,
+        compression_trigger_ratio: float = 0.9,
+        compression_context_window_tokens: int | None = None,
         max_compressions: int = 4,
         max_steps: int = 16,
         max_model_calls: int = 16,
@@ -185,9 +242,14 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
         ):
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must be a non-empty string")
+        resolved_compression_window = (
+            context_window_tokens
+            if compression_context_window_tokens is None
+            else compression_context_window_tokens
+        )
         for integer_name, integer_value in (
-            ("compression_threshold_bytes", compression_threshold_bytes),
-            ("keep_recent_units", keep_recent_units),
+            ("context_window_tokens", context_window_tokens),
+            ("compression_context_window_tokens", resolved_compression_window),
             ("max_compressions", max_compressions),
         ):
             if (
@@ -196,14 +258,21 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
                 or integer_value <= 0
             ):
                 raise ValueError(f"{integer_name} must be a positive integer")
+        if (
+            isinstance(compression_trigger_ratio, bool)
+            or not isinstance(compression_trigger_ratio, (int, float))
+            or not 0 < compression_trigger_ratio < 1
+        ):
+            raise ValueError("compression_trigger_ratio must be between zero and one")
         self.system_prompt = system_prompt
         self.compression_prompt = compression_prompt
         compressed_model = _ContextCompressionLayer(
             model=model,
-            compression_model=compression_model,
+            compressor=compressor,
             compression_prompt=compression_prompt,
-            compression_threshold_bytes=compression_threshold_bytes,
-            keep_recent_units=keep_recent_units,
+            context_window_tokens=context_window_tokens,
+            compression_trigger_ratio=float(compression_trigger_ratio),
+            compression_context_window_tokens=resolved_compression_window,
             max_compressions=max_compressions,
         )
         self.react = ReActLayer(
@@ -233,26 +302,7 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
         return answer, cast(PygentAgentContext, next_context)
 
 
-def _conversation_units(messages: tuple[Message, ...]) -> tuple[tuple[Message, ...], ...]:
-    units: list[tuple[Message, ...]] = []
-    index = 0
-    while index < len(messages):
-        message = messages[index]
-        if (
-            isinstance(message, AIMessage)
-            and message.tool_calls
-            and index + 1 < len(messages)
-            and isinstance(messages[index + 1], ToolMessage)
-        ):
-            units.append((message, messages[index + 1]))
-            index += 2
-            continue
-        units.append((message,))
-        index += 1
-    return tuple(units)
-
-
-def _projection_size_bytes(
+def _request_token_units(
     current: Message,
     context: Context,
     tools: tuple[ToolDefinition, ...],
@@ -275,11 +325,28 @@ def _projection_size_bytes(
             for tool in tools
         ],
     }
-    return len(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-            "utf-8"
-        )
+    canonical = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
     )
+    ascii_bytes = sum(ord(character) < 128 for character in canonical)
+    non_ascii_codepoints = len(canonical) - ascii_bytes
+    lexical_units = _ceil_div(ascii_bytes, 3) + _ceil_div(
+        non_ascii_codepoints * 3,
+        2,
+    )
+    structural_units = 8 * (len(context.messages) + 1) + 16 * len(tools) + 4
+    return max(1, lexical_units + structural_units)
+
+
+def _scaled_token_estimate(raw_units: int, scale_ppm: int) -> int:
+    return _ceil_div(raw_units * scale_ppm, _TOKEN_SCALE_BASE)
+
+
+def _ceil_div(numerator: int, denominator: int) -> int:
+    return (numerator + denominator - 1) // denominator
 
 
 def _message_projection(message: Message) -> dict[str, object]:

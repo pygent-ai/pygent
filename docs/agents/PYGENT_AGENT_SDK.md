@@ -17,7 +17,7 @@ PygentAgent
 └─ ReActLayer
    ├─ model: context-compression Module
    │  ├─ model: foreground Model Module
-   │  └─ compression_model: compression Model Module
+   │  └─ compressor: compression Module
    └─ tools: Tool Module
 ```
 
@@ -43,16 +43,20 @@ from pygent.agent import (
 @dataclass(frozen=True, slots=True)
 class PygentAgentContext(Context):
     context_schema = "pygent.agent-context"
-    context_schema_version = 1
+    context_schema_version = 2
 
     full_history: tuple[Message, ...] = ()
     compression_count: int = 0
+    input_token_scale_ppm: int = 1_100_000
+    last_input_tokens: int | None = None
 ```
 
 - `messages` 是下一次模型调用看到的投影；
 - `full_history` 是 ReAct 已正式提交的完整消息历史；
 - `projection_revision` 是唯一模型投影 revision；
-- `compression_count` 是当前 Context 已完成的压缩次数。
+- `compression_count` 是当前 Context 已完成的压缩次数；
+- `input_token_scale_ppm` 是根据真实 usage 单调提高的估算系数；
+- `last_input_tokens` 是最近一次可用的前台模型输入 token 数。
 
 ## 3. 构造 Agent
 
@@ -81,7 +85,7 @@ foreground_model = ModelCallLayer(
     tools=all_tool_definitions,
 )
 
-compression_model = ModelCallLayer(
+compressor = ModelCallLayer(
     model_group=compression_model_group,
     retry_policy=RetryPolicy(max_attempts_per_route=2),
     generation=GenerationConfig(temperature=0.0, max_output_tokens=4_000),
@@ -92,13 +96,14 @@ agent = PygentAgent(
     system_prompt=SYSTEM_PROMPT,
     compression_prompt=COMPRESSION_PROMPT,
     model=foreground_model,
-    compression_model=compression_model,
+    compressor=compressor,
     tools=ToolCallLayer(
         tools=all_tool_specs,
         authorization=tool_authorization,
     ),
-    compression_threshold_bytes=512 * 1024,
-    keep_recent_units=8,
+    context_window_tokens=128_000,
+    compression_trigger_ratio=0.9,
+    compression_context_window_tokens=128_000,
     max_compressions=4,
     max_steps=16,
     max_model_calls=16,
@@ -208,29 +213,60 @@ await handle.send_input(
 
 ## 7. 自动压缩
 
-每次前台模型调用前，PygentAgent 对下面的 provider-neutral 投影编码规范 JSON 并计算
-UTF-8 大小：
+每次前台模型调用前，PygentAgent 对实际 provider-neutral 投影进行保守 token 估算：
 
 ```text
 System Prompt + Context.messages + current + Context.tools
 ```
 
-达到 `compression_threshold_bytes` 时：
+ASCII 内容、非 ASCII 内容和消息/工具结构分别计入估算。第一次使用 10% 安全系数；
+后续成功请求使用真实 `AIMessage.usage.input_tokens` 单调提高估算系数，不因较低 usage
+降低已经观察到的高水位。
 
-1. 消息被切分为完整对话单元；AI ToolCall 与紧随的 ToolMessage 不得拆开；
-2. 保留最后 `keep_recent_units` 个单元和 current；
-3. 更早的完整前缀成为 compression model 的历史；
-4. `compression_prompt` 作为独立 UserMessage，compression tools 固定为空；
-5. 非空、无 ToolCall 的结果成为 `pygent.context.snapshot` UserMessage；
-6. Snapshot 加保留单元替换 `Context.messages`，revision 增加一次；
-7. `full_history`、System Prompt、tools、metadata 和具体 Context 类型保持不变。
+当前台请求或压缩请求达到各自
+`context_window_tokens × compression_trigger_ratio` 时：
+
+1. 当前 `Context.messages` 成为 Compressor 的完整投影历史；
+2. 保留固定 System Prompt，tools 固定为空；
+3. `compression_prompt` 作为最后一条独立 UserMessage；
+4. 非空、无 ToolCall 的结果成为 `pygent.context.snapshot` UserMessage；
+5. Snapshot 替换 `Context.messages`，pending current 保持原文；
+6. `compression_count` 和 `projection_revision` 各增加一次；
+7. `full_history`、metadata 和具体 Context 类型保持不变。
 
 压缩调用不计入 ReAct `max_model_calls`，但服从同一 Execution deadline、Runtime model
 capacity 和 managed-effect 规则。
 
 - 达到 `max_compressions`：`ContextCompressionLimitExceeded`；
-- 没有完整可压缩前缀：`ContextCompressionUnavailable`；
-- 压缩结果为空或带 ToolCall：`ContextCompressionUnavailable`。
+- 没有投影历史、压缩请求超过压缩窗口、Snapshot 后前台请求仍超限：
+  `ContextCompressionUnavailable`；
+- Compressor 修改 fork Context、返回空结果或带 ToolCall：
+  `ContextCompressionUnavailable`。
+
+### 自定义 Compressor
+
+`compressor` 是普通 Module，不要求专用基类。开发者可以组合多个模型、检索或文件读取，
+最终返回一个摘要 AIMessage：
+
+```python
+class ReviewingCompressor(Module[Message, AIMessage]):
+    def __init__(self, *, summarizer, reviewer):
+        super().__init__()
+        self.summarizer = summarizer
+        self.reviewer = reviewer
+
+    async def forward(self, request, context):
+        draft, context = await self.summarizer(request, context)
+        final, context = await self.reviewer(
+            UserMessage(content=f"Review and rewrite this snapshot:\n{draft.content}"),
+            context,
+        )
+        return final, context
+```
+
+Compressor 可以读取 `PygentAgentContext.full_history`，但框架不会自动把完整历史再次发送给
+模型。返回的 fork Context 必须与输入完全相等；Snapshot kind、slot、历史保存和 revision
+仍由 PygentAgent 统一处理。
 
 ## 8. 手动替换投影
 

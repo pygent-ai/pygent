@@ -4,7 +4,7 @@
 
 1. **模型调用即 Module**：ModelCallLayer 使用统一的 Message、Context、`forward()`、直接执行、绑定和托管执行协议。
 2. **定义与运行分离**：模型组需求、模型选择策略、重试策略和生成默认行为是不可变声明；托管 Runtime 可以在 admission 时从已声明模型组中选择一个经过验证的不可变 profile snapshot。允许的调用级生成参数覆盖是本次 Execution 的不可变输入，不修改 Module 或其默认配置。ModelInvoker 拥有 route、retry 与 fallback，ModelProviderAdapter 拥有 Provider 协议转换和错误归一。direct execution 使用显式配置的本地 adapter，连接生命周期和 Root 并发由调用方负责；managed Runtime 只治理选择、client 生命周期、资源、deadline、取消和调度，不解释 Provider 逻辑。
-3. **Context 只读**：模型层返回完整 AIMessage 和原 Context，不隐式提交历史；“原 Context”包括具体 AgentContext 类型和全部用户字段，Provider 只消费基础模型投影。
+3. **Context 只读**：模型层返回携带规范化成功 usage 的完整 AIMessage 和原 Context，不隐式提交历史；“原 Context”包括具体 AgentContext 类型和全部用户字段，Provider 只消费基础模型投影，历史 AIMessage 的 usage 不进入模型请求。
 4. **预算统一**：重试、fallback、deadline、attempt 与取消清理必须处于同一有界预算。只有上一 attempt 已确认结束后才能启动下一 attempt；若取消清理无法在预算内确认，结果为 `OUTCOME_UNKNOWN`，必须 fail closed，不得 retry 或 fallback。
 5. **容量责任按模式划分**：direct execution 不提供跨调用的框架容量治理；managed execution 中，多个 Layer 指向同一资源时共享 Runtime 容量所有者。
 6. **执行同源**：流式与非流式运行同一个 `forward()`，只改变事件观察方式。

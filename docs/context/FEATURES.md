@@ -11,4 +11,4 @@
 7. **持久化外置**：`projection_revision` 只用于当前模型投影的乐观并发判断，不是业务会话 revision。加载、提交、历史版本、审计和业务冲突处理仍属于框架外部的业务服务。
 8. **显式槽位更新**：无槽位 Message 正常追加；带稳定 `slot` 的 Message 替换旧的同槽位值，使基础模型投影保留该槽位当前有效内容。
 9. **可见性不是授权**：`Context.tools` 描述本次上下文和模型可见的工具，不构成可信授权证明；实际授权由用户开发的自定义授权 Module 或受信执行适配器决定。
-10. **完整历史与模型投影分离**：`PygentAgentContext.full_history` 保存 ReAct 已提交的完整消息历史；`Context.messages` 可以因压缩或显式 replacement 改变。压缩产生的新 Context 必须保留具体类型、System Prompt、tools、metadata 和完整历史。
+10. **完整历史、模型投影和估算状态分离**：`PygentAgentContext.full_history` 保存 ReAct 已提交的完整消息历史；`Context.messages` 可以因压缩或显式 replacement 改变；token 估算系数和最近 input usage 是不改变 projection revision 的 portable Agent 状态。压缩产生的新 Context 必须保留具体类型、System Prompt、tools、metadata 和完整历史。
