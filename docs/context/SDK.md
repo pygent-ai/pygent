@@ -13,7 +13,7 @@ context = Context(
 )
 ```
 
-基础字段组成模型请求投影：`system_prompt`、`messages`、`tools` 与 `metadata`。构造器立即防御性复制 tuple 字段并递归冻结 JSON 数据。`Context.tools` 只接受完整 `ToolDefinition`；工具可见性不构成执行授权。
+基础字段组成模型请求投影：`system_prompt`、`messages`、`tools`、`metadata` 与非负整数 `projection_revision`。前四项决定模型可见内容；`projection_revision` 是 Projection Operation 乐观并发使用的唯一投影版本，不直接编码到 Provider prompt。构造器立即防御性复制 tuple 字段并递归冻结 JSON 数据。`Context.tools` 只接受完整 `ToolDefinition`；工具可见性不构成执行授权。
 
 `Context` 不再等同于整个模型请求。它是 Agent 状态快照的基础类型，模型 Layer 只消费上述基础字段。用户 Context 子类中的领域字段不会自动进入 prompt、模型 metadata 或工具参数。
 

@@ -69,6 +69,8 @@ EXPECTED_TOP_LEVEL_API = {
     "ModelGroupConfig",
     "ModelRoute",
     "Module",
+    "PygentAgent",
+    "PygentAgentContext",
     "RecurrentModule",
     "ReActBudgetExceeded",
     "ReActLayer",

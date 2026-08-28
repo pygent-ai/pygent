@@ -19,6 +19,7 @@ _BASE_ANNOTATIONS: dict[str, object] = {
     "messages": tuple[Message, ...],
     "tools": tuple[ToolDefinition, ...],
     "metadata": FrozenJsonObject,
+    "projection_revision": int,
 }
 
 

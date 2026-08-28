@@ -14,12 +14,14 @@ from pygent.core import (
     CapacityPermit,
     Context,
     ExecutionEvent,
+    ExecutionInputDelivery,
     ExecutionOptions,
     ExecutionOutcome,
     ExecutionOwnerState,
     ExecutionPhase,
     ExecutionSnapshot,
     ExecutionStatus,
+    JsonValue,
     Message,
     Module,
 )
@@ -413,6 +415,10 @@ class ExecutionBackend(Protocol[BoundOutputMessageT_co]):
 
     async def request_cancel(self, execution_id: str) -> bool: ...
 
+    async def send_input(
+        self, execution_id: str, *, input_id: str, kind: str, value: JsonValue
+    ) -> ExecutionInputDelivery: ...
+
     def subscribe(
         self, execution_id: str, *, after: int | None = None
     ) -> ExecutionSubscription: ...
@@ -437,6 +443,10 @@ class ExecutionHandle(Protocol[BoundOutputMessageT_co]):
     async def result(self) -> tuple[BoundOutputMessageT_co, Context]: ...
 
     async def cancel(self) -> bool: ...
+
+    async def send_input(
+        self, *, input_id: str, kind: str, value: JsonValue
+    ) -> ExecutionInputDelivery: ...
 
     def subscribe(self, *, after: int | None = None) -> ExecutionSubscription: ...
 

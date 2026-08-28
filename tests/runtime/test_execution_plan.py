@@ -70,7 +70,7 @@ def _portable_plan() -> ExecutionPlan:
     return ExecutionPlan(
         root="agent",
         modules=(root, model),
-        runtime_api_version="0.2",
+        runtime_api_version="0.3",
         artifact=CodeArtifactSpec(
             package="pygent-example",
             version="1.4.0",

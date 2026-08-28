@@ -128,7 +128,10 @@ def test_execution_requirements_safety_is_strict_immutable_hashable_and_hashed()
 
 
 def test_builtin_layers_declare_only_their_verifiable_effect_boundaries():
-    assert ReActLayer.execution_requirements.effect_safety is EffectSafety.EFFECT_FREE
+    assert (
+        ReActLayer.execution_requirements.effect_safety
+        is EffectSafety.MANAGED_EFFECTS
+    )
     assert (
         ModelCallLayer.execution_requirements.effect_safety
         is EffectSafety.MANAGED_EFFECTS

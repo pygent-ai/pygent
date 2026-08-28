@@ -244,6 +244,28 @@ def bound_module_worker_handler(
     declared = dict(bindings)
     _validate_worker_bindings(declared, artifact_resolver)
 
+    handles: dict[str, Any] = {}
+    handles_changed = asyncio.Condition()
+
+    async def send_input(
+        request: WorkerInvocation, *, input_id: str, kind: str, value: JsonValue
+    ) -> Any:
+        bound = _resolve_worker_binding(declared, request)
+        async with handles_changed:
+            handle = handles.get(request.request_id)
+        if handle is None:
+            try:
+                handle = await cast(Any, bound).runtime.get_execution_handle(
+                    request.request_id
+                )
+            except KeyError:
+                async with handles_changed:
+                    await handles_changed.wait_for(
+                        lambda: request.request_id in handles
+                    )
+                    handle = handles[request.request_id]
+        return await handle.send_input(input_id=input_id, kind=kind, value=value)
+
     async def invoke(
         request: WorkerInvocation, event_sink: WorkerEventSink
     ) -> JsonValue:
@@ -271,6 +293,10 @@ def bound_module_worker_handler(
             ),
         )
 
+        async with handles_changed:
+            handles[request.request_id] = handle
+            handles_changed.notify_all()
+
         output, next_context = await _relay_worker_execution(handle, event_sink)
         return invocation_to_dict(output, next_context, registry=registry)
 
@@ -296,6 +322,7 @@ def bound_module_worker_handler(
         )
     if dynamic_namespaces:
         cast(Any, invoke)._pygent_model_store_namespace = next(iter(dynamic_namespaces))
+    cast(Any, invoke)._pygent_send_input = send_input
     return invoke
 
 

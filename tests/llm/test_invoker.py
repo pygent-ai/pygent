@@ -514,6 +514,7 @@ async def test_stream_normalizes_text_usage_and_completion():
     assert [event.kind for event in events] == [
         "model.started",
         "model.attempt.started",
+        "model.request.prepared",
         "model.text.delta",
         "model.usage",
         "model.attempt.succeeded",
@@ -634,7 +635,9 @@ async def test_stream_retries_only_when_failure_precedes_public_output():
     assert client.stream_calls == 2
     assert [event.kind for event in events if ".attempt." not in event.kind] == [
         "model.started",
+        "model.request.prepared",
         "model.usage",
+        "model.request.prepared",
         "model.text.delta",
         "model.usage",
         "model.completed",
@@ -674,7 +677,9 @@ async def test_stream_fallback_emits_attempt_lifecycle_before_public_output():
 
     assert [event.kind for event in events if ".attempt." not in event.kind] == [
         "model.started",
+        "model.request.prepared",
         "model.usage",
+        "model.request.prepared",
         "model.text.delta",
         "model.usage",
         "model.completed",
@@ -787,6 +792,7 @@ async def test_stream_emits_fixed_reasoning_and_multiple_tool_call_events():
     assert [event.kind for event in events] == [
         "model.started",
         "model.attempt.started",
+        "model.request.prepared",
         "model.reasoning.delta",
         "model.text.delta",
         "model.tool_call.started",

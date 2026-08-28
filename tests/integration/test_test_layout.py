@@ -12,11 +12,14 @@ ROOT_DOCUMENTS = {"README.md", "FEATURES.md", "EXECUTION.md"}
 MODULES = {"module", "context", "runtime", "agent", "llm", "tool"}
 MODULE_DOCUMENTS = {"README.md", "FEATURES.md", "SDK.md"}
 DATA_DIRECTORIES = {"fixtures"}
+DESIGN_DOCUMENT_DIRECTORIES = {"agents"}
 
 
 def test_02_documentation_has_one_directory_per_public_module():
     assert {path.name for path in DOCS_ROOT.iterdir() if path.is_file()} == ROOT_DOCUMENTS
-    assert {path.name for path in DOCS_ROOT.iterdir() if path.is_dir()} == MODULES
+    assert {path.name for path in DOCS_ROOT.iterdir() if path.is_dir()} == (
+        MODULES | DESIGN_DOCUMENT_DIRECTORIES
+    )
 
     for module in MODULES:
         assert MODULE_DOCUMENTS <= {

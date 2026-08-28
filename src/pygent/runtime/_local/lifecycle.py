@@ -282,6 +282,7 @@ class _LifecycleMixin:
                     f"execution {stored.execution_id!r} already exists; attach to it"
                 )
             record.history_started = True
+            record.history_ready.set()
             record.owner_id = f"{self._recovery_owner_id}:{record.attempt_id}"
             record.fencing_token = await self._await_with_deadline(
                 record,

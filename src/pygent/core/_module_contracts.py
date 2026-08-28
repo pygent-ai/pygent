@@ -18,9 +18,7 @@ from typing import (
     runtime_checkable,
 )
 
-from .execution import (
-    EffectOutcome,
-)
+from .execution import EffectOutcome, ExecutionInput
 from .json_values import (
     JsonValue,
 )
@@ -203,6 +201,15 @@ class ExecutionScope(Infrastructure, Protocol):
         kind: str,
         data: Mapping[str, JsonValue],
     ) -> None: ...
+
+    async def receive_execution_inputs(
+        self,
+        module: Module[Any, Any],
+        *,
+        kinds: tuple[str, ...],
+        limit: int,
+        seal_if_empty: bool,
+    ) -> tuple[ExecutionInput, ...]: ...
 
     async def wait_external(
         self,

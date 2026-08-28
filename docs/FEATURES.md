@@ -21,5 +21,6 @@
 13. **完整生命周期只有一个预算**：Execution deadline 从提交开始，覆盖准入前初始化、模型/资源 pin、容量排队、业务执行、取消清理和终结；所有等待都必须可取消。配置与发布是独立控制面操作，使用自己的显式 deadline。
 14. **Journal 决定终结顺序**：terminal span events、唯一 Execution terminal event、冻结 Outcome、终态 Snapshot 与 terminal sequence 必须原子提交。任何订阅都在交付 terminal sequence 后结束，不能根据另一路先读到的 terminal status 提前退出。
 15. **观察不等于取得执行权**：Handle 只是由 backend 支撑的稳定控制面引用。attach 只能观察、等待或请求取消；recover 必须验证资格、获取新 owner lease 和 fencing token，并创建新 attempt。首次 attempt 与恢复 attempt 使用同一所有权协议。
+16. **运行中输入分层解释**：托管 Runtime 负责通用、有界 Execution Input 的身份、顺序、存储、幂等、单消费者和终态竞态；Module 负责解释 `kind` 与 `value` 的业务语义。Runtime 不解释 ReAct Projection Operation，也不把 Inbox 变成第二份业务 Context。direct execution 不接收外部输入。
 
 可恢复执行的能力分级与故障边界见 [Runtime Durability](runtime/DURABILITY.md)，参考实现的内部记录与重放方案见 [透明恢复与确定性重放](runtime/REPLAY.md)。

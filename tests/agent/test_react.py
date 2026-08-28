@@ -82,7 +82,10 @@ async def test_no_tool_answer_commits_user_then_final_ai() -> None:
 
     assert actual is answer
     assert context.messages == (user, answer)
-    assert model.observed["one"] == [(user, initial)]
+    assert model.observed["one"] == [
+        (user, Context(metadata={"run": "one"}, projection_revision=1))
+    ]
+    assert context.projection_revision == 2
 
 
 @pytest.mark.asyncio

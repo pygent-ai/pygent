@@ -125,15 +125,17 @@ async def test_benchmark_attempt_timeout_retries_through_pygent_model_policy() -
     assert [kind for kind, _ in events] == [
         "model.started",
         "model.attempt.started",
+        "model.request.prepared",
         "model.usage",
         "model.attempt.failed",
         "model.attempt.started",
+        "model.request.prepared",
         "model.text.delta",
         "model.usage",
         "model.attempt.succeeded",
         "model.completed",
     ]
-    assert freeze_json_object(events[3][1])["error_kind"] == "timeout"
+    assert freeze_json_object(events[4][1])["error_kind"] == "timeout"
     assert freeze_json_object(events[-2][1])["attempt"] == 2
 
 

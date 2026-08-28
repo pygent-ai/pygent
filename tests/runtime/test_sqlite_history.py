@@ -287,7 +287,7 @@ async def test_open_rejects_legacy_effect_identity_schema(tmp_path):
     db.commit()
     db.close()
 
-    with pytest.raises(HistoryStoreError, match="schema v6"):
+    with pytest.raises(HistoryStoreError, match="schema v7"):
         await SQLiteHistoryStore(path).open()
 
 

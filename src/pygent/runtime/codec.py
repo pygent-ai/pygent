@@ -8,6 +8,8 @@ from typing import Any, cast
 from pygent.core import (
     AIMessage,
     Context,
+    ExecutionInput,
+    ExecutionInputDelivery,
     FrozenJsonObject,
     JsonValue,
     Message,
@@ -38,6 +40,34 @@ from .context_codec import (
 
 class WireCodecError(ValueError):
     """Raised when an untrusted Worker payload violates the public schema."""
+
+
+def execution_input_to_dict(value: ExecutionInput) -> dict[str, object]:
+    if type(value) is not ExecutionInput:
+        raise WireCodecError("unsupported ExecutionInput subtype")
+    return value.to_dict()
+
+
+def execution_input_from_dict(value: object) -> ExecutionInput:
+    try:
+        return ExecutionInput.from_dict(value)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WireCodecError("invalid ExecutionInput") from exc
+
+
+def execution_input_delivery_to_dict(
+    value: ExecutionInputDelivery,
+) -> dict[str, object]:
+    if type(value) is not ExecutionInputDelivery:
+        raise WireCodecError("unsupported ExecutionInputDelivery subtype")
+    return value.to_dict()
+
+
+def execution_input_delivery_from_dict(value: object) -> ExecutionInputDelivery:
+    try:
+        return ExecutionInputDelivery.from_dict(value)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WireCodecError("invalid ExecutionInputDelivery") from exc
 
 
 def _thaw(value: object) -> object:
@@ -478,6 +508,10 @@ __all__ = [
     "WireCodecError",
     "context_from_dict",
     "context_to_dict",
+    "execution_input_delivery_from_dict",
+    "execution_input_delivery_to_dict",
+    "execution_input_from_dict",
+    "execution_input_to_dict",
     "invocation_from_dict",
     "invocation_to_dict",
     "message_from_dict",

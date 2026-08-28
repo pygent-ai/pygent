@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from .definition import module_definition_config
 from .execution import (
+    ExecutionInput,
     ExecutionOptions,
 )
 from .json_values import (
@@ -368,6 +369,22 @@ class Module(Generic[InputMessageT, OutputMessageT]):
         prepare = getattr(scope, "_prepare_module_event_data", None)
         payload = prepare(data) if callable(prepare) else freeze_json_object(data)
         await scope.emit_event(self, kind, payload)
+
+    async def receive_execution_inputs(
+        self,
+        *,
+        kinds: tuple[str, ...],
+        limit: int = 16,
+        seal_if_empty: bool = False,
+    ) -> tuple[ExecutionInput, ...]:
+        """Receive the next ordered input batch addressed to this Module."""
+
+        scope = _execution_scope.get()
+        if scope is None:
+            raise RuntimeError("execution input receive requires an active execution scope")
+        return await scope.receive_execution_inputs(
+            self, kinds=kinds, limit=limit, seal_if_empty=seal_if_empty
+        )
 
     async def wait_external(
         self,

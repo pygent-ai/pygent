@@ -6,7 +6,7 @@ their owning subpackages and are intentionally unavailable from this module.
 
 from __future__ import annotations
 
-from .agent import ReActBudgetExceeded, ReActLayer
+from .agent import PygentAgent, PygentAgentContext, ReActBudgetExceeded, ReActLayer
 from .core import (
     Agent,
     AIMessage,
@@ -70,6 +70,8 @@ __all__ = [
     "ModelGroupConfig",
     "ModelRoute",
     "Module",
+    "PygentAgent",
+    "PygentAgentContext",
     "ReActBudgetExceeded",
     "ReActLayer",
     "RecurrentModule",

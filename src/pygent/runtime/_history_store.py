@@ -13,6 +13,7 @@ import aiosqlite
 
 from ._history_effects import EffectHistoryMixin
 from ._history_executions import ExecutionHistoryMixin
+from ._history_inputs import ExecutionInputHistoryMixin
 from ._history_jobs import JobHistoryMixin
 from ._history_types import HistoryStoreError
 
@@ -46,7 +47,9 @@ class _TransactionRequest:
     ) = None
 
 
-class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMixin):
+class SQLiteHistoryStore(
+    ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMixin, ExecutionInputHistoryMixin
+):
     """One serialized SQLite durability boundary for executions and effects."""
 
     def __init__(
@@ -109,10 +112,10 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
                 )
             ).fetchall()
         }
-        if tables and user_version != 6:
+        if tables and user_version != 7:
             await self.close()
             raise HistoryStoreError(
-                "SQLite history schema is incompatible; this Runtime requires schema v6"
+                "SQLite history schema is incompatible; this Runtime requires schema v7"
             )
         await self._connection.executescript(
             """
@@ -202,6 +205,35 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
                 admission_id TEXT NOT NULL,
                 PRIMARY KEY(execution_id, admission_id)
             );
+            CREATE TABLE IF NOT EXISTS execution_inboxes (
+                execution_id TEXT PRIMARY KEY,
+                next_sequence INTEGER NOT NULL,
+                sealed INTEGER NOT NULL CHECK(sealed IN (0,1))
+            );
+            CREATE TABLE IF NOT EXISTS execution_inputs (
+                execution_id TEXT NOT NULL,
+                input_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                value_json TEXT NOT NULL,
+                PRIMARY KEY(execution_id,input_id),
+                UNIQUE(execution_id,sequence)
+            );
+            CREATE TABLE IF NOT EXISTS execution_input_consumers (
+                execution_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                module_path TEXT NOT NULL,
+                last_sequence INTEGER NOT NULL,
+                PRIMARY KEY(execution_id,kind)
+            );
+            CREATE TABLE IF NOT EXISTS execution_input_receives (
+                execution_id TEXT NOT NULL,
+                module_path TEXT NOT NULL,
+                receive_index INTEGER NOT NULL,
+                request_json TEXT NOT NULL,
+                batch_json TEXT NOT NULL,
+                PRIMARY KEY(execution_id,module_path,receive_index)
+            );
             """
         )
         await self._connection.execute(
@@ -212,7 +244,7 @@ class SQLiteHistoryStore(ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMi
             "ON executions(binding_id,identity,idempotency_key) "
             "WHERE idempotency_key IS NOT NULL"
         )
-        await self._connection.execute("PRAGMA user_version=6")
+        await self._connection.execute("PRAGMA user_version=7")
         await self._connection.commit()
         return self
 

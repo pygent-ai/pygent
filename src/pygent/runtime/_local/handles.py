@@ -11,6 +11,7 @@ from pygent.core import (
     Context,
     ExecutionFailure,
     ExecutionFailureError,
+    ExecutionInputDelivery,
     JsonValue,
     Message,
     Module,
@@ -204,6 +205,29 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
             await self._record.notify_terminal()
         return True
 
+    async def send_input(
+        self, *, input_id: str, kind: str, value: JsonValue
+    ) -> ExecutionInputDelivery:
+        history = self._record.history
+        if history is not None:
+            if not self._record.history_started:
+                ready = asyncio.create_task(self._record.history_ready.wait())
+                task = self._record.task
+                waits = {ready} if task is None else {ready, task}
+                done, _ = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+                if ready not in done:
+                    ready.cancel()
+                    await asyncio.gather(ready, return_exceptions=True)
+                    return ExecutionInputDelivery(
+                        "execution_finished", self.execution_id, input_id
+                    )
+            return await history.send_execution_input(
+                self.execution_id, input_id=input_id, kind=kind, value=value
+            )
+        return await self._record.input_inbox.send(
+            self.execution_id, input_id=input_id, kind=kind, value=value
+        )
+
     def subscribe(self, *, after: int | None = None) -> _ExecutionSubscription:
         if after is not None and (isinstance(after, bool) or after < -1):
             raise ValueError("event cursor must be -1 or a non-negative integer")
@@ -342,6 +366,13 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
 
     async def cancel(self) -> bool:
         return False
+
+    async def send_input(
+        self, *, input_id: str, kind: str, value: JsonValue
+    ) -> ExecutionInputDelivery:
+        return await self._history.send_execution_input(
+            self.execution_id, input_id=input_id, kind=kind, value=value
+        )
 
     def subscribe(self, *, after: int | None = None) -> _DurableExecutionSubscription:
         return _DurableExecutionSubscription(self._history, self._execution_id, after)

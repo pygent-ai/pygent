@@ -314,7 +314,15 @@ class ExecutionHistoryMixin:
     @_serialized_write
     async def delete_execution(self, execution_id: str) -> None:
         db = self._db()
-        for table in ("events", "checkpoints", "effects"):
+        for table in (
+            "events",
+            "checkpoints",
+            "effects",
+            "execution_input_receives",
+            "execution_input_consumers",
+            "execution_inputs",
+            "execution_inboxes",
+        ):
             await db.execute(f"DELETE FROM {table} WHERE execution_id=?", (execution_id,))
         await db.execute(
             "DELETE FROM execution_model_admissions WHERE execution_id=?",
@@ -480,6 +488,10 @@ class ExecutionHistoryMixin:
             )
             if cursor.rowcount != 1:
                 raise HistoryConflictError("execution is already finalized or unknown")
+            await db.execute(
+                "UPDATE execution_inboxes SET sealed=1 WHERE execution_id=?",
+                (execution_id,),
+            )
             await db.execute("DELETE FROM execution_claims WHERE execution_id=?", (execution_id,))
 
         await self._queue_transaction(
@@ -544,6 +556,10 @@ class ExecutionHistoryMixin:
             )
         await db.executemany(
             "DELETE FROM execution_claims WHERE execution_id=?",
+            [(item.execution_id,) for item in items],
+        )
+        await db.executemany(
+            "UPDATE execution_inboxes SET sealed=1 WHERE execution_id=?",
             [(item.execution_id,) for item in items],
         )
         return [None] * len(items)

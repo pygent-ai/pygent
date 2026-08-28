@@ -19,7 +19,22 @@ from pygent.runtime.codec import (
     context_from_dict,
     context_to_dict,
 )
-from pygent.runtime.context_codec import ContextCodecError, ContextCodecRegistry
+from pygent.runtime.context_codec import (
+    BASE_CONTEXT_CODEC,
+    ContextCodecError,
+    ContextCodecRegistry,
+)
+
+
+def test_base_context_schema_v2_carries_projection_revision() -> None:
+    context = Context(projection_revision=7)
+    encoded = BASE_CONTEXT_CODEC.encode(context)
+
+    assert Context.context_schema_version == 2
+    assert encoded["projection_revision"] == 7
+    assert BASE_CONTEXT_CODEC.decode(encoded) == context
+    with pytest.raises(ValueError, match="projection_revision"):
+        Context(projection_revision=-1)
 
 
 @dataclass(frozen=True, slots=True)

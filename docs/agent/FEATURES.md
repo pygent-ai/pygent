@@ -11,3 +11,5 @@
 7. **共享 Layer 安全**：Agent 可以直接调用并向子 Agent 或 Layer 注入同一 Module；每次调用保持独立运行身份。
 8. **并发责任按执行模式划分**：direct execution 不启用框架级 Execution 容量，调用方自行使用 `asyncio`、服务限流器或外部设施管理 Root 与本地并发；托管执行中的所有 Agent Root 和 Child 受当前 Binding 的 live/runnable 上限、父子深度、fan-out、waiter 和公平调度约束。Agent 不为托管执行私建锁或 semaphore。
 9. **父子 Agent 只在托管执行中继承 Binding**：Binding 是部署与资源治理域，不是 Agent 身份；direct execution 没有 Binding。托管执行中的原始子 Agent 默认继承 Parent Binding，只有需要独立治理边界时才使用预绑定 Child 或 placement policy，包括容量、资源、权限、安全、SLA、服务、部署策略或生命周期隔离。
+10. **ReAct 解释自己的 Projection Operation**：Runtime Inbox 只交付 opaque 输入；`ReActLayer` 在每次模型调用前和最终返回前解释 `react.projection.operation.v1`。操作只有 ToolResult content append、独立 UserMessage 与带 revision 的 message projection replacement；拒绝只产生稳定事件，不扩展为公开生命周期 Hook、Handler、Policy 或 Runtime 业务分支。
+11. **标准前台 Agent 仍是组合**：`PygentAgent` 只组合标准 ReAct、前台模型、压缩模型和工具 Module。System Prompt 与 Compression Prompt 属于不可变 Agent 定义；压缩只替换 Context 的模型消息投影并保留完整已提交历史。ReAct 只接受子 model Module 显式返回的单次消息投影替换，要求 revision 精确前进并禁止该边界替换 System Prompt 或 tools。

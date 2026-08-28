@@ -37,6 +37,8 @@ from .execution import (
     ExecutionEvent,
     ExecutionFailure,
     ExecutionFailureError,
+    ExecutionInput,
+    ExecutionInputDelivery,
     ExecutionOptions,
     ExecutionOutcome,
     ExecutionOwnerState,
@@ -188,6 +190,16 @@ class _DirectExecutionScope:
     @property
     def managed_execution_id(self) -> None:
         return None
+
+    async def receive_execution_inputs(
+        self,
+        module: object,
+        *,
+        kinds: tuple[str, ...],
+        limit: int,
+        seal_if_empty: bool,
+    ) -> tuple[ExecutionInput, ...]:
+        return ()
 
     async def invoke_module(
         self,
@@ -558,6 +570,13 @@ class _DirectExecutionHandle(Generic[ResultT]):
         with suppress(asyncio.CancelledError):
             await task
         return True
+
+    async def send_input(
+        self, *, input_id: str, kind: str, value: JsonValue
+    ) -> ExecutionInputDelivery:
+        raise DirectExecutionError(
+            "direct executions do not accept external execution inputs"
+        )
 
     def subscribe(self, *, after: int | None = None) -> _DirectExecutionSubscription:
         if after is not None and (isinstance(after, bool) or after < -1):

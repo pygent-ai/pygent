@@ -18,6 +18,7 @@ from pygent.core import (
     EffectRecoveryUnknown,
     EffectRetryPolicy,
     EffectSpec,
+    ExecutionInput,
     FrozenJsonObject,
     JsonObjectInput,
     JsonValue,
@@ -98,6 +99,39 @@ class _ManagedScope(ExecutionScope):
             data,
             "origin_execution_id",
             frame.execution_id,
+        )
+
+    async def receive_execution_inputs(
+        self,
+        module: Module[Any, Any],
+        *,
+        kinds: tuple[str, ...],
+        limit: int,
+        seal_if_empty: bool,
+    ) -> tuple[ExecutionInput, ...]:
+        self._require_owner_task()
+        frame = _execution_frame.get()
+        if frame is None:
+            raise RuntimeError("managed execution input receive has no execution frame")
+        module_path = frame.module_path
+        receive_index = self.record.input_receive_calls.get(module_path, 0)
+        self.record.input_receive_calls[module_path] = receive_index + 1
+        history = self.record.history if self.record.history_started else None
+        if history is not None:
+            return await history.receive_execution_inputs(
+                execution_id=self.record.execution_id,
+                module_path=module_path,
+                receive_index=receive_index,
+                kinds=kinds,
+                limit=limit,
+                seal_if_empty=seal_if_empty,
+            )
+        return await self.record.input_inbox.receive(
+            module_path=module_path,
+            receive_index=receive_index,
+            kinds=kinds,
+            limit=limit,
+            seal_if_empty=seal_if_empty,
         )
 
     async def gather(

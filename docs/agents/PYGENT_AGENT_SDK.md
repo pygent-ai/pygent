@@ -1,0 +1,312 @@
+# PygentAgent 前台 ReAct SDK
+
+> 状态：已实现的公共 SDK 契约。
+>
+> 本文服从 [Pygent 第一原则](../FEATURES.md)以及正式的
+> [Agent](../agent/FEATURES.md)、[Context](../context/FEATURES.md)、
+> [Runtime](../runtime/FEATURES.md)、[LLM](../llm/FEATURES.md)和
+> [Tool](../tool/FEATURES.md)第一原则。
+
+## 1. 定位
+
+`PygentAgent` 是标准前台 ReAct Agent。它复用 `ReActLayer`、`ModelCallLayer`、
+`ToolCallLayer` 和 Runtime Execution Inbox，不维护第二套循环。
+
+```text
+PygentAgent
+└─ ReActLayer
+   ├─ model: context-compression Module
+   │  ├─ model: foreground Model Module
+   │  └─ compression_model: compression Model Module
+   └─ tools: Tool Module
+```
+
+框架固定 System Prompt，执行有界压缩，保存完整已提交历史，消费三种 ReAct
+Projection Operation，并在真实 Provider attempt 前发布最终请求快照。开发者负责 UserMessage、
+workspace reminder、ToolResult reminder 和压缩提示词正文。
+
+业务能力、提示词正文以及 session 和审计 Store 都由开发者在 Agent 外部管理。
+
+## 2. 公共 API
+
+```python
+from pygent import PygentAgent, PygentAgentContext
+from pygent.agent import (
+    ContextCompressionLimitExceeded,
+    ContextCompressionUnavailable,
+)
+```
+
+`PygentAgentContext` 是 portable、frozen、slots Context：
+
+```python
+@dataclass(frozen=True, slots=True)
+class PygentAgentContext(Context):
+    context_schema = "pygent.agent-context"
+    context_schema_version = 1
+
+    full_history: tuple[Message, ...] = ()
+    compression_count: int = 0
+```
+
+- `messages` 是下一次模型调用看到的投影；
+- `full_history` 是 ReAct 已正式提交的完整消息历史；
+- `projection_revision` 是唯一模型投影 revision；
+- `compression_count` 是当前 Context 已完成的压缩次数。
+
+## 3. 构造 Agent
+
+```python
+from pygent import (
+    GenerationConfig,
+    ModelCallLayer,
+    PygentAgent,
+    RetryPolicy,
+    ToolCallLayer,
+)
+
+SYSTEM_PROMPT = """You are a careful coding agent.
+Inspect evidence before changing code and keep execution bounded.
+"""
+
+COMPRESSION_PROMPT = """Create a compact continuation for the foreground agent.
+Preserve goals, constraints, decisions, unfinished work, relevant files and tool state.
+Return only the continuation text.
+"""
+
+foreground_model = ModelCallLayer(
+    model_group=foreground_model_group,
+    retry_policy=RetryPolicy(max_attempts_per_route=2),
+    generation=GenerationConfig(temperature=0.2, max_output_tokens=8_000),
+    tools=all_tool_definitions,
+)
+
+compression_model = ModelCallLayer(
+    model_group=compression_model_group,
+    retry_policy=RetryPolicy(max_attempts_per_route=2),
+    generation=GenerationConfig(temperature=0.0, max_output_tokens=4_000),
+    tools=(),
+)
+
+agent = PygentAgent(
+    system_prompt=SYSTEM_PROMPT,
+    compression_prompt=COMPRESSION_PROMPT,
+    model=foreground_model,
+    compression_model=compression_model,
+    tools=ToolCallLayer(
+        tools=all_tool_specs,
+        authorization=tool_authorization,
+    ),
+    compression_threshold_bytes=512 * 1024,
+    keep_recent_units=8,
+    max_compressions=4,
+    max_steps=16,
+    max_model_calls=16,
+    max_tool_calls=64,
+)
+```
+
+两个 Prompt 在 Agent 初始化时固定。`new_context()` 创建初始 Context，不在每次
+`forward()` 中重新替换或校验 System Prompt。
+
+`ModelCallLayer.tools` 是部署允许的工具集合；`Context.tools` 是本次请求可见的子集；
+`ToolCallLayer.authorization` 在实际执行前完成授权。
+
+## 4. 创建 Context 与首次执行
+
+```python
+context = agent.new_context(
+    tools=all_tool_definitions,
+    metadata={"workspace_mode": "write"},
+)
+
+initial_message = UserMessage(
+    content="检查项目并修复失败的测试。",
+    kind="application.user_context",
+    metadata={"audit_id": "user-input-1842"},
+)
+
+bound_agent = runtime.bind(agent)
+handle = await bound_agent.start(
+    initial_message,
+    context,
+    execution=execution_options,
+)
+
+answer, final_context = await handle.result()
+```
+
+原始用户输入审计、session 加载和最终 Context 提交属于 Agent 外部的业务服务。
+
+## 5. 运行中 UserMessage
+
+Runtime 接收 opaque Execution Input；ReAct 只解释固定 kind：
+
+```python
+from pygent.agent import (
+    REACT_PROJECTION_OPERATION_KIND,
+    StandaloneUserMessage,
+    encode_react_projection_operation,
+)
+
+operation = StandaloneUserMessage(
+    UserMessage(
+        content="先分析根因，再决定修改范围。",
+        kind="application.user_context",
+        metadata={"audit_id": "user-input-1843"},
+    )
+)
+
+delivery = await handle.send_input(
+    input_id="chat-message-1843",
+    kind=REACT_PROJECTION_OPERATION_KIND,
+    value=encode_react_projection_operation(operation),
+)
+```
+
+`accepted` 表示进入当前 Execution；`duplicate` 表示相同 `input_id` 已投递；
+`execution_finished` 表示调用方应把该 UserMessage 作为下一 turn 的 Initial UserMessage。
+
+工作区变化等临时上下文同样由开发者构造最终 UserMessage：
+
+```python
+workspace_change = StandaloneUserMessage(
+    UserMessage(
+        content=(
+            "<system-reminder>pyproject.toml 和 src/app.py 已发生变化。"
+            "</system-reminder>"
+        ),
+        kind="application.system_reminder",
+        metadata={"event_kind": "workspace_changed", "revision": 37},
+    )
+)
+```
+
+## 6. ToolResult 后附加内容
+
+开发者可以把最终提示词附在当前尚未提交的 ToolMessage：
+
+```python
+from pygent.agent import AppendToolResultContent
+
+operation = AppendToolResultContent(
+    content=(
+        "<system-reminder>工具执行后发现工作区配置发生变化。"
+        "</system-reminder>"
+    )
+)
+
+await handle.send_input(
+    input_id="tool-reminder-17",
+    kind=REACT_PROJECTION_OPERATION_KIND,
+    value=encode_react_projection_operation(operation),
+)
+```
+
+原始 `ToolResult.output` 不变。附加内容保存在 `ToolMessage.content`，Provider 投影时追加到
+最后一个 ToolResult 的模型可见内容。
+
+## 7. 自动压缩
+
+每次前台模型调用前，PygentAgent 对下面的 provider-neutral 投影编码规范 JSON 并计算
+UTF-8 大小：
+
+```text
+System Prompt + Context.messages + current + Context.tools
+```
+
+达到 `compression_threshold_bytes` 时：
+
+1. 消息被切分为完整对话单元；AI ToolCall 与紧随的 ToolMessage 不得拆开；
+2. 保留最后 `keep_recent_units` 个单元和 current；
+3. 更早的完整前缀成为 compression model 的历史；
+4. `compression_prompt` 作为独立 UserMessage，compression tools 固定为空；
+5. 非空、无 ToolCall 的结果成为 `pygent.context.snapshot` UserMessage；
+6. Snapshot 加保留单元替换 `Context.messages`，revision 增加一次；
+7. `full_history`、System Prompt、tools、metadata 和具体 Context 类型保持不变。
+
+压缩调用不计入 ReAct `max_model_calls`，但服从同一 Execution deadline、Runtime model
+capacity 和 managed-effect 规则。
+
+- 达到 `max_compressions`：`ContextCompressionLimitExceeded`；
+- 没有完整可压缩前缀：`ContextCompressionUnavailable`；
+- 压缩结果为空或带 ToolCall：`ContextCompressionUnavailable`。
+
+## 8. 手动替换投影
+
+```python
+from pygent.agent import ReplaceMessageProjection
+
+replacement = ReplaceMessageProjection(
+    messages=(
+        UserMessage(
+            content=snapshot_text,
+            kind="application.context_snapshot",
+        ),
+    ),
+    expected_revision=captured_context.projection_revision,
+    rebase_appended=True,
+)
+
+await handle.send_input(
+    input_id="context-replacement-7",
+    kind=REACT_PROJECTION_OPERATION_KIND,
+    value=encode_react_projection_operation(replacement),
+)
+```
+
+严格模式要求 revision 完全相等。`rebase_appended=True` 只允许把 base revision 后的完整
+追加消息接到 replacement 尾部；期间发生自动压缩、其他
+`ReplaceMessageProjection` 或 `AppendToolResultContent` 时，ReAct 以
+`revision_conflict` 拒绝。
+
+替换投影前尚未提交的 current 会先进入 `full_history`；已经提交的最终 AIMessage 不会
+重复写入。完全清空会话时结束当前 Execution，再调用 `agent.new_context()`。
+
+## 9. 最终模型请求快照
+
+每个真实 Provider attempt 发出 I/O 前依次产生：
+
+```text
+model.attempt.started
+model.request.prepared
+Provider I/O
+```
+
+```python
+async with handle.subscribe() as events:
+    async for event in events:
+        if event.kind == "model.request.prepared":
+            await request_audit_store.record(
+                execution_id=event.execution_id,
+                span_id=event.span_id,
+                request_id=event.data["request_id"],
+                request_digest=event.data["request_digest"],
+                request=event.data["request"],
+            )
+```
+
+事件包含 `route_id`、`attempt`、唯一 `request_id`、稳定 `request_digest` 和完整
+provider-neutral request。Request 包含 provider/model、System Prompt、历史消息、current、
+effective tools、有效 generation settings 和 projection revision。
+
+快照不包含 Context metadata、client、credential、endpoint、headers、Provider 原始响应
+或内部异常。用户消息正文和 Tool Definition 是实际请求内容，不会被改写；审计服务必须
+自行实施访问控制。
+
+规范 JSON 上限为 1 MiB。超过上限时在 Provider I/O 前以 `invalid_request` 失败，不会
+静默退化为仅 digest。retry 使用新的 `request_id`，请求不变时 digest 相同。effect replay
+不伪造没有真实发生的 attempt 或请求快照。
+
+## 10. 不变量
+
+1. PygentAgent 只使用标准 ReActLayer。
+2. System Prompt 和 Compression Prompt 属于不可变 Agent 定义。
+3. Initial 与 Mid-run 输入都是开发者构造的真实 UserMessage。
+4. Runtime 只管理 Execution Input，不解释 Projection Operation。
+5. ReAct 在每次模型调用前和最终返回前消费输入。
+6. 自动压缩和手动 `ReplaceMessageProjection` 只替换模型投影，不删除 `full_history`。
+7. 每次有效投影变化只增加一次 `projection_revision`。
+8. 压缩后的 replacement 会阻止过期 append-only rebase。
+9. 每个真实 Provider attempt 都有一份完整、有界的请求快照。
+10. direct execution 可以压缩和产生请求快照，但不接收运行中外部输入。

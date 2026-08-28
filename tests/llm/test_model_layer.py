@@ -233,6 +233,7 @@ async def test_streaming_invoker_drives_module_stream_and_final_result():
     assert [event.kind for event in events if event.kind.startswith("model.")] == [
         "model.started",
         "model.attempt.started",
+        "model.request.prepared",
         "model.text.delta",
         "model.text.delta",
         "model.usage",
@@ -357,6 +358,7 @@ async def test_raw_provider_fields_do_not_leak_to_message_context_or_events() ->
     assert [event.kind for event in events if event.kind.startswith("model.")] == [
         "model.started",
         "model.attempt.started",
+        "model.request.prepared",
         "model.text.delta",
         "model.usage",
         "model.attempt.succeeded",
@@ -471,9 +473,11 @@ async def test_provider_errors_are_sanitized_for_invoke_stream_and_run_events() 
     ] == [
         "model.started",
         "model.attempt.started",
+        "model.request.prepared",
         "model.usage",
         "model.attempt.failed",
         "model.attempt.started",
+        "model.request.prepared",
         "model.usage",
         "model.attempt.failed",
         "model.failed",

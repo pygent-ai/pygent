@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, Literal, TypeVar, cast
 
 from .json_values import (
     FrozenJsonObject,
@@ -186,6 +187,108 @@ class ExecutionOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionInput:
+    """One portable, ordered input delivered to a managed execution."""
+
+    input_id: str
+    sequence: int
+    kind: str
+    value: JsonValue
+
+    def __post_init__(self) -> None:
+        for name in ("input_id", "kind"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string")
+        if isinstance(self.sequence, bool) or not isinstance(self.sequence, int) or self.sequence < 0:
+            raise ValueError("sequence must be a non-negative integer")
+        object.__setattr__(self, "value", freeze_json(self.value))
+        encoded = json.dumps(
+            thaw_json(self.value),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        if len(encoded) > EXECUTION_INPUT_MAX_BYTES:
+            raise ValueError("execution input exceeds the 64 KiB limit")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "input_id": self.input_id,
+            "sequence": self.sequence,
+            "kind": self.kind,
+            "value": thaw_json(self.value),
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> ExecutionInput:
+        if not isinstance(value, Mapping) or set(value) != {
+            "input_id", "sequence", "kind", "value"
+        }:
+            raise ValueError("execution input fields are invalid")
+        return cls(
+            input_id=cast(str, value["input_id"]),
+            sequence=cast(int, value["sequence"]),
+            kind=cast(str, value["kind"]),
+            value=cast(JsonValue, value["value"]),
+        )
+
+
+ExecutionInputDeliveryStatus = Literal[
+    "accepted", "duplicate", "execution_finished"
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionInputDelivery:
+    """Stable acknowledgement for one execution input submission."""
+
+    status: ExecutionInputDeliveryStatus
+    execution_id: str
+    input_id: str
+    sequence: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in {"accepted", "duplicate", "execution_finished"}:
+            raise ValueError("invalid execution input delivery status")
+        for name in ("execution_id", "input_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string")
+        if self.sequence is not None and (
+            isinstance(self.sequence, bool)
+            or not isinstance(self.sequence, int)
+            or self.sequence < 0
+        ):
+            raise ValueError("sequence must be non-negative when provided")
+        if self.status in {"accepted", "duplicate"} and self.sequence is None:
+            raise ValueError(f"{self.status} delivery requires sequence")
+        if self.status == "execution_finished" and self.sequence is not None:
+            raise ValueError("execution_finished delivery cannot have sequence")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "execution_id": self.execution_id,
+            "input_id": self.input_id,
+            "sequence": self.sequence,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> ExecutionInputDelivery:
+        if not isinstance(value, Mapping) or set(value) != {
+            "status", "execution_id", "input_id", "sequence"
+        }:
+            raise ValueError("execution input delivery fields are invalid")
+        return cls(
+            status=cast(ExecutionInputDeliveryStatus, value["status"]),
+            execution_id=cast(str, value["execution_id"]),
+            input_id=cast(str, value["input_id"]),
+            sequence=cast(int | None, value["sequence"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionOptions:
     """Per-execution transport, trace, and lifecycle options."""
 
@@ -350,6 +453,7 @@ class EffectOutcome(Generic[EffectValueT]):
 
 
 EXECUTION_EVENT_SCHEMA_VERSION = "1"
+EXECUTION_INPUT_MAX_BYTES = 64 * 1024
 
 
 __all__ = [
@@ -359,6 +463,9 @@ __all__ = [
     "ExecutionEvent",
     "ExecutionFailure",
     "ExecutionFailureError",
+    "ExecutionInput",
+    "ExecutionInputDelivery",
+    "ExecutionInputDeliveryStatus",
     "ExecutionOptions",
     "ExecutionOutcome",
     "ExecutionOwnerState",

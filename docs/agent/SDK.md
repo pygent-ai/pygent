@@ -238,4 +238,10 @@ class ApprovalModule(Module[ApprovalRequiredMessage, ApprovalMessage]):
 
 外部反馈按 `approval_id` 通过 Runtime 或共享信号适配器完成等待。`wait_external()` 会暂停当前 `forward()` 和同步等待它的 Parent Agent；虽然不会阻塞线程、event loop 或其他独立 Execution，但会持续保留 live execution、Task、调用栈、局部变量和内存。它必须同时受当前 Execution deadline 与局部 `timeout` 限制，effective deadline 取两者中更早者；如果两者都没有提供有限值，Runtime 必须拒绝注册 waiter。Binding 还必须限制 waiter 与 live execution 数，该能力只用于秒级或分钟级短等待。
 
-长等待应返回 ApprovalRequiredMessage 并结束当前 Execution，服务保存 Context；反馈到达后，以 ApprovalMessage 和保存的当前有效 Context 创建新 Execution。普通 `forward()` 不接受执行途中的任意参数注入，也不承诺跨进程保存 Python 调用栈。完整调度与竞态要求见 [Runtime 外部信号受管等待](../runtime/README.md#外部信号受管等待)。
+长等待应返回 ApprovalRequiredMessage 并结束当前 Execution，服务保存 Context；反馈到达后，以 ApprovalMessage 和保存的当前有效 Context 创建新 Execution。Execution Inbox 可以在短时运行过程中向选择消费该 `kind` 的 Module 追加 portable 输入，但它不保存 Python 调用栈，也不替代长等待的新 Execution。完整调度与竞态要求见 [Runtime 外部信号受管等待](../runtime/README.md#外部信号受管等待)。
+
+## ReAct 运行中 Projection Operation
+
+托管 ReAct 固定消费 `react.projection.operation.v1`。开发者通过 `handle.send_input()` 发送由 `encode_react_projection_operation()` 编码的 `StandaloneUserMessage`、`AppendToolResultContent` 或 `ReplaceMessageProjection`；ReAct 在每次模型调用前以及最终返回前读取并按 input sequence 应用。`ReplaceMessageProjection` 使用 `Context.projection_revision` 做严格替换，或以 `rebase_appended=True` 保留 base revision 后可以证明为完整 Message 追加的尾部。解码、revision、replacement 或 pending ToolResult 校验失败会发出 `react.projection_operation.rejected`，不会终结 Execution。
+
+该能力使 `ReActLayer.execution_requirements.effect_safety` 固定为 `MANAGED_EFFECTS`。direct execution 的 receive 固定为空，因此运行中 Projection Operation 只属于 bound/managed ReAct。

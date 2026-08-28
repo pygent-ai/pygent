@@ -321,7 +321,7 @@ async def test_history_v3_is_rejected_without_migration(tmp_path: Path) -> None:
     db.commit()
     db.close()
 
-    with pytest.raises(HistoryStoreError, match="schema v6"):
+    with pytest.raises(HistoryStoreError, match="schema v7"):
         await SQLiteHistoryStore(path).open()
 
 

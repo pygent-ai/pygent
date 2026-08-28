@@ -114,9 +114,10 @@ class Context:
     messages: tuple[Message, ...] = ()
     tools: tuple[ToolDefinition, ...] = ()
     metadata: JsonObjectInput = ()
+    projection_revision: int = 0
 
     context_schema: ClassVar[str] = "pygent.context"
-    context_schema_version: ClassVar[int] = 1
+    context_schema_version: ClassVar[int] = 2
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         if kwargs:
@@ -150,6 +151,12 @@ class Context:
         object.__setattr__(self, "messages", messages)
         object.__setattr__(self, "tools", tools)
         object.__setattr__(self, "metadata", freeze_json_object(self.metadata))
+        if (
+            isinstance(self.projection_revision, bool)
+            or not isinstance(self.projection_revision, int)
+            or self.projection_revision < 0
+        ):
+            raise ValueError("context projection_revision must be non-negative")
         if type(self) is not Context:
             _validate_context_extension(self)
 

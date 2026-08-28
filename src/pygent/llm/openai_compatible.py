@@ -1079,7 +1079,7 @@ def _encode_messages(
     message: Message, wire_names: Mapping[str, str] | None = None
 ) -> list[dict[str, object]]:
     if isinstance(message, ToolMessage) and message.results:
-        return [
+        encoded_results: list[dict[str, object]] = [
             {
                 "role": "tool",
                 "tool_call_id": result.call_id,
@@ -1088,6 +1088,10 @@ def _encode_messages(
             }
             for result in message.results
         ]
+        if message.content:
+            prior = cast(str, encoded_results[-1]["content"])
+            encoded_results[-1]["content"] = f"{prior}\n{message.content}"
+        return encoded_results
     encoded: dict[str, object] = {"role": message.role, "content": message.content}
     if isinstance(message, AIMessage) and message.tool_calls:
         encoded["tool_calls"] = [

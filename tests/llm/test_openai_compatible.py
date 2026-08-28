@@ -243,6 +243,26 @@ def test_tool_result_error_classification_is_visible_to_the_model() -> None:
     }
 
 
+def test_tool_message_reminder_is_appended_only_to_last_model_result() -> None:
+    message = ToolMessage(
+        content="<system-reminder>workspace changed</system-reminder>",
+        results=(
+            ToolResult(call_id="one", name="first", status="succeeded", output=1),
+            ToolResult(call_id="two", name="second", status="succeeded", output=2),
+        ),
+    )
+    encoded = openai_compatible_module._encode_messages(message)
+    first_content = encoded[0]["content"]
+    second_content = encoded[1]["content"]
+    assert isinstance(first_content, str)
+    assert isinstance(second_content, str)
+
+    assert json.loads(first_content)["output"] == 1
+    assert "system-reminder" not in first_content
+    assert json.loads(second_content.split("\n", 1)[0])["output"] == 2
+    assert second_content.endswith(message.content)
+
+
 def test_provider_raw_diagnostics_are_not_projected_through_usage() -> None:
     canaries = (
         "synthetic-api-key-canary",

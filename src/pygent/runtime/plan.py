@@ -361,7 +361,7 @@ class ExecutionPlan:
     root: str
     modules: tuple[ModuleSpec, ...]
     schema_version: int = PLAN_SCHEMA_VERSION
-    runtime_api_version: str = "0.2"
+    runtime_api_version: str = "0.3"
     artifact: CodeArtifactSpec | None = None
     metadata: tuple[tuple[str, str], ...] = ()
     context_codecs: tuple[tuple[str, int, str, str], ...] = ()
@@ -379,7 +379,7 @@ class ExecutionPlan:
                 f"expected {PLAN_SCHEMA_VERSION}"
             )
         _require_text(self.runtime_api_version, "runtime_api_version")
-        if self.runtime_api_version != "0.2":
+        if self.runtime_api_version != "0.3":
             raise PlanVersionError(
                 f"unsupported Runtime API version {self.runtime_api_version!r}; "
                 "expected '0.2'"

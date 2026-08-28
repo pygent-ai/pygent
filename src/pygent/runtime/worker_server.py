@@ -22,6 +22,7 @@ from pygent.core import (
     EXECUTION_EVENT_SCHEMA_VERSION,
     ExecutionEvent,
     ExecutionFailure,
+    ExecutionInputDelivery,
     FrozenJsonObject,
     JsonValue,
     freeze_json,
@@ -121,6 +122,11 @@ class HTTPWorkerApp:
                 Route(
                     "/v1/executions/{execution_id:str}/cancel",
                     self.cancel,
+                    methods=["POST"],
+                ),
+                Route(
+                    "/v1/executions/{execution_id:str}/inputs",
+                    self.input,
                     methods=["POST"],
                 ),
                 Route(
@@ -703,6 +709,40 @@ class HTTPWorkerApp:
                 "result": thaw_json(run.result),
             }
         )
+
+    async def input(self, request: Request) -> Response:
+        run = self.executions.get(request.path_params["execution_id"])
+        if run is None:
+            return JSONResponse({"error": "execution_not_found"}, status_code=404)
+        try:
+            body = await request.json()
+            if set(body) != {"input_id", "kind", "value"}:
+                raise ValueError
+            input_id = body["input_id"]
+            kind = body["kind"]
+            value = freeze_json(body["value"])
+            if not isinstance(input_id, str) or not input_id:
+                raise ValueError
+            if not isinstance(kind, str) or not kind:
+                raise ValueError
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return JSONResponse({"error": "invalid_request"}, status_code=400)
+        sender = getattr(self.handler, "_pygent_send_input", None)
+        if not callable(sender):
+            return JSONResponse(
+                {"error": "execution_input_unavailable"}, status_code=501
+            )
+        try:
+            delivery = await sender(
+                run.invocation, input_id=input_id, kind=kind, value=value
+            )
+        except ValueError:
+            return JSONResponse({"error": "invalid_request"}, status_code=400)
+        except OverflowError:
+            return JSONResponse({"error": "worker_capacity"}, status_code=429)
+        if not isinstance(delivery, ExecutionInputDelivery):
+            return JSONResponse({"error": "invalid_delivery"}, status_code=500)
+        return JSONResponse(delivery.to_dict())
 
     async def _emit(
         self,

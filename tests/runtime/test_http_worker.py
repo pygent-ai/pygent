@@ -21,6 +21,7 @@ from pygent.core import (
     PlacementPolicy,
     RemoteModule,
     UserMessage,
+    freeze_json,
     thaw_json,
 )
 from pygent.llm import ModelAttempt, ModelFailureReason
@@ -45,6 +46,7 @@ from pygent.runtime._worker_protocol import (
     WorkerTarget,
     WorkerUnavailableError,
 )
+from pygent.runtime.codec import invocation_to_dict
 from pygent.runtime.context_codec import BASE_CONTEXT_CODEC
 from pygent.runtime.worker_client import HTTPWorkerClient
 from pygent.runtime.worker_server import HTTPWorkerApp
@@ -124,6 +126,70 @@ async def test_http_worker_invoke_health_and_cursor_sse():
 
     assert thaw_json(result) == {"binding": "echo", "echo": "hello"}
     assert [event.kind for event in events] == ["execution.completed"]
+
+
+@pytest.mark.asyncio
+async def test_remote_execution_handle_sends_input_to_bound_runtime():
+    class State:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.received = []
+
+    class Receiver(Module[UserMessage, AIMessage]):
+        trusted_live_resource_attributes = ("state",)
+
+        def __init__(self):
+            super().__init__()
+            self.state = State()
+
+        async def forward(self, message, context):
+            self.state.started.set()
+            await self.state.release.wait()
+            self.state.received.extend(
+                await self.receive_execution_inputs(kinds=("worker.input",))
+            )
+            return AIMessage(content="done"), context
+
+    runtime = _portable_runtime()
+    receiver = Receiver()
+    bound = runtime.bind(receiver)
+    worker = HTTPWorkerApp(_bound_worker_handler({"receiver": bound}))
+    registry = WorkerRegistry()
+    target = WorkerTarget("worker", "http://worker")
+    registry.publish("receiver", (target,))
+
+    async with HTTPWorkerClient(
+        registry, transport=httpx.ASGITransport(app=worker.app)
+    ) as client:
+        ref = await client.start(
+            "receiver",
+            thaw_json(
+                freeze_json(invocation_to_dict(UserMessage(content="go"), Context()))
+            ),
+            request_id="worker-input-request",
+            plan_id=bound.plan.plan_id,
+            graph_hash=bound.plan.graph_hash,
+            deadline=monotonic() + 5,
+        )
+        await receiver.state.started.wait()
+        delivery = await ref.send_input(
+            input_id="input-1", kind="worker.input", value={"value": 1}
+        )
+        assert delivery.status == "accepted"
+        receiver.state.release.set()
+        await ref.result(deadline=monotonic() + 5)
+        duplicate = await ref.send_input(
+            input_id="input-1", kind="worker.input", value={"value": 999}
+        )
+        finished = await ref.send_input(
+            input_id="input-2", kind="worker.input", value={"value": 2}
+        )
+        assert (duplicate.status, duplicate.sequence) == ("duplicate", 0)
+        assert finished.status == "execution_finished"
+
+    assert [item.input_id for item in receiver.state.received] == ["input-1"]
+    await runtime.close()
 
 
 @pytest.mark.asyncio

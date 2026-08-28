@@ -49,6 +49,7 @@ class ModelEventKind(str, Enum):
 
     STARTED = "model.started"
     ATTEMPT_STARTED = "model.attempt.started"
+    REQUEST_PREPARED = "model.request.prepared"
     REASONING_DELTA = "model.reasoning.delta"
     TEXT_DELTA = "model.text.delta"
     TOOL_CALL_STARTED = "model.tool_call.started"
@@ -317,6 +318,8 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
     required: dict[ModelEventKind, set[str]] = {
         ModelEventKind.STARTED: {"model_group"},
         ModelEventKind.ATTEMPT_STARTED: common_attempt,
+        ModelEventKind.REQUEST_PREPARED: common_attempt
+        | {"request_id", "request_digest", "request"},
         ModelEventKind.REASONING_DELTA: common_attempt | {"text"},
         ModelEventKind.TEXT_DELTA: common_attempt | {"text"},
         ModelEventKind.TOOL_CALL_STARTED: common_attempt | {"item_id", "index"},
@@ -367,6 +370,51 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
         raise ValueError("attempt must be a positive integer")
     if kind in (ModelEventKind.REASONING_DELTA, ModelEventKind.TEXT_DELTA):
         _require_string(data, "text", allow_empty=False)
+    elif kind is ModelEventKind.REQUEST_PREPARED:
+        _require_string(data, "request_id")
+        digest = data["request_digest"]
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 71
+            or not digest.startswith("sha256:")
+        ):
+            raise ValueError("request_digest must be a sha256 digest")
+        request = data["request"]
+        if not isinstance(request, Mapping):
+            raise ValueError("prepared request must be an object")
+        expected_request_fields = {
+            "provider",
+            "model",
+            "system_prompt",
+            "messages",
+            "current_message",
+            "tools",
+            "generation",
+            "projection_revision",
+        }
+        if set(request) != expected_request_fields:
+            raise ValueError("prepared request fields do not match the contract")
+        for key in ("provider", "model", "system_prompt"):
+            value = request[key]
+            if not isinstance(value, str) or (key != "system_prompt" and not value):
+                raise ValueError(f"prepared request {key} is invalid")
+        for key in ("messages", "tools"):
+            if not isinstance(request[key], tuple):
+                raise TypeError(f"prepared request {key} must be an array")
+        if not isinstance(request["current_message"], Mapping):
+            raise ValueError("prepared current_message must be an object")
+        generation = request["generation"]
+        if not isinstance(generation, Mapping) or set(generation) != {
+            "temperature",
+            "max_output_tokens",
+            "response_schema",
+            "response_schema_name",
+            "tool_choice",
+        }:
+            raise ValueError("prepared generation fields do not match the contract")
+        revision = request["projection_revision"]
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+            raise ValueError("prepared projection_revision must be non-negative")
     elif kind in (
         ModelEventKind.TOOL_CALL_STARTED,
         ModelEventKind.TOOL_CALL_DELTA,

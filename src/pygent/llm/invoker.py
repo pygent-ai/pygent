@@ -33,6 +33,7 @@ from ._adapter_contracts import (
     _validated_canonical_usage,
 )
 from ._model_execution import ModelExecution, _ProviderStreamOwner
+from ._request_snapshot import prepared_request_event
 from ._stream_accumulator import ModelStreamAccumulator
 from .types import (
     GenerationConfig,
@@ -296,6 +297,7 @@ class DefaultModelInvoker:
             )
             payload = adapter.build_request(request)
             for number in range(1, retry_policy.max_attempts_per_route + 1):
+                prepared_event = prepared_request_event(request, attempt=number)
                 attempt_deadline = _earliest_deadline(
                     deadline, retry_policy.attempt_timeout_seconds
                 )
@@ -306,6 +308,11 @@ class DefaultModelInvoker:
                     event_sink,
                     ModelEventKind.ATTEMPT_STARTED,
                     {"route_id": route_id, "attempt": number},
+                )
+                await _emit(
+                    event_sink,
+                    ModelEventKind.REQUEST_PREPARED,
+                    prepared_event,
                 )
                 try:
                     self._ensure_client_available(client)

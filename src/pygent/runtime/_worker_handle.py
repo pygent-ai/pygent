@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from pygent.core import (
     ExecutionEvent,
+    ExecutionInputDelivery,
     ExecutionOutcome,
     ExecutionSnapshot,
     ExecutionStatus,
@@ -74,6 +75,13 @@ class RemoteExecutionHandle:
 
     async def cancel(self) -> bool:
         return await self.client.cancel(self)
+
+    async def send_input(
+        self, *, input_id: str, kind: str, value: JsonValue
+    ) -> ExecutionInputDelivery:
+        return await self.client.send_input(
+            self, input_id=input_id, kind=kind, value=value
+        )
 
     def subscribe(self, *, after: int | None = None) -> _RemoteExecutionSubscription:
         return _RemoteExecutionSubscription(self, -1 if after is None else after)

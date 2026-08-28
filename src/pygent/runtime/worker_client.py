@@ -14,6 +14,7 @@ from httpx_sse import aconnect_sse
 from pygent.core import (
     ExecutionEvent,
     ExecutionFailure,
+    ExecutionInputDelivery,
     ExecutionOwnerState,
     ExecutionPhase,
     ExecutionSnapshot,
@@ -415,6 +416,31 @@ class HTTPWorkerClient:
             ) from exc
         response.raise_for_status()
         return bool(response.json().get("cancelled", False))
+
+    async def send_input(
+        self,
+        ref: RemoteExecutionHandle,
+        *,
+        input_id: str,
+        kind: str,
+        value: JsonValue,
+    ) -> ExecutionInputDelivery:
+        try:
+            response = await self._client.post(
+                f"{ref.target.endpoint.rstrip('/')}/v1/executions/{ref.execution_id}/inputs",
+                json={"input_id": input_id, "kind": kind, "value": thaw_json(freeze_json(value))},
+            )
+        except httpx.TransportError as exc:
+            raise WorkerUnavailableError(
+                "remote Worker unavailable during execution input delivery"
+            ) from exc
+        if response.status_code == 404:
+            raise KeyError(f"unknown execution {ref.execution_id!r}")
+        response.raise_for_status()
+        try:
+            return ExecutionInputDelivery.from_dict(response.json())
+        except (TypeError, ValueError, KeyError) as exc:
+            raise WorkerProtocolError("Worker input response is invalid") from exc
 
     async def events(
         self,

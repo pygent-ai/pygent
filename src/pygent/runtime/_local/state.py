@@ -26,6 +26,7 @@ from pygent.core.json_values import (
 )
 from pygent.tool import ToolTaskManager
 
+from .._execution_inputs import MemoryExecutionInbox
 from .._history_store import SQLiteHistoryStore
 from .._history_types import _json_frozen_object
 from ..api import (
@@ -77,10 +78,13 @@ class _ExecutionRecord:
     child_calls: int = 0
     module_calls: dict[str, int] = field(default_factory=dict)
     effect_calls: dict[str, int] = field(default_factory=dict)
+    input_receive_calls: dict[str, int] = field(default_factory=dict)
+    input_inbox: MemoryExecutionInbox = field(default_factory=MemoryExecutionInbox)
     runnable_held: bool = False
     deadline_fired: bool = False
     history: SQLiteHistoryStore | None = None
     history_started: bool = False
+    history_ready: asyncio.Event = field(default_factory=asyncio.Event)
     attempt: int = 1
     idempotency_key: str | None = None
     model_calls: Any = None
@@ -242,6 +246,8 @@ class _ExecutionRecord:
 
         if not status.terminal:
             raise ValueError("finalization requires a terminal status")
+        if self.history is None or not self.history_started:
+            await self.input_inbox.seal()
         failure: ExecutionFailure | None = None
         stored_error = error
         if status is not ExecutionStatus.SUCCEEDED:
@@ -329,6 +335,8 @@ class _ExecutionRecord:
                 self.event_condition.notify_all()
 
     async def notify_terminal(self) -> None:
+        if self.history is None or not self.history_started:
+            await self.input_inbox.seal()
         self.phase = ExecutionPhase.TERMINAL
         self.owner_state = ExecutionOwnerState.TERMINAL
         self.updated_at_unix_ns = time.time_ns()
