@@ -7,10 +7,13 @@ import pytest
 from pygent import (
     AIMessage,
     Context,
+    Message,
     ModelCallLayer,
     Module,
+    PygentAgent,
     ReActLayer,
     ToolCallLayer,
+    ToolMessage,
     UserMessage,
 )
 from pygent.core import (
@@ -148,6 +151,57 @@ def test_builtin_layers_declare_only_their_verifiable_effect_boundaries():
     assert adapter_layer.execution_requirements.effect_safety is (
         EffectSafety.UNDECLARED
     )
+
+
+@pytest.mark.asyncio
+async def test_pygent_agent_native_graph_declares_managed_boundary_retry(
+    tmp_path,
+):
+    class SafeModel(Module[Message, AIMessage]):
+        execution_requirements = ExecutionRequirements(
+            recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
+            effect_safety=EffectSafety.MANAGED_EFFECTS,
+        )
+
+        async def forward(self, message, context):
+            return AIMessage(content="done"), context
+
+    class SafeTools(Module[AIMessage, ToolMessage]):
+        execution_requirements = ExecutionRequirements(
+            recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
+            effect_safety=EffectSafety.MANAGED_EFFECTS,
+        )
+
+        async def forward(self, message, context):
+            return ToolMessage(content=""), context
+
+    agent = PygentAgent(
+        system_prompt="system",
+        compression_prompt="compress",
+        model=SafeModel(),
+        compressor=SafeModel(),
+        tools=SafeTools(),
+        context_window_tokens=4096,
+    )
+    plan = compile_execution_plan(agent)
+
+    assert all(
+        dict(spec.metadata)["recovery_safety"] == "module_boundary_retry"
+        for spec in plan.modules
+    )
+    assert all(
+        dict(spec.metadata)["effect_safety"] in ("effect_free", "managed_effects")
+        for spec in plan.modules
+    )
+
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        bound = binding(runtime).bind(agent)
+
+        assert bound.durability.recovery_level == "module_boundary_retry"
+        assert bound.durability.recovery_undeclared_modules == ()
+        assert bound.durability.effect_unverified_modules == ()
+        await runtime.close()
 
 
 @pytest.mark.asyncio

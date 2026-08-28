@@ -64,18 +64,10 @@ def _annotation_schema(annotation: object) -> object:
 def _context_hints(context_type: type[Context]) -> dict[str, object]:
     if context_type is Context:
         return dict(_BASE_ANNOTATIONS)
-    annotations = dict(getattr(context_type, "__annotations__", {}))
-    module_globals = vars(__import__(context_type.__module__, fromlist=["*"]))
-    resolved: dict[str, object] = {}
-    for name, annotation in annotations.items():
-        if isinstance(annotation, str):
-            try:
-                annotation = eval(annotation, module_globals, vars(context_type))
-            except (NameError, TypeError) as exc:
-                raise ContextCodecError(
-                    f"cannot resolve Context annotation for {name!r}"
-                ) from exc
-        resolved[name] = annotation
+    try:
+        resolved = get_type_hints(context_type)
+    except (NameError, TypeError) as exc:
+        raise ContextCodecError("cannot resolve Context annotations") from exc
     return {**resolved, **_BASE_ANNOTATIONS}
 
 

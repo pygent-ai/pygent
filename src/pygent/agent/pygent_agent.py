@@ -11,9 +11,12 @@ from pygent.core import (
     Agent,
     AIMessage,
     Context,
+    EffectSafety,
+    ExecutionRequirements,
     JsonValue,
     Message,
     Module,
+    RecoverySafety,
     ToolMessage,
     UserMessage,
     thaw_json,
@@ -26,6 +29,11 @@ _CONTEXT_SNAPSHOT_KIND = "pygent.context.snapshot"
 _CONTEXT_SNAPSHOT_SLOT = "pygent.context.snapshot"
 _TOKEN_SCALE_BASE = 1_000_000
 _INITIAL_TOKEN_SCALE_PPM = 1_100_000
+_COORDINATOR_EXECUTION_REQUIREMENTS = ExecutionRequirements(
+    requires_finite_deadline=True,
+    recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
+    effect_safety=EffectSafety.MANAGED_EFFECTS,
+)
 
 
 class ContextCompressionLimitExceeded(RuntimeError):
@@ -82,6 +90,8 @@ class PygentAgentContext(Context):
 
 
 class _ContextCompressionLayer(Module[Message, AIMessage]):
+    execution_requirements = _COORDINATOR_EXECUTION_REQUIREMENTS
+
     def __init__(
         self,
         *,
@@ -218,6 +228,7 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
     """Standard foreground ReAct Agent with configurable context compression."""
 
     context_type = PygentAgentContext
+    execution_requirements = _COORDINATOR_EXECUTION_REQUIREMENTS
 
     def __init__(
         self,

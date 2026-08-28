@@ -11,6 +11,7 @@ from pygent import (
     ContextCodec,
     Message,
     Module,
+    PygentAgentContext,
     UserMessage,
 )
 from pygent.runtime import ExecutionAdmissionError, LocalRuntime, SQLiteHistoryStore
@@ -107,6 +108,32 @@ def test_agent_context_add_and_codec_preserve_concrete_type_and_fields():
     encoded = context_to_dict(updated, registry=REGISTRY)
     assert set(encoded) == {"schema", "version", "codec", "codec_digest", "data"}
     assert context_from_dict(encoded, registry=REGISTRY) == updated
+
+
+def test_context_codec_includes_inherited_extension_fields():
+    @dataclass(frozen=True, slots=True)
+    class DerivedAgentContext(PygentAgentContext):
+        context_schema = "tests.derived-agent-context"
+        context_schema_version = 1
+
+        workspace: str = ""
+
+    context = DerivedAgentContext(
+        system_prompt="system",
+        full_history=(UserMessage(content="original"),),
+        compression_count=2,
+        input_token_scale_ppm=1_250_000,
+        last_input_tokens=321,
+        workspace="repo",
+    )
+    codec = ContextCodec.dataclass(DerivedAgentContext)
+
+    decoded = codec.decode(codec.encode(context))
+
+    assert decoded == context
+    assert type(decoded) is DerivedAgentContext
+    assert decoded.full_history == context.full_history
+    assert decoded.workspace == "repo"
 
 
 def test_old_context_wire_shape_is_rejected():
