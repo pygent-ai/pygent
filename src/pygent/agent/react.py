@@ -113,7 +113,8 @@ class ReActLayer(Module[UserMessage, AIMessage]):
 
             calls_this_turn = len(answer.tool_calls)
             if calls_this_turn == 0:
-                history = _commit_message(history, current)
+                if not current_committed:
+                    history = _commit_message(history, current)
                 history = _append_message(history, answer)
                 changes.append((history.projection_revision, "append", answer))
                 current = answer
@@ -242,10 +243,12 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                         and message is not None
                     )
                 projected = operation.messages + rebased
-                if not current_committed:
+                replacement_current = projected[-1]
+                same_current = replacement_current == current
+                if not current_committed and not same_current:
                     history = _commit_message(history, current)
-                current = projected[-1]
-                current_committed = False
+                current = replacement_current
+                current_committed = current_committed and same_current
                 history = replace(
                     history,
                     messages=projected[:-1],

@@ -371,6 +371,60 @@ async def test_bash_cancellation_joins_process_before_returning(tmp_path):
     assert not should_not_exist.exists()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows process-tree behavior")
+@pytest.mark.asyncio
+async def test_bash_cancellation_terminates_windows_descendants(tmp_path):
+    tools = PythonCommandTools(workspace_root=tmp_path)
+    child_started = tmp_path / "child-started.txt"
+    child_late = tmp_path / "child-late.txt"
+    child = (
+        "import pathlib,time; "
+        f"pathlib.Path({str(child_started)!r}).write_text('started'); "
+        "time.sleep(1); "
+        f"pathlib.Path({str(child_late)!r}).write_text('late')"
+    )
+    parent = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "time.sleep(30)"
+    )
+    invocation = asyncio.create_task(invoke_tool(tools.bash, {"command": parent}))
+    for _ in range(200):
+        if child_started.exists():
+            break
+        await asyncio.sleep(0.01)
+    assert child_started.exists()
+
+    invocation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(invocation, timeout=5)
+    await asyncio.sleep(1.1)
+
+    assert not child_late.exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows process-tree behavior")
+@pytest.mark.asyncio
+async def test_bash_timeout_terminates_windows_descendants(tmp_path):
+    tools = PythonCommandTools(workspace_root=tmp_path)
+    child_late = tmp_path / "timeout-child-late.txt"
+    child = (
+        "import pathlib,time; time.sleep(1); "
+        f"pathlib.Path({str(child_late)!r}).write_text('late')"
+    )
+    parent = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "print('started', flush=True); time.sleep(30)"
+    )
+
+    result = await invoke_tool(tools.bash, {"command": parent, "timeout": 250})
+    assert result.error_code == "command_timeout"
+    await asyncio.sleep(1.1)
+
+    assert not child_late.exists()
+
+
 @pytest.mark.asyncio
 async def test_bash_ut_times_out_and_preserves_partial_terminal_output(tmp_path):
     tools = PythonCommandTools(workspace_root=tmp_path)

@@ -278,7 +278,7 @@ def _freeze_pairs(
     return tuple(frozen_items)
 
 
-def thaw_json(value: JsonValue) -> object:
+def thaw_json(value: JsonValue | Mapping[str, object]) -> object:
     """Convert an immutable JSON value to built-in dict/list containers."""
 
     if isinstance(value, FrozenJsonObject):

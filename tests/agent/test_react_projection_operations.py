@@ -87,6 +87,21 @@ class EmptyTools(Module[AIMessage, ToolMessage]):
         raise AssertionError("tools should not be called")
 
 
+class GatedReAct(Module[UserMessage, AIMessage]):
+    trusted_live_resource_attributes = ("entered", "release")
+
+    def __init__(self, react: ReActLayer) -> None:
+        super().__init__()
+        self.react = react
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def forward(self, message: UserMessage, context: Context):
+        self.entered.set()
+        await self.release.wait()
+        return await self.react(message, context)
+
+
 def bind(runtime: LocalRuntime, react: ReActLayer):
     binding = runtime.create_binding(
         name="react-input-test",
@@ -171,6 +186,56 @@ async def test_replace_during_final_model_does_not_duplicate_committed_history()
         "initial",
         "first answer",
         "snapshot",
+        "after replacement",
+    ]
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_replace_preserving_pending_current_commits_it_once() -> None:
+    current = UserMessage(content="current request")
+    model = BlockingFirstModel((AIMessage(content="after replacement"),))
+    model.state.release.set()
+    gated = GatedReAct(ReActLayer(model=model, tools=EmptyTools()))
+    runtime = LocalRuntime(
+        context_codecs=(ContextCodec.dataclass(PygentAgentContext),)
+    )
+    handle = await bind(runtime, gated).start(
+        current,
+        PygentAgentContext(
+            messages=(
+                UserMessage(content="earlier request"),
+                AIMessage(content="earlier answer"),
+            ),
+            full_history=(
+                UserMessage(content="earlier request"),
+                AIMessage(content="earlier answer"),
+            ),
+        ),
+        execution=options(),
+    )
+    await gated.entered.wait()
+    await handle.send_input(
+        input_id="replace-preserving-current",
+        kind=REACT_PROJECTION_OPERATION_KIND,
+        value=encode_react_projection_operation(
+            ReplaceMessageProjection(
+                messages=(
+                    UserMessage(content="snapshot"),
+                    current,
+                ),
+                expected_revision=1,
+            )
+        ),
+    )
+    gated.release.set()
+
+    _, context = await handle.result()
+    assert isinstance(context, PygentAgentContext)
+    assert [message.content for message in context.full_history] == [
+        "earlier request",
+        "earlier answer",
+        "current request",
         "after replacement",
     ]
     await runtime.close()

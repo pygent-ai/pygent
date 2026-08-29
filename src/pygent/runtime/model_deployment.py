@@ -10,7 +10,7 @@ from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Concatenate, ParamSpec, Protocol, Self, TypeVar
+from typing import Any, Protocol, Self, TypeVar, cast
 
 import aiosqlite
 
@@ -27,26 +27,22 @@ from pygent.llm import (
 )
 from pygent.llm._route_codec import model_route_from_value, model_route_value
 
-_P = ParamSpec("_P")
-_R = TypeVar("_R")
+_AsyncMethodT = TypeVar(
+    "_AsyncMethodT", bound=Callable[..., Coroutine[Any, Any, Any]]
+)
 
 
 def _sqlite_serialized(
-    method: Callable[
-        Concatenate[SQLiteModelDeploymentStore, _P],
-        Coroutine[object, object, _R],
-    ],
-) -> Callable[
-    Concatenate[SQLiteModelDeploymentStore, _P], Coroutine[object, object, _R]
-]:
+    method: _AsyncMethodT,
+) -> _AsyncMethodT:
     @wraps(method)
     async def wrapped(
-        self: SQLiteModelDeploymentStore, /, *args: _P.args, **kwargs: _P.kwargs
-    ) -> _R:
+        self: SQLiteModelDeploymentStore, /, *args: Any, **kwargs: Any
+    ) -> Any:
         async with self._sqlite_write_lock:
             return await method(self, *args, **kwargs)
 
-    return wrapped
+    return cast(_AsyncMethodT, wrapped)
 
 
 def _canonical(value: object) -> str:

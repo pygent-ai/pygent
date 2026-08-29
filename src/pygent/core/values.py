@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, is_dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from types import NotImplementedType
 from typing import ClassVar
 
@@ -131,7 +132,7 @@ class Context:
     system_prompt: str = ""
     messages: tuple[Message, ...] = ()
     tools: tuple[ToolDefinition, ...] = ()
-    metadata: JsonObjectInput = ()
+    metadata: Mapping[str, object] = field(default_factory=FrozenJsonObject)
     projection_revision: int = 0
 
     context_schema: ClassVar[str] = "pygent.context"

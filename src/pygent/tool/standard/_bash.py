@@ -493,12 +493,12 @@ class BashTools:
     ) -> None:
         if process.returncode is not None:
             return
+        if self._is_windows:
+            await _terminate_windows_process_tree(process)
+            return
         try:
-            if self._is_windows:
-                process.terminate()
-            else:
-                kill_process_group = os.killpg  # type: ignore[attr-defined]
-                kill_process_group(process.pid, signal.SIGTERM)
+            kill_process_group = os.killpg  # type: ignore[attr-defined]
+            kill_process_group(process.pid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError):
             pass
         try:
@@ -507,13 +507,45 @@ class BashTools:
         except TimeoutError:
             pass
         try:
-            if self._is_windows:
-                process.kill()
-            else:
-                kill_process_group = os.killpg  # type: ignore[attr-defined]
-                kill_process_group(
-                    process.pid, getattr(signal, "SIGKILL", signal.SIGTERM)
-                )
+            kill_process_group = os.killpg  # type: ignore[attr-defined]
+            kill_process_group(
+                process.pid, getattr(signal, "SIGKILL", signal.SIGTERM)
+            )
+        except (ProcessLookupError, PermissionError):
+            pass
+        await process.wait()
+
+
+async def _terminate_windows_process_tree(
+    process: asyncio.subprocess.Process,
+) -> None:
+    """Force-close a Windows subprocess and every descendant it owns."""
+
+    try:
+        terminator = await asyncio.create_subprocess_exec(
+            "taskkill",
+            "/PID",
+            str(process.pid),
+            "/T",
+            "/F",
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        await terminator.wait()
+    except (FileNotFoundError, OSError):
+        # taskkill is part of supported Windows installations. Keep a bounded
+        # parent-only fallback so cancellation can still complete on a damaged
+        # or restricted host.
+        try:
+            process.kill()
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        await asyncio.wait_for(process.wait(), _PROCESS_KILL_GRACE_SECONDS)
+    except TimeoutError:
+        try:
+            process.kill()
         except (ProcessLookupError, PermissionError):
             pass
         await process.wait()
