@@ -118,7 +118,7 @@ grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=10
 
 | 工具 | ToolSideEffect / 幂等 | 权限 | 关键边界 |
 |---|---|---|---|
-| `bash` | `EXTERNAL / NOT_IDEMPOTENT` | `shell:execute` | 默认限制 cwd 在 workspace；进程超时不超过 600 秒；超时返回 `unknown` 且副作用提交状态未知；输出最多投影 512 KiB |
+| `bash` | `EXTERNAL / NOT_IDEMPOTENT` | `shell:execute` | 默认限制 cwd 在 workspace；进程超时不超过 600 秒；取消或超时会终止前台命令的完整进程树；超时返回 `unknown` 且副作用提交状态未知；输出最多投影 512 KiB |
 | `read`, `glob`, `grep`, `read_lints` | `READ / INHERENT` | `filesystem:read` | 默认拒绝 workspace 外路径；glob pattern、匹配结果和符号链接目标都重新验证；读取与搜索有界 |
 | `write` | `WRITE / INHERENT` | `filesystem:write` | 完整 UTF-8 原子替换；同一 FileTools 实例内的同路径变更串行；相同输入可重复得到相同文件内容 |
 | `edit`, `edit_notebook` | `WRITE / NOT_IDEMPOTENT` | `filesystem:write` | 同一实例内串行 read-modify-write 并原子提交；取消在所属写线程退出后返回；不确定失败不谎报未提交 |
