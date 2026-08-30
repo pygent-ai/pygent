@@ -21,6 +21,7 @@ from pygent.core._module_contracts import _execution_scope
 from pygent.llm import ModelCallError, ModelGroupConfig
 
 from .._history_store import SQLiteHistoryStore
+from .._history_types import StoredExecution
 from ..api import (
     Binding,
     DurabilityReport,
@@ -31,6 +32,7 @@ from ..api import (
     ExecutionPhase,
     ExecutionSnapshot,
     ExecutionStatus,
+    _event_cursor,
 )
 from ..codec import invocation_from_dict
 from ..context_codec import ContextCodecRegistry
@@ -69,9 +71,9 @@ class RuntimeBinding:
 
 
 class _ExecutionSubscription:
-    def __init__(self, record: _ExecutionRecord, after: int | None) -> None:
+    def __init__(self, record: _ExecutionRecord, after: int) -> None:
         self._record = record
-        self._next = record.event_base_sequence if after is None else after + 1
+        self._next = after + 1
         self._entered = False
 
     async def __aenter__(self) -> AsyncIterator[ExecutionEvent]:
@@ -229,20 +231,21 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
         )
 
     def subscribe(self, *, after: int | None = None) -> _ExecutionSubscription:
-        if after is not None and (isinstance(after, bool) or after < -1):
-            raise ValueError("event cursor must be -1 or a non-negative integer")
-        if after is not None and after + 1 < self._record.event_base_sequence:
+        cursor = _event_cursor(after)
+        if after is None:
+            cursor = self._record.event_base_sequence - 1
+        elif cursor + 1 < self._record.event_base_sequence:
             raise ValueError("event cursor is outside the retained execution segment")
-        return _ExecutionSubscription(self._record, after)
+        return _ExecutionSubscription(self._record, cursor)
 
 
 class _DurableExecutionSubscription:
     def __init__(
-        self, history: SQLiteHistoryStore, execution_id: str, after: int | None
+        self, history: SQLiteHistoryStore, execution_id: str, after: int
     ) -> None:
         self._history = history
         self._execution_id = execution_id
-        self._next = 0 if after is None else after + 1
+        self._next = after + 1
 
     async def __aenter__(self) -> AsyncIterator[ExecutionEvent]:
         return self._iterate()
@@ -280,24 +283,37 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
     def __init__(
         self,
         history: SQLiteHistoryStore,
-        execution_id: str,
+        stored: StoredExecution,
         context_codec_registry: ContextCodecRegistry,
     ) -> None:
         self._history = history
-        self._execution_id = execution_id
+        self._stored = stored
         self._context_codec_registry = context_codec_registry
 
     @property
     def execution_id(self) -> str:
-        return self._execution_id
+        return self._stored.execution_id
+
+    @property
+    def trace_id(self) -> str:
+        return self._stored.trace_id
+
+    @property
+    def status(self) -> ExecutionStatus:
+        return ExecutionStatus(self._stored.status)
+
+    async def _refresh(self) -> StoredExecution:
+        stored = await self._history.get_execution(self.execution_id)
+        if stored is None:
+            raise KeyError(f"unknown execution {self.execution_id!r}")
+        self._stored = stored
+        return stored
 
     async def snapshot(self) -> ExecutionSnapshot:
-        stored = await self._history.get_execution(self._execution_id)
-        if stored is None:
-            raise KeyError(f"unknown execution {self._execution_id!r}")
+        stored = await self._refresh()
         status = ExecutionStatus(stored.status)
         phase = ExecutionPhase(stored.phase)
-        events = await self._history.events_tail(execution_id=self._execution_id, limit=1)
+        events = await self._history.events_tail(execution_id=self.execution_id, limit=1)
         last_sequence = -1
         if events:
             value = thaw_json(events[0])
@@ -322,9 +338,7 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
 
     async def result(self) -> tuple[OutputMessageT, Context]:
         while True:
-            stored = await self._history.get_execution(self._execution_id)
-            if stored is None:
-                raise KeyError(f"unknown execution {self._execution_id!r}")
+            stored = await self._refresh()
             status = ExecutionStatus(stored.status)
             if status is ExecutionStatus.SUCCEEDED and stored.output is not None:
                 message, context = invocation_from_dict(
@@ -334,7 +348,7 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
             if status.terminal:
                 if stored.error is None:
                     raise RuntimeError(
-                        f"execution {self._execution_id} ended with {status.value}"
+                        f"execution {self.execution_id} ended with {status.value}"
                     )
                 failure = ExecutionFailure.from_dict(thaw_json(stored.error))
                 if failure.domain == "model":
@@ -344,9 +358,7 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
 
     async def outcome(self) -> ExecutionOutcome:
         while True:
-            stored = await self._history.get_execution(self._execution_id)
-            if stored is None:
-                raise KeyError(f"unknown execution {self._execution_id!r}")
+            stored = await self._refresh()
             status = ExecutionStatus(stored.status)
             if status.terminal and stored.terminal_sequence is not None:
                 if stored.attempt_id is None:
@@ -375,7 +387,9 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
         )
 
     def subscribe(self, *, after: int | None = None) -> _DurableExecutionSubscription:
-        return _DurableExecutionSubscription(self._history, self._execution_id, after)
+        return _DurableExecutionSubscription(
+            self._history, self.execution_id, _event_cursor(after)
+        )
 
 
 class _LocalExecutionStream(Generic[OutputMessageT]):

@@ -600,6 +600,36 @@ class ToolTaskManager(Protocol):
     async def close(self, *, cancel: bool = False) -> None: ...
 
 
+def _cancelled_task_result(
+    spec: ToolSpec,
+    call: ToolCall,
+    task: ToolTask,
+    *,
+    started: bool,
+) -> ToolResult:
+    uncertain = started and spec.side_effect in (
+        ToolSideEffect.WRITE,
+        ToolSideEffect.EXTERNAL,
+    )
+    state = ToolTaskState.UNKNOWN if uncertain else ToolTaskState.CANCELLED
+    return ToolResult(
+        call_id=call.call_id,
+        name=call.name,
+        status="unknown" if uncertain else "cancelled",
+        task=replace(task, state=state),
+        error=(
+            "tool cancellation could not confirm whether the side effect committed"
+            if uncertain
+            else None
+        ),
+        error_kind="cancellation_uncertain" if uncertain else "cancelled",
+        retryable=False,
+        side_effect_committed=None if uncertain else False,
+        tool_id=spec.tool_id,
+        tool_version=spec.version,
+    )
+
+
 class InMemoryToolTaskManager:
     """Explicit process-local detached-task facility for applications and tests.
 
@@ -705,18 +735,11 @@ class InMemoryToolTaskManager:
             )
             state = ToolTaskState.SUCCEEDED
         except asyncio.CancelledError:
-            result = ToolResult(
-                call_id=call.call_id,
-                name=call.name,
-                status="cancelled",
-                task=replace(snapshot, state=ToolTaskState.CANCELLED),
-                error_kind="cancelled",
-                retryable=False,
-                side_effect_committed=None,
-                tool_id=spec.tool_id,
-                tool_version=spec.version,
+            result = _cancelled_task_result(
+                spec, call, snapshot, started=True
             )
-            state = ToolTaskState.CANCELLED
+            assert result.task is not None
+            state = result.task.state
         except Exception as exc:  # noqa: BLE001 - converted to a public result
             result = result_from_exception(spec, call, exc, task=snapshot)
             state = (
@@ -780,19 +803,12 @@ class InMemoryToolTaskManager:
             if task_id not in self._results:
                 snapshot = self._snapshots[task_id]
                 spec, call, _ = self._invocations[task_id]
-                cancelled = replace(snapshot, state=ToolTaskState.CANCELLED)
-                self._snapshots[task_id] = cancelled
-                self._results[task_id] = ToolResult(
-                    call_id=call.call_id,
-                    name=call.name,
-                    status="cancelled",
-                    task=cancelled,
-                    error_kind="cancelled",
-                    retryable=False,
-                    side_effect_committed=None,
-                    tool_id=spec.tool_id,
-                    tool_version=spec.version,
+                result = _cancelled_task_result(
+                    spec, call, snapshot, started=False
                 )
+                assert result.task is not None
+                self._snapshots[task_id] = result.task
+                self._results[task_id] = result
         return True
 
     async def get_result(

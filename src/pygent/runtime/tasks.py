@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from typing import Any, cast
 from uuid import uuid4
 
-from pygent.core import FrozenJsonObject, freeze_json, freeze_json_object, thaw_json
+from pygent.core import FrozenJsonObject, freeze_json
 from pygent.tool import (
     ExecutorRegistry,
     IdempotencyPolicy,
@@ -21,6 +20,7 @@ from pygent.tool import (
 )
 from pygent.tool.executors import (
     ToolTaskExecution,
+    _cancelled_task_result,
     _execute_with_timeout,
     result_from_exception,
 )
@@ -29,69 +29,27 @@ from ._history_store import SQLiteHistoryStore
 from ._history_types import StoredJob
 from .api import JobSnapshot, JobState
 from .codec import (
-    tool_definition_from_dict,
-    tool_definition_to_dict,
+    WireCodecError,
+    _tool_call_from_dict,
+    _tool_call_to_dict,
+    _tool_spec_from_dict,
+    _tool_spec_to_dict,
     tool_result_from_dict,
     tool_result_to_dict,
 )
 
 
 def _request_to_dict(spec: ToolSpec, call: ToolCall) -> dict[str, object]:
-    return {
-        "spec": {
-            "tool_id": spec.tool_id,
-            "version": spec.version,
-            "definition": tool_definition_to_dict(spec.definition),
-            "side_effect": spec.side_effect.value,
-            "idempotency": spec.idempotency.value,
-            "timeout": spec.timeout,
-            "resource_key": spec.resource_key,
-            "sandbox_profile": spec.sandbox_profile,
-            "required_permissions": list(spec.required_permissions),
-        },
-        "call": {
-            "call_id": call.call_id,
-            "name": call.name,
-            "arguments": thaw_json(cast(FrozenJsonObject, call.arguments)),
-            "tool_id": call.tool_id,
-            "tool_version": call.tool_version,
-            "idempotency_key": call.idempotency_key,
-        },
-    }
+    return {"spec": _tool_spec_to_dict(spec), "call": _tool_call_to_dict(call)}
 
 
 def _request_from_dict(value: object) -> tuple[ToolSpec, ToolCall]:
     if not isinstance(value, FrozenJsonObject):
-        value = freeze_json_object(cast(dict[str, Any], value))
-    spec_data = value["spec"]
-    call_data = value["call"]
-    if not isinstance(spec_data, FrozenJsonObject) or not isinstance(
-        call_data, FrozenJsonObject
-    ):
         raise TypeError("durable ToolTask request is invalid")
-    permissions = spec_data.get("required_permissions", ())
-    if not isinstance(permissions, tuple):
-        raise TypeError("durable ToolTask permissions are invalid")
-    spec = ToolSpec(
-        tool_id=cast(str, spec_data["tool_id"]),
-        version=cast(str, spec_data["version"]),
-        definition=tool_definition_from_dict(spec_data["definition"]),
-        side_effect=ToolSideEffect(cast(str, spec_data["side_effect"])),
-        idempotency=IdempotencyPolicy(cast(str, spec_data["idempotency"])),
-        timeout=cast(float | None, spec_data.get("timeout")),
-        resource_key=cast(str | None, spec_data.get("resource_key")),
-        sandbox_profile=cast(str | None, spec_data.get("sandbox_profile")),
-        required_permissions=cast(tuple[str, ...], permissions),
-    )
-    call = ToolCall(
-        call_id=cast(str, call_data["call_id"]),
-        name=cast(str, call_data["name"]),
-        arguments=cast(FrozenJsonObject, call_data["arguments"]),
-        tool_id=cast(str | None, call_data.get("tool_id")),
-        tool_version=cast(str | None, call_data.get("tool_version")),
-        idempotency_key=cast(str | None, call_data.get("idempotency_key")),
-    )
-    return spec, call
+    try:
+        return _tool_spec_from_dict(value["spec"]), _tool_call_from_dict(value["call"])
+    except (KeyError, WireCodecError) as exc:
+        raise TypeError("durable ToolTask request is invalid") from exc
 
 
 class DurableToolTaskManager:
@@ -309,25 +267,11 @@ class DurableToolTaskManager:
                 tool_version=spec.version,
             )
         except asyncio.CancelledError:
-            uncertain = spec.side_effect in (
-                ToolSideEffect.WRITE,
-                ToolSideEffect.EXTERNAL,
-            )
-            state = ToolTaskState.UNKNOWN if uncertain else ToolTaskState.CANCELLED
-            result = ToolResult(
-                call_id=call.call_id,
-                name=call.name,
-                status="unknown" if uncertain else "cancelled",
-                task=self._job_task(stored, spec, call, state=state),
-                error=(
-                    "tool cancellation could not confirm whether the side effect committed"
-                    if uncertain
-                    else None
-                ),
-                error_kind="cancellation_uncertain" if uncertain else "cancelled",
-                side_effect_committed=None,
-                tool_id=spec.tool_id,
-                tool_version=spec.version,
+            result = _cancelled_task_result(
+                spec,
+                call,
+                self._job_task(stored, spec, call),
+                started=True,
             )
         except Exception as exc:  # noqa: BLE001 - executor result boundary
             task = self._job_task(stored, spec, call, state=ToolTaskState.FAILED)
@@ -399,26 +343,11 @@ class DurableToolTaskManager:
                 tool_version=spec.version,
             )
         except asyncio.CancelledError:
-            uncertain = spec.side_effect in (
-                ToolSideEffect.WRITE,
-                ToolSideEffect.EXTERNAL,
-            )
-            state = ToolTaskState.UNKNOWN if uncertain else ToolTaskState.CANCELLED
-            snapshot = self._snapshot(task_id, spec, call, state)
-            result = ToolResult(
-                call_id=call.call_id,
-                name=call.name,
-                status="unknown" if uncertain else "cancelled",
-                task=snapshot,
-                error=(
-                    "tool cancellation could not confirm whether the side effect committed"
-                    if uncertain
-                    else None
-                ),
-                error_kind="cancellation_uncertain" if uncertain else "cancelled",
-                side_effect_committed=None,
-                tool_id=spec.tool_id,
-                tool_version=spec.version,
+            result = _cancelled_task_result(
+                spec,
+                call,
+                self._snapshot(task_id, spec, call, ToolTaskState.RUNNING),
+                started=True,
             )
         except Exception as exc:  # noqa: BLE001 - executor result boundary
             snapshot = self._snapshot(task_id, spec, call, ToolTaskState.FAILED)
@@ -519,17 +448,11 @@ class DurableToolTaskManager:
             if job is None or job.status != JobState.PENDING.value:
                 return False
             spec, call = _request_from_dict(job.request)
-            result = ToolResult(
-                call_id=call.call_id,
-                name=call.name,
-                status="cancelled",
-                task=self._job_task(
-                    job, spec, call, state=ToolTaskState.CANCELLED
-                ),
-                error_kind="cancelled",
-                side_effect_committed=False,
-                tool_id=spec.tool_id,
-                tool_version=spec.version,
+            result = _cancelled_task_result(
+                spec,
+                call,
+                self._job_task(job, spec, call),
+                started=False,
             )
             await self._store_job_terminal(job, result)
             return True
@@ -540,20 +463,11 @@ class DurableToolTaskManager:
             # Persist a terminal result here so cancellation never leaves an
             # admitted Job permanently RUNNING.
             spec, call = _request_from_dict(job.request)
-            uncertain = job.status == JobState.RUNNING.value and spec.side_effect in (
-                ToolSideEffect.WRITE,
-                ToolSideEffect.EXTERNAL,
-            )
-            state = ToolTaskState.UNKNOWN if uncertain else ToolTaskState.CANCELLED
-            result = ToolResult(
-                call_id=call.call_id,
-                name=call.name,
-                status="unknown" if uncertain else "cancelled",
-                task=self._job_task(job, spec, call, state=state),
-                error_kind="cancellation_uncertain" if uncertain else "cancelled",
-                side_effect_committed=None if uncertain else False,
-                tool_id=spec.tool_id,
-                tool_version=spec.version,
+            result = _cancelled_task_result(
+                spec,
+                call,
+                self._job_task(job, spec, call),
+                started=job.status == JobState.RUNNING.value,
             )
             await self._store_job_terminal(job, result)
         return True

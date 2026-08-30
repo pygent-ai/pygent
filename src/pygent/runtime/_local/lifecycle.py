@@ -644,12 +644,15 @@ class _LifecycleMixin:
         active = self._executions.get(execution_id)
         if active is not None:
             return cast(ExecutionHandle[Message], _LocalExecutionHandle(active))
-        if self.history is None or await self.history.get_execution(execution_id) is None:
+        if self.history is None:
+            raise KeyError(f"unknown execution {execution_id!r}")
+        stored = await self.history.get_execution(execution_id)
+        if stored is None:
             raise KeyError(f"unknown execution {execution_id!r}")
         return cast(
             ExecutionHandle[Message],
             _DurableExecutionHandle(
-                self.history, execution_id, self.context_codec_registry
+                self.history, stored, self.context_codec_registry
             ),
         )
 

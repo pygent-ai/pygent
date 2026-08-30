@@ -12,13 +12,13 @@ from pygent.core import (
     ExecutionInputDelivery,
     ExecutionOutcome,
     ExecutionSnapshot,
-    ExecutionStatus,
     FrozenJsonObject,
     JsonValue,
     PlacementMode,
 )
 
 from ._worker_protocol import WorkerTarget
+from .api import _event_cursor
 
 if TYPE_CHECKING:
     from .worker_client import HTTPWorkerClient
@@ -50,10 +50,6 @@ class RemoteExecutionHandle:
     model_admission_ref: str | None = None
     model_store_namespace: str | None = None
 
-    @property
-    def status(self) -> ExecutionStatus:
-        return ExecutionStatus.RUNNING
-
     async def snapshot(self) -> ExecutionSnapshot:
         return await self.client.snapshot(self)
 
@@ -84,7 +80,7 @@ class RemoteExecutionHandle:
         )
 
     def subscribe(self, *, after: int | None = None) -> _RemoteExecutionSubscription:
-        return _RemoteExecutionSubscription(self, -1 if after is None else after)
+        return _RemoteExecutionSubscription(self, _event_cursor(after))
 
 
 class _RemoteExecutionSubscription:

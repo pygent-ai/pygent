@@ -1400,8 +1400,12 @@ async def test_durable_worker_recover_restarts_running_job(tmp_path):
         async with HTTPWorkerClient(
             registry, transport=httpx.ASGITransport(app=rebuilt.app)
         ) as client:
+            handle = RemoteExecutionHandle(client, "job-1", target)
+            for cursor in (-2, True, 1.5):
+                with pytest.raises(ValueError, match="event cursor"):
+                    handle.subscribe(after=cursor)  # type: ignore[arg-type]
             result = await client.result(
-                RemoteExecutionHandle(client, "job-1", target), poll_interval=0
+                handle, poll_interval=0
             )
             events = [event async for event in client.events(target, "job-1", after=0)]
 

@@ -36,6 +36,14 @@ BoundOutputMessageT_co = TypeVar(
 )
 
 
+def _event_cursor(after: int | None) -> int:
+    if after is not None and (
+        not isinstance(after, int) or isinstance(after, bool) or after < -1
+    ):
+        raise ValueError("event cursor must be -1 or a non-negative integer")
+    return -1 if after is None else after
+
+
 class CapacityScope(str, Enum):
     """Where one declared capacity total is coordinated."""
 

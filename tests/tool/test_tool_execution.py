@@ -438,6 +438,31 @@ async def test_detached_task_can_be_cancelled_before_handler_finishes() -> None:
     result = await manager.get_result(task.task_id)
     assert result is not None
     assert result.status == "cancelled"
+    assert result.side_effect_committed is False
+
+
+@pytest.mark.asyncio
+async def test_started_detached_write_cancellation_is_unknown() -> None:
+    tool = spec(side_effect=ToolSideEffect.WRITE)
+    registry = ExecutorRegistry()
+    started = asyncio.Event()
+
+    async def wait_forever(_arguments):
+        started.set()
+        await asyncio.Event().wait()
+
+    registry.register(tool.tool_id, tool.version, LocalToolExecutor(wait_forever))
+    manager = InMemoryToolTaskManager(registry)
+    task = await manager.submit(
+        tool,
+        ToolCall(call_id="cancel-write", name="double", arguments={"value": 2}),
+    )
+    await started.wait()
+    assert await manager.cancel(task.task_id)
+    result = await manager.get_result(task.task_id)
+    assert result is not None
+    assert result.status == "unknown"
+    assert result.error_kind == "cancellation_uncertain"
     assert result.side_effect_committed is None
 
 

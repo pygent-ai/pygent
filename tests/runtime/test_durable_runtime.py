@@ -263,14 +263,22 @@ async def test_completed_durable_run_restores_without_reexecuting_forward(tmp_pa
     async with SQLiteHistoryStore(path) as history:
         restored_runtime = LocalRuntime(history=history)
         restored = await restored_runtime.get_execution_handle(execution_id)
+        assert restored.execution_id == execution_id
+        assert restored.trace_id
+        assert restored.status is ExecutionStatus.SUCCEEDED
         assert await restored.result() == expected
         snapshot = await restored.snapshot()
+        assert restored.trace_id == snapshot.trace_id
+        assert restored.status is snapshot.status
         outcome = await restored.outcome()
         assert snapshot.submitted_at_unix_ns <= snapshot.updated_at_unix_ns
         assert snapshot.terminal_sequence == outcome.terminal_sequence
         async with restored.subscribe() as subscription:
             restored_events = [event async for event in subscription]
         assert restored_events[-1].kind == "execution.completed"
+        for cursor in (-2, True, 1.5):
+            with pytest.raises(ValueError, match="event cursor"):
+                restored.subscribe(after=cursor)  # type: ignore[arg-type]
         with pytest.raises(ExecutionAdmissionError, match="attach to its existing outcome"):
             await restored_runtime.recover(
                 restored_runtime.bind(CountingEcho(counter)), execution_id
