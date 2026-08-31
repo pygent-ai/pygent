@@ -130,7 +130,7 @@ direct execution 中，调用方管理 Root 并发与外部资源生命周期，
 
 Binding 不与某个 Agent 一一对应。同一个服务中的 Coordinator、Worker、Reviewer 等父子 Agent 通常属于同一 Binding；它们共享部署策略和 Execution 治理域，原始子 Agent 调用默认继承当前 Binding。只有需要独立治理边界时，才使用预绑定 Child、RemoteModule 或 Binding placement，包括容量、资源、权限、安全、SLA、服务、部署策略或生命周期隔离；这不改变用户的 `forward()`。
 
-业务服务负责加载持久状态、构造本次 Context，并在 Execution 成功后显式提交返回的 Agent 状态快照。AgentContext 可以携带完整历史视图、领域状态和来源 revision，但不负责权威提交或冲突处理，框架不暗中维护第二个 Session 状态源。Durable Runtime 可以另行保存执行元数据、Context checkpoint 和重放记录，但不得把这些记录当作业务会话或领域状态的真实源。
+业务服务负责加载持久状态、构造本次 Context，并在 Execution 成功后显式提交返回的 Agent 状态快照。AgentContext 可以携带有限历史视图、领域状态和来源 revision，但不负责长期完整历史、权威提交或冲突处理，框架不暗中维护第二个 Session 状态源。Durable Runtime 可以另行保存执行元数据、Context checkpoint 和重放记录，但不得把这些记录当作业务会话或领域状态的真实源。
 
 ## 组合与调度
 

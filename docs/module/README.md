@@ -110,4 +110,4 @@ Module 可以保存不可变配置、子 Module，以及显式 trusted 的 direc
 
 handoff、审批和其他领域控制流同样由用户 Module 组合：Module 可以返回带稳定 `kind` 和 JSON `data` 的领域 Message，由父 Module 或服务决定下一步。该规则不表示普通 `forward()` 可以在进程退出后保留 Python 调用栈；需要长时间等待时，应结束当前 Execution、外置保存待处理事实，并在反馈到达后通过新 Message 发起新 Execution。
 
-Context 是可作为 RecurrentModule state 使用的不可变 Agent 状态快照，可以包含模型历史投影、完整历史视图和其他 portable 领域状态，但不是普通 Module 的强制参数，也不是完整 Execution checkpoint。`forward()` 的局部变量、普通 coroutine 等待状态、未提交事件和外部副作用不包含在任何普通返回值中。当前 Runtime 只能从自己已支持并验证的 Message/Context 边界重试或恢复，不能从任意 Python `await` 之后透明恢复。
+Context 是可作为 RecurrentModule state 使用的不可变 Agent 状态快照，可以包含模型历史投影、有限历史视图和其他 portable 领域状态，但不是普通 Module 的强制参数，也不是完整 Execution checkpoint。`forward()` 的局部变量、普通 coroutine 等待状态、未提交事件和外部副作用不包含在任何普通返回值中。当前 Runtime 只能从自己已支持并验证的 Message/Context 边界重试或恢复，不能从任意 Python `await` 之后透明恢复。

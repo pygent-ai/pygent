@@ -6,7 +6,7 @@
 2. [SDK 使用](SDK.md)
 3. 本文的详细契约
 
-Context 是框架提供的不可变 Agent 上下文值。它可以作为普通 Module 的输入或输出，也可以被 RecurrentModule 选作 state；Context 本身不依赖 RecurrentModule。基础 `Context` 定义当前模型可见投影；用户可以用具有稳定 schema、版本和 portable 字段的子类增加完整历史视图与领域状态。Context 不是依赖容器或服务对象，也不负责权威持久化、revision、审计和冲突提交。
+Context 是框架提供的不可变 Agent 上下文值。它可以作为普通 Module 的输入或输出，也可以被 RecurrentModule 选作 state；Context 本身不依赖 RecurrentModule。基础 `Context` 定义当前模型可见投影；用户可以用具有稳定 schema、版本和 portable 字段的子类增加有限历史视图与领域状态。Context 不是依赖容器或服务对象，也不负责长期完整历史、权威持久化、revision、审计和冲突提交。
 
 ## 数据形态
 

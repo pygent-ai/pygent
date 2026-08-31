@@ -140,7 +140,7 @@ class AgentContext(Context):
     context_schema: ClassVar[str] = "example.agent-context"
     context_schema_version: ClassVar[int] = 1
 
-    full_history: tuple[Message, ...] = ()
+    recent_commits: tuple[Message, ...] = ()
 
     def __add__(self, value: object):
         updated = Context.__add__(self, value)
@@ -149,7 +149,7 @@ class AgentContext(Context):
         assert isinstance(value, Message)
         return replace(
             updated,
-            full_history=updated.full_history + (value,),
+            recent_commits=(self.recent_commits + (value,))[-32:],
         )
 
 
@@ -157,8 +157,11 @@ previous = context
 context += new_message
 
 assert context is not previous
-assert previous.full_history != context.full_history
+assert previous.recent_commits != context.recent_commits
 ```
+
+这个示例明确把应用自定义视图限制为最近 32 条。跨 invocation 的完整历史应由业务 Store
+增量持久化，不应在 portable Context 中无限追加。
 
 用户也可以显式定义 `__iadd__()`，但它仍必须返回同一具体 Context 类型的新值，不得修改 `self`。无论重载哪个运算符，都必须保留基础消息的 slot 替换规则、拒绝非 Message 输入、递归 portable/frozen 约束以及旧值不变；不得把 `+=` 变成隐藏 I/O、Store 提交或 live resource 修改入口。Runtime 和 codec 只持久化运算后的 Context 值，不执行或传输用户运算符代码。
 
@@ -230,7 +233,7 @@ await store.commit(
 )
 ```
 
-Context 可以携带完整历史视图和领域快照，但不提供隐式 `save()`、`load()` 或全局 Session。业务 Store 仍然负责权威状态、revision、审计与冲突处理。Runtime checkpoint 只负责恢复对应 Execution，不能成为另一份可独立写入的业务状态源。
+Context 可以携带有限历史视图和领域快照，但不提供隐式 `save()`、`load()` 或全局 Session。业务 Store 仍然负责长期完整历史、权威状态、revision、审计与冲突处理。Runtime checkpoint 只负责恢复对应 Execution，不能成为另一份可独立写入的业务状态源。
 
 ## 并行 Child
 

@@ -55,14 +55,17 @@ class AgentContext(Context):
 
     tool_state: ToolState = ToolState()
     file_state: FileState = FileState()
-    full_history: tuple[Message, ...] = ()
+    recent_messages: tuple[Message, ...] = ()
 
     def __add__(self, value: object):
         updated = Context.__add__(self, value)
         if updated is NotImplemented:
             return NotImplemented
         assert isinstance(value, Message)
-        return replace(updated, full_history=updated.full_history + (value,))
+        return replace(
+            updated,
+            recent_messages=(self.recent_messages + (value,))[-32:],
+        )
 
 
 CODEC = ContextCodec.dataclass(AgentContext)
@@ -103,7 +106,7 @@ def test_agent_context_add_and_codec_preserve_concrete_type_and_fields():
     assert updated is not original
     assert original.messages == ()
     assert updated.tool_state is original.tool_state
-    assert updated.full_history == updated.messages
+    assert updated.recent_messages == updated.messages
 
     encoded = context_to_dict(updated, registry=REGISTRY)
     assert set(encoded) == {"schema", "version", "codec", "codec_digest", "data"}
@@ -120,7 +123,7 @@ def test_context_codec_includes_inherited_extension_fields():
 
     context = DerivedAgentContext(
         system_prompt="system",
-        full_history=(UserMessage(content="original"),),
+        committed_messages=(UserMessage(content="original"),),
         compression_count=2,
         input_token_scale_ppm=1_250_000,
         last_input_tokens=321,
@@ -132,8 +135,18 @@ def test_context_codec_includes_inherited_extension_fields():
 
     assert decoded == context
     assert type(decoded) is DerivedAgentContext
-    assert decoded.full_history == context.full_history
+    assert decoded.committed_messages == context.committed_messages
     assert decoded.workspace == "repo"
+
+
+def test_pygent_agent_context_v2_identity_is_rejected() -> None:
+    codec = ContextCodec.dataclass(PygentAgentContext)
+    registry = ContextCodecRegistry((codec,))
+    encoded = context_to_dict(PygentAgentContext(), registry=registry)
+    encoded["version"] = 2
+
+    with pytest.raises(WireCodecError, match="invalid Context"):
+        context_from_dict(encoded, registry=registry)
 
 
 def test_old_context_wire_shape_is_rejected():

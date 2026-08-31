@@ -21,9 +21,9 @@ PygentAgent
    └─ tools: Tool Module
 ```
 
-框架固定 System Prompt，执行有界压缩，保存完整已提交历史，消费三种 ReAct
+框架固定 System Prompt，执行有界压缩，返回本次调用正式提交的消息增量，消费三种 ReAct
 Projection Operation，并在真实 Provider attempt 前发布最终请求快照。开发者负责 UserMessage、
-workspace reminder、ToolResult reminder 和压缩提示词正文。
+workspace reminder、ToolResult reminder、压缩提示词正文和长期历史持久化。
 
 业务能力、提示词正文以及 session 和审计 Store 都由开发者在 Agent 外部管理。
 
@@ -43,18 +43,18 @@ from pygent.agent import (
 @dataclass(frozen=True, slots=True)
 class PygentAgentContext(Context):
     context_schema = "pygent.agent-context"
-    context_schema_version = 2
+    context_schema_version = 3
 
-    full_history: tuple[Message, ...] = ()
+    committed_messages: tuple[Message, ...] = ()
     compression_count: int = 0
     input_token_scale_ppm: int = 1_100_000
     last_input_tokens: int | None = None
 ```
 
 - `messages` 是下一次模型调用看到的投影；
-- `full_history` 是 ReAct 已正式提交的完整消息历史；
+- `committed_messages` 只包含本次 `PygentAgent.forward()` 已正式提交的消息；
 - `projection_revision` 是唯一模型投影 revision；
-- `compression_count` 是当前 Context 已完成的压缩次数；
+- `compression_count` 是本次 Agent 调用已完成的压缩次数；
 - `input_token_scale_ppm` 是根据真实 usage 单调提高的估算系数；
 - `last_input_tokens` 是最近一次可用的前台模型输入 token 数。
 
@@ -139,9 +139,17 @@ handle = await bound_agent.start(
 )
 
 answer, final_context = await handle.result()
+
+await business_history.append(
+    execution_id=handle.execution_id,
+    messages=final_context.committed_messages,
+)
 ```
 
-原始用户输入审计、session 加载和最终 Context 提交属于 Agent 外部的业务服务。
+`committed_messages` 已包含 Initial/Mid-run UserMessage、ToolCall AIMessage、ToolMessage
+和最终 AIMessage，业务服务不得再次追加 `answer`。只有成功结果具有可提交的消息增量；
+业务 Store 负责以 Execution 或 invocation identity 实现幂等追加、revision、审计和冲突处理。
+原始用户输入审计、session 加载和最终 Context 提交也属于 Agent 外部的业务服务。
 
 ## 5. 运行中 UserMessage
 
@@ -232,7 +240,7 @@ ASCII 内容、非 ASCII 内容和消息/工具结构分别计入估算。第一
 4. 非空、无 ToolCall 的结果成为 `pygent.context.snapshot` UserMessage；
 5. Snapshot 替换 `Context.messages`，pending current 保持原文；
 6. `compression_count` 和 `projection_revision` 各增加一次；
-7. `full_history`、metadata 和具体 Context 类型保持不变。
+7. 本次已经产生的 `committed_messages`、metadata 和具体 Context 类型保持不变。
 
 压缩调用不计入 ReAct `max_model_calls`，但服从同一 Execution deadline、Runtime model
 capacity 和 managed-effect 规则。
@@ -264,9 +272,9 @@ class ReviewingCompressor(Module[Message, AIMessage]):
         return final, context
 ```
 
-Compressor 可以读取 `PygentAgentContext.full_history`，但框架不会自动把完整历史再次发送给
-模型。返回的 fork Context 必须与输入完全相等；Snapshot kind、slot、历史保存和 revision
-仍由 PygentAgent 统一处理。
+需要长期历史的自定义 Compressor 应通过开发者自己的外部服务或有界输入获得它，不能依赖
+`PygentAgentContext` 跨调用累积完整历史。返回的 fork Context 必须与输入完全相等；
+Snapshot kind、slot、当前调用提交增量和 revision 仍由 PygentAgent 统一处理。
 
 ## 8. 手动替换投影
 
@@ -296,8 +304,9 @@ await handle.send_input(
 `ReplaceMessageProjection` 或 `AppendToolResultContent` 时，ReAct 以
 `revision_conflict` 拒绝。
 
-替换投影前尚未提交的 current 会先进入 `full_history`；已经提交的最终 AIMessage 不会
-重复写入。完全清空会话时结束当前 Execution，再调用 `agent.new_context()`。
+替换投影前尚未提交的 current 会先进入本次 `committed_messages`；最终 AIMessage 只记录
+一次。replacement 中仅作为投影前缀的消息不会成为本次业务增量。完全清空会话时结束当前
+Execution，再调用 `agent.new_context()`。
 
 ## 9. 最终模型请求快照
 
@@ -341,8 +350,9 @@ effective tools、有效 generation settings 和 projection revision。
 3. Initial 与 Mid-run 输入都是开发者构造的真实 UserMessage。
 4. Runtime 只管理 Execution Input，不解释 Projection Operation。
 5. ReAct 在每次模型调用前和最终返回前消费输入。
-6. 自动压缩和手动 `ReplaceMessageProjection` 只替换模型投影，不删除 `full_history`。
+6. 自动压缩和手动 `ReplaceMessageProjection` 只替换模型投影，不删除本次已经记录的提交增量。
 7. 每次有效投影变化只增加一次 `projection_revision`。
 8. 压缩后的 replacement 会阻止过期 append-only rebase。
 9. 每个真实 Provider attempt 都有一份完整、有界的请求快照。
 10. direct execution 可以压缩和产生请求快照，但不接收运行中外部输入。
+11. `committed_messages` 在每次 Agent 调用入口清空；长期完整历史只由外部业务 Store 保存。

@@ -49,21 +49,21 @@ class ContextCompressionUnavailable(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class PygentAgentContext(Context):
-    """Portable foreground-Agent state with an uncompressed committed history."""
+    """Portable foreground-Agent state with bounded invocation commits."""
 
     context_schema: ClassVar[str] = "pygent.agent-context"
-    context_schema_version: ClassVar[int] = 2
+    context_schema_version: ClassVar[int] = 3
 
-    full_history: tuple[Message, ...] = ()
+    committed_messages: tuple[Message, ...] = ()
     compression_count: int = 0
     input_token_scale_ppm: int = _INITIAL_TOKEN_SCALE_PPM
     last_input_tokens: int | None = None
 
     def __post_init__(self) -> None:
         super(PygentAgentContext, self).__post_init__()
-        history = tuple(self.full_history)
-        if any(not isinstance(message, Message) for message in history):
-            raise TypeError("full_history must contain only Message values")
+        committed_messages = tuple(self.committed_messages)
+        if any(not isinstance(message, Message) for message in committed_messages):
+            raise TypeError("committed_messages must contain only Message values")
         if (
             isinstance(self.compression_count, bool)
             or not isinstance(self.compression_count, int)
@@ -82,14 +82,17 @@ class PygentAgentContext(Context):
             or self.last_input_tokens < 0
         ):
             raise ValueError("last_input_tokens must be non-negative when provided")
-        object.__setattr__(self, "full_history", history)
+        object.__setattr__(self, "committed_messages", committed_messages)
 
     def __add__(self, value: object):
         updated = Context.__add__(self, value)
         if updated is NotImplemented:
             return NotImplemented
         assert isinstance(value, Message)
-        return replace(updated, full_history=self.full_history + (value,))
+        return replace(
+            updated,
+            committed_messages=self.committed_messages + (value,),
+        )
 
 
 class _ContextCompressionLayer(Module[Message, AIMessage]):
@@ -312,7 +315,12 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
     async def forward(
         self, message: UserMessage, context: _PygentAgentContextT
     ) -> tuple[AIMessage, _PygentAgentContextT]:
-        answer, next_context = await self.react(message, context)
+        invocation_context = replace(
+            context,
+            committed_messages=(),
+            compression_count=0,
+        )
+        answer, next_context = await self.react(message, invocation_context)
         return answer, cast(_PygentAgentContextT, next_context)
 
 

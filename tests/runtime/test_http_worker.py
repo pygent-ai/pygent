@@ -12,6 +12,7 @@ from pygent import (
     Agent,
     ModelCallError,
     ModelErrorKind,
+    PygentAgentContext,
 )
 from pygent.core import (
     AIMessage,
@@ -929,6 +930,61 @@ async def test_agent_context_crosses_http_worker_without_field_loss():
     assert context.tenant == "acme"
     assert context.history == ("created",)
     assert [message.content for message in context.messages] == ["remote"]
+
+
+@pytest.mark.asyncio
+async def test_pygent_agent_context_v3_crosses_http_worker():
+    class Echo(Agent[UserMessage, AIMessage]):
+        context_type = PygentAgentContext
+
+        async def forward(self, message, context):
+            return AIMessage(content=message.content.upper()), context + message
+
+    worker_runtime = _portable_runtime()
+    worker_bound = worker_runtime.bind(Echo())
+
+    def resolver(artifact):
+        manifest = _artifact_resolver(artifact)
+        return WorkerDeploymentManifest(
+            artifact=manifest.artifact,
+            verified_digest=manifest.verified_digest,
+            entrypoint=manifest.entrypoint,
+            input_schema=manifest.input_schema,
+            output_schema=manifest.output_schema,
+            serializer=manifest.serializer,
+            context_codecs=worker_bound.plan.context_codecs,
+        )
+
+    worker = HTTPWorkerApp(
+        bound_module_worker_handler(
+            {"pygent-agent-context": worker_bound}, artifact_resolver=resolver
+        )
+    )
+    registry = WorkerRegistry()
+    registry.publish(
+        "pygent-agent-context",
+        (WorkerTarget("worker", "http://worker", ("local",)),),
+    )
+    async with HTTPWorkerClient(
+        registry, transport=httpx.ASGITransport(app=worker.app)
+    ) as client:
+        remote = HTTPRemoteModuleTarget(
+            client,
+            "pygent-agent-context",
+            worker_bound.plan.plan_id,
+            worker_bound.plan.graph_hash,
+            ("local",),
+        )
+        output, context = await remote.invoke(
+            UserMessage(content="remote"),
+            PygentAgentContext(),
+            deadline=None,
+        )
+
+    assert output.content == "REMOTE"
+    assert type(context) is PygentAgentContext
+    assert [message.content for message in context.committed_messages] == ["remote"]
+    await worker_runtime.close()
 
 
 @pytest.mark.asyncio

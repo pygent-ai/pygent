@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from typing import ClassVar
 
 import pytest
 
@@ -20,7 +21,15 @@ from pygent.agent import (
     ContextCompressionLimitExceeded,
     ContextCompressionUnavailable,
 )
-from pygent.runtime import ContextCodec, ExecutionOptions, LocalRuntime
+from pygent.runtime import (
+    ContextCodec,
+    ExecutionOptions,
+    LocalRuntime,
+    SQLiteHistoryStore,
+)
+from pygent.runtime.codec import invocation_to_dict
+from pygent.runtime.context_codec import ContextCodecRegistry
+from pygent.tool import ToolCall, ToolResult
 
 
 class CallRecorder:
@@ -56,6 +65,59 @@ class EmptyTools(Module[AIMessage, ToolMessage]):
         raise AssertionError("tools should not be called")
 
 
+class LongSessionState:
+    def __init__(self) -> None:
+        self.call_index = 0
+
+
+class LongSessionModel(Module[Message, AIMessage]):
+    trusted_live_resource_attributes = ("state",)
+
+    def __init__(self, *, tool_calls_per_invocation: int) -> None:
+        super().__init__()
+        self.tool_calls_per_invocation = tool_calls_per_invocation
+        self.state = LongSessionState()
+
+    async def forward(self, message: Message, context: Context):
+        invocation_index = self.state.call_index % (
+            self.tool_calls_per_invocation + 1
+        )
+        self.state.call_index += 1
+        if invocation_index == self.tool_calls_per_invocation:
+            return AIMessage(content="done"), context
+        return (
+            AIMessage(
+                content="call",
+                tool_calls=(
+                    ToolCall(
+                        call_id=f"call-{self.state.call_index}",
+                        name="lookup",
+                        arguments={},
+                    ),
+                ),
+            ),
+            context,
+        )
+
+
+class LongSessionTools(Module[AIMessage, ToolMessage]):
+    async def forward(self, message: AIMessage, context: Context):
+        call = message.tool_calls[0]
+        return (
+            ToolMessage(
+                results=(
+                    ToolResult(
+                        call_id=call.call_id,
+                        name=call.name,
+                        status="succeeded",
+                        output={"value": 1},
+                    ),
+                )
+            ),
+            context,
+        )
+
+
 class ToolFilteringModel(RecordingModel):
     def effective_tools(self, context: Context) -> tuple[ToolDefinition, ...]:
         return ()
@@ -86,7 +148,7 @@ def test_pygent_agent_context_has_a_portable_round_trip() -> None:
     context = PygentAgentContext(
         system_prompt="fixed",
         messages=(UserMessage(content="visible"),),
-        full_history=(UserMessage(content="original"),),
+        committed_messages=(UserMessage(content="original"),),
         compression_count=2,
         input_token_scale_ppm=1_250_000,
         last_input_tokens=321,
@@ -94,12 +156,20 @@ def test_pygent_agent_context_has_a_portable_round_trip() -> None:
     )
 
     codec = ContextCodec.dataclass(PygentAgentContext)
-    decoded = codec.decode(codec.encode(context))
+    encoded = codec.encode(context)
+    decoded = codec.decode(encoded)
 
     assert decoded == context
     assert type(decoded) is PygentAgentContext
     assert codec.schema == "pygent.agent-context"
-    assert codec.version == 2
+    assert codec.version == 3
+    assert "committed_messages" in encoded
+    assert "full_history" not in encoded
+
+
+def test_pygent_agent_context_rejects_the_removed_history_field() -> None:
+    with pytest.raises(TypeError, match="full_history"):
+        PygentAgentContext(full_history=())  # type: ignore[call-arg]
 
 
 def test_new_context_uses_the_agent_configuration() -> None:
@@ -111,7 +181,7 @@ def test_new_context_uses_the_agent_configuration() -> None:
 
     assert context.system_prompt == "You are a careful coding agent."
     assert context.metadata["workspace"] == "write"
-    assert context.full_history == ()
+    assert context.committed_messages == ()
     assert context.input_token_scale_ppm == 1_100_000
     assert agent.react.model.model is model
     assert agent.react.model.compressor is compressor
@@ -142,7 +212,7 @@ def test_agent_rejects_invalid_window_configuration(kwargs, message) -> None:
 
 
 @pytest.mark.asyncio
-async def test_managed_agent_auto_registers_context_schema_v2() -> None:
+async def test_managed_agent_auto_registers_context_schema_v3() -> None:
     agent = build_agent(
         model=RecordingModel(AIMessage(content="done")),
         compressor=RecordingModel(AIMessage(content="summary")),
@@ -158,8 +228,71 @@ async def test_managed_agent_auto_registers_context_schema_v2() -> None:
 
     assert answer.content == "done"
     assert isinstance(context, PygentAgentContext)
-    assert [message.content for message in context.full_history] == ["hello", "done"]
+    assert [message.content for message in context.committed_messages] == [
+        "hello",
+        "done",
+    ]
     await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_pygent_agent_context_v3_survives_durable_reattach(tmp_path) -> None:
+    agent = build_agent(
+        model=RecordingModel(AIMessage(content="done")),
+        compressor=RecordingModel(AIMessage(content="summary")),
+    )
+    async with SQLiteHistoryStore(tmp_path / "pygent-agent-v3.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        handle = await runtime.bind(agent).start(
+            UserMessage(content="hello"),
+            agent.new_context(),
+            execution=ExecutionOptions(deadline=time.monotonic() + 5),
+        )
+        expected = await handle.result()
+        attached = await runtime.get_execution_handle(handle.execution_id)
+
+        assert await attached.result() == expected
+        assert isinstance(expected[1], PygentAgentContext)
+        assert [message.content for message in expected[1].committed_messages] == [
+            "hello",
+            "done",
+        ]
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_invocation_reset_preserves_a_concrete_context_subtype() -> None:
+    @dataclass(frozen=True, slots=True)
+    class DerivedContext(PygentAgentContext):
+        context_schema: ClassVar[str] = "tests.pygent-derived"
+        context_schema_version: ClassVar[int] = 1
+        workspace: str = "repo"
+
+    class DerivedAgent(PygentAgent):
+        context_type = DerivedContext
+
+    agent = DerivedAgent(
+        system_prompt="system",
+        compression_prompt="compress",
+        model=RecordingModel(AIMessage(content="done")),
+        compressor=RecordingModel(AIMessage(content="summary")),
+        tools=EmptyTools(),
+        context_window_tokens=4096,
+    )
+    context = DerivedContext(
+        committed_messages=(UserMessage(content="previous"),),
+        compression_count=3,
+    )
+
+    _, returned = await agent.invoke(UserMessage(content="current"), context)
+
+    assert type(returned) is DerivedContext
+    assert returned.workspace == "repo"
+    assert [message.content for message in returned.committed_messages] == [
+        "current",
+        "done",
+    ]
+    assert returned.compression_count == 0
 
 
 @pytest.mark.asyncio
@@ -187,7 +320,7 @@ async def test_token_estimate_uses_foreground_effective_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_agent_forks_full_projection_and_preserves_current_and_full_history() -> None:
+async def test_agent_forks_projection_and_preserves_current_commits() -> None:
     answer = AIMessage(content="done", usage={"input_tokens": 120})
     model = RecordingModel(answer)
     compressor = RecordingModel(AIMessage(content="compact snapshot"))
@@ -205,7 +338,8 @@ async def test_agent_forks_full_projection_and_preserves_current_and_full_histor
     context = PygentAgentContext(
         system_prompt=agent.system_prompt,
         messages=original,
-        full_history=original,
+        committed_messages=(UserMessage(content="previous invocation"),),
+        compression_count=3,
         projection_revision=5,
     )
     current = UserMessage(content="continue")
@@ -226,7 +360,7 @@ async def test_agent_forks_full_projection_and_preserves_current_and_full_histor
     assert foreground_context.compression_count == 1
     assert foreground_context.projection_revision == 7
 
-    assert final_context.full_history == original + (current, answer)
+    assert final_context.committed_messages == (current, answer)
     assert [message.content for message in final_context.messages] == [
         "compact snapshot",
         "continue",
@@ -248,7 +382,7 @@ async def test_compression_prompt_can_trigger_early_compression() -> None:
         compression_prompt="p" * 1000,
     )
     old = UserMessage(content="old")
-    context = replace(agent.new_context(), messages=(old,), full_history=(old,))
+    context = replace(agent.new_context(), messages=(old,))
 
     await agent.invoke(UserMessage(content="current"), context)
 
@@ -310,7 +444,7 @@ async def test_compressor_must_preserve_fork_context() -> None:
         compression_context_window_tokens=4096,
     )
     old = UserMessage(content="x" * 2000)
-    context = replace(agent.new_context(), messages=(old,), full_history=(old,))
+    context = replace(agent.new_context(), messages=(old,))
 
     with pytest.raises(ContextCompressionUnavailable, match="preserve"):
         await agent.invoke(UserMessage(content="current"), context)
@@ -336,7 +470,7 @@ async def test_compressor_result_must_be_non_empty_without_tool_calls(summary) -
         compression_context_window_tokens=4096,
     )
     old = UserMessage(content="x" * 2000)
-    context = replace(agent.new_context(), messages=(old,), full_history=(old,))
+    context = replace(agent.new_context(), messages=(old,))
 
     with pytest.raises(ContextCompressionUnavailable, match="non-empty"):
         await agent.invoke(UserMessage(content="current"), context)
@@ -365,7 +499,7 @@ async def test_compression_request_must_fit_its_window() -> None:
         compression_prompt="p" * 2000,
     )
     old = UserMessage(content="old")
-    context = replace(agent.new_context(), messages=(old,), full_history=(old,))
+    context = replace(agent.new_context(), messages=(old,))
 
     with pytest.raises(ContextCompressionUnavailable, match="compression context window"):
         await agent.invoke(UserMessage(content="current"), context)
@@ -380,14 +514,14 @@ async def test_compressed_request_must_fall_below_foreground_trigger() -> None:
         compression_context_window_tokens=4096,
     )
     old = UserMessage(content="old " + "x" * 2000)
-    context = replace(agent.new_context(), messages=(old,), full_history=(old,))
+    context = replace(agent.new_context(), messages=(old,))
 
     with pytest.raises(ContextCompressionUnavailable, match="remains oversized"):
         await agent.invoke(UserMessage(content="y" * 2000), context)
 
 
 @pytest.mark.asyncio
-async def test_compression_budget_is_explicit() -> None:
+async def test_compression_budget_resets_at_invocation_boundary() -> None:
     agent = build_agent(
         model=RecordingModel(AIMessage(content="done")),
         compressor=RecordingModel(AIMessage(content="summary")),
@@ -399,12 +533,71 @@ async def test_compression_budget_is_explicit() -> None:
     context = replace(
         agent.new_context(),
         messages=(old,),
-        full_history=(old,),
+        compression_count=1,
+    )
+
+    _, returned = await agent.invoke(UserMessage(content="current"), context)
+
+    assert returned.compression_count == 1
+
+
+@pytest.mark.asyncio
+async def test_compression_budget_is_explicit_within_an_invocation() -> None:
+    agent = build_agent(
+        model=RecordingModel(AIMessage(content="done")),
+        compressor=RecordingModel(AIMessage(content="summary")),
+        context_window_tokens=300,
+        compression_context_window_tokens=4096,
+        max_compressions=1,
+    )
+    old = UserMessage(content="x" * 2000)
+    context = replace(
+        agent.new_context(),
+        messages=(old,),
         compression_count=1,
     )
 
     with pytest.raises(ContextCompressionLimitExceeded):
-        await agent.invoke(UserMessage(content="current"), context)
+        await agent.react.model.invoke(UserMessage(content="current"), context)
+
+
+@pytest.mark.asyncio
+async def test_long_session_keeps_only_each_invocation_commit_delta() -> None:
+    model = LongSessionModel(tool_calls_per_invocation=15)
+    compressor = RecordingModel(AIMessage(content="compact snapshot"))
+    agent = PygentAgent(
+        system_prompt="system",
+        compression_prompt="Return a compact continuation.",
+        model=model,
+        compressor=compressor,
+        tools=LongSessionTools(),
+        context_window_tokens=1024,
+        compression_context_window_tokens=4096,
+        max_steps=16,
+        max_model_calls=16,
+        max_tool_calls=16,
+    )
+    codec = ContextCodec.dataclass(PygentAgentContext)
+    registry = ContextCodecRegistry((codec,))
+    context = agent.new_context()
+    external_history: list[Message] = []
+
+    for round_index in range(113):
+        _, context = await agent.invoke(
+            UserMessage(content=f"round {round_index}"),
+            context,
+        )
+        assert len(context.committed_messages) == 32
+        external_history.extend(context.committed_messages)
+        invocation_to_dict(
+            UserMessage(content="next"),
+            context,
+            registry=registry,
+        )
+
+    assert len(external_history) == 3616
+    assert len(context.committed_messages) == 32
+    assert len(compressor.calls) > 4
 
 
 class ReplacingModel(Module[Message, AIMessage]):

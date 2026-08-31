@@ -182,7 +182,7 @@ async def test_replace_during_final_model_does_not_duplicate_committed_history()
 
     _, context = await handle.result()
     assert isinstance(context, PygentAgentContext)
-    assert [message.content for message in context.full_history] == [
+    assert [message.content for message in context.committed_messages] == [
         "initial",
         "first answer",
         "snapshot",
@@ -207,7 +207,7 @@ async def test_replace_preserving_pending_current_commits_it_once() -> None:
                 UserMessage(content="earlier request"),
                 AIMessage(content="earlier answer"),
             ),
-            full_history=(
+            committed_messages=(
                 UserMessage(content="earlier request"),
                 AIMessage(content="earlier answer"),
             ),
@@ -232,7 +232,7 @@ async def test_replace_preserving_pending_current_commits_it_once() -> None:
 
     _, context = await handle.result()
     assert isinstance(context, PygentAgentContext)
-    assert [message.content for message in context.full_history] == [
+    assert [message.content for message in context.committed_messages] == [
         "earlier request",
         "earlier answer",
         "current request",
