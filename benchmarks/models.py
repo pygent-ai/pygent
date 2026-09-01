@@ -502,7 +502,7 @@ def build_resources(
             settings.retry_backoff_seconds,
             settings.retry_backoff_seconds,
         ),
-        attempt_timeout_seconds=settings.attempt_timeout_seconds,
+        attempt_idle_timeout_seconds=settings.attempt_idle_timeout_seconds,
     )
     model = ModelCallLayer(
         model_group=model_group,

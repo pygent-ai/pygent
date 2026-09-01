@@ -62,7 +62,7 @@ Root 调用使用 `invoke()` 或 `stream()`；只有 `forward()` 内的 Child �
 ```python
 model = ModelCallLayer(
     model_group=fixed_model_group(model_name),
-    retry_policy=RetryPolicy(attempt_timeout_seconds=30.0),
+    retry_policy=RetryPolicy(attempt_idle_timeout_seconds=30.0),
     generation=GenerationConfig(
         temperature=0.0,
         max_output_tokens=256,
@@ -149,7 +149,9 @@ Agent 图不需要修改，只替换 Root 入口：
 ```python
 async with agent.stream(message, context) as stream:
     async for event in stream:
-        if event.kind == "model.text.delta":
+        if event.kind == "model.output.reset":
+            reset_rendered_output(event.data["route_id"], event.data["attempt"])
+        elif event.kind == "model.text.delta":
             render(event.data["text"])
     answer, next_context = await stream.final_result()
 ```

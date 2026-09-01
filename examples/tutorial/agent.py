@@ -120,7 +120,7 @@ def build_agent(
             if model_group.is_deferred
             else ModelCallPolicy()
         ),
-        retry_policy=RetryPolicy(attempt_timeout_seconds=30.0),
+        retry_policy=RetryPolicy(attempt_idle_timeout_seconds=30.0),
         generation=GenerationConfig(
             temperature=0.0,
             max_output_tokens=256,

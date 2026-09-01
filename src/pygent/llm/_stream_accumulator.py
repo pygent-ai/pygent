@@ -58,6 +58,27 @@ class ModelStreamAccumulator:
         self, part: ModelProviderStreamPart, event_sink: EventSink | None
     ) -> None:
         data = freeze_json_object(part.data)
+        if part.kind == ModelProviderStreamKind.RESET:
+            public_output = data.get("public_output")
+            if not isinstance(public_output, bool):
+                raise TypeError("model stream reset public_output must be a bool")
+            self.text_parts.clear()
+            self.usage = freeze_json_object()
+            self.calls.clear()
+            self.selected_route = None
+            self.selected_attempt = None
+            self.finish_reason = "other"
+            self.provider_request_id = None
+            if public_output:
+                await _emit(
+                    event_sink,
+                    ModelEventKind.OUTPUT_RESET,
+                    {
+                        "route_id": data["route_id"],
+                        "attempt": data["attempt"],
+                    },
+                )
+            return
         route_value = data.get("route_id")
         if isinstance(route_value, str):
             self.selected_route = route_value

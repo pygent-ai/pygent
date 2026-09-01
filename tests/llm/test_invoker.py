@@ -196,6 +196,17 @@ async def test_default_retry_policy_allows_two_total_attempts():
     assert primary.calls == 2
 
 
+@pytest.mark.parametrize("value", (0, -1, float("inf"), float("nan"), True))
+def test_retry_policy_requires_a_positive_finite_idle_timeout(value: object) -> None:
+    with pytest.raises(ValueError, match="attempt_idle_timeout_seconds"):
+        RetryPolicy(attempt_idle_timeout_seconds=value)  # type: ignore[arg-type]
+
+
+def test_retry_policy_does_not_accept_the_removed_total_attempt_timeout() -> None:
+    with pytest.raises(TypeError, match="attempt_timeout_seconds"):
+        RetryPolicy(attempt_timeout_seconds=1)  # type: ignore[call-arg]
+
+
 @pytest.mark.asyncio
 async def test_non_streaming_output_limit_retries_before_exposing_partial_answer():
     primary = FakeClient(
@@ -327,7 +338,7 @@ async def test_cancellation_cleanup_timeout_is_terminal_and_quarantines_client(
         model_group=group(),
         retry_policy=RetryPolicy(
             max_attempts_per_route=3,
-            attempt_timeout_seconds=0.01,
+            attempt_idle_timeout_seconds=0.01,
         ),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
@@ -399,7 +410,7 @@ async def test_close_waits_for_running_stream_anext_before_closing_client(
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=1,
-            attempt_timeout_seconds=0.01,
+            attempt_idle_timeout_seconds=0.01,
         ),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
@@ -448,7 +459,7 @@ async def test_close_cancels_active_execution_before_closing_stream_client(
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=1,
-            attempt_timeout_seconds=1,
+            attempt_idle_timeout_seconds=1,
         ),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
@@ -611,6 +622,398 @@ async def test_stream_normalizes_text_usage_and_completion():
         "cached_input_tokens": None,
         "reasoning_tokens": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_stream_idle_timeout_resets_after_every_provider_frame() -> None:
+    class ActiveStreamClient(FakeClient):
+        async def stream(self, route, payload):
+            del route, payload
+            for _ in range(8):
+                await asyncio.sleep(0.02)
+                yield freeze_json_object(
+                    {"choices": [{"delta": {"content": "x"}}]}
+                )
+            await asyncio.sleep(0.02)
+            yield freeze_json_object({"done": True})
+
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": ActiveStreamClient([])},
+        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+    )
+    started = time.monotonic()
+    result = await invoker.execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(
+            max_attempts_per_route=1,
+            attempt_idle_timeout_seconds=0.1,
+        ),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+        deadline=time.monotonic() + 1,
+    ).result()
+
+    assert time.monotonic() - started > 0.1
+    assert result.message.content == "x" * 8
+    await invoker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_first_stream_frame_idle_timeout_retries_before_public_output() -> None:
+    class SlowFirstFrameClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.stream_calls = 0
+
+        async def stream(self, route, payload):
+            del route, payload
+            self.stream_calls += 1
+            if self.stream_calls == 1:
+                await asyncio.sleep(1)
+            yield freeze_json_object(
+                {"choices": [{"delta": {"content": "retried"}}]}
+            )
+            yield freeze_json_object({"done": True})
+
+    client = SlowFirstFrameClient()
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": client},
+        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+    )
+    result = await invoker.execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(
+            max_attempts_per_route=2,
+            attempt_idle_timeout_seconds=0.03,
+            backoff=ExponentialBackoff(0, 0),
+        ),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+        deadline=time.monotonic() + 1,
+    ).result()
+
+    assert result.message.content == "retried"
+    assert client.stream_calls == 2
+    await invoker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_idle_timeout_resets_partial_output_and_retries() -> None:
+    class StalledStreamClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.stream_calls = 0
+
+        async def stream(self, route, payload):
+            del route, payload
+            self.stream_calls += 1
+            if self.stream_calls == 1:
+                yield freeze_json_object(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "reasoning_content": "old reasoning",
+                                    "content": "partial",
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "old-call",
+                                            "function": {
+                                                "name": "old-tool",
+                                                "arguments": '{"old":',
+                                            },
+                                        }
+                                    ],
+                                }
+                            }
+                        ]
+                    }
+                )
+                await asyncio.sleep(1)
+            yield freeze_json_object(
+                {"choices": [{"delta": {"content": "recovered"}}]}
+            )
+            yield freeze_json_object({"done": True})
+
+    client = StalledStreamClient()
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": client},
+        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+    )
+    execution = invoker.execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(
+            max_attempts_per_route=2,
+            attempt_idle_timeout_seconds=0.03,
+            backoff=ExponentialBackoff(0, 0),
+        ),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+        deadline=time.monotonic() + 1,
+    )
+
+    result = await execution.result()
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+
+    assert result.message.content == "recovered"
+    assert result.message.tool_calls == ()
+    assert client.stream_calls == 2
+    kinds = [event.kind for event in events]
+    assert kinds.count("model.attempt.failed") == 1
+    assert kinds.count("model.output.reset") == 1
+    assert kinds.index("model.attempt.failed") < kinds.index("model.output.reset")
+    assert kinds.index("model.output.reset") < kinds.index(
+        "model.attempt.started", kinds.index("model.output.reset")
+    )
+    reset = next(event.data for event in events if event.kind == "model.output.reset")
+    assert reset.to_dict() == {"route_id": "primary", "attempt": 1}
+    await invoker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_idle_timeout_exhaustion_keeps_last_partial_output() -> None:
+    class AlwaysStalledStreamClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.stream_calls = 0
+
+        async def stream(self, route, payload):
+            del route, payload
+            self.stream_calls += 1
+            yield freeze_json_object(
+                {"choices": [{"delta": {"content": str(self.stream_calls)}}]}
+            )
+            await asyncio.sleep(1)
+            yield freeze_json_object({"done": True})
+
+    client = AlwaysStalledStreamClient()
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": client},
+        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+    )
+    execution = invoker.execute(
+        model_group=ModelGroupConfig(
+            name="idle-exhaustion",
+            routes=(ModelRoute("primary", "openai", "first"),),
+            fallback=FallbackPolicy(("primary",)),
+        ),
+        retry_policy=RetryPolicy(
+            max_attempts_per_route=2,
+            attempt_idle_timeout_seconds=0.03,
+            backoff=ExponentialBackoff(0, 0),
+        ),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+        deadline=time.monotonic() + 1,
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        await execution.result()
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+
+    assert raised.value.kind is ModelErrorKind.TIMEOUT
+    assert raised.value.partial_output is True
+    assert all(
+        attempt.reason_code is ModelFailureReason.PROVIDER_IDLE_TIMEOUT
+        for attempt in raised.value.attempts
+    )
+    assert client.stream_calls == 2
+    assert [event.kind for event in events].count("model.output.reset") == 1
+    await invoker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_partial_idle_timeout_obeys_retry_on_policy() -> None:
+    class StalledStreamClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.stream_calls = 0
+
+        async def stream(self, route, payload):
+            del route, payload
+            self.stream_calls += 1
+            yield freeze_json_object(
+                {"choices": [{"delta": {"content": "partial"}}]}
+            )
+            await asyncio.sleep(1)
+            yield freeze_json_object({"done": True})
+
+    client = StalledStreamClient()
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": client},
+        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+    )
+    execution = invoker.execute(
+        model_group=ModelGroupConfig(
+            name="idle-policy",
+            routes=(ModelRoute("primary", "openai", "first"),),
+            fallback=FallbackPolicy(("primary",)),
+        ),
+        retry_policy=RetryPolicy(
+            max_attempts_per_route=2,
+            retry_on=(),
+            attempt_idle_timeout_seconds=0.03,
+        ),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+        deadline=time.monotonic() + 1,
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        await execution.result()
+
+    assert raised.value.partial_output is True
+    assert client.stream_calls == 1
+    await invoker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_partial_output_is_not_reset_when_backoff_exhausts_deadline() -> None:
+    class StalledStreamClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.stream_calls = 0
+
+        async def stream(self, route, payload):
+            del route, payload
+            self.stream_calls += 1
+            yield freeze_json_object(
+                {"choices": [{"delta": {"content": "still-visible"}}]}
+            )
+            await asyncio.sleep(1)
+            yield freeze_json_object({"done": True})
+
+    client = StalledStreamClient()
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": client},
+        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+    )
+    execution = invoker.execute(
+        model_group=ModelGroupConfig(
+            name="idle-backoff-deadline",
+            routes=(ModelRoute("primary", "openai", "first"),),
+            fallback=FallbackPolicy(("primary",)),
+        ),
+        retry_policy=RetryPolicy(
+            max_attempts_per_route=2,
+            attempt_idle_timeout_seconds=0.1,
+            backoff=ExponentialBackoff(1, 1),
+        ),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+        deadline=time.monotonic() + 0.25,
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        await execution.result()
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+
+    assert raised.value.kind is ModelErrorKind.TIMEOUT
+    assert raised.value.partial_output is True
+    assert client.stream_calls == 1
+    assert "model.output.reset" not in [event.kind for event in events]
+    await invoker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_partial_idle_timeout_resets_before_fallback_route() -> None:
+    class PartialPrimary(FakeClient):
+        async def stream(self, route, payload):
+            del route, payload
+            yield freeze_json_object(
+                {"choices": [{"delta": {"content": "primary-partial"}}]}
+            )
+            await asyncio.sleep(1)
+            yield freeze_json_object({"done": True})
+
+    fallback = FakeClient(
+        [
+            freeze_json_object(
+                {"choices": [{"delta": {"content": "fallback-complete"}}]}
+            ),
+            freeze_json_object({"done": True}),
+        ]
+    )
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": PartialPrimary([]), "fallback": fallback},
+        capabilities={
+            "primary": ModelProviderCapabilities(streaming=True),
+            "fallback": ModelProviderCapabilities(streaming=True),
+        },
+    )
+    execution = invoker.execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(
+            max_attempts_per_route=1,
+            attempt_idle_timeout_seconds=0.03,
+        ),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+        deadline=time.monotonic() + 1,
+    )
+
+    result = await execution.result()
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+
+    assert result.message.content == "fallback-complete"
+    assert [event.kind for event in events].count("model.output.reset") == 1
+    assert events[-1].data["route_id"] == "fallback"
+    await invoker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_execution_deadline_still_bounds_an_active_provider_stream() -> None:
+    class EndlessActiveStreamClient(FakeClient):
+        async def stream(self, route, payload):
+            del route, payload
+            while True:
+                await asyncio.sleep(0.01)
+                yield freeze_json_object(
+                    {"choices": [{"delta": {"content": "x"}}]}
+                )
+
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": EndlessActiveStreamClient([])},
+        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+    )
+    execution = invoker.execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(
+            max_attempts_per_route=1,
+            attempt_idle_timeout_seconds=0.1,
+        ),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+        deadline=time.monotonic() + 0.05,
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        await execution.result()
+
+    assert raised.value.kind is ModelErrorKind.TIMEOUT
+    assert raised.value.partial_output is True
+    await invoker.aclose()
 
 
 @pytest.mark.asyncio

@@ -28,4 +28,4 @@ tool_latency_ms = 2.0
 retry_max_attempts = 2
 retry_on = ["timeout", "unavailable"]
 retry_backoff_seconds = 1.0
-attempt_timeout_seconds = 90.0
+attempt_idle_timeout_seconds = 90.0

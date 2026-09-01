@@ -50,6 +50,7 @@ class ModelEventKind(str, Enum):
     STARTED = "model.started"
     ATTEMPT_STARTED = "model.attempt.started"
     REQUEST_PREPARED = "model.request.prepared"
+    OUTPUT_RESET = "model.output.reset"
     REASONING_DELTA = "model.reasoning.delta"
     TEXT_DELTA = "model.text.delta"
     TOOL_CALL_STARTED = "model.tool_call.started"
@@ -66,6 +67,7 @@ class ModelEventKind(str, Enum):
 class ModelProviderStreamKind(str, Enum):
     """Closed provider-neutral vocabulary before public event reduction."""
 
+    RESET = "reset"
     REASONING = "reasoning"
     TEXT = "text"
     TOOL_CALL = "tool_call"
@@ -326,6 +328,7 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
         ModelEventKind.ATTEMPT_STARTED: common_attempt,
         ModelEventKind.REQUEST_PREPARED: common_attempt
         | {"request_id", "request_digest", "request"},
+        ModelEventKind.OUTPUT_RESET: common_attempt,
         ModelEventKind.REASONING_DELTA: common_attempt | {"text"},
         ModelEventKind.TEXT_DELTA: common_attempt | {"text"},
         ModelEventKind.TOOL_CALL_STARTED: common_attempt | {"item_id", "index"},

@@ -75,6 +75,15 @@ def test_public_model_stream_events_remain_strictly_validated() -> None:
         ModelStreamEvent("private.invalid", {})
     with pytest.raises(ValueError, match="data fields must be exactly"):
         ModelStreamEvent("model.started", {})
+    reset = ModelStreamEvent(
+        "model.output.reset", {"route_id": "primary", "attempt": 1}
+    )
+    assert reset.kind == "model.output.reset"
+    with pytest.raises(ValueError, match="data fields must be exactly"):
+        ModelStreamEvent(
+            "model.output.reset",
+            {"route_id": "primary", "attempt": 1, "reason": "free-form"},
+        )
 
 
 @pytest.mark.asyncio

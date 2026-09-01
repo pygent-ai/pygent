@@ -284,7 +284,7 @@ class DefaultModelInvoker:
         order = model_group.fallback.order or tuple(routes)
         attempts: list[ModelAttempt] = []
         last_kind = ModelErrorKind.UNKNOWN
-        for route_id in order:
+        for route_index, route_id in enumerate(order):
             route = routes[route_id]
             adapter, client = self._resolve(route)
             _validate_route_for_request(adapter, route)
@@ -298,9 +298,6 @@ class DefaultModelInvoker:
             payload = adapter.build_request(request)
             for number in range(1, retry_policy.max_attempts_per_route + 1):
                 prepared_event = prepared_request_event(request, attempt=number)
-                attempt_deadline = _earliest_deadline(
-                    deadline, retry_policy.attempt_timeout_seconds
-                )
                 emitted = False
                 completed = False
                 attempt_usage = freeze_json_object()
@@ -322,7 +319,10 @@ class DefaultModelInvoker:
                         client=client,
                         request=request,
                         payload=payload,
-                        deadline=attempt_deadline,
+                        deadline=deadline,
+                        idle_timeout_seconds=(
+                            retry_policy.attempt_idle_timeout_seconds
+                        ),
                         cancel_event=cancel_event,
                     ):
                         if part.kind == ModelProviderStreamKind.FINISH:
@@ -395,23 +395,53 @@ class DefaultModelInvoker:
                             kind=kind,
                             attempts=tuple(attempts),
                         ) from None
-                    if emitted:
+                    has_budget = deadline is None or time.monotonic() < deadline
+                    can_retry = (
+                        has_budget
+                        and kind in retry_policy.retry_on
+                        and number < retry_policy.max_attempts_per_route
+                    )
+                    can_fallback = has_budget and route_index + 1 < len(order)
+                    retryable_partial = (
+                        emitted
+                        and reason_code
+                        is ModelFailureReason.PROVIDER_IDLE_TIMEOUT
+                        and (can_retry or can_fallback)
+                    )
+                    if emitted and not retryable_partial:
                         raise ModelCallError(
                             "model stream failed after output was emitted",
                             kind=kind,
                             attempts=tuple(attempts),
                             partial_output=True,
                         ) from None
-                    if (
-                        kind not in retry_policy.retry_on
-                        or number >= retry_policy.max_attempts_per_route
-                    ):
+                    if can_retry:
+                        try:
+                            await _sleep_budget(
+                                retry_policy.backoff.delay(number - 1),
+                                deadline=deadline,
+                                cancel_event=cancel_event,
+                            )
+                        except ModelProviderError:
+                            if emitted:
+                                raise ModelCallError(
+                                    "model retry budget expired after partial output",
+                                    kind=ModelErrorKind.TIMEOUT,
+                                    attempts=tuple(attempts),
+                                    partial_output=True,
+                                ) from None
+                            raise
+                    if can_retry or can_fallback:
+                        yield ModelProviderStreamPart(
+                            ModelProviderStreamKind.RESET,
+                            {
+                                "route_id": route_id,
+                                "attempt": number,
+                                "public_output": emitted,
+                            },
+                        )
+                    if not can_retry:
                         break
-                    await _sleep_budget(
-                        retry_policy.backoff.delay(number - 1),
-                        deadline=deadline,
-                        cancel_event=cancel_event,
-                    )
         raise ModelCallError(
             _terminal_failure_message(attempts),
             kind=last_kind,
@@ -427,6 +457,7 @@ class DefaultModelInvoker:
         request: ModelProviderRequest,
         payload: FrozenJsonObject,
         deadline: float | None,
+        idle_timeout_seconds: float | None,
         cancel_event: asyncio.Event | None,
     ) -> AsyncIterator[ModelProviderStreamPart]:
         capabilities = self._capabilities.get(
@@ -443,6 +474,7 @@ class DefaultModelInvoker:
                             client=client,
                             on_cleanup_stuck=self._quarantine,
                             deadline=deadline,
+                            idle_timeout_seconds=idle_timeout_seconds,
                             cancel_event=cancel_event,
                         )
                     except StopAsyncIteration:
@@ -458,7 +490,7 @@ class DefaultModelInvoker:
         else:
             raw = await _await_budget(
                 client.invoke(route, payload),
-                deadline=deadline,
+                deadline=_earliest_deadline(deadline, idle_timeout_seconds),
                 cancel_event=cancel_event,
                 on_cleanup_stuck=lambda task: self._quarantine(client, task),
             )
@@ -593,14 +625,14 @@ def _raise_for_unsuccessful_finish(reason: object) -> None:
 
 
 def _earliest_deadline(
-    request_deadline: float | None, attempt_timeout_seconds: float | None
+    absolute_deadline: float | None, timeout_seconds: float | None
 ) -> float | None:
-    if attempt_timeout_seconds is None:
-        return request_deadline
-    attempt_deadline = time.monotonic() + attempt_timeout_seconds
-    if request_deadline is None:
-        return attempt_deadline
-    return min(request_deadline, attempt_deadline)
+    if timeout_seconds is None:
+        return absolute_deadline
+    timeout_deadline = time.monotonic() + timeout_seconds
+    if absolute_deadline is None:
+        return timeout_deadline
+    return min(absolute_deadline, timeout_deadline)
 
 
 def _validate_deadline(deadline: float | None) -> None:
@@ -679,6 +711,7 @@ async def _await_stream_owner(
     client: ModelProviderClient,
     on_cleanup_stuck: Callable[[ModelProviderClient, asyncio.Future[Any]], None],
     deadline: float | None,
+    idle_timeout_seconds: float | None,
     cancel_event: asyncio.Event | None,
 ) -> FrozenJsonObject:
     try:
@@ -699,11 +732,28 @@ async def _await_stream_owner(
                 "model provider outcome is unknown after cancellation",
             ) from None
         raise
+    idle_deadline = (
+        None
+        if idle_timeout_seconds is None
+        else time.monotonic() + idle_timeout_seconds
+    )
+    idle_limited = idle_deadline is not None and (
+        deadline is None or idle_deadline <= deadline
+    )
+    wait_deadline = (
+        idle_deadline
+        if deadline is None
+        else deadline
+        if idle_deadline is None
+        else min(deadline, idle_deadline)
+    )
     if cancel_event is None:
         try:
-            if deadline is None:
+            if wait_deadline is None:
                 return await owner.next()
-            async with asyncio.timeout(max(0.0, deadline - time.monotonic())):
+            async with asyncio.timeout(
+                max(0.0, wait_deadline - time.monotonic())
+            ):
                 return await owner.next()
         except TimeoutError:
             owner.cancel()
@@ -714,9 +764,7 @@ async def _await_stream_owner(
                     ModelErrorKind.OUTCOME_UNKNOWN,
                     "model provider outcome is unknown after cancellation",
                 ) from None
-            raise ModelProviderError(
-                ModelErrorKind.TIMEOUT, "model deadline exceeded"
-            ) from None
+            raise _stream_timeout_error(idle_limited) from None
         except asyncio.CancelledError:
             owner.cancel()
             cleaned = await _await_cancellation_cleanup(owner.task)
@@ -730,7 +778,11 @@ async def _await_stream_owner(
     waiters: set[asyncio.Future[Any]] = {next_task}
     if cancel_task is not None:
         waiters.add(cancel_task)
-    timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
+    timeout = (
+        None
+        if wait_deadline is None
+        else max(0.0, wait_deadline - time.monotonic())
+    )
     try:
         done, _ = await asyncio.wait(
             waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
@@ -748,7 +800,7 @@ async def _await_stream_owner(
                 ModelErrorKind.OUTCOME_UNKNOWN,
                 "model provider outcome is unknown after cancellation",
             )
-        raise ModelProviderError(ModelErrorKind.TIMEOUT, "model deadline exceeded")
+        raise _stream_timeout_error(idle_limited)
     except asyncio.CancelledError:
         owner.cancel()
         cleaned = await _await_cancellation_cleanup(owner.task)
@@ -765,6 +817,16 @@ async def _await_stream_owner(
             *((cancel_task,) if cancel_task is not None else ()),
             return_exceptions=True,
         )
+
+
+def _stream_timeout_error(idle_limited: bool) -> ModelProviderError:
+    if idle_limited:
+        return ModelProviderError(
+            ModelErrorKind.TIMEOUT,
+            "model provider stream idle timeout exceeded",
+            reason_code=ModelFailureReason.PROVIDER_IDLE_TIMEOUT,
+        )
+    return ModelProviderError(ModelErrorKind.TIMEOUT, "model deadline exceeded")
 
 
 async def _await_cancellation_cleanup(task: asyncio.Future[Any]) -> bool:

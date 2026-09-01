@@ -34,6 +34,7 @@ class ModelFailureReason(str, Enum):
     """Closed, Provider-neutral reasons safe to expose at public boundaries."""
 
     PROVIDER_TIMEOUT = "provider_timeout"
+    PROVIDER_IDLE_TIMEOUT = "provider_idle_timeout"
     PROVIDER_OUTCOME_UNKNOWN = "provider_outcome_unknown"
     RATE_LIMITED = "rate_limited"
     QUOTA_EXHAUSTED = "quota_exhausted"
@@ -427,7 +428,7 @@ class RetryPolicy:
         ModelErrorKind.INCOMPLETE_RESPONSE,
     )
     backoff: ExponentialBackoff = ExponentialBackoff()
-    attempt_timeout_seconds: float | None = None
+    attempt_idle_timeout_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -441,13 +442,15 @@ class RetryPolicy:
             raise TypeError("retry_on must contain ModelErrorKind values")
         if len(retry_on) != len(set(retry_on)):
             raise ValueError("retry_on contains duplicates")
-        if self.attempt_timeout_seconds is not None and (
-            not isinstance(self.attempt_timeout_seconds, (int, float))
-            or isinstance(self.attempt_timeout_seconds, bool)
-            or not math.isfinite(self.attempt_timeout_seconds)
-            or self.attempt_timeout_seconds <= 0
+        if self.attempt_idle_timeout_seconds is not None and (
+            not isinstance(self.attempt_idle_timeout_seconds, (int, float))
+            or isinstance(self.attempt_idle_timeout_seconds, bool)
+            or not math.isfinite(self.attempt_idle_timeout_seconds)
+            or self.attempt_idle_timeout_seconds <= 0
         ):
-            raise ValueError("attempt_timeout_seconds must be finite and positive")
+            raise ValueError(
+                "attempt_idle_timeout_seconds must be finite and positive"
+            )
         object.__setattr__(self, "retry_on", retry_on)
 
 

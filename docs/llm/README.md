@@ -96,11 +96,12 @@ SDK adapter 的隐式重试必须关闭，或纳入同一 attempt 与 deadline �
 
 - 生命周期：`model.started`，以及恰好一个 `model.completed`、`model.failed` 或 `model.cancelled`。
 - Provider attempt：`model.attempt.started`、`model.attempt.succeeded`、`model.attempt.failed`。
+- 输出回滚：`model.output.reset` 表示失败 attempt 已公开的 reasoning、正文和 ToolCall 增量必须在重试前整体撤销。
 - 内容：`model.reasoning.delta` 和 `model.text.delta`。reasoning 仅表示 Provider 明确允许公开的 reasoning/thinking 内容，不承诺暴露隐藏思维链。
 - ToolCall 生成：`model.tool_call.started`、`model.tool_call.delta`、`model.tool_call.completed`。这组事件不表示工具已经授权或执行；实际执行使用 `tool.*` 事件。
 - Token：`model.usage`。字段固定为 `input_tokens`、`output_tokens`、`total_tokens`、`cached_input_tokens` 和 `reasoning_tokens`，缺失值为 `null`；每个 route/attempt 使用累计快照。
 
-一个 Provider SSE 数据块可以拆成多个标准增量，例如同时产生 reasoning、正文、多个 ToolCall 和 usage。`model.completed` 不等同于 Provider 的 `[DONE]`；只有完成原因允许成功、完整 ToolCall 参数、结构化输出、最终 usage 与 AIMessage 全部校验后才能发布。非流式输出限制会在正文事件发布前进入 retry，流式输出限制若已有正文则作为 partial failure 终止，二者都不会被 ReAct 当成无 ToolCall 的最终答案。
+一个 Provider SSE 数据块可以拆成多个标准增量，例如同时产生 reasoning、正文、多个 ToolCall 和 usage。`model.completed` 不等同于 Provider 的 `[DONE]`；只有完成原因允许成功、完整 ToolCall 参数、结构化输出、最终 usage 与 AIMessage 全部校验后才能发布。流式 idle timeout 在 `RetryPolicy` 允许重试时先发布 `model.attempt.failed` 和 `model.output.reset`，清空失败 attempt 的累积状态后再开始下一 attempt；消费者不得把 reset 前后的增量拼接。非流式输出限制会在正文事件发布前进入 retry，流式输出限制若已有正文则作为 partial failure 终止，二者都不会被 ReAct 当成无 ToolCall 的最终答案。
 
 - `invoke()` 消费或转交事件，只返回最终 `(AIMessage, Context)`。
 - `stream()` 暴露同一路径的事件，通过 `final_result()` 返回相同元组。

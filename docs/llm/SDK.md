@@ -48,7 +48,7 @@ def build_model(invoker: ModelInvoker | None = None) -> ModelCallLayer:
                 ModelErrorKind.INCOMPLETE_RESPONSE,
             ),
             backoff=ExponentialBackoff(initial=0.2, maximum=2.0),
-            attempt_timeout_seconds=10.0,
+            attempt_idle_timeout_seconds=10.0,
         ),
         generation=GenerationConfig(
             temperature=0.2,
@@ -182,9 +182,9 @@ route = ModelRoute(
 
 0.2 不在 `forward()` 中接受 provider 私有参数字典、stream 开关、client、credential 或 route 强制覆盖。direct execution 使用 ModelCallLayer 声明的本地 adapter 配置，调用方管理其连接生命周期与外部 deadline；managed execution 的本次请求信息进入可选 ExecutionOptions，secret、endpoint 与 client 等部署资源由 Runtime 根据 Binding 中的稳定资源引用解析。`ModelRoute` 选择、retry 与 fallback 始终由 ModelInvoker 决定，Runtime 不解释 Provider 路由逻辑。
 
-所有 route、retry、fallback、容量等待和 attempt 必须消耗同一有限 effective deadline 与取消预算；adapter 不得建立隐藏的第二套重试或 deadline 预算。`ModelCallLayer` 声明 `requires_finite_deadline=True`，因此 managed Root 或任意包含它的 Module 图在没有有限 `ExecutionOptions.deadline` 时必须于 admission 阶段 fail closed，不能等到 Provider I/O 后才失败。direct execution 不启用该 Runtime 门禁，外部 deadline 仍由调用方或 adapter 负责。
+所有 route、retry、fallback、容量等待和 attempt 必须消耗同一有限 effective deadline 与取消预算；adapter 不得建立隐藏的第二套重试或 deadline 预算。`ExecutionOptions.deadline` 是不可被流式进展延长的整体硬截止。`RetryPolicy.attempt_idle_timeout_seconds` 是 Provider 无进展窗口：非流式调用从请求开始等待完整响应；流式调用从请求开始等待首个有效 Provider 数据帧，并在每个后续有效数据帧到达后重新计时。SSE 注释和空行不算进展。`ModelCallLayer` 声明 `requires_finite_deadline=True`，因此 managed Root 或任意包含它的 Module 图在没有有限 `ExecutionOptions.deadline` 时必须于 admission 阶段 fail closed，不能等到 Provider I/O 后才失败。direct execution 不启用该 Runtime 门禁，外部整体 deadline 仍由调用方负责。
 
-attempt timeout 取消 Provider task 后，ModelInvoker 最多使用内部 1 秒 cleanup grace，并进一步受剩余 effective deadline 限制。只有 task 已确认退出，`TIMEOUT` 才能按 `RetryPolicy` 进入 retry/fallback；清理未确认时公开错误为 `ModelErrorKind.OUTCOME_UNKNOWN`，`model.attempt.failed` 固定携带脱敏的 `reason="cancellation_cleanup_timeout"`，本次模型调用立即终止。Invoker 按 client 对象身份隔离仍未退出的 task；隔离期间同一 client 的新逻辑 attempt fail-fast，不发送 Provider 请求，后台 task 退出并被安全回收后自动解除隔离。调用方显式取消仍传播 `CancelledError`，不会转换为模型失败。
+idle timeout 或整体 deadline 取消 Provider task 后，ModelInvoker 最多使用内部 1 秒 cleanup grace。只有 task 已确认退出，`TIMEOUT` 才能按 `RetryPolicy` 进入 retry/fallback；清理未确认时公开错误为 `ModelErrorKind.OUTCOME_UNKNOWN`，`model.attempt.failed` 固定携带脱敏的 `reason="cancellation_cleanup_timeout"`，本次模型调用立即终止。Invoker 按 client 对象身份隔离仍未退出的 task；隔离期间同一 client 的新逻辑 attempt fail-fast，不发送 Provider 请求，后台 task 退出并被安全回收后自动解除隔离。调用方显式取消仍传播 `CancelledError`，不会转换为模型失败。流式 attempt 已经发布正文、reasoning 或 ToolCall 后发生可确认的 idle timeout 时，是否重试仍统一由 `retry_on`、`max_attempts_per_route`、`backoff` 和 fallback 顺序决定；重试前固定发布 `model.output.reset`，消费者必须丢弃该失败 attempt 的暂存输出。最终 AIMessage 和 usage 只包含成功 attempt。重试耗尽时，最后一个未重置 attempt 仍以 `partial_output=True` 失败。
 
 Provider 请求失败时，`ModelCallError.attempts` 保留每次 attempt 的 `error_kind`、封闭脱敏 `reason_code` 和可选的数字 `http_status`。`reason_code` 用于区分 `model_not_found`、`quota_exhausted`、`context_length_exceeded`、`output_limit_reached` 等可操作原因；它由 Provider adapter 基于受支持的 Provider code/type 和完成原因白名单映射，不是 Provider message 的原样或清洗后转发。OpenAI-compatible 非流式响应会保留并规范化 `choices[0].finish_reason`；`length` 在任何正文事件发布前转换为默认可重试的 `INCOMPLETE_RESPONSE`，`content_filter` 转换为不可重试的 `CONTENT_POLICY_REJECTED` 失败。流式 `length` 若已发布正文则按既有 no-retry-after-output 规则作为 partial failure 终止。未识别的响应使用通用脱敏原因；Provider 任意 message、code、header、body、endpoint、credential 和内部异常链都不进入 Message、Context、ExecutionEvent 或公开失败值。managed effect、durable replay 和 Worker 传输必须原样保留这些脱敏字段。
 
@@ -220,12 +220,14 @@ async with model.stream(message, context) as stream:
             render_answer(event.data["text"])
         elif event.kind == "model.tool_call.delta":
             render_tool_arguments(event.data["item_id"], event.data["arguments_delta"])
+        elif event.kind == "model.output.reset":
+            discard_attempt_output(event.data["route_id"], event.data["attempt"])
         elif event.kind == "model.usage" and event.data["final"]:
             record_attempt_usage(event.data)
     ai_message, context = await stream.final_result()
 ```
 
-事件消费者应按 `event.kind` 处理固定 payload，不解释 Provider 私有字段。`model.usage` 是 route/attempt 级累计快照，同一 attempt 取最后一条；`model.tool_call.completed` 才包含已解析的完整 `arguments` 对象。执行工具时观察独立的 `tool.*` 事件。
+事件消费者应按 `event.kind` 处理固定 payload，不解释 Provider 私有字段。reasoning、正文和 ToolCall 增量在 attempt 成功前都是暂存输出；收到 `model.output.reset` 必须按 `route_id`/`attempt` 一次性撤销。`model.usage` 是 route/attempt 级累计快照，同一 attempt 取最后一条；`model.tool_call.completed` 才包含已解析的完整 `arguments` 对象。执行工具时观察独立的 `tool.*` 事件。
 
 直接调用要求 ModelCallLayer 具有可用的本地 adapter 配置；调用方负责 Root 并发、连接生命周期和外部 deadline。只声明了托管资源引用、没有本地 adapter 的模型层必须明确拒绝 direct execution。
 
@@ -242,7 +244,7 @@ async with bound_model.stream(message, context, run=run) as stream:
     ai_message, context = await stream.final_result()
 ```
 
-请求级 attempt timeout 仍只等待有限 cleanup grace；未确认退出时返回 `OUTCOME_UNKNOWN` 并隔离对应 client。每个原生 Provider stream 由唯一 owner task 从创建、读取到关闭全程持有，其他任务不直接调用其 `__anext__()` 或 `aclose()`。资源级 `DefaultModelInvoker.aclose()` 使用严格关闭语义：它会等待所有 active execution、stream owner 与 quarantine cleanup 终止，再关闭共享 client 并返回，因此 `aclose()` 返回后不会遗留后台异步生成器。
+请求级 idle timeout 仍只等待有限 cleanup grace；未确认退出时返回 `OUTCOME_UNKNOWN` 并隔离对应 client。每个原生 Provider stream 由唯一 owner task 从创建、读取到关闭全程持有，其他任务不直接调用其 `__anext__()` 或 `aclose()`。资源级 `DefaultModelInvoker.aclose()` 使用严格关闭语义：它会等待所有 active execution、stream owner 与 quarantine cleanup 终止，再关闭共享 client 并返回，因此 `aclose()` 返回后不会遗留后台异步生成器。
 
 这里是把 ModelCallLayer 作为 Root 接入已有 Binding。作为子 Module 时它默认继承 Parent Binding；只有需要独立治理边界时才为模型层使用不同 Binding。
 

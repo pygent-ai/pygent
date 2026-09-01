@@ -312,6 +312,9 @@ def _model_effect_request(
                 "retry": {
                     "max_attempts_per_route": retry.max_attempts_per_route,
                     "retry_on": [kind.value for kind in retry.retry_on],
+                    "attempt_idle_timeout_seconds": (
+                        retry.attempt_idle_timeout_seconds
+                    ),
                     "backoff": {
                         "initial": retry.backoff.initial,
                         "maximum": retry.backoff.maximum,

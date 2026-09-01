@@ -66,7 +66,7 @@ async def test_benchmark_resources_project_retry_configuration() -> None:
             retry_max_attempts=2,
             retry_on=("timeout", "unavailable"),
             retry_backoff_seconds=1.0,
-            attempt_timeout_seconds=90.0,
+            attempt_idle_timeout_seconds=90.0,
         ),
         seed=1729,
         streaming=False,
@@ -78,7 +78,7 @@ async def test_benchmark_resources_project_retry_configuration() -> None:
             ModelErrorKind.TIMEOUT,
             ModelErrorKind.UNAVAILABLE,
         )
-        assert policy.attempt_timeout_seconds == 90.0
+        assert policy.attempt_idle_timeout_seconds == 90.0
         assert policy.backoff.delay(0) == 1.0
     finally:
         await resources.aclose()
@@ -86,7 +86,7 @@ async def test_benchmark_resources_project_retry_configuration() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.performance
-async def test_benchmark_attempt_timeout_retries_through_pygent_model_policy() -> None:
+async def test_benchmark_attempt_idle_timeout_retries_through_model_policy() -> None:
     provider = SlowOnceClient()
     tracked = TrackedClient(provider)
     invoker = DefaultModelInvoker(
@@ -104,7 +104,7 @@ async def test_benchmark_attempt_timeout_retries_through_pygent_model_policy() -
             max_attempts_per_route=2,
             retry_on=(ModelErrorKind.TIMEOUT,),
             backoff=ExponentialBackoff(0, 0),
-            attempt_timeout_seconds=0.01,
+            attempt_idle_timeout_seconds=0.01,
         ),
         generation=GenerationConfig(),
         message=UserMessage(content="Return done for request 1."),
@@ -142,7 +142,7 @@ async def test_benchmark_attempt_timeout_retries_through_pygent_model_policy() -
 @pytest.mark.asyncio
 @pytest.mark.performance
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_benchmark_attempt_timeout_fails_closed_when_cleanup_is_unknown(
+async def test_benchmark_attempt_idle_timeout_fails_closed_when_cleanup_is_unknown(
     monkeypatch: pytest.MonkeyPatch, streaming: bool
 ) -> None:
     class StuckClient(SlowOnceClient):
@@ -193,7 +193,7 @@ async def test_benchmark_attempt_timeout_fails_closed_when_cleanup_is_unknown(
             max_attempts_per_route=3,
             retry_on=(ModelErrorKind.TIMEOUT,),
             backoff=ExponentialBackoff(0, 0),
-            attempt_timeout_seconds=0.01,
+            attempt_idle_timeout_seconds=0.01,
         ),
         generation=GenerationConfig(),
         message=UserMessage(content="request 1"),

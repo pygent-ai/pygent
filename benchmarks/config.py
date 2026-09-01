@@ -24,7 +24,7 @@ class ModelSettings:
     retry_max_attempts: int = 1
     retry_on: tuple[str, ...] = ()
     retry_backoff_seconds: float = 0.0
-    attempt_timeout_seconds: float | None = None
+    attempt_idle_timeout_seconds: float | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -56,14 +56,16 @@ class ModelSettings:
         object.__setattr__(self, "retry_on", retry_on)
         if self.retry_max_attempts > 1 and not retry_on:
             raise ValueError("retry_on is required when retry_max_attempts is greater than one")
-        timeout = self.attempt_timeout_seconds
+        timeout = self.attempt_idle_timeout_seconds
         if timeout is not None and (
             not isinstance(timeout, (int, float))
             or isinstance(timeout, bool)
             or not math.isfinite(timeout)
             or timeout <= 0
         ):
-            raise ValueError("attempt_timeout_seconds must be finite and positive")
+            raise ValueError(
+                "attempt_idle_timeout_seconds must be finite and positive"
+            )
 
 
 @dataclass(frozen=True, slots=True)

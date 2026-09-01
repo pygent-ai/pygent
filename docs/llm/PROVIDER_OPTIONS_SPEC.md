@@ -317,7 +317,7 @@ model.route.provider-options.v1
 - API key、token、cookie、Authorization header；
 - endpoint、代理认证、TLS 私钥、CA 或证书校验策略（包括 `verify_ssl`）；
 - client、session、连接池、锁、Task、协程或 callback；
-- retry 次数、backoff、attempt timeout 或总 deadline；
+- retry 次数、backoff、attempt idle timeout 或总 deadline；
 - stream 开关；
 - Runtime、Binding、Execution 或 resource resolver 对象；
 - Provider 原始响应或内部异常。

@@ -91,7 +91,7 @@ def test_provider_options_change_definition_and_effect_identity_but_empty_does_n
     )
     assert (
         compile_execution_plan(empty_layer).modules[0].config_ref
-        == "sha256:db8f0c523d141f386486cc63b15957d22076f7e3144953ad4bdab4702283ddc8"
+        == "sha256:a46ffe87f32486dd7af9aa341ec2f85e71b1a71911aa3cfcd887693169c34d6a"
     )
     assert (
         compile_execution_plan(empty_layer).modules[0].config_ref
@@ -114,6 +114,23 @@ def test_provider_options_change_definition_and_effect_identity_but_empty_does_n
     effect_routes = cast(tuple[object, ...], effect_group["routes"])
     empty_route = cast(FrozenJsonObject, effect_routes[0])
     assert empty_route["provider_options"] == freeze_json_object({})
+    assert empty_effect["retry"] == freeze_json_object(
+        {
+            "max_attempts_per_route": 2,
+            "retry_on": [
+                "timeout",
+                "rate_limit",
+                "unavailable",
+                "incomplete_response",
+            ],
+            "attempt_idle_timeout_seconds": None,
+            "backoff": {
+                "initial": 0.0,
+                "maximum": 0.0,
+                "multiplier": 2.0,
+            },
+        }
+    )
     assert empty_effect != configured_effect
 
 

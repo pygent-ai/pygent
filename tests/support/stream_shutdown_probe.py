@@ -76,7 +76,7 @@ async def main() -> None:
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=1,
-            attempt_timeout_seconds=0.005,
+            attempt_idle_timeout_seconds=0.005,
         ),
         generation=GenerationConfig(),
         message=UserMessage(content="probe"),

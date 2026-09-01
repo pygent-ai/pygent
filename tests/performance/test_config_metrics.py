@@ -20,11 +20,8 @@ def test_profiles_are_validated_and_live_has_a_hard_concurrency_limit():
     assert smoke.estimated_seconds() > 0
     assert live.model.retry_max_attempts == 2
     assert live.model.retry_on == ("timeout", "unavailable")
-    assert live.model.attempt_timeout_seconds == 90.0
-    assert live.request_deadline_seconds > (
-        live.model.attempt_timeout_seconds * live.model.retry_max_attempts
-        + live.model.retry_backoff_seconds
-    )
+    assert live.model.attempt_idle_timeout_seconds == 90.0
+    assert live.request_deadline_seconds > live.model.attempt_idle_timeout_seconds
 
     with pytest.raises(ValueError, match="hard-limited"):
         replace(
@@ -105,8 +102,8 @@ def test_invalid_profile_shapes_fail_closed():
     with pytest.raises(ValueError, match="retry_on is required"):
         ModelSettings(retry_max_attempts=2)
 
-    with pytest.raises(ValueError, match="attempt_timeout_seconds"):
-        ModelSettings(attempt_timeout_seconds=0)
+    with pytest.raises(ValueError, match="attempt_idle_timeout_seconds"):
+        ModelSettings(attempt_idle_timeout_seconds=0)
 
 
 @pytest.mark.performance
