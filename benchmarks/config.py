@@ -45,12 +45,13 @@ class ModelSettings:
         ):
             raise ValueError("retry_max_attempts must be a positive integer")
         retry_on = tuple(self.retry_on)
-        supported = {"timeout", "rate_limit", "unavailable"}
+        supported = {"timeout", "rate_limit", "unavailable", "incomplete_response"}
         if len(retry_on) != len(set(retry_on)) or any(
             kind not in supported for kind in retry_on
         ):
             raise ValueError(
-                "retry_on must contain unique timeout, rate_limit, or unavailable values"
+                "retry_on must contain unique timeout, rate_limit, unavailable, or "
+                "incomplete_response values"
             )
         object.__setattr__(self, "retry_on", retry_on)
         if self.retry_max_attempts > 1 and not retry_on:

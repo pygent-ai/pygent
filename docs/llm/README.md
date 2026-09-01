@@ -76,7 +76,7 @@ ModelInvoker 在当前执行模式提供的总 deadline、取消信号和资源�
 
 1. 按 FallbackPolicy 选择 route。
 2. direct execution 从本地 adapter 获得 client；managed execution 请求 Runtime 获取物理资源对应的容量和 client。
-3. 通过对应 ModelProviderAdapter 调用 Provider，并把错误归一化为 ModelErrorKind。
+3. 通过对应 ModelProviderAdapter 调用 Provider，保留规范化完成原因，并把错误归一化为 ModelErrorKind；`length` 是默认可重试的 `INCOMPLETE_RESPONSE`，`content_filter` 是内容策略失败。
 4. RetryPolicy 允许时在同一 route 重试；预算耗尽后考虑下一 route。
 5. 全部失败时抛出脱敏的 ModelCallError，不伪造成功 AIMessage。
 
@@ -100,7 +100,7 @@ SDK adapter 的隐式重试必须关闭，或纳入同一 attempt 与 deadline �
 - ToolCall 生成：`model.tool_call.started`、`model.tool_call.delta`、`model.tool_call.completed`。这组事件不表示工具已经授权或执行；实际执行使用 `tool.*` 事件。
 - Token：`model.usage`。字段固定为 `input_tokens`、`output_tokens`、`total_tokens`、`cached_input_tokens` 和 `reasoning_tokens`，缺失值为 `null`；每个 route/attempt 使用累计快照。
 
-一个 Provider SSE 数据块可以拆成多个标准增量，例如同时产生 reasoning、正文、多个 ToolCall 和 usage。`model.completed` 不等同于 Provider 的 `[DONE]`；只有完整 ToolCall 参数、结构化输出、最终 usage 与 AIMessage 全部校验后才能发布。
+一个 Provider SSE 数据块可以拆成多个标准增量，例如同时产生 reasoning、正文、多个 ToolCall 和 usage。`model.completed` 不等同于 Provider 的 `[DONE]`；只有完成原因允许成功、完整 ToolCall 参数、结构化输出、最终 usage 与 AIMessage 全部校验后才能发布。非流式输出限制会在正文事件发布前进入 retry，流式输出限制若已有正文则作为 partial failure 终止，二者都不会被 ReAct 当成无 ToolCall 的最终答案。
 
 - `invoke()` 消费或转交事件，只返回最终 `(AIMessage, Context)`。
 - `stream()` 暴露同一路径的事件，通过 `final_result()` 返回相同元组。

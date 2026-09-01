@@ -715,6 +715,14 @@ class OpenAICompatibleAdapter:
             choice = choices[0]
             if not isinstance(choice, dict):
                 raise TypeError
+            raw_finish_reason = choice.get("finish_reason")
+            if raw_finish_reason is not None and not isinstance(raw_finish_reason, str):
+                raise TypeError
+            finish_reason = (
+                "other"
+                if raw_finish_reason is None
+                else _normalized_finish_reason(raw_finish_reason)
+            )
             raw_message = choice.get("message")
             if isinstance(raw_message, str):
                 content = raw_message
@@ -785,6 +793,7 @@ class OpenAICompatibleAdapter:
             message=message,
             usage=usage,
             provider_request_id=request_id,
+            finish_reason=finish_reason,
         )
 
     def parse_stream_events(

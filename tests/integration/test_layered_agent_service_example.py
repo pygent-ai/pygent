@@ -39,6 +39,7 @@ def test_example_builds_a_user_authored_module_graph():
         ModelErrorKind.TIMEOUT,
         ModelErrorKind.RATE_LIMIT,
         ModelErrorKind.UNAVAILABLE,
+        ModelErrorKind.INCOMPLETE_RESPONSE,
     )
     assert agent.react.model.generation.max_output_tokens == 2048
     assert agent.react.max_steps == 4

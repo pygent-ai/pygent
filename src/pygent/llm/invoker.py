@@ -325,6 +325,10 @@ class DefaultModelInvoker:
                         deadline=attempt_deadline,
                         cancel_event=cancel_event,
                     ):
+                        if part.kind == ModelProviderStreamKind.FINISH:
+                            _raise_for_unsuccessful_finish(
+                                cast(FrozenJsonObject, part.data).get("finish_reason")
+                            )
                         part_payload = cast(FrozenJsonObject, part.data).to_dict()
                         part_payload.update({"route_id": route_id, "attempt": number})
                         part = ModelProviderStreamPart(part.kind, part_payload)
@@ -333,7 +337,11 @@ class DefaultModelInvoker:
                             raw_usage.pop("route_id", None)
                             raw_usage.pop("attempt", None)
                             attempt_usage = _validated_canonical_usage(raw_usage)
-                        emitted = emitted or part.kind != ModelProviderStreamKind.FINISH
+                        emitted = emitted or part.kind in {
+                            ModelProviderStreamKind.REASONING,
+                            ModelProviderStreamKind.TEXT,
+                            ModelProviderStreamKind.TOOL_CALL,
+                        }
                         completed = (
                             completed or part.kind == ModelProviderStreamKind.FINISH
                         )
@@ -455,6 +463,9 @@ class DefaultModelInvoker:
                 on_cleanup_stuck=lambda task: self._quarantine(client, task),
             )
             response = adapter.parse_response(request, raw)
+            if response.usage:
+                yield ModelProviderStreamPart("usage", response.usage)
+            _raise_for_unsuccessful_finish(response.finish_reason)
             if response.message.content:
                 yield ModelProviderStreamPart(
                     "text", {"text": response.message.content}
@@ -473,14 +484,10 @@ class DefaultModelInvoker:
                         ),
                     },
                 )
-            if response.usage:
-                yield ModelProviderStreamPart("usage", response.usage)
             yield ModelProviderStreamPart(
                 "finish",
                 {
-                    "finish_reason": (
-                        "tool_calls" if response.message.tool_calls else "stop"
-                    ),
+                    "finish_reason": response.finish_reason,
                     "provider_request_id": response.provider_request_id,
                 },
             )
@@ -568,6 +575,21 @@ def _terminal_failure_message(attempts: list[ModelAttempt]) -> str:
     if last.http_status is not None:
         diagnostic += f" (HTTP {last.http_status})"
     return f"{message}: {diagnostic}"
+
+
+def _raise_for_unsuccessful_finish(reason: object) -> None:
+    if reason == "length":
+        raise ModelProviderError(
+            ModelErrorKind.INCOMPLETE_RESPONSE,
+            "model output stopped at the output-token limit",
+            reason_code=ModelFailureReason.OUTPUT_LIMIT_REACHED,
+        )
+    if reason == "content_filter":
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_RESPONSE,
+            "model output was rejected by the provider content policy",
+            reason_code=ModelFailureReason.CONTENT_POLICY_REJECTED,
+        )
 
 
 def _earliest_deadline(

@@ -45,6 +45,7 @@ def build_model(invoker: ModelInvoker | None = None) -> ModelCallLayer:
                 ModelErrorKind.TIMEOUT,
                 ModelErrorKind.RATE_LIMIT,
                 ModelErrorKind.UNAVAILABLE,
+                ModelErrorKind.INCOMPLETE_RESPONSE,
             ),
             backoff=ExponentialBackoff(initial=0.2, maximum=2.0),
             attempt_timeout_seconds=10.0,
@@ -185,7 +186,7 @@ route = ModelRoute(
 
 attempt timeout 取消 Provider task 后，ModelInvoker 最多使用内部 1 秒 cleanup grace，并进一步受剩余 effective deadline 限制。只有 task 已确认退出，`TIMEOUT` 才能按 `RetryPolicy` 进入 retry/fallback；清理未确认时公开错误为 `ModelErrorKind.OUTCOME_UNKNOWN`，`model.attempt.failed` 固定携带脱敏的 `reason="cancellation_cleanup_timeout"`，本次模型调用立即终止。Invoker 按 client 对象身份隔离仍未退出的 task；隔离期间同一 client 的新逻辑 attempt fail-fast，不发送 Provider 请求，后台 task 退出并被安全回收后自动解除隔离。调用方显式取消仍传播 `CancelledError`，不会转换为模型失败。
 
-Provider 请求失败时，`ModelCallError.attempts` 保留每次 attempt 的 `error_kind`、封闭脱敏 `reason_code` 和可选的数字 `http_status`。`reason_code` 用于区分 `model_not_found`、`quota_exhausted`、`context_length_exceeded` 等可操作原因；它由 Provider adapter 基于受支持的 Provider code/type 白名单映射，不是 Provider message 的原样或清洗后转发。未识别的响应使用通用脱敏原因；Provider 任意 message、code、header、body、endpoint、credential 和内部异常链都不进入 Message、Context、ExecutionEvent 或公开失败值。managed effect、durable replay 和 Worker 传输必须原样保留这些脱敏字段。
+Provider 请求失败时，`ModelCallError.attempts` 保留每次 attempt 的 `error_kind`、封闭脱敏 `reason_code` 和可选的数字 `http_status`。`reason_code` 用于区分 `model_not_found`、`quota_exhausted`、`context_length_exceeded`、`output_limit_reached` 等可操作原因；它由 Provider adapter 基于受支持的 Provider code/type 和完成原因白名单映射，不是 Provider message 的原样或清洗后转发。OpenAI-compatible 非流式响应会保留并规范化 `choices[0].finish_reason`；`length` 在任何正文事件发布前转换为默认可重试的 `INCOMPLETE_RESPONSE`，`content_filter` 转换为不可重试的 `CONTENT_POLICY_REJECTED` 失败。流式 `length` 若已发布正文则按既有 no-retry-after-output 规则作为 partial failure 终止。未识别的响应使用通用脱敏原因；Provider 任意 message、code、header、body、endpoint、credential 和内部异常链都不进入 Message、Context、ExecutionEvent 或公开失败值。managed effect、durable replay 和 Worker 传输必须原样保留这些脱敏字段。
 
 响应兼容失败进一步使用 `provider_payload_invalid`、`completion_shape_invalid`、`stream_event_invalid`、`generation_schema_invalid`、`tool_call_invalid` 或 `stream_incomplete`，以便在不暴露原始 payload 的前提下区分失败阶段。可恢复的未知字段、文本 content-parts、辅助空 chunk 和兼容 ToolCall 增量会先由 adapter 规范化；这些 reason 只表示最终仍无法形成严格 canonical 结果。
 

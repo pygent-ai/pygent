@@ -127,13 +127,11 @@ class CloseSensitiveStreamingClient:
             self.closed.set()
 
 
-def completion(content="ok", usage=None) -> FrozenJsonObject:
-    return freeze_json_object(
-        {
-            "choices": [{"message": {"content": content}}],
-            "usage": usage or {},
-        }
-    )
+def completion(content="ok", usage=None, finish_reason=None) -> FrozenJsonObject:
+    choice: dict[str, object] = {"message": {"content": content}}
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    return freeze_json_object({"choices": [choice], "usage": usage or {}})
 
 
 def group() -> ModelGroupConfig:
@@ -196,6 +194,86 @@ async def test_default_retry_policy_allows_two_total_attempts():
 
     assert result.message.content == "recovered"
     assert primary.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_output_limit_retries_before_exposing_partial_answer():
+    primary = FakeClient(
+        [
+            completion(
+                "truncated",
+                usage={"completion_tokens": 4},
+                finish_reason="length",
+            ),
+            completion("complete", finish_reason="stop"),
+        ]
+    )
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": primary, "fallback": FakeClient([])},
+        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+    )
+    execution = invoker.execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(backoff=ExponentialBackoff(0, 0)),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    )
+
+    result = await execution.result()
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+
+    assert result.message.content == "complete"
+    assert result.finish_reason == "stop"
+    assert primary.calls == 2
+    assert [event.kind for event in events].count("model.text.delta") == 1
+    assert [event.kind for event in events].count("model.attempt.failed") == 1
+    assert [event.kind for event in events].count("model.attempt.succeeded") == 1
+    failed_usage = next(
+        event.data
+        for event in events
+        if event.kind == "model.usage" and event.data["attempt"] == 1
+    )
+    assert failed_usage["output_tokens"] == 4
+    assert events[-1].data["finish_reason"] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_content_filter_fails_without_successful_output():
+    client = FakeClient([completion("blocked", finish_reason="content_filter")])
+    invoker = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": client},
+        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+    )
+    model_group = ModelGroupConfig(
+        name="assistant",
+        routes=(ModelRoute("primary", "openai", "first"),),
+        fallback=FallbackPolicy(("primary",)),
+    )
+    execution = invoker.execute(
+        model_group=model_group,
+        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        await execution.result()
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+
+    assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
+    assert (
+        raised.value.attempts[-1].reason_code
+        is ModelFailureReason.CONTENT_POLICY_REJECTED
+    )
+    assert "model.text.delta" not in [event.kind for event in events]
+    assert "model.attempt.succeeded" not in [event.kind for event in events]
+    assert "model.completed" not in [event.kind for event in events]
 
 
 @pytest.mark.asyncio
@@ -533,6 +611,45 @@ async def test_stream_normalizes_text_usage_and_completion():
         "cached_input_tokens": None,
         "reasoning_tokens": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_streaming_output_limit_fails_as_partial_without_retrying():
+    client = FakeClient(
+        [
+            freeze_json_object({"choices": [{"delta": {"content": "partial"}}]}),
+            freeze_json_object(
+                {"choices": [{"delta": {}, "finish_reason": "length"}]}
+            ),
+        ]
+    )
+    model_group = ModelGroupConfig(
+        name="assistant",
+        routes=(ModelRoute("primary", "openai", "first"),),
+        fallback=FallbackPolicy(("primary",)),
+    )
+    execution = DefaultModelInvoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": client},
+    ).execute(
+        model_group=model_group,
+        retry_policy=RetryPolicy(backoff=ExponentialBackoff(0, 0)),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        await execution.result()
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+
+    assert raised.value.kind is ModelErrorKind.INCOMPLETE_RESPONSE
+    assert raised.value.partial_output is True
+    assert raised.value.attempts[-1].reason_code is ModelFailureReason.OUTPUT_LIMIT_REACHED
+    assert "model.text.delta" in [event.kind for event in events]
+    assert "model.attempt.succeeded" not in [event.kind for event in events]
+    assert "model.completed" not in [event.kind for event in events]
 
 
 @pytest.mark.asyncio

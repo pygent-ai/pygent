@@ -91,9 +91,15 @@ class ModelProviderResponse:
     message: AIMessage
     usage: JsonObjectInput = ()
     provider_request_id: str | None = None
+    finish_reason: str = "other"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "usage", _validated_canonical_usage(self.usage))
+        if not isinstance(self.finish_reason, str):
+            raise TypeError("finish_reason must be a string")
+        object.__setattr__(
+            self, "finish_reason", _normalized_finish_reason(self.finish_reason)
+        )
 
 
 @dataclass(frozen=True, slots=True)

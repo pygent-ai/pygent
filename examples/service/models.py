@@ -43,6 +43,7 @@ def build_assistant_model(
                 ModelErrorKind.TIMEOUT,
                 ModelErrorKind.RATE_LIMIT,
                 ModelErrorKind.UNAVAILABLE,
+                ModelErrorKind.INCOMPLETE_RESPONSE,
             ),
             backoff=ExponentialBackoff(initial=0.2, maximum=2.0),
         ),

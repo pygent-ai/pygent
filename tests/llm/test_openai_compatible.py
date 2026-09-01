@@ -101,6 +101,57 @@ def test_non_streaming_accepts_recoverable_completion_shapes(
     assert response.message.content == expected
 
 
+@pytest.mark.parametrize(
+    ("wire_reason", "expected"),
+    [
+        ("stop", "stop"),
+        ("tool_calls", "tool_calls"),
+        ("function_call", "tool_calls"),
+        ("length", "length"),
+        ("max_tokens", "length"),
+        ("content_filter", "content_filter"),
+        ("vendor_specific", "other"),
+    ],
+)
+def test_non_streaming_preserves_normalized_finish_reason(
+    wire_reason: str, expected: str
+) -> None:
+    response = OpenAICompatibleAdapter().parse_response(
+        _request(),
+        freeze_json_object(
+            {
+                "choices": [
+                    {
+                        "message": {"content": "answer"},
+                        "finish_reason": wire_reason,
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert response.finish_reason == expected
+
+
+def test_non_streaming_rejects_non_string_finish_reason() -> None:
+    with pytest.raises(ModelProviderError) as raised:
+        OpenAICompatibleAdapter().parse_response(
+            _request(),
+            freeze_json_object(
+                {
+                    "choices": [
+                        {
+                            "message": {"content": "answer"},
+                            "finish_reason": 1,
+                        }
+                    ]
+                }
+            ),
+        )
+
+    assert raised.value.reason_code is ModelFailureReason.COMPLETION_SHAPE_INVALID
+
+
 def test_non_streaming_synthesizes_missing_tool_id_and_decodes_fenced_arguments():
     tool = ToolDefinition(
         name="double",

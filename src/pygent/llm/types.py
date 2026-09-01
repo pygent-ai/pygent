@@ -23,6 +23,7 @@ class ModelErrorKind(str, Enum):
     OUTCOME_UNKNOWN = "outcome_unknown"
     RATE_LIMIT = "rate_limit"
     UNAVAILABLE = "unavailable"
+    INCOMPLETE_RESPONSE = "incomplete_response"
     AUTHENTICATION = "authentication"
     INVALID_REQUEST = "invalid_request"
     INVALID_RESPONSE = "invalid_response"
@@ -51,6 +52,7 @@ class ModelFailureReason(str, Enum):
     GENERATION_SCHEMA_INVALID = "generation_schema_invalid"
     TOOL_CALL_INVALID = "tool_call_invalid"
     STREAM_INCOMPLETE = "stream_incomplete"
+    OUTPUT_LIMIT_REACHED = "output_limit_reached"
     UNKNOWN_PROVIDER_FAILURE = "unknown_provider_failure"
 
 
@@ -60,6 +62,7 @@ def _default_failure_reason(kind: ModelErrorKind) -> ModelFailureReason:
         ModelErrorKind.OUTCOME_UNKNOWN: ModelFailureReason.PROVIDER_OUTCOME_UNKNOWN,
         ModelErrorKind.RATE_LIMIT: ModelFailureReason.RATE_LIMITED,
         ModelErrorKind.UNAVAILABLE: ModelFailureReason.PROVIDER_UNAVAILABLE,
+        ModelErrorKind.INCOMPLETE_RESPONSE: ModelFailureReason.OUTPUT_LIMIT_REACHED,
         ModelErrorKind.AUTHENTICATION: ModelFailureReason.AUTHENTICATION_FAILED,
         ModelErrorKind.INVALID_REQUEST: ModelFailureReason.INVALID_PARAMETER,
         ModelErrorKind.INVALID_RESPONSE: ModelFailureReason.INVALID_PROVIDER_RESPONSE,
@@ -421,6 +424,7 @@ class RetryPolicy:
         ModelErrorKind.TIMEOUT,
         ModelErrorKind.RATE_LIMIT,
         ModelErrorKind.UNAVAILABLE,
+        ModelErrorKind.INCOMPLETE_RESPONSE,
     )
     backoff: ExponentialBackoff = ExponentialBackoff()
     attempt_timeout_seconds: float | None = None
@@ -552,6 +556,7 @@ class ModelCallError(ExecutionFailureError):
                     ModelErrorKind.TIMEOUT,
                     ModelErrorKind.RATE_LIMIT,
                     ModelErrorKind.UNAVAILABLE,
+                    ModelErrorKind.INCOMPLETE_RESPONSE,
                 },
                 outcome_unknown=kind is ModelErrorKind.OUTCOME_UNKNOWN,
                 partial_output=partial_output,

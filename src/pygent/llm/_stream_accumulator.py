@@ -168,6 +168,7 @@ class ModelStreamAccumulator:
             ),
             usage=self.usage,
             provider_request_id=self.provider_request_id,
+            finish_reason=self.finish_reason,
         )
 
     async def _validate_content(
