@@ -11,9 +11,10 @@ import shutil
 import tempfile
 import threading
 from contextlib import suppress
+from io import TextIOWrapper
 from itertools import islice
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any, Never
+from typing import Annotated, Any, Never, TextIO
 
 from pydantic import Field
 from pypdf import PdfReader
@@ -96,14 +97,46 @@ def _fail(
     )
 
 
-def _format_file_text(text: str, offset: int | None, limit: int | None) -> str:
-    lines = text.splitlines(keepends=True)
+def _read_text_range(
+    stream: TextIO, offset: int | None, limit: int | None, max_bytes: int
+) -> str:
     start_line = offset or 1
-    start = start_line - 1
-    selected = lines[start : start + limit] if limit is not None else lines[start:]
-    return "".join(
-        f"{index + start_line}|{line}" for index, line in enumerate(selected)
-    )
+    # Bound each read even when a skipped line is much larger than the page.
+    for _ in range(start_line - 1):
+        while True:
+            chunk = stream.readline(64 * 1024)
+            if not chunk:
+                return ""
+            if chunk.endswith("\n"):
+                break
+
+    output: list[str] = []
+    used = 0
+    line_number = start_line
+    while limit is None or line_number - start_line < limit:
+        line = stream.readline(max_bytes + 1)
+        if not line:
+            break
+        encoded = line.encode("utf-8")
+        if len(encoded) > max_bytes - used:
+            if output:
+                output.append(
+                    f"\n[read truncated to {max_bytes} bytes; "
+                    f"continue with offset={line_number}]"
+                )
+            else:
+                prefix = encoded[:max_bytes].decode("utf-8", errors="ignore")
+                output.append(f"{line_number}|{prefix}")
+                output.append(
+                    f"\n[read truncated to {max_bytes} bytes within line {line_number}; "
+                    "line-based offset cannot retrieve the remainder of this line. "
+                    "Use a tool supporting byte ranges to read the full line.]"
+                )
+            break
+        output.append(f"{line_number}|{line}")
+        used += len(encoded)
+        line_number += 1
+    return "".join(output)
 
 
 def _parse_pdf_page_range(pages: str | None, total_pages: int) -> list[int]:
@@ -489,11 +522,15 @@ class FileTools:
                 description="File path resolved from workspace_root and restricted to it by default."
             ),
         ],
-        limit: Annotated[int | None, Field(gt=0)] = None,
-        offset: Annotated[int | None, Field(gt=0)] = None,
+        limit: Annotated[
+            int | None, Field(gt=0, description="Maximum number of text lines to return.")
+        ] = None,
+        offset: Annotated[
+            int | None, Field(gt=0, description="Starting text line, numbered from 1.")
+        ] = None,
         pages: str | None = None,
     ) -> str:
-        """Read text ranges, optional PDF pages, or a bounded binary description."""
+        """Read text from offset, with a per-response byte cap and continuation hints, or PDF pages/binary descriptions."""
 
         return await _run_owned_thread(
             self._io_service.read, file_path, limit, offset, pages
@@ -513,7 +550,12 @@ class FileTools:
             _fail("pages applies only to PDF files", "invalid_page_range")
         try:
             with path.open("rb") as stream:
-                raw = stream.read(self.max_read_bytes + 1)
+                sample = stream.read(self.max_read_bytes)
+                text_bytes = set(range(0x20, 0x100)) | {7, 8, 9, 10, 12, 13, 27}
+                if not sample or all(byte in text_bytes for byte in sample):
+                    stream.seek(0)
+                    with TextIOWrapper(stream, encoding="utf-8", errors="replace") as text:
+                        return _read_text_range(text, offset, limit, self.max_read_bytes)
         except OSError as exc:
             raise ToolExecutionError(
                 f"could not read file: {path}",
@@ -522,16 +564,6 @@ class FileTools:
                 retryable=True,
                 side_effect_committed=False,
             ) from exc
-        truncated = len(raw) > self.max_read_bytes
-        raw = raw[: self.max_read_bytes]
-        text_bytes = set(range(0x20, 0x100)) | {7, 8, 9, 10, 12, 13, 27}
-        if not raw or all(byte in text_bytes for byte in raw):
-            text = raw.decode("utf-8", errors="replace")
-            text = text.replace("\r\n", "\n").replace("\r", "\n")
-            output = _format_file_text(text, offset, limit)
-            if truncated:
-                output += f"\n[read truncated to {self.max_read_bytes} bytes]"
-            return output
         label = "image" if path.suffix.lower() in _IMAGE_SUFFIXES else "binary"
         return f"[{label} file {path.name}, size {path.stat().st_size} bytes]"
 

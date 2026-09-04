@@ -10,12 +10,8 @@ from typing import TypeAlias, cast
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 
-# Public values cross process and persistence boundaries.  These conservative
-# limits keep validation deterministic and prevent recursive or oversized
-# payloads from consuming unbounded stack or memory before a Runtime can apply
-# its own transport limits.
+# Bound recursive nesting; payload byte size and node count are unrestricted.
 MAX_JSON_DEPTH = 64
-MAX_JSON_NODES = 100_000
 
 
 class JsonValueError(TypeError):
@@ -25,17 +21,11 @@ class JsonValueError(TypeError):
 @dataclass(slots=True)
 class _FreezeState:
     active_container_ids: set[int]
-    nodes: int = 0
 
     def visit(self, *, depth: int) -> None:
         if depth > MAX_JSON_DEPTH:
             raise JsonValueError(
                 f"JSON value exceeds maximum depth of {MAX_JSON_DEPTH}"
-            )
-        self.nodes += 1
-        if self.nodes > MAX_JSON_NODES:
-            raise JsonValueError(
-                f"JSON value exceeds maximum size of {MAX_JSON_NODES} nodes"
             )
 
 
@@ -105,7 +95,7 @@ def freeze_json_object(value: JsonObjectInput = ()) -> FrozenJsonObject:
         state.active_container_ids.discard(container_id)
 
     # The private constructor avoids validating the already-frozen tree a
-    # second time (which would also reset the aggregate node budget).
+    # second time.
     frozen = object.__new__(FrozenJsonObject)
     object.__setattr__(frozen, "_items", items)
     return frozen
@@ -177,7 +167,7 @@ def _patch_frozen_json_object(
         if overwrite and key in update_by_key:
             patched = _freeze(update_by_key[key], state=state, depth=1)
         else:
-            _count_frozen_nodes(existing, state=state)
+            _validate_frozen_depth(existing, state=state)
             patched = existing
         patched_items.append((key, patched))
     for key, update in update_items:
@@ -189,7 +179,7 @@ def _patch_frozen_json_object(
     return patched
 
 
-def _count_frozen_nodes(value: JsonValue, *, state: _FreezeState) -> None:
+def _validate_frozen_depth(value: JsonValue, *, state: _FreezeState) -> None:
     pending = [(value, 1)]
     while pending:
         current, depth = pending.pop()
@@ -215,7 +205,7 @@ def _freeze(value: object, *, state: _FreezeState, depth: int) -> JsonValue:
         return value
     if isinstance(value, FrozenJsonObject):
         # Existing frozen values still have to participate in the current
-        # aggregate depth/node/cycle budget.  Treating them as trusted leaves
+        # depth and cycle checks.  Treating them as trusted leaves
         # lets repeated shallow wrapping create a value that construction
         # accepts but wire thawing cannot traverse safely.
         return _freeze_mapping(
@@ -290,7 +280,6 @@ def thaw_json(value: JsonValue | Mapping[str, object]) -> object:
 
 __all__ = [
     "MAX_JSON_DEPTH",
-    "MAX_JSON_NODES",
     "FrozenJsonObject",
     "JsonObjectInput",
     "JsonScalar",

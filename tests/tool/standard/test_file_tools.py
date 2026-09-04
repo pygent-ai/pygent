@@ -862,3 +862,54 @@ def test_file_tools_publish_explicit_02_side_effect_and_permission_policies(tmp_
     assert specs["read"].required_permissions == ("filesystem:read",)
     assert specs["write"].required_permissions == ("filesystem:write",)
     assert all(item.sandbox_profile == "workspace" for item in specs.values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n", b"\r"])
+async def test_read_offset_reaches_beyond_default_byte_cap(tmp_path, newline):
+    tools = FileTools(workspace_root=tmp_path)
+    # The skipped line itself exceeds the byte cap and must be scanned in chunks.
+    (tmp_path / "large.txt").write_bytes(
+        b"x" * (tools.max_read_bytes + 100) + newline + b"target" + newline + b"last"
+    )
+    assert await succeeded(
+        tools.read, file_path="large.txt", offset=2, limit=1
+    ) == "2|target\n"
+    assert await succeeded(
+        tools.read, file_path="large.txt", offset=3, limit=1
+    ) == "3|last"
+    assert await succeeded(tools.read, file_path="large.txt", offset=4) == ""
+
+
+@pytest.mark.asyncio
+async def test_read_byte_cap_returns_complete_lines_and_next_offset(tmp_path):
+    tools = FileTools(workspace_root=tmp_path, max_read_bytes=10)
+    (tmp_path / "pages.txt").write_bytes("一二\n三四\n五六\n".encode())
+    first = await succeeded(tools.read, file_path="pages.txt")
+    assert first.startswith("1|一二\n")
+    assert "2|" not in first
+    assert "continue with offset=2" in first
+    second = await succeeded(tools.read, file_path="pages.txt", offset=2)
+    assert second.startswith("2|三四\n")
+    assert "continue with offset=3" in second
+    assert await succeeded(tools.read, file_path="pages.txt", offset=3) == "3|五六\n"
+    assert await succeeded(tools.read, file_path="pages.txt", limit=1) == "1|一二\n"
+
+
+@pytest.mark.asyncio
+async def test_read_oversized_line_explains_partial_line_without_broken_utf8(tmp_path):
+    tools = FileTools(workspace_root=tmp_path, max_read_bytes=5)
+    (tmp_path / "long.txt").write_bytes("中文中文\nend\n".encode())
+    output = await succeeded(tools.read, file_path="long.txt")
+    assert output.startswith("1|中\n[read truncated")
+    assert "within line 1" in output
+    assert "offset cannot retrieve the remainder" in output
+    assert "\ufffd" not in output
+    assert await succeeded(tools.read, file_path="long.txt", offset=2) == "2|end\n"
+
+
+@pytest.mark.asyncio
+async def test_read_exact_byte_cap_does_not_report_false_truncation(tmp_path):
+    tools = FileTools(workspace_root=tmp_path, max_read_bytes=4)
+    (tmp_path / "exact.txt").write_bytes(b"abc\n")
+    assert await succeeded(tools.read, file_path="exact.txt") == "1|abc\n"

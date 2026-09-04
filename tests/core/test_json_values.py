@@ -96,14 +96,10 @@ def test_cyclic_json_values_are_rejected(container_kind):
         freeze_json(value)
 
 
-def test_json_depth_and_aggregate_size_are_bounded(monkeypatch):
+def test_json_depth_is_bounded(monkeypatch):
     monkeypatch.setattr(json_values, "MAX_JSON_DEPTH", 2)
     with pytest.raises(JsonValueError, match="maximum depth"):
         freeze_json([[[None]]])
-
-    monkeypatch.setattr(json_values, "MAX_JSON_NODES", 3)
-    with pytest.raises(JsonValueError, match="maximum size"):
-        freeze_json([1, 2, 3])
 
 
 def test_shared_non_cyclic_container_is_copied_for_each_reference():
@@ -156,18 +152,6 @@ def test_private_root_patch_reuses_validated_children_and_preserves_order():
     assert defaulted is original
 
 
-def test_private_root_patch_preserves_aggregate_node_limit(monkeypatch):
-    original = json_values.freeze_json_object({"nested": [None]})
-    monkeypatch.setattr(json_values, "MAX_JSON_NODES", 3)
-
-    with pytest.raises(JsonValueError, match="maximum size"):
-        json_values._patch_frozen_json_object(
-            original,
-            {"origin_execution_id": "child"},
-            overwrite=False,
-        )
-
-
 def test_private_root_patch_preserves_current_depth_limit(monkeypatch):
     original = json_values.freeze_json_object({"nested": [[None]]})
     monkeypatch.setattr(json_values, "MAX_JSON_DEPTH", 2)
@@ -216,12 +200,23 @@ def test_root_default_keeps_duplicate_and_value_validation_strict():
         )
 
 
-def test_root_default_preserves_aggregate_node_limit(monkeypatch):
-    monkeypatch.setattr(json_values, "MAX_JSON_NODES", 3)
-
-    with pytest.raises(JsonValueError, match="maximum size"):
-        json_values._freeze_json_object_with_default(
-            {"nested": [None]},
-            "origin_execution_id",
-            "child",
+@pytest.mark.parametrize("mode", ["freeze", "object", "constructor", "patch", "default"])
+def test_large_json_values_have_no_node_count_limit(mode):
+    source = {"items": [0] * 100_001}
+    if mode == "freeze":
+        result = freeze_json(source)
+    elif mode == "object":
+        result = json_values.freeze_json_object(source)
+    elif mode == "constructor":
+        result = FrozenJsonObject(tuple(source.items()))
+    elif mode == "patch":
+        original = json_values.freeze_json_object(source)
+        result = json_values._patch_frozen_json_object(
+            original, {"origin": "child"}, overwrite=False
         )
+    else:
+        result = json_values._freeze_json_object_with_default(source, "origin", "child")
+    expected = dict(source)
+    if mode in {"patch", "default"}:
+        expected["origin"] = "child"
+    assert thaw_json(result) == expected

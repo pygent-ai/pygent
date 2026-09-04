@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -203,14 +202,6 @@ class ExecutionInput:
         if isinstance(self.sequence, bool) or not isinstance(self.sequence, int) or self.sequence < 0:
             raise ValueError("sequence must be a non-negative integer")
         object.__setattr__(self, "value", freeze_json(self.value))
-        encoded = json.dumps(
-            thaw_json(self.value),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-        if len(encoded) > EXECUTION_INPUT_MAX_BYTES:
-            raise ValueError("execution input exceeds the 64 KiB limit")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -453,7 +444,6 @@ class EffectOutcome(Generic[EffectValueT]):
 
 
 EXECUTION_EVENT_SCHEMA_VERSION = "1"
-EXECUTION_INPUT_MAX_BYTES = 64 * 1024
 
 
 __all__ = [

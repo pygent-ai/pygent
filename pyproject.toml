@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pygent-ai"
-version = "0.3.6"
+version = "0.3.7"
 description = "A PyTorch-like Module framework for building stateless LLM agents."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -54,6 +54,7 @@ dev = [
 module-name = "pygent._native"
 python-source = "src"
 features = ["pyo3/extension-module"]
+exclude = [".lora/**", "logs/**", "todo/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

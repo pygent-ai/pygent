@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import pytest
 
-from pygent import AIMessage, Context, GenerationConfig, ToolDefinition, UserMessage
+from pygent import (
+    AIMessage,
+    Context,
+    GenerationConfig,
+    ToolDefinition,
+    UserMessage,
+    freeze_json_object,
+)
 from pygent.llm import (
     DefaultModelInvoker,
     FallbackPolicy,
-    ModelCallError,
-    ModelErrorKind,
     ModelGroupConfig,
-    ModelProviderError,
     ModelProviderRequest,
     ModelRoute,
     ModelStreamEvent,
@@ -17,7 +21,6 @@ from pygent.llm import (
     RetryPolicy,
 )
 from pygent.llm._request_snapshot import (
-    MAX_MODEL_REQUEST_SNAPSHOT_BYTES,
     prepared_request_event,
 )
 
@@ -100,34 +103,35 @@ def test_historical_message_usage_does_not_change_the_request_snapshot() -> None
     )
 
 
-def test_prepared_request_fails_closed_above_one_mib() -> None:
-    oversized = "x" * (MAX_MODEL_REQUEST_SNAPSHOT_BYTES + 1)
-
-    with pytest.raises(ModelProviderError) as raised:
-        prepared_request_event(request(content=oversized), attempt=1)
-
-    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
+def test_prepared_request_preserves_content_above_one_mib() -> None:
+    content = "上下文" * 400_000
+    prepared = prepared_request_event(request(content=content), attempt=1)
+    event = ModelStreamEvent("model.request.prepared", prepared)
+    assert event.data["request"]["current_message"]["content"] == content
 
 
 @pytest.mark.asyncio
-async def test_oversized_snapshot_stops_before_provider_io() -> None:
-    class NeverCalledClient:
+async def test_large_snapshot_reaches_provider_io() -> None:
+    class RecordingClient:
         def __init__(self) -> None:
             self.calls = 0
 
         async def invoke(self, route, payload):
             self.calls += 1
-            raise AssertionError("provider must not be called")
+            raise AssertionError("stream expected")
 
         async def stream(self, route, payload):
             self.calls += 1
-            if False:
-                yield
+            assert payload["messages"][-1]["content"] == content
+            yield freeze_json_object({"choices": [{"delta": {"content": "ok"}}]})
+            yield freeze_json_object({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+            yield freeze_json_object({"done": True})
 
         async def aclose(self):
             return None
 
-    client = NeverCalledClient()
+    content = "x" * (2 * 1024 * 1024)
+    client = RecordingClient()
     invoker = DefaultModelInvoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"openai": client},
@@ -141,16 +145,16 @@ async def test_oversized_snapshot_stops_before_provider_io() -> None:
         retry_policy=RetryPolicy(max_attempts_per_route=1),
         generation=GenerationConfig(),
         message=UserMessage(
-            content="x" * (MAX_MODEL_REQUEST_SNAPSHOT_BYTES + 1)
+            content=content
         ),
         context=Context(),
     )
     async with execution.subscribe() as subscription:
         events = [event async for event in subscription]
 
-    with pytest.raises(ModelCallError) as raised:
-        await execution.result()
-
-    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
-    assert client.calls == 0
-    assert [event.kind for event in events] == ["model.started", "model.failed"]
+    result = await execution.result()
+    assert result.message.content == "ok"
+    assert client.calls == 1
+    prepared = next(event for event in events if event.kind == "model.request.prepared")
+    assert prepared.data["request"]["current_message"]["content"] == content
+    await invoker.aclose()

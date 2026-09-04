@@ -1,4 +1,4 @@
-"""Bounded provider-neutral snapshots for actual model attempts."""
+"""Provider-neutral snapshots for actual model attempts."""
 
 from __future__ import annotations
 
@@ -10,9 +10,6 @@ from typing import cast
 from pygent.core import AIMessage, JsonValue, Message, ToolMessage, thaw_json
 
 from ._adapter_contracts import ModelProviderRequest
-from .types import ModelErrorKind, ModelProviderError
-
-MAX_MODEL_REQUEST_SNAPSHOT_BYTES = 1024 * 1024
 
 
 def prepared_request_event(
@@ -25,11 +22,6 @@ def prepared_request_event(
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
-    if len(encoded) > MAX_MODEL_REQUEST_SNAPSHOT_BYTES:
-        raise ModelProviderError(
-            ModelErrorKind.INVALID_REQUEST,
-            "model request snapshot exceeds the 1 MiB public event limit",
-        )
     return {
         "route_id": request.route.route_id,
         "attempt": attempt,
@@ -116,4 +108,4 @@ def _message_projection(message: Message) -> dict[str, object]:
     return value
 
 
-__all__ = ["MAX_MODEL_REQUEST_SNAPSHOT_BYTES", "prepared_request_event"]
+__all__ = ["prepared_request_event"]

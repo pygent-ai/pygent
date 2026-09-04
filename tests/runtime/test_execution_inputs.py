@@ -217,7 +217,7 @@ async def test_one_kind_cannot_be_consumed_by_two_module_paths() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execution_input_enforces_size_and_pending_capacity() -> None:
+async def test_execution_input_enforces_pending_capacity() -> None:
     receiver = InputReceiver()
     runtime = LocalRuntime()
     handle = await bind(runtime, receiver).start(
@@ -226,10 +226,6 @@ async def test_execution_input_enforces_size_and_pending_capacity() -> None:
         )
     )
     await receiver.state.started.wait()
-    with pytest.raises(ValueError, match="64 KiB"):
-        await handle.send_input(
-            input_id="large", kind="test.input", value="x" * (64 * 1024)
-        )
     for index in range(256):
         await handle.send_input(
             input_id=f"input-{index}", kind="test.input", value=index
@@ -241,3 +237,33 @@ async def test_execution_input_enforces_size_and_pending_capacity() -> None:
     receiver.state.release.set()
     await handle.result()
     await runtime.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("durable", [False, True])
+async def test_large_execution_input_round_trips_without_truncation(tmp_path, durable):
+    value = {"memory": "上下文" * 100_000, "history": ["x" * 200_000]}
+    history = (
+        await SQLiteHistoryStore(tmp_path / "large-input.sqlite3").open()
+        if durable
+        else None
+    )
+    runtime = LocalRuntime(history=history)
+    receiver = InputReceiver()
+    try:
+        handle = await bind(runtime, receiver).start(
+            UserMessage(content="go"),
+            Context(),
+            execution=ExecutionOptions(deadline=time.monotonic() + 20),
+        )
+        await receiver.state.started.wait()
+        delivery = await handle.send_input(input_id="large", kind="test.input", value=value)
+        assert delivery.status == "accepted"
+        receiver.state.release.set()
+        await handle.result()
+        item = receiver.state.received[0]
+        assert item.to_dict()["value"] == value
+        assert ExecutionInput.from_dict(item.to_dict()) == item
+    finally:
+        await runtime.close()
+        if history is not None:
+            await history.close()

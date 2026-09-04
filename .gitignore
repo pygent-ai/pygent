@@ -28,3 +28,6 @@ sessions/
 
 # JiuwenSwarm runtime file operation logs
 .agent_history/
+.lora/
+logs/
+todo/

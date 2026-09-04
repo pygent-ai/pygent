@@ -476,3 +476,16 @@ async with bound_tools.stream(ai_message, context) as stream:
         ...
     tool_message, context = await stream.final_result()
 ```
+
+
+## 标准文件读取分页
+
+`FileTools.read(file_path=..., offset=1, limit=...)` 的 `offset` 是从 1 开始的行号，
+`limit` 是最多返回的行数。先跳过目标行之前的内容，再对本次选中的文本应用
+`FileTools(max_read_bytes=...)` 的字节预算（默认 1 MiB；行号和提示文字不计入预算）。
+因此可以分页读取超过 1 MiB 的文件。LF、CRLF 和 CR 换行统一返回为 LF。
+
+达到字节预算时优先保留完整行，并在结果中提示 `continue with offset=N`。
+如果首个目标行本身超过预算，会返回该行的 UTF-8 完整字符前缀，并明确提示
+行偏移不能读取该行余下内容，需要使用支持字节范围的工具。显式 `limit` 已满足或
+文件已读完时不追加大小截断提示。PDF 仍使用 `pages` 参数选择页码。

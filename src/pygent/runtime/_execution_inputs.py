@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import dataclass, field
 
 from pygent.core import (
@@ -11,11 +10,8 @@ from pygent.core import (
     ExecutionInputDelivery,
     JsonValue,
     freeze_json,
-    thaw_json,
 )
-from pygent.core.execution import EXECUTION_INPUT_MAX_BYTES
 
-MAX_EXECUTION_INPUT_BYTES = EXECUTION_INPUT_MAX_BYTES
 MAX_PENDING_EXECUTION_INPUTS = 256
 MAX_EXECUTION_INPUT_RECEIVE = 256
 
@@ -28,13 +24,7 @@ def prepare_execution_input(input_id: str, kind: str, value: JsonValue) -> JsonV
     for name, item in (("input_id", input_id), ("kind", kind)):
         if not isinstance(item, str) or not item:
             raise ValueError(f"{name} must be a non-empty string")
-    frozen = freeze_json(value)
-    encoded = json.dumps(
-        thaw_json(frozen), sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
-    if len(encoded) > MAX_EXECUTION_INPUT_BYTES:
-        raise ValueError("execution input exceeds the 64 KiB limit")
-    return frozen
+    return freeze_json(value)
 
 
 def validate_receive(kinds: tuple[str, ...], limit: int, seal_if_empty: bool) -> None:

@@ -336,8 +336,7 @@ effective tools、有效 generation settings 和 projection revision。
 或内部异常。用户消息正文和 Tool Definition 是实际请求内容，不会被改写；审计服务必须
 自行实施访问控制。
 
-规范 JSON 上限为 1 MiB。超过上限时在 Provider I/O 前以 `invalid_request` 失败，不会
-静默退化为仅 digest。retry 使用新的 `request_id`，请求不变时 digest 相同。effect replay
+请求快照不设固定字节大小上限，保留完整请求投影和 digest。retry 使用新的 `request_id`，请求不变时 digest 相同。effect replay
 不伪造没有真实发生的 attempt 或请求快照。
 
 ## 10. 不变量
