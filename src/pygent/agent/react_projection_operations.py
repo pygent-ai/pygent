@@ -7,16 +7,20 @@ from typing import TypeAlias, cast
 
 from pygent.core import JsonValue, Message, UserMessage, freeze_json
 
-REACT_PROJECTION_OPERATION_KIND = "react.projection.operation.v1"
+from .reminder import InjectionKind
+
+REACT_PROJECTION_OPERATION_KIND = "react.projection.operation.v2"
 
 
 @dataclass(frozen=True, slots=True)
 class AppendToolResultContent:
     content: str
+    kind: InjectionKind = InjectionKind.RUNTIME_CONTEXT
 
     def __post_init__(self) -> None:
         if not isinstance(self.content, str) or not self.content:
             raise ValueError("AppendToolResultContent.content must be non-empty")
+        object.__setattr__(self, "kind", InjectionKind(self.kind))
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,9 +63,16 @@ def encode_react_projection_operation(operation: ReActProjectionOperation) -> Js
     from pygent.runtime.codec import message_to_dict
 
     if type(operation) is AppendToolResultContent:
-        raw: object = {"type": "append_tool_result_content", "content": operation.content}
+        raw: object = {
+            "type": "append_tool_result_content",
+            "content": operation.content,
+            "kind": operation.kind.value,
+        }
     elif type(operation) is StandaloneUserMessage:
-        raw = {"type": "standalone_user_message", "message": message_to_dict(operation.message)}
+        raw = {
+            "type": "standalone_user_message",
+            "message": message_to_dict(operation.message),
+        }
     elif type(operation) is ReplaceMessageProjection:
         raw = {
             "type": "replace_message_projection",
@@ -83,15 +94,24 @@ def decode_react_projection_operation(value: JsonValue) -> ReActProjectionOperat
     data = raw.to_dict() if hasattr(raw, "to_dict") else raw
     assert isinstance(data, dict)
     operation_type = data.get("type")
-    if operation_type == "append_tool_result_content" and set(data) == {"type", "content"}:
-        return AppendToolResultContent(cast(str, data["content"]))
+    if operation_type == "append_tool_result_content" and set(data) == {
+        "type",
+        "content",
+        "kind",
+    }:
+        return AppendToolResultContent(
+            cast(str, data["content"]), InjectionKind(data["kind"])
+        )
     if operation_type == "standalone_user_message" and set(data) == {"type", "message"}:
         message = message_from_dict(data["message"])
         if type(message) is not UserMessage:
             raise ValueError("standalone operation requires a UserMessage")
         return StandaloneUserMessage(message)
     if operation_type == "replace_message_projection" and set(data) == {
-        "type", "messages", "expected_revision", "rebase_appended"
+        "type",
+        "messages",
+        "expected_revision",
+        "rebase_appended",
     }:
         messages = data["messages"]
         if not isinstance(messages, list):

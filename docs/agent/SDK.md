@@ -242,6 +242,53 @@ class ApprovalModule(Module[ApprovalRequiredMessage, ApprovalMessage]):
 
 ## ReAct 运行中 Projection Operation
 
-托管 ReAct 固定消费 `react.projection.operation.v1`。开发者通过 `handle.send_input()` 发送由 `encode_react_projection_operation()` 编码的 `StandaloneUserMessage`、`AppendToolResultContent` 或 `ReplaceMessageProjection`；ReAct 在每次模型调用前以及最终返回前读取并按 input sequence 应用。`ReplaceMessageProjection` 使用 `Context.projection_revision` 做严格替换，或以 `rebase_appended=True` 保留 base revision 后可以证明为完整 Message 追加的尾部。解码、revision、replacement 或 pending ToolResult 校验失败会发出 `react.projection_operation.rejected`，不会终结 Execution。
+托管 ReAct 固定消费 `react.projection.operation.v2`。开发者通过 `handle.send_input()` 发送由 `encode_react_projection_operation()` 编码的 `StandaloneUserMessage`、`AppendToolResultContent` 或 `ReplaceMessageProjection`；ReAct 在每次模型调用前以及最终返回前读取并按 input sequence 应用。`ReplaceMessageProjection` 使用 `Context.projection_revision` 做严格替换，或以 `rebase_appended=True` 保留 base revision 后可以证明为完整 Message 追加的尾部。解码、revision、replacement 或 pending ToolResult 校验失败会发出 `react.projection_operation.rejected`，不会终结 Execution。
 
 该能力使 `ReActLayer.execution_requirements.effect_safety` 固定为 `MANAGED_EFFECTS`。direct execution 的 receive 固定为空，因此运行中 Projection Operation 只属于 bound/managed ReAct。
+
+## Reminder
+
+`Reminder` 是普通、无 session 状态的 `Module[Message, Message]`。它接收中性的 Message，返回包装后的中性 Message 和原 Context，保留 slot、data、metadata，不提交消息历史。每次输入的 kind 决定内容类型，缺省为 `InjectionKind.RUNTIME_CONTEXT`：
+
+- `InjectionKind.RUNTIME_CONTEXT` → `<runtime-context>...</runtime-context>`
+- `InjectionKind.USER_CONTEXT` → `<user-context>...</user-context>`
+
+同一个 Reminder 可以生成不同类型的内容；类型不决定注入位置。调用方通过 Projection Operation 选择独立 UserMessage 或工具结果追加：
+
+```python
+from pygent import Context, InjectionKind, Message, Reminder, UserMessage
+from pygent.agent import (
+    REACT_PROJECTION_OPERATION_KIND,
+    AppendToolResultContent,
+    StandaloneUserMessage,
+    encode_react_projection_operation,
+)
+
+reminder = Reminder()
+piece, context = await reminder.invoke(
+    Message(content="用户补充：只处理 src 目录。", kind=InjectionKind.USER_CONTEXT.value),
+    Context(),
+)
+
+# 选择一种注入位置。
+operation = StandaloneUserMessage(
+    UserMessage(content=piece.content, kind=piece.kind, metadata=piece.metadata)
+)
+# 或：operation = AppendToolResultContent(piece.content, kind=InjectionKind(piece.kind))
+
+receipt = await handle.send_input(
+    input_id="context-17",
+    kind=REACT_PROJECTION_OPERATION_KIND,
+    value=encode_react_projection_operation(operation),
+)
+```
+
+在组合 Module 内，将 Reminder 声明为 `self.reminder`，在 `forward()` 中调用 `await self.reminder(message, context)`；direct、managed 与 stream 使用同一 forward。Reminder 不采集 Git/Skills、不启动后台 Task，也不负责 session 持久化。
+
+无需 Module 时，可以直接投递 `StandaloneUserMessage(UserMessage(content=raw_text, kind=InjectionKind.RUNTIME_CONTEXT.value))`，或 `AppendToolResultContent(raw_text, kind=InjectionKind.USER_CONTEXT)`。ReAct 按 kind 包装内容，也处理初始输入中带这两种 kind 的 UserMessage；普通用户消息和完整 ReplaceMessageProjection 保持原文。工具结果追加缺省为 runtime context，原始 ToolResult 不变。
+
+`from pygent.agent import format_context` 提供同步格式函数：`format_context(raw_text, kind=InjectionKind.RUNTIME_CONTEXT)`。函数转义 XML 正文，保留同类型的规范纯文本包装以避免重复套壳；其他标签作为正文转义。空白或 XML 非法字符被拒绝；运行中操作产生 `invalid_context` 拒绝事件，首次调用则抛出 ValueError。XML 标签不赋予 system/user 消息角色或权限。
+
+这是不兼容变更：不再提供 REMINDER_KIND、format_reminder 或旧标签识别；Reminder 不接受 UserMessage，而是接受中性 Message。Projection Operation 使用 v2，工具追加的编码必须包含 kind，不读取 v1。
+
+首轮同时包含用户请求与补充上下文时，显式把用户原文和 `piece.content` 组装到普通 UserMessage 中，不给整条混合消息设置注入 kind。direct execution 只支持显式计算与组合，不支持外部运行中 send_input。

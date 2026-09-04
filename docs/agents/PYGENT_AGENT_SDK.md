@@ -180,16 +180,15 @@ delivery = await handle.send_input(
 `accepted` 表示进入当前 Execution；`duplicate` 表示相同 `input_id` 已投递；
 `execution_finished` 表示调用方应把该 UserMessage 作为下一 turn 的 Initial UserMessage。
 
-工作区变化等临时上下文同样由开发者构造最终 UserMessage：
+工作区变化等补充上下文使用 `InjectionKind.RUNTIME_CONTEXT.value` 标记，ReAct 会统一包装 XML；也可以由普通 [Reminder Module](../agent/SDK.md#reminder) 显式生成：
 
 ```python
+from pygent.agent import InjectionKind
+
 workspace_change = StandaloneUserMessage(
     UserMessage(
-        content=(
-            "<system-reminder>pyproject.toml 和 src/app.py 已发生变化。"
-            "</system-reminder>"
-        ),
-        kind="application.system_reminder",
+        content="pyproject.toml 和 src/app.py 已发生变化。",
+        kind=InjectionKind.RUNTIME_CONTEXT.value,
         metadata={"event_kind": "workspace_changed", "revision": 37},
     )
 )
@@ -203,10 +202,7 @@ workspace_change = StandaloneUserMessage(
 from pygent.agent import AppendToolResultContent
 
 operation = AppendToolResultContent(
-    content=(
-        "<system-reminder>工具执行后发现工作区配置发生变化。"
-        "</system-reminder>"
-    )
+    content="工具执行后发现工作区配置发生变化。"
 )
 
 await handle.send_input(
@@ -216,6 +212,7 @@ await handle.send_input(
 )
 ```
 
+ReAct 将附加内容包装为 `<runtime-context>...</runtime-context>`，已规范化的包装不会重复嵌套。
 原始 `ToolResult.output` 不变。附加内容保存在 `ToolMessage.content`，Provider 投影时追加到
 最后一个 ToolResult 的模型可见内容。
 

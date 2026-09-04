@@ -242,7 +242,8 @@ async def test_replace_preserving_pending_current_commits_it_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_result_reminder_preserves_original_result() -> None:
+@pytest.mark.parametrize("preformatted", [False, True])
+async def test_tool_result_reminder_preserves_original_result(preformatted) -> None:
     first = AIMessage(
         tool_calls=(ToolCall(call_id="call-1", name="lookup", arguments={}),)
     )
@@ -254,10 +255,13 @@ async def test_tool_result_reminder_preserves_original_result() -> None:
         UserMessage(content="initial"), Context(), execution=options()
     )
     await tools.state.entered.wait()
+    first_content = "workspace changed"
+    if preformatted:
+        first_content = f"<runtime-context>{first_content}</runtime-context>"
     await handle.send_input(
         input_id="reminder-1",
         kind=REACT_PROJECTION_OPERATION_KIND,
-        value=encode_react_projection_operation(AppendToolResultContent("workspace changed")),
+        value=encode_react_projection_operation(AppendToolResultContent(first_content)),
     )
     await handle.send_input(
         input_id="reminder-2",
@@ -269,7 +273,10 @@ async def test_tool_result_reminder_preserves_original_result() -> None:
     _, context = await handle.result()
     projected_tool = model.state.messages[1]
     assert isinstance(projected_tool, ToolMessage)
-    assert projected_tool.content == "workspace changed\ncapability changed"
+    assert projected_tool.content == (
+        "<runtime-context>workspace changed</runtime-context>\n"
+        "<runtime-context>capability changed</runtime-context>"
+    )
     assert projected_tool.results[0].output["original"] is True
     assert context.projection_revision == 6
     await runtime.close()

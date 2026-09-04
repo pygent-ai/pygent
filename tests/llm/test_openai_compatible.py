@@ -296,7 +296,7 @@ def test_tool_result_error_classification_is_visible_to_the_model() -> None:
 
 def test_tool_message_reminder_is_appended_only_to_last_model_result() -> None:
     message = ToolMessage(
-        content="<system-reminder>workspace changed</system-reminder>",
+        content="<runtime-context>workspace changed</runtime-context>",
         results=(
             ToolResult(call_id="one", name="first", status="succeeded", output=1),
             ToolResult(call_id="two", name="second", status="succeeded", output=2),
@@ -309,7 +309,7 @@ def test_tool_message_reminder_is_appended_only_to_last_model_result() -> None:
     assert isinstance(second_content, str)
 
     assert json.loads(first_content)["output"] == 1
-    assert "system-reminder" not in first_content
+    assert "runtime-context" not in first_content
     assert json.loads(second_content.split("\n", 1)[0])["output"] == 2
     assert second_content.endswith(message.content)
 

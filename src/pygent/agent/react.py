@@ -22,6 +22,9 @@ from .react_projection_operations import (
     StandaloneUserMessage,
     decode_react_projection_operation,
 )
+from .reminder import InjectionKind, format_context
+
+_INJECTION_KINDS = frozenset(kind.value for kind in InjectionKind)
 
 
 class ReActBudgetExceeded(RuntimeError):
@@ -75,6 +78,11 @@ class ReActLayer(Module[UserMessage, AIMessage]):
         model_calls = 0
         tool_calls = 0
         current: Message = message
+        if message.kind in _INJECTION_KINDS:
+            current = replace(
+                message,
+                content=format_context(message.content, kind=InjectionKind(message.kind)),
+            )
         current_committed = False
         entry_revision = context.projection_revision
         history = replace(context, projection_revision=entry_revision + 1)
@@ -196,12 +204,17 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                             item, "no_pending_tool_result"
                         )
                         continue
+                    try:
+                        content = format_context(operation.content, kind=operation.kind)
+                    except ValueError:
+                        await self._reject_projection_operation(item, "invalid_context")
+                        continue
                     current = replace(
                         current,
                         content=(
-                            operation.content
+                            content
                             if not current.content
-                            else f"{current.content}\n{operation.content}"
+                            else f"{current.content}\n{content}"
                         ),
                     )
                     history = replace(
@@ -212,15 +225,27 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                     )
                     continue
                 if isinstance(operation, StandaloneUserMessage):
+                    message = operation.message
+                    if message.kind in _INJECTION_KINDS:
+                        try:
+                            message = replace(
+                                message,
+                                content=format_context(
+                                    message.content, kind=InjectionKind(message.kind)
+                                ),
+                            )
+                        except ValueError:
+                            await self._reject_projection_operation(item, "invalid_context")
+                            continue
                     if not current_committed:
                         history = _commit_message(history, current)
-                    current = operation.message
+                    current = message
                     current_committed = False
                     history = replace(
                         history, projection_revision=history.projection_revision + 1
                     )
                     changes.append(
-                        (history.projection_revision, "append", operation.message)
+                        (history.projection_revision, "append", message)
                     )
                     continue
                 assert isinstance(operation, ReplaceMessageProjection)

@@ -6,7 +6,14 @@ their owning subpackages and are intentionally unavailable from this module.
 
 from __future__ import annotations
 
-from .agent import PygentAgent, PygentAgentContext, ReActBudgetExceeded, ReActLayer
+from .agent import (
+    InjectionKind,
+    PygentAgent,
+    PygentAgentContext,
+    ReActBudgetExceeded,
+    ReActLayer,
+    Reminder,
+)
 from .core import (
     Agent,
     AIMessage,
@@ -60,6 +67,7 @@ __all__ = [
     "FrozenJsonObject",
     "GenerationConfig",
     "IdempotencyPolicy",
+    "InjectionKind",
     "JsonValueError",
     "Message",
     "ModelCallError",
@@ -75,6 +83,7 @@ __all__ = [
     "ReActBudgetExceeded",
     "ReActLayer",
     "RecurrentModule",
+    "Reminder",
     "RetryPolicy",
     "ToolAuthorizationDecision",
     "ToolAuthorizationRequest",
