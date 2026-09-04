@@ -78,6 +78,8 @@ route = ModelRoute(
 
 `provider_options` 是仅关键字、严格 JSON、递归不可变的 route 定义值；原字典后续修改不会影响 route。它不能承载 secret、endpoint、client、连接、认证头、TLS/证书校验策略、retry、deadline、stream 或框架保留请求字段，也不能由单次调用覆盖。OpenAI-compatible adapter 对未知 Provider 默认只做非保留严格 JSON 的结构透传，这不表示 Provider 能力已经验证；DeepSeek `thinking` 则使用严格子 schema。第三方 adapter 只有实现公开的 `ModelProviderRouteValidator` 后才能接受非空选项，空选项调用保持原行为。
 
+OpenAI-compatible 流式请求默认发送 `stream_options={"include_usage": True}`，原生与 HTTPX 传输行为一致；不改变非流式请求。可通过 `provider_options={"stream_options": {"include_usage": False}}` 显式关闭，或 `provider_options={"stream_options": None}` 完全省略该字段。其他 stream_options 保留，只补缺失的 include_usage；usage 仍由现有解析与事件路径返回，服务端未提供时不伪造统计。
+
 OpenAI-compatible route 可以在 `provider_options` 中显式选择一个 token-limit 字段和值；这用于仍要求旧字段或只接受新字段的兼容服务：
 
 ```python

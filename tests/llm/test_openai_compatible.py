@@ -42,6 +42,77 @@ def _request(
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize(
+    "options, expected",
+    [
+        ({}, {"include_usage": True}),
+        ({"stream_options": {}}, {"include_usage": True}),
+        ({"stream_options": {"include_usage": False}}, {"include_usage": False}),
+        ({"stream_options": {"include_usage": True}}, {"include_usage": True}),
+        ({"stream_options": None}, None),
+        ({"stream_options": {"include_obfuscation": False}},
+         {"include_obfuscation": False, "include_usage": True}),
+    ],
+)
+async def test_stream_usage_defaults_preserve_options(monkeypatch, native, options, expected):
+    bodies = []
+    frames = [
+        {"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}},
+    ]
+
+    class RecordingNativeClient:
+        def __init__(self, *_args):
+            pass
+
+        async def stream_sse(self, _endpoint, body):
+            bodies.append(json.loads(body))
+            for frame in frames:
+                yield "data", json.dumps(frame)
+            yield "data", "[DONE]"
+
+        async def close(self):
+            pass
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text="".join(f"data: {json.dumps(frame)}\n\n" for frame in frames) + "data: [DONE]\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    monkeypatch.setattr(openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient)
+    route = ModelRoute("main", "openai", "gpt-test", provider_options=options)
+    request = ModelProviderRequest(
+        route=route, message=UserMessage(content="hello"), context=Context(),
+        generation=GenerationConfig(), tools=(),
+    )
+    adapter = OpenAICompatibleAdapter()
+    payload = adapter.build_request(request)
+    original = payload.to_dict()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OpenAICompatibleClient(
+            base_url="https://models.example/v1", client=None if native else http,
+        )
+        try:
+            streamed = [frame async for frame in client.stream(route, payload)]
+        finally:
+            await client.aclose()
+    assert len(bodies) == 1
+    assert bodies[0]["stream"] is True
+    if expected is None:
+        assert "stream_options" not in bodies[0]
+    else:
+        assert bodies[0]["stream_options"] == expected
+    assert payload.to_dict() == original
+    assert streamed[-1]["done"] is True
+    usage = adapter.parse_stream_events(request, streamed[-2])
+    assert usage[0].kind == "usage"
+
+
 def test_openai_codec_parses_usage_tools_and_structured_output():
     adapter = OpenAICompatibleAdapter()
     request = _request(
@@ -680,6 +751,8 @@ async def test_http_and_sse_transport_use_openai_compatible_endpoint():
     payload = OpenAICompatibleAdapter().build_request(_request())
     full = await client.invoke(route, payload)
     streamed = [item async for item in client.stream(route, payload)]
+    assert "stream_options" not in json.loads(requests[0].content)
+    assert json.loads(requests[1].content)["stream_options"] == {"include_usage": True}
     assert full["choices"]
     assert streamed[-1]["done"] is True
     assert all(request.url.path == "/v1/chat/completions" for request in requests)

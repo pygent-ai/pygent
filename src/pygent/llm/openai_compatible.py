@@ -370,11 +370,17 @@ class OpenAICompatibleClient:
     async def stream(
         self, route: ModelRoute, payload: FrozenJsonObject
     ) -> AsyncIterator[FrozenJsonObject]:
+        body = payload.to_dict()
+        body["stream"] = True
+        options = body.get("stream_options", {})
+        if options is None:
+            body.pop("stream_options", None)
+        elif isinstance(options, dict):
+            options.setdefault("include_usage", True)
+            body["stream_options"] = options
         native_client = self._native_client
         if native_client is not None:
             self._ensure_open()
-            body = payload.to_dict()
-            body["stream"] = True
             native_stream = native_client.stream_sse(self._endpoint, _wire_json(body))
             completed = False
             try:
@@ -414,8 +420,6 @@ class OpenAICompatibleClient:
             return
         client, admission = await self._acquire_http_client()
         try:
-            body = payload.to_dict()
-            body["stream"] = True
             async with client.stream(
                 "POST",
                 self._endpoint,
