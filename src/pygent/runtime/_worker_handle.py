@@ -54,17 +54,7 @@ class RemoteExecutionHandle:
         return await self.client.snapshot(self)
 
     async def outcome(self) -> ExecutionOutcome:
-        while True:
-            snapshot = await self.snapshot()
-            if snapshot.status.terminal:
-                assert snapshot.attempt_id is not None
-                assert snapshot.terminal_sequence is not None
-                return ExecutionOutcome(
-                    execution_id=self.execution_id,
-                    status=snapshot.status,
-                    attempt_id=snapshot.attempt_id,
-                    terminal_sequence=snapshot.terminal_sequence,
-                )
+        return await self.client._outcome(self)
 
     async def result(self, *, deadline: float | None = None) -> JsonValue:
         return await self.client.result(self, deadline=deadline)

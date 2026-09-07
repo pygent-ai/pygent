@@ -48,6 +48,81 @@ from pygent.runtime._worker_protocol import (
     WorkerUnavailableError,
 )
 from pygent.runtime.codec import invocation_to_dict
+
+
+@pytest.mark.asyncio
+async def test_worker_terminal_transaction_failure_does_not_publish_success(tmp_path):
+    calls = []
+
+    async def handler(invocation, event_sink):
+        calls.append(invocation.request_id)
+        return freeze_json({"result": "done"})
+
+    async with SQLiteHistoryStore(tmp_path / "atomic-worker.sqlite3") as history:
+        await history._db().executescript(
+            "CREATE TRIGGER fail_terminal BEFORE INSERT ON events "
+            "WHEN json_extract(NEW.event_json,'$.kind')='execution.completed' "
+            "BEGIN SELECT RAISE(ABORT,'terminal write failed'); END;"
+        )
+        worker = HTTPWorkerApp(handler, history=history)
+        registry = WorkerRegistry()
+        registry.publish("service", (WorkerTarget("worker", "http://worker"),))
+        async with HTTPWorkerClient(
+            registry, transport=httpx.ASGITransport(app=worker.app)
+        ) as client:
+            ref = await client.start(
+                "service",
+                {},
+                request_id="atomic",
+                plan_id=_PLAN_ID,
+                graph_hash=_GRAPH_HASH,
+            )
+            with pytest.raises(WorkerRemoteError) as raised:
+                await asyncio.wait_for(ref.outcome(), 1)
+            assert raised.value.kind == "persistence_error"
+            assert raised.value.failure.outcome_unknown
+            with pytest.raises(WorkerRemoteError):
+                await client.result(ref)
+            with pytest.raises(WorkerRemoteError):
+                await ref.snapshot()
+        await worker.close()
+        run = worker.executions[ref.execution_id]
+        assert not run.terminal
+        assert not any(event["kind"] == "execution.completed" for event in run.events)
+        assert (await history.get_task(ref.execution_id)).status == "running"
+        assert all(
+            event["kind"] != "execution.completed"
+            for event in await history.events_after(execution_id=ref.execution_id)
+        )
+        assert calls == ["atomic"]
+
+
+@pytest.mark.asyncio
+async def test_remote_outcome_preserves_committed_failure():
+    async def handler(invocation, event_sink):
+        raise ValueError("business failure")
+
+    worker = HTTPWorkerApp(handler)
+    registry = WorkerRegistry()
+    registry.publish("service", (WorkerTarget("worker", "http://worker"),))
+    async with HTTPWorkerClient(
+        registry, transport=httpx.ASGITransport(app=worker.app)
+    ) as client:
+        ref = await client.start(
+            "service",
+            {},
+            request_id="failure",
+            plan_id=_PLAN_ID,
+            graph_hash=_GRAPH_HASH,
+        )
+        outcome = await asyncio.wait_for(ref.outcome(), 1)
+        assert outcome.status.value == "failed"
+        assert outcome.error.domain == "worker"
+        assert outcome.error.kind == "worker_internal"
+        assert outcome.terminal_sequence >= 0
+    await worker.close()
+
+
 from pygent.runtime.context_codec import BASE_CONTEXT_CODEC
 from pygent.runtime.worker_client import HTTPWorkerClient
 from pygent.runtime.worker_server import HTTPWorkerApp

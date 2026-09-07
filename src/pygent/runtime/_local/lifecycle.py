@@ -7,7 +7,9 @@ import asyncio
 import hashlib
 import time
 import uuid
+from collections import deque
 from collections.abc import Mapping
+from contextlib import ExitStack
 from types import TracebackType
 from typing import Any, Self, TypeVar, cast
 
@@ -22,20 +24,26 @@ from pygent.core._module_contracts import _execution_scope
 from pygent.core.values import validate_context
 from pygent.llm import ModelCallLayer, ModelCallOptions, ModelProfileSelectionError
 
+from .._cleanup import track_cleanup, wait_cleanup
+from .._deadline import _ExecutionDeadlineExpired
+from .._history_ownership import owner_scope
 from .._history_types import HistoryConflictError
 from ..api import (
     ExecutionAdmissionError,
     ExecutionDeadlineExceeded,
     ExecutionHandle,
     ExecutionOptions,
+    ExecutionOwnerState,
     ExecutionPhase,
     ExecutionStatus,
     ExternalWaitNotFound,
     ExternalWaitRejected,
     RuntimeClosedError,
 )
+from ..capacity import _release_owner
 from ..codec import invocation_to_dict
 from .admission import AdmissionCoordinator
+from .capacity import _ExecutionCapacityState
 from .handles import _DurableExecutionHandle, _LocalBoundModule, _LocalExecutionHandle
 from .policies import _apply_binding_policy, _finite_deadline_requirement
 from .scope import _ManagedScope
@@ -47,6 +55,7 @@ OutputMessageT = TypeVar("OutputMessageT", bound=Message)
 
 class _LifecycleMixin:
     _closed: bool
+    _completed_executions: deque[_ExecutionRecord]
 
     async def start(
         self,
@@ -105,7 +114,10 @@ class _LifecycleMixin:
             existing = self._idempotency_records.get(idempotency_identity)
             if existing is not None:
                 digest, existing_record = existing
-                if digest != invocation_digest or existing_record.plan.plan_id != bound.plan.plan_id:
+                if (
+                    digest != invocation_digest
+                    or existing_record.plan.plan_id != bound.plan.plan_id
+                ):
                     raise HistoryConflictError(
                         "idempotency identity is already committed with different input"
                     )
@@ -154,24 +166,32 @@ class _LifecycleMixin:
             name=f"pygent-execution-{execution_id}",
         )
         record.task = task
-        task.add_done_callback(self._execution_finished)
+        task.add_done_callback(
+            lambda completed: self._execution_finished(record, completed)
+        )
         return _LocalExecutionHandle(record)
 
-    def _execution_finished(self, _task: asyncio.Task[Any]) -> None:
+    def _execution_finished(
+        self, record: _ExecutionRecord, _task: asyncio.Task[Any]
+    ) -> None:
+        if not _task.cancelled():
+            _task.exception()
+        if self._executions.get(record.execution_id) is record:
+            self._completed_executions.append(record)
         self._purge_terminal_executions(reserve=0)
 
     def _purge_terminal_executions(self, *, reserve: int = 1) -> None:
-        terminal_ids = [
-            execution_id
-            for execution_id, record in self._executions.items()
-            if record.terminal and (record.task is None or record.task.done())
-        ]
-        excess = len(terminal_ids) - self.max_retained_executions + reserve
+        excess = (
+            len(self._completed_executions) - self.max_retained_executions + reserve
+        )
         if excess <= 0:
             return
-        evicted = set(terminal_ids[:excess])
-        for execution_id in evicted:
-            self._executions.pop(execution_id, None)
+        evicted = set()
+        for _ in range(excess):
+            record = self._completed_executions.popleft()
+            if self._executions.get(record.execution_id) is record:
+                self._executions.pop(record.execution_id)
+                evicted.add(record.execution_id)
         for identity, (_, record) in tuple(self._idempotency_records.items()):
             if record.execution_id in evicted:
                 del self._idempotency_records[identity]
@@ -199,15 +219,14 @@ class _LifecycleMixin:
         unknown = set(options.model_calls) - set(layers)
         if unknown:
             raise ExecutionAdmissionError(
-                "model_calls references undeclared groups: " + ", ".join(sorted(unknown))
+                "model_calls references undeclared groups: "
+                + ", ".join(sorted(unknown))
             )
         selections: dict[str, str | None] = {}
         for group_name, layer in layers.items():
             raw = options.model_calls.get(group_name)
             call_options = (
-                ModelCallOptions()
-                if raw is None
-                else ModelCallOptions.from_dict(raw)  # type: ignore[arg-type]
+                ModelCallOptions() if raw is None else ModelCallOptions.from_dict(raw)  # type: ignore[arg-type]
             )
             if call_options.profile is not None:
                 if not layer.model_group.is_deferred:
@@ -237,9 +256,8 @@ class _LifecycleMixin:
             selections,
             admission_id=admission_id,
         )
-        if (
-            "durability.sqlite" in bound.durability.effective_capabilities
-            and any(snapshot.resources is None for _, snapshot in admission.snapshots)
+        if "durability.sqlite" in bound.durability.effective_capabilities and any(
+            snapshot.resources is None for _, snapshot in admission.snapshots
         ):
             await self.model_deployment_store.release_admission(
                 admission.admission_id, recoverable=False
@@ -258,9 +276,10 @@ class _LifecycleMixin:
         has_deferred_models: bool,
     ) -> asyncio.Task[None] | None:
         if record.history is not None and not record.history_started:
-            stored, created = await self._await_with_deadline(
-                record,
-                record.history.begin_execution(
+            history = record.history
+
+            async def prepare_identity() -> None:
+                stored, created = await history.begin_execution(
                     execution_id=record.execution_id,
                     request_id=record.request_id,
                     plan_id=bound.plan.plan_id,
@@ -269,49 +288,79 @@ class _LifecycleMixin:
                     identity=options.identity or "",
                     idempotency_key=options.idempotency_key,
                     model_calls=options.model_calls,
-                    model_admission_status=(
-                        "preparing" if has_deferred_models else "none"
-                    ),
+                    model_admission_status="preparing"
+                    if has_deferred_models
+                    else "none",
                     trace_id=record.trace_id,
                     phase=ExecutionPhase.PREPARING.value,
                     attempt_id=record.attempt_id,
-                ),
-            )
-            if not created:
-                raise ExecutionAdmissionError(
-                    f"execution {stored.execution_id!r} already exists; attach to it"
                 )
-            record.history_started = True
-            record.history_ready.set()
-            record.owner_id = f"{self._recovery_owner_id}:{record.attempt_id}"
-            record.fencing_token = await self._await_with_deadline(
-                record,
-                record.history.claim_execution(
+                if not created:
+                    raise ExecutionAdmissionError(
+                        f"execution {stored.execution_id!r} already exists; attach to it"
+                    )
+                record.history_started = True
+                record.history_ready.set()
+                record.owner_id = f"{self._recovery_owner_id}:{record.attempt_id}"
+                record.fencing_token = await history.claim_execution(
                     execution_id=record.execution_id,
                     owner_id=record.owner_id,
                     lease_ttl=self._recovery_lease_ttl,
-                ),
+                )
+                if record.fencing_token is None:
+                    raise ExecutionAdmissionError(
+                        "execution already has an active owner"
+                    )
+
+            preparation = track_cleanup(
+                self._cleanup_tasks,
+                prepare_identity(),
+                f"pygent-prepare-{record.execution_id}",
             )
-            if record.fencing_token is None:
-                raise ExecutionAdmissionError("execution already has an active owner")
+            record.preparation_task = preparation
+            try:
+                await self._await_with_deadline(record, asyncio.shield(preparation))
+            except BaseException:
+                try:
+                    await self._wait_cleanup(preparation, record)
+                except BaseException as exc:
+                    record._mark_journal_failed(exc)
+                    raise
+                raise
         if record.history is None or record.fencing_token is None:
             return None
         claim_history = record.history
         owner_task = asyncio.current_task()
 
         async def heartbeat() -> None:
-            while True:
-                await asyncio.sleep(self._recovery_lease_ttl / 3)
-                renewed = await claim_history.renew_execution_claim(
-                    execution_id=record.execution_id,
-                    owner_id=cast(str, record.owner_id),
-                    fencing_token=cast(int, record.fencing_token),
-                    lease_ttl=self._recovery_lease_ttl,
-                )
-                if not renewed:
-                    if owner_task is not None:
-                        owner_task.cancel()
-                    return
+            try:
+                next_renewal = time.monotonic() + self._recovery_lease_ttl / 3
+                while True:
+                    await asyncio.sleep(min(0.05, self._recovery_lease_ttl / 3))
+                    if await claim_history._execution_cancel_requested(
+                        record.execution_id
+                    ):
+                        if owner_task is not None:
+                            owner_task.cancel()
+                        return
+                    if time.monotonic() < next_renewal:
+                        continue
+                    next_renewal = time.monotonic() + self._recovery_lease_ttl / 3
+                    renewed = await claim_history.renew_execution_claim(
+                        execution_id=record.execution_id,
+                        owner_id=cast(str, record.owner_id),
+                        fencing_token=cast(int, record.fencing_token),
+                        lease_ttl=self._recovery_lease_ttl,
+                    )
+                    if not renewed:
+                        if owner_task is not None:
+                            owner_task.cancel()
+                        return
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001 - unverifiable ownership stops execution
+                if owner_task is not None:
+                    owner_task.cancel()
 
         return asyncio.create_task(
             heartbeat(), name=f"pygent-execution-claim-{record.execution_id}"
@@ -430,7 +479,11 @@ class _LifecycleMixin:
         registry = self.context_codec_registry
         input_codec = registry.for_value(context)
         admission = AdmissionCoordinator(self, record, has_deferred_models)
-        if prepared and record.history is not None and record.model_admission is not None:
+        if (
+            prepared
+            and record.history is not None
+            and record.model_admission is not None
+        ):
             admission.mark_model_manifest_committed()
         span_started = False
         claim_heartbeat: asyncio.Task[None] | None = None
@@ -441,102 +494,193 @@ class _LifecycleMixin:
                 record.deadline, setattr, record, "deadline_fired", True
             )
         )
-        try:
-            record.phase = ExecutionPhase.PREPARING
-            if not prepared or record.history is not None and record.fencing_token is not None:
-                claim_heartbeat = await self._establish_execution_claim(
-                    record, bound, options, invocation, has_deferred_models
+        with ExitStack() as ownership:
+            try:
+                record.phase = ExecutionPhase.PREPARING
+                if (
+                    not prepared
+                    or record.history is not None
+                    and record.fencing_token is not None
+                ):
+                    claim_heartbeat = await self._establish_execution_claim(
+                        record, bound, options, invocation, has_deferred_models
+                    )
+                if record.owner_id is not None and record.fencing_token is not None:
+                    ownership.enter_context(
+                        owner_scope(
+                            record.execution_id, record.owner_id, record.fencing_token
+                        )
+                    )
+                if not prepared:
+                    await self._prepare_root_admission(
+                        record, bound, options, admission
+                    )
+                await self._admit_root(record, admission)
+                span_started = True
+                output, next_context = await self._invoke_root_module(
+                    record, bound, message, context
                 )
-            if not prepared:
-                await self._prepare_root_admission(record, bound, options, admission)
-            await self._admit_root(record, admission)
-            span_started = True
-            output, next_context = await self._invoke_root_module(
-                record, bound, message, context
-            )
-            if not isinstance(output, Message) or not isinstance(next_context, Context):
-                raise TypeError("Module.forward() must return (Message, Context)")
-            validate_context(next_context)
-            if registry.for_value(next_context).identity != input_codec.identity:
-                raise TypeError("Module execution changed Context schema")
-            await record.finalize(
-                status=ExecutionStatus.SUCCEEDED,
-                terminal_events=(("span.completed", {}), ("execution.completed", {})),
-                output=invocation_to_dict(output, next_context, registry=registry),
-            )
-            return output, next_context
-        except TimeoutError as exc:
-            events: tuple[tuple[str, Mapping[str, JsonValue]], ...] = (
-                ("execution.deadline_exceeded", {}),
-            )
-            if span_started:
-                events = (("span.deadline_exceeded", {}),) + events
-            await record.finalize(
-                status=ExecutionStatus.DEADLINE_EXCEEDED,
-                terminal_events=events,
-                error={"type": "deadline_exceeded"},
-            )
-            raise ExecutionDeadlineExceeded(
-                f"Execution {record.execution_id} exceeded its deadline"
-            ) from exc
-        except asyncio.CancelledError:
-            events = (("execution.cancelled", {}),)
-            if span_started:
-                events = (("span.cancelled", {}),) + events
-            await record.finalize(
-                status=ExecutionStatus.CANCELLED,
-                terminal_events=events,
-                error={"type": "cancelled"},
-            )
-            raise
-        except BaseException as exc:
-            data = {"error_type": type(exc).__name__, "message": str(exc)}
-            events = (("execution.failed", data),)
-            if span_started:
-                events = (("span.failed", data),) + events
-            await record.finalize(
-                status=ExecutionStatus.FAILED,
-                terminal_events=events,
-                error=(
-                    exc.failure
-                    if isinstance(exc, ExecutionFailureError)
-                    else {"type": type(exc).__name__, "message": str(exc)}
-                ),
-            )
-            raise
-        finally:
-            if claim_heartbeat is not None:
-                claim_heartbeat.cancel()
-                await asyncio.gather(claim_heartbeat, return_exceptions=True)
-            if deadline_timer is not None:
-                deadline_timer.cancel()
-            deferred, record.deferred_tool_tasks = record.deferred_tool_tasks, []
-            for manager, task_id in deferred:
-                await manager.start(task_id)
-            await admission.release()
-            await self._remove_waiters_for(record)
-            if (
-                record.history is not None
-                and record.history_started
-                and has_deferred_models
-                and record.model_admission is None
-            ):
-                await record.history.abort_model_admission(record.execution_id)
-            if not record.terminal:
-                await record.notify_terminal()
-            if (
-                record.history is not None
-                and record.owner_id is not None
-                and record.fencing_token is not None
-                and not record.terminal
-            ):
-                await asyncio.shield(
-                    record.history.release_execution_claim(
-                        execution_id=record.execution_id,
-                        owner_id=record.owner_id,
-                        fencing_token=record.fencing_token,
+                if not isinstance(output, Message) or not isinstance(
+                    next_context, Context
+                ):
+                    raise TypeError("Module.forward() must return (Message, Context)")
+                validate_context(next_context)
+                if registry.for_value(next_context).identity != input_codec.identity:
+                    raise TypeError("Module execution changed Context schema")
+                await self._finalize_root(
+                    record,
+                    status=ExecutionStatus.SUCCEEDED,
+                    terminal_events=(
+                        ("span.completed", {}),
+                        ("execution.completed", {}),
+                    ),
+                    output=invocation_to_dict(output, next_context, registry=registry),
+                )
+                return output, next_context
+            except _ExecutionDeadlineExpired as exc:
+                events: tuple[tuple[str, Mapping[str, JsonValue]], ...] = (
+                    ("execution.deadline_exceeded", {}),
+                )
+                if span_started:
+                    events = (("span.deadline_exceeded", {}),) + events
+                await self._finalize_root(
+                    record,
+                    status=ExecutionStatus.DEADLINE_EXCEEDED,
+                    terminal_events=events,
+                    error={"type": "deadline_exceeded"},
+                )
+                raise ExecutionDeadlineExceeded(
+                    f"Execution {record.execution_id} exceeded its deadline"
+                ) from exc
+            except asyncio.CancelledError:
+                if record.phase is ExecutionPhase.FINALIZING:
+                    raise
+                events = (("execution.cancelled", {}),)
+                if span_started:
+                    events = (("span.cancelled", {}),) + events
+                await self._finalize_root(
+                    record,
+                    status=ExecutionStatus.CANCELLED,
+                    terminal_events=events,
+                    error={"type": "cancelled"},
+                )
+                raise
+            except BaseException as exc:
+                if record.phase is ExecutionPhase.FINALIZING:
+                    raise
+                data = {"error_type": type(exc).__name__, "message": str(exc)}
+                events = (("execution.failed", data),)
+                if span_started:
+                    events = (("span.failed", data),) + events
+                await self._finalize_root(
+                    record,
+                    status=ExecutionStatus.FAILED,
+                    terminal_events=events,
+                    error=(
+                        exc.failure
+                        if isinstance(exc, ExecutionFailureError)
+                        else {"type": type(exc).__name__, "message": str(exc)}
+                    ),
+                )
+                raise
+            finally:
+                if claim_heartbeat is not None:
+                    claim_heartbeat.cancel()
+                if deadline_timer is not None:
+                    deadline_timer.cancel()
+                await self._cleanup_root(record, admission, claim_heartbeat)
+
+    async def _wait_cleanup(
+        self, task: asyncio.Task[Any], record: _ExecutionRecord
+    ) -> Any:
+        if record.cleanup_deadline is None:
+            record.cleanup_deadline = (
+                record.deadline if record.deadline is not None else time.monotonic()
+            ) + 1.0
+        return await wait_cleanup(task, record.cleanup_deadline)
+
+    async def _finalize_root(self, record: _ExecutionRecord, **kwargs: Any) -> None:
+        record.phase = ExecutionPhase.FINALIZING
+        if record.journal_error is not None:
+            raise record.journal_error
+        if record.history is None:
+            # These in-memory critical sections never suspend while holding locks.
+            await record.finalize(**kwargs)
+            return
+        with ExitStack() as ownership:
+            if record.owner_id is not None and record.fencing_token is not None:
+                ownership.enter_context(
+                    owner_scope(
+                        record.execution_id, record.owner_id, record.fencing_token
                     )
                 )
+            task = track_cleanup(
+                self._cleanup_tasks,
+                record.finalize(**kwargs),
+                f"pygent-finalize-{record.execution_id}",
+            )
+        record.finalization_task = task
+        try:
+            await self._wait_cleanup(task, record)
+        except BaseException as exc:
+            record._mark_journal_failed(exc)
+            raise
+
+    async def _cleanup_root(
+        self,
+        record: _ExecutionRecord,
+        admission: AdmissionCoordinator,
+        claim_heartbeat: asyncio.Task[None] | None,
+    ) -> None:
+        owner = asyncio.current_task()
+
+        async def release() -> None:
+            if record.preparation_task is not None:
+                await asyncio.gather(record.preparation_task, return_exceptions=True)
+            if claim_heartbeat is not None:
+                await asyncio.gather(claim_heartbeat, return_exceptions=True)
+            if record.finalization_task is not None:
+                await asyncio.gather(record.finalization_task, return_exceptions=True)
+            try:
+                deferred, record.deferred_tool_tasks = record.deferred_tool_tasks, []
+                for manager, task_id in deferred:
+                    await manager.start(task_id)
+            finally:
+                try:
+                    token = _release_owner.set(owner)
+                    try:
+                        await admission.release()
+                    finally:
+                        _release_owner.reset(token)
+                finally:
+                    await self._remove_waiters_for(record)
+                    if (
+                        record.history is not None
+                        and record.owner_id is not None
+                        and record.fencing_token is not None
+                        and not record.terminal
+                    ):
+                        await record.history.release_execution_claim(
+                            execution_id=record.execution_id,
+                            owner_id=record.owner_id,
+                            fencing_token=record.fencing_token,
+                        )
+                    if not record.terminal:
+                        record.owner_state = ExecutionOwnerState.UNOWNED
+
+        if (
+            record.history is None
+            and record.model_admission is None
+            and not admission.has_deferred_models
+            and not record.deferred_tool_tasks
+            and type(record.binding_state.execution) is _ExecutionCapacityState
+        ):
+            await release()
+            return
+        task = track_cleanup(
+            self._cleanup_tasks, release(), f"pygent-release-{record.execution_id}"
+        )
+        await self._wait_cleanup(task, record)
 
     async def _await_with_deadline(self, record: _ExecutionRecord, awaitable: Any) -> Any:
         return await self._await_until(record.deadline, awaitable)
@@ -548,9 +692,15 @@ class _LifecycleMixin:
         if remaining <= 0:
             if hasattr(awaitable, "close"):
                 awaitable.close()
-            raise TimeoutError
-        async with asyncio.timeout(remaining):
-            return await awaitable
+            raise _ExecutionDeadlineExpired
+        timeout = asyncio.timeout(remaining)
+        try:
+            async with timeout:
+                return await awaitable
+        except TimeoutError as exc:
+            if timeout.expired():
+                raise _ExecutionDeadlineExpired from exc
+            raise
 
     async def _wait_external(
         self,
@@ -594,10 +744,7 @@ class _LifecycleMixin:
                 old_phase = record.phase
                 record.phase = ExecutionPhase.WAITING_EXTERNAL
                 try:
-                    return await asyncio.wait_for(
-                        future,
-                        timeout=max(0.0, effective - time.monotonic()),
-                    )
+                    return await self._await_until(effective, future)
                 finally:
                     if not record.terminal:
                         record.phase = old_phase
@@ -682,6 +829,11 @@ class _LifecycleMixin:
                     item, recoverable=False
                 )
         self._executions.pop(execution_id, None)
+        self._completed_executions = deque(
+            record
+            for record in self._completed_executions
+            if record.execution_id != execution_id
+        )
         for identity, (_, record) in tuple(self._idempotency_records.items()):
             if record.execution_id == execution_id:
                 del self._idempotency_records[identity]
@@ -697,6 +849,8 @@ class _LifecycleMixin:
                 task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        if self._cleanup_tasks:
+            await asyncio.gather(*tuple(self._cleanup_tasks), return_exceptions=True)
         if self._tool_tasks is not None:
             await self._tool_tasks.close(cancel=cancel)
         closed: set[int] = set()

@@ -15,6 +15,7 @@ from pygent.core import (
     thaw_json,
 )
 
+from .._history_ownership import owner_scope
 from .._history_types import StoredExecution
 from ..api import (
     ExecutionAdmissionError,
@@ -60,10 +61,14 @@ class _RecoveryMixin:
             raise RuntimeError("this LocalRuntime has no SQLiteHistoryStore")
         active = self._executions.get(stored.execution_id)
         if active is not None:
-            return cast(_LocalExecutionHandle[OutputMessageT], _LocalExecutionHandle(active))
+            return cast(
+                _LocalExecutionHandle[OutputMessageT], _LocalExecutionHandle(active)
+            )
         if stored.plan_id != bound.plan.plan_id:
             raise RuntimeError("durable execution ExecutionPlan is incompatible")
-        raw_model_calls = thaw_json(stored.model_calls) if stored.model_calls is not None else {}
+        raw_model_calls = (
+            thaw_json(stored.model_calls) if stored.model_calls is not None else {}
+        )
         if not isinstance(raw_model_calls, Mapping):
             raise TypeError("durable model call options are invalid")
         model_calls = freeze_json_object(raw_model_calls)
@@ -77,17 +82,14 @@ class _RecoveryMixin:
                 stored.model_admission_id or stored.execution_id
             )
             if model_admission is None:
-                await history.abort_model_admission(stored.execution_id)
                 raise ExecutionAdmissionError(
                     "durable model admission intent has no exact manifest"
                 )
-            await history.commit_model_admission(
-                stored.execution_id,
-                admission_id=model_admission.admission_id,
-                manifest_digest=model_admission.digest,
-            )
         elif stored.model_admission_status == "committed":
-            if stored.model_admission_id is None or stored.model_admission_digest is None:
+            if (
+                stored.model_admission_id is None
+                or stored.model_admission_digest is None
+            ):
                 raise RuntimeError("durable model admission metadata is incomplete")
             await self._ensure_model_store_open()
             model_admission = await self.model_deployment_store.get_admission(
@@ -148,16 +150,26 @@ class _RecoveryMixin:
             lease_ttl=self._recovery_lease_ttl,
         )
         if fencing_token is None:
-            raise ExecutionAdmissionError("durable execution is owned by another recovery attempt")
+            raise ExecutionAdmissionError(
+                "durable execution is owned by another recovery attempt"
+            )
         record.fencing_token = fencing_token
         try:
-            await history.update_execution(
-                stored.execution_id,
-                status=ExecutionStatus.PENDING.value,
-                attempt=stored.attempt + 1,
-                attempt_id=record.attempt_id,
-                phase=ExecutionPhase.PREPARING.value,
-            )
+            with owner_scope(stored.execution_id, record.owner_id, fencing_token):
+                if stored.model_admission_status == "preparing":
+                    assert model_admission is not None
+                    await history.commit_model_admission(
+                        stored.execution_id,
+                        admission_id=model_admission.admission_id,
+                        manifest_digest=model_admission.digest,
+                    )
+                await history.update_execution(
+                    stored.execution_id,
+                    status=ExecutionStatus.PENDING.value,
+                    attempt=stored.attempt + 1,
+                    attempt_id=record.attempt_id,
+                    phase=ExecutionPhase.PREPARING.value,
+                )
         except BaseException:
             await history.release_execution_claim(
                 execution_id=stored.execution_id,
@@ -171,9 +183,13 @@ class _RecoveryMixin:
             ),
             name=f"pygent-recovered-{stored.execution_id}",
         )
-        record.task.add_done_callback(self._execution_finished)
+        record.task.add_done_callback(
+            lambda completed: self._execution_finished(record, completed)
+        )
         self._executions[stored.execution_id] = record
-        return cast(_LocalExecutionHandle[OutputMessageT], _LocalExecutionHandle(record))
+        return cast(
+            _LocalExecutionHandle[OutputMessageT], _LocalExecutionHandle(record)
+        )
 
     async def _run_recovered_with_claim(
         self,
@@ -195,5 +211,6 @@ class _RecoveryMixin:
             bool(record.model_admission),
             prepared=True,
         )
+
 
 __all__ = ["_RecoveryMixin"]

@@ -15,6 +15,24 @@ from pygent.core import json_values
 from pygent.runtime import ExecutionEvent
 
 
+def test_empty_json_snapshot_is_independent_of_later_input_mutation():
+    source = {}
+    frozen = freeze_json(source)
+    object_value = json_values.freeze_json_object(source)
+    source["later"] = [1, 2, 3]
+    assert thaw_json(frozen) == {}
+    assert thaw_json(object_value) == {}
+
+
+def test_empty_mapping_subclass_still_validates_its_declared_items():
+    class CustomMapping(dict):
+        def items(self):
+            return [("invalid", object())]
+
+    with pytest.raises(JsonValueError):
+        json_values.freeze_json_object(CustomMapping())
+
+
 def test_nested_json_values_are_recursively_frozen_and_thawed():
     source = {"name": "weather", "values": [1, {"ok": True}]}
 

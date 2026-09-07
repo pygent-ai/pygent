@@ -386,7 +386,7 @@ async def test_concurrent_events_share_group_commit(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_full_event_batch_shares_one_commit_receipt(tmp_path):
+async def test_event_batch_shares_receipts_within_each_execution(tmp_path):
     async with SQLiteHistoryStore(
         tmp_path / "grouped.sqlite3", max_event_batch_size=8
     ) as store:
@@ -395,13 +395,17 @@ async def test_full_event_batch_shares_one_commit_receipt(tmp_path):
             await store._reserve_event_slot()
             receipts.append(
                 store._enqueue_reserved_event_payload(
-                    f"execution-{index}", index, json.dumps({"index": index})
+                    f"execution-{index % 2}", index, json.dumps({"index": index})
                 )
             )
 
-        assert len({id(receipt) for receipt in receipts}) == 1
+        assert len({id(receipt) for receipt in receipts}) == 2
+        assert receipts[0] is receipts[2]
+        assert receipts[1] is receipts[3]
         await asyncio.gather(*(asyncio.shield(receipt) for receipt in receipts))
-        assert all(receipt.done() and receipt.exception() is None for receipt in receipts)
+        assert all(
+            receipt.done() and receipt.exception() is None for receipt in receipts
+        )
 
 
 @pytest.mark.asyncio

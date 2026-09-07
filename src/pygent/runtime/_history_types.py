@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Concatenate, Literal, ParamSpec, Protocol, TypeVar
 
+import aiosqlite
+
 from pygent.core import FrozenJsonObject, JsonValue, freeze_json, thaw_json
 
 _P = ParamSpec("_P")
@@ -18,6 +20,8 @@ _R = TypeVar("_R")
 
 class _SerializedWriter(Protocol):
     _write_lock: asyncio.Lock
+
+    def _db(self) -> aiosqlite.Connection: ...
 
 
 _WriterT = TypeVar("_WriterT", bound=_SerializedWriter)
@@ -58,6 +62,20 @@ class StoredExecution:
     terminal_sequence: int | None = None
     submitted_at_unix_ns: int = 0
     updated_at_unix_ns: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionState:
+    status: str
+    phase: str
+    attempt_id: str | None
+    terminal_sequence: int | None
+    trace_id: str
+    submitted_at_unix_ns: int
+    updated_at_unix_ns: int
+    error: JsonValue | None
+    owner_active: bool
+    last_sequence: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,16 +165,42 @@ def _prepared_json_digest(prepared: _PreparedJson) -> str:
     return hashlib.sha256(prepared.payload.encode("utf-8")).hexdigest()
 
 
-def _serialized_write(
+def _serialized_access(
     method: Callable[Concatenate[_WriterT, _P], Awaitable[_R]],
 ) -> Callable[Concatenate[_WriterT, _P], Awaitable[_R]]:
-    """Serialize transactions on the Store's single writer connection."""
+    """Serialize access to the Store connection so readers cannot observe uncommitted writes."""
 
     @wraps(method)
-    async def wrapped(
-        self: _WriterT, /, *args: _P.args, **kwargs: _P.kwargs
-    ) -> _R:
+    async def wrapped(self: _WriterT, /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
         async with self._write_lock:
             return await method(self, *args, **kwargs)
+
+    return wrapped
+
+
+def _execution_write(
+    method: Callable[Concatenate[_WriterT, _P], Awaitable[_R]],
+) -> Callable[Concatenate[_WriterT, _P], Awaitable[_R]]:
+    """Serialize an execution mutation with its authority check in one transaction."""
+
+    @wraps(method)
+    async def wrapped(self: _WriterT, /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        from ._history_ownership import validate_writers, write_authority
+
+        execution_id = kwargs.get("execution_id", args[0] if args else None)
+        if not isinstance(execution_id, str):
+            raise TypeError("execution write requires an execution identity")
+        authority = write_authority(execution_id)
+        async with self._write_lock:
+            db = self._db()
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await validate_writers(db, (authority,))
+                result = await method(self, *args, **kwargs)
+                await db.commit()
+                return result
+            except BaseException:
+                await db.rollback()
+                raise
 
     return wrapped

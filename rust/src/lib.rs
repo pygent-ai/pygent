@@ -265,6 +265,97 @@ fn stream_item_to_py(item: StreamItem) -> PyResult<Py<PyAny>> {
     })
 }
 
+#[derive(Default)]
+struct SseDecoder {
+    buffer: Vec<u8>,
+    consumed: usize,
+    scanned: usize,
+    data: Vec<u8>,
+    has_data: bool,
+}
+
+impl SseDecoder {
+    fn push(&mut self, chunk: &[u8]) {
+        // Compact once per network chunk, never once per line. Keep the scan
+        // cursor across fragments so long lines are traversed only once.
+        if self.consumed > 0 {
+            self.buffer.drain(..self.consumed);
+            self.scanned -= self.consumed;
+            self.consumed = 0;
+        }
+        self.buffer.extend_from_slice(chunk);
+    }
+
+    fn next_event(&mut self) -> Option<Result<String, std::string::FromUtf8Error>> {
+        while let Some(offset) = self.buffer[self.scanned..].iter().position(|b| *b == b'\n') {
+            let end = self.scanned + offset;
+            let line = &self.buffer[self.consumed..end];
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            self.consumed = end + 1;
+            self.scanned = self.consumed;
+            if line.is_empty() && self.has_data {
+                self.has_data = false;
+                return Some(String::from_utf8(std::mem::take(&mut self.data)));
+            }
+            if let Some(value) = line.strip_prefix(b"data:") {
+                if self.has_data {
+                    self.data.push(b'\n');
+                }
+                self.data
+                    .extend_from_slice(value.strip_prefix(b" ").unwrap_or(value));
+                self.has_data = true;
+            }
+        }
+        self.scanned = self.buffer.len();
+        None
+    }
+}
+
+#[cfg(test)]
+mod sse_tests {
+    use super::SseDecoder;
+
+    #[test]
+    fn arbitrary_fragmentation_preserves_multiline_unicode_and_empty_data() {
+        let input = ":comment\r\nevent: delta\r\ndata: 上海\r\ndata: world\r\n\r\ndata:\n\ndata: [DONE]\n\n";
+        for chunk_size in 1..=input.len() {
+            let mut decoder = SseDecoder::default();
+            let mut events = Vec::new();
+            for chunk in input.as_bytes().chunks(chunk_size) {
+                decoder.push(chunk);
+                while let Some(event) = decoder.next_event() {
+                    events.push(event.unwrap());
+                }
+            }
+            assert_eq!(events, ["上海\nworld", "", "[DONE]"]);
+        }
+    }
+
+    #[test]
+    fn long_fragmented_line_advances_scan_without_losing_partial_data() {
+        let mut decoder = SseDecoder::default();
+        decoder.push(b"data: ");
+        assert!(decoder.next_event().is_none());
+        for _ in 0..4096 {
+            decoder.push(b"xxxxxxxxxxxxxxxx");
+            assert!(decoder.next_event().is_none());
+            assert_eq!(decoder.scanned, decoder.buffer.len());
+        }
+        decoder.push(b"\n\n");
+        assert_eq!(decoder.next_event().unwrap().unwrap(), "x".repeat(65536));
+        assert!(decoder.next_event().is_none());
+    }
+
+    #[test]
+    fn invalid_utf8_is_reported_only_at_a_complete_event() {
+        let mut decoder = SseDecoder::default();
+        decoder.push(b"data: \xff\n");
+        assert!(decoder.next_event().is_none());
+        decoder.push(b"\n");
+        assert!(decoder.next_event().unwrap().is_err());
+    }
+}
+
 async fn run_sse(
     state: Arc<ClientState>,
     url: String,
@@ -324,8 +415,7 @@ async fn run_sse(
         return;
     }
     let mut stream = response.bytes_stream();
-    let mut buffer = Vec::new();
-    let mut data_lines: Vec<Vec<u8>> = Vec::new();
+    let mut decoder = SseDecoder::default();
     loop {
         let chunk = match cancel.run_until_cancelled(stream.next()).await {
             Some(value) => value,
@@ -340,60 +430,36 @@ async fn run_sse(
                 return;
             }
         };
-        buffer.extend_from_slice(&chunk);
-        while let Some(position) = buffer.iter().position(|byte| *byte == b'\n') {
-            let mut line: Vec<u8> = buffer.drain(..=position).collect();
-            line.pop();
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
-            if line.is_empty() {
-                if data_lines.is_empty() {
-                    continue;
+        decoder.push(&chunk);
+        while let Some(payload) = decoder.next_event() {
+            let payload = match payload {
+                Ok(value) => value,
+                Err(error) => {
+                    let _ =
+                        send_stream_item(&sender, &cancel, StreamItem::Error(error.to_string()))
+                            .await;
+                    return;
                 }
-                let mut payload = Vec::new();
-                for (index, value) in data_lines.drain(..).enumerate() {
-                    if index > 0 {
-                        payload.push(b'\n');
-                    }
-                    payload.extend_from_slice(&value);
-                }
-                let payload = match String::from_utf8(payload) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        let _ = send_stream_item(
-                            &sender,
-                            &cancel,
-                            StreamItem::Error(error.to_string()),
-                        )
-                        .await;
-                        return;
+            };
+            let terminal = payload.trim() == "[DONE]";
+            if terminal {
+                let drain = async {
+                    while let Some(chunk) = stream.next().await {
+                        if chunk.is_err() {
+                            break;
+                        }
                     }
                 };
-                let terminal = payload.trim() == "[DONE]";
-                if terminal {
-                    let drain = async {
-                        while let Some(chunk) = stream.next().await {
-                            if chunk.is_err() {
-                                break;
-                            }
-                        }
-                    };
-                    let _ = tokio::time::timeout(
-                        Duration::from_millis(50),
-                        cancel.run_until_cancelled(drain),
-                    )
-                    .await;
-                    let _ = send_stream_item(&sender, &cancel, StreamItem::Data(payload)).await;
-                    return;
-                }
-                if !send_stream_item(&sender, &cancel, StreamItem::Data(payload)).await {
-                    return;
-                }
-            } else if !line.starts_with(b":") {
-                if let Some(value) = line.strip_prefix(b"data:") {
-                    data_lines.push(value.strip_prefix(b" ").unwrap_or(value).to_vec());
-                }
+                let _ = tokio::time::timeout(
+                    Duration::from_millis(50),
+                    cancel.run_until_cancelled(drain),
+                )
+                .await;
+                let _ = send_stream_item(&sender, &cancel, StreamItem::Data(payload)).await;
+                return;
+            }
+            if !send_stream_item(&sender, &cancel, StreamItem::Data(payload)).await {
+                return;
             }
         }
     }

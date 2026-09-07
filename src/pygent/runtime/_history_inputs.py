@@ -23,11 +23,13 @@ _T = TypeVar("_T")
 
 class ExecutionInputHistoryMixin:
     if TYPE_CHECKING:
+
         def _db(self) -> aiosqlite.Connection: ...
         async def _queue_transaction(
             self,
             operation: Callable[[aiosqlite.Connection], Awaitable[_T]],
             *,
+            execution_id: str | None = None,
             batch_key: str | None = None,
             batch_payload: object | None = None,
             batch_operation: (
@@ -130,7 +132,9 @@ class ExecutionInputHistoryMixin:
             ).fetchone()
             if receipt is not None:
                 if receipt[0] != request_json:
-                    raise RuntimeError("replayed execution input receive changed its request")
+                    raise RuntimeError(
+                        "replayed execution input receive changed its request"
+                    )
                 values = json.loads(receipt[1])
                 return tuple(ExecutionInput.from_dict(item) for item in values)
             await db.execute(
@@ -164,7 +168,9 @@ class ExecutionInputHistoryMixin:
                 )
             ).fetchall()
             selected = tuple(
-                ExecutionInput(row[0], int(row[1]), row[2], cast(JsonValue, _load(row[3])))
+                ExecutionInput(
+                    row[0], int(row[1]), row[2], cast(JsonValue, _load(row[3]))
+                )
                 for row in rows
             )
             for item in selected:
@@ -190,4 +196,7 @@ class ExecutionInputHistoryMixin:
             )
             return selected
 
-        return cast(tuple[ExecutionInput, ...], await self._queue_transaction(operation))
+        return cast(
+            tuple[ExecutionInput, ...],
+            await self._queue_transaction(operation, execution_id=execution_id),
+        )

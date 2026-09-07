@@ -12,6 +12,7 @@ from pygent.core import (
     ExecutionFailure,
     ExecutionFailureError,
     ExecutionInputDelivery,
+    FrozenJsonObject,
     JsonValue,
     Message,
     Module,
@@ -21,7 +22,7 @@ from pygent.core._module_contracts import _execution_scope
 from pygent.llm import ModelCallError, ModelGroupConfig
 
 from .._history_store import SQLiteHistoryStore
-from .._history_types import StoredExecution
+from .._history_types import ExecutionState, StoredExecution
 from ..api import (
     Binding,
     DurabilityReport,
@@ -107,10 +108,13 @@ class _ExecutionSubscription:
                 and self._next > self._record.terminal_sequence
             ):
                 return
+            if self._record.journal_error is not None:
+                raise self._record.journal_error
             async with self._record.event_condition:
                 await self._record.event_condition.wait_for(
                     lambda: (
-                        self._next <= self._record.committed_sequence
+                        self._record.journal_error is not None
+                        or self._next <= self._record.committed_sequence
                         or (
                             self._record.terminal_sequence is not None
                             and self._next > self._record.terminal_sequence
@@ -120,9 +124,9 @@ class _ExecutionSubscription:
 
 
 def _event_from_frozen(frozen: JsonValue) -> ExecutionEvent:
-    item = thaw_json(frozen)
-    if not isinstance(item, dict):
+    if not isinstance(frozen, FrozenJsonObject):
         raise TypeError("durable event must be a JSON object")
+    item = frozen
     return ExecutionEvent(
         schema_version=cast(str, item.get("schema_version")),
         event_id=cast(str, item.get("event_id")),
@@ -135,7 +139,7 @@ def _event_from_frozen(frozen: JsonValue) -> ExecutionEvent:
         timestamp_unix_ns=cast(int, item.get("timestamp_unix_ns")),
         module_path=cast(str, item.get("module_path")),
         kind=cast(str, item.get("kind")),
-        data=cast(dict[str, JsonValue], item.get("data", {})),
+        data=cast(FrozenJsonObject, item.get("data", {})),
     )
 
 
@@ -161,9 +165,11 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
     async def outcome(self) -> ExecutionOutcome:
         task = self._record.task
         if task is not None and not task.done():
-            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.shield(asyncio.gather(task, return_exceptions=True))
         outcome = self._record.outcome
         if outcome is None:
+            if self._record.journal_error is not None:
+                raise self._record.journal_error
             raise RuntimeError("execution has no terminal outcome")
         return outcome
 
@@ -184,27 +190,22 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
         if callable(wait_handle):
             message, context = await wait_handle(task)
         else:
-            message, context = await task
+            message, context = await asyncio.shield(task)
         return cast(OutputMessageT, message), context
 
     async def cancel(self) -> bool:
         task = self._record.task
         if task is None or task.done():
             return False
+        if self._record.phase is ExecutionPhase.SUBMITTING:
+            await asyncio.sleep(0)
+        if task.done():
+            return False
         task.cancel()
         try:
-            await task
+            await asyncio.shield(task)
         except asyncio.CancelledError:
             pass
-        if self._record.status is ExecutionStatus.PENDING:
-            self._record.status = ExecutionStatus.CANCELLED
-            await self._record.emit(
-                parent_execution_id=self._record.parent_execution_id,
-                module_path=self._record.plan.root,
-                kind="execution.cancelled",
-                data={},
-            )
-            await self._record.notify_terminal()
         return True
 
     async def send_input(
@@ -216,10 +217,14 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
                 ready = asyncio.create_task(self._record.history_ready.wait())
                 task = self._record.task
                 waits = {ready} if task is None else {ready, task}
-                done, _ = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
-                if ready not in done:
+                try:
+                    done, _ = await asyncio.wait(
+                        waits, return_when=asyncio.FIRST_COMPLETED
+                    )
+                finally:
                     ready.cancel()
                     await asyncio.gather(ready, return_exceptions=True)
+                if ready not in done:
                     return ExecutionInputDelivery(
                         "execution_finished", self.execution_id, input_id
                     )
@@ -266,7 +271,9 @@ class _DurableExecutionSubscription:
                     raise RuntimeError("durable event journal is not contiguous")
                 self._next += 1
                 yield event
-            stored = await self._history.get_execution(self._execution_id)
+            if len(page) == 256:
+                continue
+            stored = await self._history._execution_status(self._execution_id)
             if stored is None:
                 raise KeyError(f"unknown execution {self._execution_id!r}")
             if (
@@ -288,6 +295,7 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
     ) -> None:
         self._history = history
         self._stored = stored
+        self._status = ExecutionStatus(stored.status)
         self._context_codec_registry = context_codec_registry
 
     @property
@@ -300,37 +308,33 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
 
     @property
     def status(self) -> ExecutionStatus:
-        return ExecutionStatus(self._stored.status)
+        return self._status
 
-    async def _refresh(self) -> StoredExecution:
-        stored = await self._history.get_execution(self.execution_id)
+    async def _refresh(self) -> ExecutionState:
+        stored = await self._history._execution_status(self.execution_id)
         if stored is None:
             raise KeyError(f"unknown execution {self.execution_id!r}")
-        self._stored = stored
+        self._status = ExecutionStatus(stored.status)
         return stored
 
     async def snapshot(self) -> ExecutionSnapshot:
         stored = await self._refresh()
         status = ExecutionStatus(stored.status)
         phase = ExecutionPhase(stored.phase)
-        events = await self._history.events_tail(execution_id=self.execution_id, limit=1)
-        last_sequence = -1
-        if events:
-            value = thaw_json(events[0])
-            if isinstance(value, dict):
-                last_sequence = cast(int, value.get("sequence", -1))
         return ExecutionSnapshot(
-            execution_id=stored.execution_id,
+            execution_id=self.execution_id,
             trace_id=stored.trace_id,
             status=status,
             phase=phase,
             owner_state=(
                 ExecutionOwnerState.TERMINAL
                 if status.terminal
+                else ExecutionOwnerState.ACTIVE
+                if stored.owner_active
                 else ExecutionOwnerState.UNOWNED
             ),
             attempt_id=stored.attempt_id,
-            last_sequence=last_sequence,
+            last_sequence=stored.last_sequence,
             terminal_sequence=stored.terminal_sequence,
             submitted_at_unix_ns=stored.submitted_at_unix_ns,
             updated_at_unix_ns=stored.updated_at_unix_ns,
@@ -340,9 +344,12 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
         while True:
             stored = await self._refresh()
             status = ExecutionStatus(stored.status)
-            if status is ExecutionStatus.SUCCEEDED and stored.output is not None:
+            if status is ExecutionStatus.SUCCEEDED:
+                result = await self._history.get_execution(self.execution_id)
+                if result is None or result.output is None:
+                    raise RuntimeError("successful execution has no persisted output")
                 message, context = invocation_from_dict(
-                    stored.output, registry=self._context_codec_registry
+                    result.output, registry=self._context_codec_registry
                 )
                 return cast(OutputMessageT, message), context
             if status.terminal:
@@ -364,7 +371,7 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
                 if stored.attempt_id is None:
                     raise RuntimeError("terminal execution has no attempt identity")
                 return ExecutionOutcome(
-                    execution_id=stored.execution_id,
+                    execution_id=self.execution_id,
                     status=status,
                     attempt_id=stored.attempt_id,
                     terminal_sequence=stored.terminal_sequence,
@@ -377,7 +384,7 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
             await asyncio.sleep(0.02)
 
     async def cancel(self) -> bool:
-        return False
+        return await self._history._request_execution_cancel(self.execution_id)
 
     async def send_input(
         self, *, input_id: str, kind: str, value: JsonValue
@@ -507,7 +514,11 @@ class _LocalBoundModule(Generic[InputMessageT, OutputMessageT]):
         execution: ExecutionOptions | None = None,
     ) -> tuple[OutputMessageT, Context]:
         handle = await self.start(message, context, execution=execution)
-        return await handle.result()
+        try:
+            return await handle.result()
+        except asyncio.CancelledError:
+            await handle.cancel()
+            raise
 
     def stream(
         self,

@@ -15,6 +15,7 @@ from ._history_effects import EffectHistoryMixin
 from ._history_executions import ExecutionHistoryMixin
 from ._history_inputs import ExecutionInputHistoryMixin
 from ._history_jobs import JobHistoryMixin
+from ._history_ownership import WriteAuthority, validate_writers, write_authority
 from ._history_types import HistoryStoreError
 
 _T = TypeVar("_T")
@@ -25,6 +26,7 @@ class _QueuedEvent:
     execution_id: str
     index: int
     payload: str
+    authority: WriteAuthority
     on_commit: Callable[[int], None] | None = None
     on_error: Callable[[BaseException], None] | None = None
 
@@ -32,23 +34,26 @@ class _QueuedEvent:
 @dataclass(slots=True)
 class _EventBatch:
     events: list[_QueuedEvent]
-    committed: asyncio.Future[None]
+    committed: dict[WriteAuthority, asyncio.Future[None]]
 
 
 @dataclass(slots=True)
 class _TransactionRequest:
     operation: Callable[[aiosqlite.Connection], Awaitable[object]]
     committed: asyncio.Future[object]
+    authority: WriteAuthority | None
     batch_key: str | None = None
     batch_payload: object | None = None
     batch_operation: (
-        Callable[[aiosqlite.Connection, list[object]], Awaitable[list[object]]]
-        | None
+        Callable[[aiosqlite.Connection, list[object]], Awaitable[list[object]]] | None
     ) = None
 
 
 class SQLiteHistoryStore(
-    ExecutionHistoryMixin, JobHistoryMixin, EffectHistoryMixin, ExecutionInputHistoryMixin
+    ExecutionHistoryMixin,
+    JobHistoryMixin,
+    EffectHistoryMixin,
+    ExecutionInputHistoryMixin,
 ):
     """One serialized SQLite durability boundary for executions and effects."""
 
@@ -200,6 +205,9 @@ class SQLiteHistoryStore(
                 fencing_token INTEGER NOT NULL,
                 expires_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS execution_cancellations (
+                execution_id TEXT PRIMARY KEY
+            );
             CREATE TABLE IF NOT EXISTS execution_model_admissions (
                 execution_id TEXT NOT NULL,
                 admission_id TEXT NOT NULL,
@@ -296,19 +304,23 @@ class SQLiteHistoryStore(
             not self._event_batches
             or len(self._event_batches[-1].events) >= self._max_event_batch_size
         ):
-            committed: asyncio.Future[None] = loop.create_future()
-            committed.add_done_callback(_consume_future_exception)
-            self._event_batches.append(_EventBatch([], committed))
+            self._event_batches.append(_EventBatch([], {}))
         batch = self._event_batches[-1]
+        authority = write_authority(execution_id)
+        committed = batch.committed.get(authority)
+        if committed is None:
+            committed = loop.create_future()
+            committed.add_done_callback(_consume_future_exception)
+            batch.committed[authority] = committed
         batch.events.append(
-            _QueuedEvent(execution_id, index, payload, on_commit, on_error)
+            _QueuedEvent(execution_id, index, payload, authority, on_commit, on_error)
         )
         task = self._event_flush_task
         if task is None or task.done():
             self._event_flush_task = asyncio.create_task(
                 self._flush_event_batches(), name="pygent-sqlite-event-writer"
             )
-        return batch.committed
+        return committed
 
     async def _flush_event_batches(self) -> None:
         while True:
@@ -321,38 +333,55 @@ class SQLiteHistoryStore(
             batch = self._event_batches.popleft()
             try:
                 await self._commit_event_batch(batch.events)
-            except BaseException as exc:  # noqa: BLE001 - fail every queued writer
-                for event in batch.events:
-                    self._event_capacity.release()
-                    if event.on_error is not None:
-                        event.on_error(exc)
-                if not batch.committed.done():
-                    batch.committed.set_exception(exc)
+            except asyncio.CancelledError as exc:
+                self._finish_event_batch(batch, exc)
                 pending, self._event_batches = self._event_batches, deque()
                 self._event_flush_task = None
                 for queued in pending:
-                    for event in queued.events:
-                        self._event_capacity.release()
-                        if event.on_error is not None:
-                            event.on_error(exc)
-                    if not queued.committed.done():
-                        queued.committed.set_exception(exc)
-                return
+                    self._finish_event_batch(queued, exc)
+                raise
+            except Exception:  # noqa: BLE001 - isolate execution writers
+                for authority, receipt in batch.committed.items():
+                    isolated = _EventBatch(
+                        [
+                            event
+                            for event in batch.events
+                            if event.authority == authority
+                        ],
+                        {authority: receipt},
+                    )
+                    try:
+                        await self._commit_event_batch(isolated.events)
+                    except Exception as exc:  # noqa: BLE001 - report commit failure
+                        self._finish_event_batch(isolated, exc)
+                    else:
+                        self._finish_event_batch(isolated)
             else:
-                for event in batch.events:
-                    self._event_capacity.release()
-                    if event.on_commit is not None:
-                        event.on_commit(event.index)
-                if not batch.committed.done():
-                    batch.committed.set_result(None)
+                self._finish_event_batch(batch)
 
-    async def _commit_event_batch(
-        self, batch: list[_QueuedEvent]
+    def _finish_event_batch(
+        self, batch: _EventBatch, error: BaseException | None = None
     ) -> None:
+        for event in batch.events:
+            self._event_capacity.release()
+            if error is not None:
+                if event.on_error is not None:
+                    event.on_error(error)
+            elif event.on_commit is not None:
+                event.on_commit(event.index)
+        for receipt in batch.committed.values():
+            if not receipt.done():
+                if error is None:
+                    receipt.set_result(None)
+                else:
+                    receipt.set_exception(error)
+
+    async def _commit_event_batch(self, batch: list[_QueuedEvent]) -> None:
         db = self._db()
         async with self._write_lock:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                await validate_writers(db, tuple(event.authority for event in batch))
                 cursor = await db.executemany(
                     "INSERT INTO events(execution_id,event_index,event_json) "
                     "VALUES(?,?,?) ON CONFLICT(execution_id,event_index) DO NOTHING",
@@ -385,6 +414,7 @@ class SQLiteHistoryStore(
         self,
         operation: Callable[[aiosqlite.Connection], Awaitable[_T]],
         *,
+        execution_id: str | None = None,
         batch_key: str | None = None,
         batch_payload: object | None = None,
         batch_operation: (
@@ -405,6 +435,7 @@ class SQLiteHistoryStore(
                 _TransactionRequest(
                     cast(Callable[..., Awaitable[object]], operation),
                     committed,
+                    None if execution_id is None else write_authority(execution_id),
                     batch_key,
                     batch_payload,
                     batch_operation,
@@ -453,6 +484,27 @@ class SQLiteHistoryStore(
         async with self._write_lock:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                terminal_owners = {
+                    item.authority
+                    for item in batch
+                    if item.batch_key == "finalize_execution"
+                    and item.authority is not None
+                }
+                if terminal_owners and any(
+                    sum(item.authority == owner for item in batch) > 1
+                    for owner in terminal_owners
+                ):
+                    # A terminal write ends this authority. Re-run such mixed
+                    # requests in order, validating the fence before each one.
+                    raise RuntimeError(
+                        "terminal owner requires an isolated transaction"
+                    )
+                await validate_writers(
+                    db,
+                    tuple(
+                        item.authority for item in batch if item.authority is not None
+                    ),
+                )
                 results: list[object] = []
                 index = 0
                 while index < len(batch):
@@ -463,8 +515,7 @@ class SQLiteHistoryStore(
                         continue
                     end = index + 1
                     while (
-                        end < len(batch)
-                        and batch[end].batch_key == request.batch_key
+                        end < len(batch) and batch[end].batch_key == request.batch_key
                     ):
                         end += 1
                     run = batch[index:end]

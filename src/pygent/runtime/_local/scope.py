@@ -45,6 +45,7 @@ from pygent.tool import (
 )
 from pygent.tool.executors import validate_executor_sandbox
 
+from .._deadline import _ExecutionDeadlineExpired
 from ..api import (
     CapacityPolicy,
     ExecutionAdmissionError,
@@ -184,13 +185,13 @@ class _ManagedScope(ExecutionScope):
         if task is asyncio.current_task():
             raise RuntimeError("a managed execution cannot wait for its own Handle")
         if task.done():
-            return await task
+            return await asyncio.shield(task)
         parent_had_lease = frame.runnable_held
         if parent_had_lease:
             self._release_runnable(frame)
         self.record.phase = ExecutionPhase.WAITING_CHILD
         try:
-            return await task
+            return await asyncio.shield(task)
         finally:
             current = asyncio.current_task()
             if parent_had_lease and (current is None or current.cancelling() == 0):
@@ -371,7 +372,7 @@ class _ManagedScope(ExecutionScope):
                     child.deadline, module.forward(message, context)
                 )
                 validated = _validate_result(result)
-            except TimeoutError:
+            except _ExecutionDeadlineExpired:
                 await self.record.emit(
                     execution_id=child.execution_id,
                     parent_execution_id=child.parent_execution_id,
@@ -631,7 +632,9 @@ class _ManagedScope(ExecutionScope):
 
     def resolve_model_deployment(self, model_group: str) -> object:
         frame = _execution_frame.get()
-        admission = self.record.model_admission if frame is None else frame.model_admission
+        admission = (
+            self.record.model_admission if frame is None else frame.model_admission
+        )
         if admission is None:
             raise ExecutionAdmissionError(
                 f"model group {model_group!r} has no active admission"

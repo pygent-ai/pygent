@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from collections.abc import AsyncIterator, Awaitable, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Mapping
+from contextlib import ExitStack, asynccontextmanager, nullcontext
 from contextvars import Context as ContextVarsContext
 from dataclasses import dataclass, field
 from time import monotonic, time
@@ -30,6 +30,8 @@ from pygent.core import (
     thaw_json,
 )
 
+from ._cleanup import track_cleanup, wait_cleanup
+from ._history_ownership import owner_scope
 from ._history_store import SQLiteHistoryStore
 from ._history_types import StoredTask
 from ._worker_protocol import (
@@ -60,6 +62,10 @@ class _ServerExecution:
     result: JsonValue | None = None
     error: JsonValue | None = None
     terminal: bool = False
+    finalizing: bool = False
+    journal_error: BaseException | None = None
+    finalization_task: asyncio.Task[None] | None = None
+    cleanup_deadline: float | None = None
     next_event_index: int = 0
 
 
@@ -101,6 +107,7 @@ class HTTPWorkerApp:
         self.max_retained_executions = max_retained_executions
         self.history = history
         self.executions: dict[str, _ServerExecution] = {}
+        self._cleanup_tasks: set[asyncio.Task[Any]] = set()
         self._requests: dict[tuple[str, str], str] = {}
 
         @asynccontextmanager
@@ -150,6 +157,8 @@ class HTTPWorkerApp:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if self._cleanup_tasks:
+            await asyncio.gather(*tuple(self._cleanup_tasks), return_exceptions=True)
 
     @staticmethod
     def _job_request(invocation: WorkerInvocation) -> dict[str, object]:
@@ -216,7 +225,10 @@ class HTTPWorkerApp:
             attempt=cast(int, request.get("attempt", 1)),
             expires_at=expires_at,
             model_calls=freeze_json_object(
-                cast(Mapping[str, object], thaw_json(request.get("model_calls", FrozenJsonObject())))
+                cast(
+                    Mapping[str, object],
+                    thaw_json(request.get("model_calls", FrozenJsonObject())),
+                )
             ),
             model_admission_ref=cast(str | None, request.get("model_admission_ref")),
             model_store_namespace=cast(
@@ -502,96 +514,129 @@ class HTTPWorkerApp:
             )
             frozen_result = freeze_json(result)
             phase = "persistence"
-            run.result = frozen_result
-            await self._emit(run, "execution.completed", {})
-            await self._persist_job(run, status="succeeded")
-            # Publish terminal success only after its durable record commits.
-            run.status = "succeeded"
+            await self._finalize_job(run, "succeeded", result=frozen_result)
             return frozen_result
 
         async def execute() -> JsonValue:
-            try:
-                history = self.history
-                if history is None:
-                    return await run_owned()
-                claim_id = f"worker-job:{run.execution_id}"
-                owner_id = f"worker:{id(self)}"
-                fencing_token: int | None = None
-                while fencing_token is None:
-                    fencing_token = await history.claim_execution(
-                        execution_id=claim_id,
-                        owner_id=owner_id,
-                        lease_ttl=5.0,
-                    )
-                    if fencing_token is not None:
-                        break
-                    stored = await history.get_task(run.execution_id)
-                    if stored is not None and stored.status not in {
-                        "pending",
-                        "running",
-                    }:
-                        run.status = stored.status
-                        run.result = stored.result
-                        run.error = stored.error
-                        if stored.status == "succeeded" and stored.result is not None:
-                            return stored.result
-                        failure = ExecutionFailure.from_dict(thaw_json(stored.error))
-                        raise WorkerRemoteError(failure)
-                    await asyncio.sleep(0.05)
-
-                owner_task = asyncio.current_task()
-
-                async def renew() -> None:
-                    assert fencing_token is not None
-                    while True:
-                        await asyncio.sleep(1.5)
-                        if not await history.renew_execution_claim(
-                            execution_id=claim_id,
-                            owner_id=owner_id,
-                            fencing_token=fencing_token,
-                            lease_ttl=5.0,
-                        ):
-                            if owner_task is not None:
-                                owner_task.cancel()
-                            return
-
-                heartbeat = asyncio.create_task(
-                    renew(), name=f"pygent-worker-claim-{run.execution_id}"
-                )
+            history = self.history
+            claim_id = f"worker-job:{run.execution_id}" if history is not None else ""
+            owner_id = f"worker:{id(self)}" if history is not None else ""
+            fencing_token: int | None = None
+            heartbeat: asyncio.Task[None] | None = None
+            with ExitStack() if history is not None else nullcontext() as ownership:
                 try:
+                    if history is not None:
+                        while fencing_token is None:
+                            fencing_token = await history.claim_execution(
+                                execution_id=claim_id,
+                                owner_id=owner_id,
+                                lease_ttl=5.0,
+                            )
+                            if fencing_token is not None:
+                                break
+                            stored = await history.get_task(run.execution_id)
+                            if stored is not None and stored.status not in {
+                                "pending",
+                                "running",
+                            }:
+                                run.status, run.result, run.error = (
+                                    stored.status,
+                                    stored.result,
+                                    stored.error,
+                                )
+                                run.terminal = True
+                                if (
+                                    stored.status == "succeeded"
+                                    and stored.result is not None
+                                ):
+                                    return stored.result
+                                raise WorkerRemoteError(
+                                    ExecutionFailure.from_dict(thaw_json(stored.error))
+                                )
+                            await asyncio.sleep(0.05)
+                        assert ownership is not None
+                        ownership.enter_context(
+                            owner_scope(
+                                claim_id,
+                                owner_id,
+                                fencing_token,
+                                journal_id=run.execution_id,
+                            )
+                        )
+                        owner_task = asyncio.current_task()
+
+                        async def renew() -> None:
+                            assert history is not None and fencing_token is not None
+                            try:
+                                while True:
+                                    await asyncio.sleep(1.5)
+                                    if not await history.renew_execution_claim(
+                                        execution_id=claim_id,
+                                        owner_id=owner_id,
+                                        fencing_token=fencing_token,
+                                        lease_ttl=5.0,
+                                    ):
+                                        if owner_task is not None:
+                                            owner_task.cancel()
+                                        return
+                            except asyncio.CancelledError:
+                                return
+                            except Exception:  # noqa: BLE001 - stop when ownership is unverifiable
+                                if owner_task is not None:
+                                    owner_task.cancel()
+
+                        heartbeat = asyncio.create_task(
+                            renew(), name=f"pygent-worker-claim-{run.execution_id}"
+                        )
                     return await run_owned()
+                except asyncio.CancelledError:
+                    if not run.finalizing and not run.terminal:
+                        await self._finalize_job(
+                            run,
+                            "cancelled",
+                            failure=_worker_failure(
+                                "cancelled", "Worker execution was cancelled"
+                            ),
+                        )
+                    raise
+                except BaseException as exc:
+                    if not run.finalizing and not run.terminal:
+                        await self._finalize_job(
+                            run,
+                            "failed",
+                            failure=_failure_from_exception(
+                                exc, persistence=phase == "persistence"
+                            ),
+                        )
+                    raise
                 finally:
-                    heartbeat.cancel()
-                    await asyncio.gather(heartbeat, return_exceptions=True)
-                    assert fencing_token is not None
-                    release_task = asyncio.create_task(
-                        history.release_execution_claim(
-                            execution_id=claim_id,
-                            owner_id=owner_id,
-                            fencing_token=fencing_token,
-                        ),
-                        name=f"pygent-worker-claim-release-{run.execution_id}",
-                    )
-                    try:
-                        await asyncio.shield(release_task)
-                    except asyncio.CancelledError:
-                        # A second cancellation from Worker shutdown must not
-                        # orphan release work past History Store closure.
-                        await release_task
-                        raise
-            except asyncio.CancelledError:
-                await self._finish_cancelled(run)
-                raise
-            except BaseException as exc:
-                await self._finish_failed(
-                    run,
-                    _failure_from_exception(exc, persistence=phase == "persistence"),
-                )
-                raise
-            finally:
-                async with run.condition:
-                    run.terminal = True
-                    run.condition.notify_all()
+                    if heartbeat is not None:
+                        heartbeat.cancel()
+
+                    if heartbeat is not None or fencing_token is not None:
+
+                        async def release() -> None:
+                            if run.finalization_task is not None:
+                                await asyncio.gather(
+                                    run.finalization_task, return_exceptions=True
+                                )
+                            if heartbeat is not None:
+                                await asyncio.gather(heartbeat, return_exceptions=True)
+                            if history is not None and fencing_token is not None:
+                                await history.release_execution_claim(
+                                    execution_id=claim_id,
+                                    owner_id=owner_id,
+                                    fencing_token=fencing_token,
+                                )
+
+                        release_task = track_cleanup(
+                            self._cleanup_tasks,
+                            release(),
+                            f"pygent-worker-claim-release-{run.execution_id}",
+                        )
+                        await wait_cleanup(release_task, self._cleanup_deadline(run))
+                    async with run.condition:
+                        run.condition.notify_all()
 
         task = asyncio.create_task(
             execute(),
@@ -601,40 +646,68 @@ class HTTPWorkerApp:
         task.add_done_callback(self._observe_task)
         run.task = task
 
-    async def _finish_cancelled(self, run: _ServerExecution) -> None:
-        failure = _worker_failure("cancelled", "Worker execution was cancelled")
-        run.error = freeze_json(failure.to_dict())
-        run.status = "cancelled"
-        await self._best_effort(
-            self._emit(
-                run,
-                "execution.cancelled",
-                freeze_json_object({"failure": failure.to_dict()}),
-            )
-        )
-        await self._best_effort(self._persist_job(run, status="cancelled"))
-
-    async def _finish_failed(
-        self, run: _ServerExecution, failure: ExecutionFailure
+    async def _finalize_job(
+        self,
+        run: _ServerExecution,
+        status: str,
+        *,
+        result: JsonValue | None = None,
+        failure: ExecutionFailure | None = None,
     ) -> None:
-        run.error = freeze_json(failure.to_dict())
-        run.status = "failed"
-        await self._best_effort(
-            self._emit(
-                run,
-                "execution.failed",
-                freeze_json_object({"failure": failure.to_dict()}),
-            )
+        run.finalizing = True
+        error = None if failure is None else freeze_json(failure.to_dict())
+        kind = {
+            "succeeded": "execution.completed",
+            "failed": "execution.failed",
+            "cancelled": "execution.cancelled",
+        }[status]
+        data = freeze_json_object(
+            {} if failure is None else {"failure": failure.to_dict()}
         )
-        await self._best_effort(self._persist_job(run, status="failed"))
+        event = self._event_value(run, kind, data)
+
+        async def commit() -> None:
+            if self.history is not None:
+                await self.history._finalize_worker_job(
+                    task_id=run.execution_id,
+                    status=status,
+                    result=result,
+                    error=error,
+                    index=run.next_event_index,
+                    event=event,
+                )
+            async with run.condition:
+                run.result, run.error, run.status = result, error, status
+                run.terminal = True
+                run.journal_error = None
+                self._publish_event(run, event)
+
+        try:
+            if self.history is None:
+                # In-memory publication has no suspending I/O; keep it on the owner.
+                await commit()
+            else:
+                run.finalization_task = track_cleanup(
+                    self._cleanup_tasks,
+                    commit(),
+                    f"pygent-worker-finalize-{run.execution_id}",
+                )
+                await wait_cleanup(run.finalization_task, self._cleanup_deadline(run))
+        except BaseException as exc:
+            run.journal_error = exc
+            async with run.condition:
+                run.condition.notify_all()
+            raise
 
     @staticmethod
-    async def _best_effort(operation: Awaitable[object]) -> bool:
-        try:
-            await operation
-        except Exception:  # noqa: BLE001 - terminal state must remain observable
-            return False
-        return True
+    def _cleanup_deadline(run: _ServerExecution) -> float:
+        if run.cleanup_deadline is None:
+            run.cleanup_deadline = (
+                run.invocation.deadline
+                if run.invocation.deadline is not None
+                else monotonic()
+            ) + 1.0
+        return run.cleanup_deadline
 
     @staticmethod
     def _status(run: _ServerExecution) -> str:
@@ -651,7 +724,8 @@ class HTTPWorkerApp:
                 (
                     execution_id
                     for execution_id, run in self.executions.items()
-                    if run.terminal
+                    if (run.terminal or run.journal_error is not None)
+                    and (run.task is None or run.task.done())
                 ),
                 None,
             )
@@ -670,6 +744,12 @@ class HTTPWorkerApp:
                 run = await self._restore_job(stored)
         if run is None:
             return JSONResponse({"error": "execution_not_found"}, status_code=404)
+        if (
+            (run.terminal or run.finalizing)
+            and run.task is not None
+            and not run.task.done()
+        ):
+            await asyncio.shield(asyncio.gather(run.task, return_exceptions=True))
         status = self._status(run)
         metadata = {
             "execution_id": run.execution_id,
@@ -678,10 +758,21 @@ class HTTPWorkerApp:
             "last_sequence": run.next_event_index - 1,
             "terminal_sequence": run.next_event_index - 1 if run.terminal else None,
         }
-        if not run.terminal or status in {"pending", "running"}:
+        if run.journal_error is not None:
             return JSONResponse(
-                {**metadata, "status": status}, status_code=202
+                {
+                    **metadata,
+                    "status": status,
+                    "error": _worker_failure(
+                        "persistence_error",
+                        "Worker journal commit is unconfirmed",
+                        outcome_unknown=True,
+                    ).to_dict(),
+                },
+                status_code=503,
             )
+        if not run.terminal or status in {"pending", "running"}:
+            return JSONResponse({**metadata, "status": status}, status_code=202)
         if status == "cancelled":
             return JSONResponse(
                 {
@@ -744,6 +835,32 @@ class HTTPWorkerApp:
             return JSONResponse({"error": "invalid_delivery"}, status_code=500)
         return JSONResponse(delivery.to_dict())
 
+    @staticmethod
+    def _event_value(
+        run: _ServerExecution, kind: str, data: Mapping[str, JsonValue]
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": EXECUTION_EVENT_SCHEMA_VERSION,
+            "event_id": str(uuid4()),
+            "sequence": run.next_event_index,
+            "timestamp_unix_ns": int(time() * 1_000_000_000),
+            "kind": kind,
+            "data": thaw_json(cast(JsonValue, freeze_json_object(data))),
+            "execution_id": run.execution_id,
+            "attempt_id": run.attempt_id,
+            "trace_id": run.invocation.trace_id or run.execution_id,
+            "span_id": run.root_span_id,
+            "parent_span_id": run.invocation.parent_span_id,
+            "module_path": "worker",
+        }
+
+    def _publish_event(self, run: _ServerExecution, event: dict[str, Any]) -> None:
+        run.next_event_index += 1
+        run.events.append(event)
+        if len(run.events) > self.max_retained_events:
+            del run.events[: len(run.events) - self.max_retained_events]
+        run.condition.notify_all()
+
     async def _emit(
         self,
         run: _ServerExecution,
@@ -751,35 +868,21 @@ class HTTPWorkerApp:
         data: Mapping[str, JsonValue],
     ) -> None:
         async with run.condition:
+            if run.finalizing or run.terminal:
+                raise RuntimeError("Worker journal is finalizing")
             index = run.next_event_index
-            run.next_event_index += 1
-            event = {
-                "schema_version": EXECUTION_EVENT_SCHEMA_VERSION,
-                "event_id": str(uuid4()),
-                "sequence": index,
-                "timestamp_unix_ns": int(time() * 1_000_000_000),
-                "kind": kind,
-                "data": thaw_json(cast(JsonValue, freeze_json_object(data))),
-                "execution_id": run.execution_id,
-                "attempt_id": run.attempt_id,
-                "trace_id": run.invocation.trace_id or run.execution_id,
-                "span_id": run.root_span_id,
-                "parent_span_id": run.invocation.parent_span_id,
-                "module_path": "worker",
-            }
+            event = self._event_value(run, kind, data)
             if self.history is not None:
                 await self.history.append_event(
                     execution_id=run.execution_id, index=index, event=event
                 )
-            run.events.append(event)
-            if len(run.events) > self.max_retained_events:
-                del run.events[: len(run.events) - self.max_retained_events]
-            run.condition.notify_all()
+            self._publish_event(run, event)
 
     async def _relay_event(self, run: _ServerExecution, origin: ExecutionEvent) -> None:
         async with run.condition:
+            if run.finalizing or run.terminal:
+                raise RuntimeError("Worker journal is finalizing")
             sequence = run.next_event_index
-            run.next_event_index += 1
             data = freeze_json_object(origin.data).to_dict()
             data.update(
                 {
@@ -805,17 +908,14 @@ class HTTPWorkerApp:
                 await self.history.append_event(
                     execution_id=run.execution_id, index=sequence, event=event
                 )
-            run.events.append(event)
-            if len(run.events) > self.max_retained_events:
-                del run.events[: len(run.events) - self.max_retained_events]
-            run.condition.notify_all()
+            self._publish_event(run, event)
 
     async def cancel(self, request: Request) -> Response:
         run = self.executions.get(request.path_params["execution_id"])
         if run is None:
             return JSONResponse({"error": "execution_not_found"}, status_code=404)
         task = run.task
-        if task is None or task.done():
+        if task is None or task.done() or run.finalizing:
             return JSONResponse({"cancelled": False})
         task.cancel()
         return JSONResponse({"cancelled": True})
@@ -868,6 +968,14 @@ class HTTPWorkerApp:
                         not run.events or cursor >= int(run.events[-1]["sequence"])
                     )
                     if not available and not drained:
+                        if run.journal_error is not None:
+                            raise WorkerRemoteError(
+                                _worker_failure(
+                                    "persistence_error",
+                                    "Worker journal commit is unconfirmed",
+                                    outcome_unknown=True,
+                                )
+                            )
                         await run.condition.wait()
                         continue
                 for event in available:

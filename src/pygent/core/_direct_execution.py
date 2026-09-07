@@ -62,6 +62,7 @@ _direct_span: ContextVar[tuple[str, str | None, str] | None] = ContextVar(
 )
 ResultT = TypeVar("ResultT")
 
+
 @dataclass(slots=True)
 class _DirectExecutionRecord(Generic[ResultT]):
     """Single owner of direct execution state and its non-blocking journal."""
@@ -551,12 +552,18 @@ class _DirectExecutionHandle(Generic[ResultT]):
     async def outcome(self) -> ExecutionOutcome:
         self._record.ensure_started()
         assert self._record.task is not None
-        await asyncio.gather(self._record.task, return_exceptions=True)
+        await asyncio.shield(asyncio.gather(self._record.task, return_exceptions=True))
         if self._record.outcome is None:
             raise RuntimeError("execution has no terminal outcome")
         return self._record.outcome
 
     async def result(self) -> ResultT:
+        self._record.ensure_started()
+        assert self._record.task is not None
+        return await asyncio.shield(self._record.task)
+
+    async def _owned_result(self) -> ResultT:
+        """Join the owner when the caller owns the invocation or stream lifetime."""
         self._record.ensure_started()
         assert self._record.task is not None
         return await self._record.task
@@ -565,6 +572,10 @@ class _DirectExecutionHandle(Generic[ResultT]):
         self._record.ensure_started()
         task = self._record.task
         if task is None or task.done():
+            return False
+        if self._record.phase is ExecutionPhase.SUBMITTING:
+            await asyncio.sleep(0)
+        if task.done():
             return False
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -616,7 +627,10 @@ class DirectExecutionStream(Generic[ResultT]):
         if self._closed:
             raise RuntimeError("the execution stream is closed")
         try:
-            return await self._handle.result()
+            return await self._handle._owned_result()
+        except asyncio.CancelledError:
+            await self._handle.cancel()
+            raise
         finally:
             self._result_consumed = True
 

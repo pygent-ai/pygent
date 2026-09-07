@@ -82,6 +82,9 @@ class _ExecutionRecord:
     input_inbox: MemoryExecutionInbox = field(default_factory=MemoryExecutionInbox)
     runnable_held: bool = False
     deadline_fired: bool = False
+    cleanup_deadline: float | None = None
+    finalization_task: asyncio.Task[None] | None = None
+    preparation_task: asyncio.Task[None] | None = None
     history: SQLiteHistoryStore | None = None
     history_started: bool = False
     history_ready: asyncio.Event = field(default_factory=asyncio.Event)
@@ -114,14 +117,18 @@ class _ExecutionRecord:
         data: Mapping[str, JsonValue],
     ) -> ExecutionEvent:
         frame = _execution_frame.get()
-        effective_span_id = span_id or (self.root_span_id if frame is None else frame.span_id)
+        effective_span_id = span_id or (
+            self.root_span_id if frame is None else frame.span_id
+        )
         effective_parent_span_id = (
             parent_span_id
             if parent_span_id is not None
             else (self.parent_span_id if frame is None else frame.parent_span_id)
         )
         payload: Mapping[str, JsonValue] = data
-        foreign_execution = execution_id is not None and execution_id != self.execution_id
+        foreign_execution = (
+            execution_id is not None and execution_id != self.execution_id
+        )
         if foreign_execution:
             if isinstance(data, FrozenJsonObject):
                 payload = (
@@ -200,6 +207,12 @@ class _ExecutionRecord:
     def _mark_journal_failed(self, exc: BaseException) -> None:
         if self.journal_error is None:
             self.journal_error = exc
+        if self.active_subscribers:
+            task = self.journal_notification
+            if task is None or task.done():
+                self.journal_notification = asyncio.create_task(
+                    self._notify_journal_committed()
+                )
 
     async def _notify_journal_committed(self) -> None:
         async with self.event_condition:
@@ -262,7 +275,7 @@ class _ExecutionRecord:
                 failure = ExecutionFailure(
                     domain="runtime",
                     kind=kind,
-                    message=message,
+                    message=message or kind,
                     details={
                         key: value
                         for key, value in error_value.items()
@@ -330,19 +343,7 @@ class _ExecutionRecord:
             )
             self.updated_at_unix_ns = time.time_ns()
             self.event_stream_closed = True
-        if self.active_subscribers:
-            async with self.event_condition:
-                self.event_condition.notify_all()
-
-    async def notify_terminal(self) -> None:
-        if self.history is None or not self.history_started:
-            await self.input_inbox.seal()
-        self.phase = ExecutionPhase.TERMINAL
-        self.owner_state = ExecutionOwnerState.TERMINAL
-        self.updated_at_unix_ns = time.time_ns()
-        if self.terminal_sequence is None and self.committed_sequence >= 0:
-            self.terminal_sequence = self.committed_sequence
-        self.event_stream_closed = True
+            self.journal_error = None
         if self.active_subscribers:
             async with self.event_condition:
                 self.event_condition.notify_all()

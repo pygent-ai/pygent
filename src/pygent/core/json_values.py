@@ -71,12 +71,20 @@ JsonObjectInput: TypeAlias = (
 def freeze_json(value: object) -> JsonValue:
     """Validate and recursively freeze one strict JSON-compatible value."""
 
+    if type(value) is FrozenJsonObject and not value._items:
+        return value
+    if type(value) is dict and not value:
+        return _EMPTY_JSON_OBJECT
     return _freeze(value, state=_FreezeState(set()), depth=0)
 
 
 def freeze_json_object(value: JsonObjectInput = ()) -> FrozenJsonObject:
     """Validate and freeze a mapping or iterable of key/value pairs."""
 
+    if type(value) is FrozenJsonObject and not value._items:
+        return value
+    if type(value) in (dict, tuple, list) and not value:
+        return _EMPTY_JSON_OBJECT
     state = _FreezeState(set())
     state.visit(depth=0)
     container_id = id(value)
@@ -289,3 +297,6 @@ __all__ = [
     "freeze_json_object",
     "thaw_json",
 ]
+
+# Empty JSON is immutable and contains no invocation-owned data.
+_EMPTY_JSON_OBJECT = FrozenJsonObject()

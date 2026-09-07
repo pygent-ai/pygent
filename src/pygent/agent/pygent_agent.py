@@ -29,9 +29,7 @@ _CONTEXT_SNAPSHOT_KIND = "pygent.context.snapshot"
 _CONTEXT_SNAPSHOT_SLOT = "pygent.context.snapshot"
 _TOKEN_SCALE_BASE = 1_000_000
 _INITIAL_TOKEN_SCALE_PPM = 1_100_000
-_PygentAgentContextT = TypeVar(
-    "_PygentAgentContextT", bound="PygentAgentContext"
-)
+_PygentAgentContextT = TypeVar("_PygentAgentContextT", bound="PygentAgentContext")
 _COORDINATOR_EXECUTION_REQUIREMENTS = ExecutionRequirements(
     requires_finite_deadline=True,
     recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
@@ -353,7 +351,7 @@ def _request_token_units(
         separators=(",", ":"),
         ensure_ascii=False,
     )
-    ascii_bytes = sum(ord(character) < 128 for character in canonical)
+    ascii_bytes = len(canonical.encode("ascii", errors="ignore"))
     non_ascii_codepoints = len(canonical) - ascii_bytes
     lexical_units = _ceil_div(ascii_bytes, 3) + _ceil_div(
         non_ascii_codepoints * 3,

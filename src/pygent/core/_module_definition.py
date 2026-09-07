@@ -95,9 +95,8 @@ class RemoteModule(Generic[InputMessageT, OutputMessageT]):
         if (self.plan_id is None) != (self.graph_hash is None):
             raise ValueError("plan_id and graph_hash must be declared together")
         if self.graph_hash is not None:
-            if (
-                len(self.graph_hash) != 64
-                or any(character not in "0123456789abcdef" for character in self.graph_hash)
+            if len(self.graph_hash) != 64 or any(
+                character not in "0123456789abcdef" for character in self.graph_hash
             ):
                 raise ValueError("graph_hash must be a lowercase SHA-256 digest")
             if self.plan_id != f"sha256:{self.graph_hash}":
@@ -223,7 +222,8 @@ class Module(Generic[InputMessageT, OutputMessageT]):
                     f"{type(current).__name__} definition changed after freeze; "
                     "create a new Module definition"
                 )
-            snapshots.append((current, snapshot))
+            if not current._definition_frozen:
+                snapshots.append((current, snapshot))
         for current, snapshot in snapshots:
             object.__setattr__(current, "_definition_config_snapshot", snapshot)
             object.__setattr__(current, "_definition_frozen", True)
@@ -264,7 +264,7 @@ class Module(Generic[InputMessageT, OutputMessageT]):
         """Return the result projection of one direct execution."""
 
         handle = await self.start(*args, execution=execution, **kwargs)
-        return await handle.result()
+        return await handle._owned_result()
 
     def _start_direct(
         self,

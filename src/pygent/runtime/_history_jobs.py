@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import aiosqlite
 
+from ._history_ownership import validate_writers, write_authority
 from ._history_types import (
     HistoryConflictError,
     HistoryStoreError,
@@ -14,7 +15,7 @@ from ._history_types import (
     StoredTask,
     _json,
     _load,
-    _serialized_write,
+    _serialized_access,
 )
 
 
@@ -24,7 +25,44 @@ class JobHistoryMixin:
 
         def _db(self) -> aiosqlite.Connection: ...
 
-    @_serialized_write
+    @_serialized_access
+    async def _finalize_worker_job(
+        self,
+        *,
+        task_id: str,
+        status: str,
+        result: object | None,
+        error: object | None,
+        index: int,
+        event: object,
+    ) -> None:
+        """Commit a Worker outcome and its terminal cursor under one owner fence."""
+        db = self._db()
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await validate_writers(db, (write_authority(f"worker-job:{task_id}"),))
+            cursor = await db.execute(
+                "UPDATE tasks SET status=?,result_json=?,error_json=?,updated_at=CURRENT_TIMESTAMP "
+                "WHERE task_id=? AND kind='job' AND status IN ('pending','running')",
+                (
+                    status,
+                    None if result is None else _json(result),
+                    None if error is None else _json(error),
+                    task_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise HistoryConflictError("Worker task is finalized or unknown")
+            await db.execute(
+                "INSERT INTO events(execution_id,event_index,event_json) VALUES(?,?,?)",
+                (task_id, index, _json(event)),
+            )
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
+
+    @_serialized_access
     async def put_task(
         self,
         *,
@@ -37,30 +75,39 @@ class JobHistoryMixin:
     ) -> None:
         request_json = _json(request)
         db = self._db()
-        cursor = await db.execute(
-            "INSERT INTO tasks(task_id,kind,status,request_json,result_json,error_json) "
-            "VALUES(?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET "
-            "status=excluded.status,result_json=excluded.result_json,"
-            "error_json=excluded.error_json,updated_at=CURRENT_TIMESTAMP "
-            "WHERE tasks.kind=excluded.kind "
-            "AND tasks.request_json=excluded.request_json",
-            (
-                task_id,
-                kind,
-                status,
-                request_json,
-                None if result is None else _json(result),
-                None if error is None else _json(error),
-            ),
-        )
-        if cursor.rowcount != 1:
-            await db.rollback()
-            raise HistoryConflictError(
-                "task identity is already committed with a different kind or request"
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            if kind == "job":
+                await validate_writers(db, (write_authority(f"worker-job:{task_id}"),))
+            cursor = await db.execute(
+                "INSERT INTO tasks(task_id,kind,status,request_json,result_json,error_json) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET "
+                "status=excluded.status,result_json=excluded.result_json,"
+                "error_json=excluded.error_json,updated_at=CURRENT_TIMESTAMP "
+                "WHERE tasks.kind=excluded.kind "
+                "AND tasks.request_json=excluded.request_json "
+                "AND (tasks.kind<>'job' OR tasks.status IN ('pending','running') "
+                "OR (tasks.status=excluded.status AND tasks.result_json IS excluded.result_json "
+                "AND tasks.error_json IS excluded.error_json))",
+                (
+                    task_id,
+                    kind,
+                    status,
+                    request_json,
+                    None if result is None else _json(result),
+                    None if error is None else _json(error),
+                ),
             )
-        await db.commit()
+            if cursor.rowcount != 1:
+                raise HistoryConflictError(
+                    "task identity is already committed with a different kind or request"
+                )
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
 
-    @_serialized_write
+    @_serialized_access
     async def create_tool_job(
         self,
         *,
@@ -115,7 +162,7 @@ class JobHistoryMixin:
         assert stored is not None
         return stored
 
-    @_serialized_write
+    @_serialized_access
     async def update_tool_job(
         self,
         job_id: str,
@@ -209,6 +256,7 @@ class JobHistoryMixin:
             attempt=row[11],
         )
 
+    @_serialized_access
     async def get_task(self, task_id: str) -> StoredTask | None:
         db = self._db()
         cursor = await db.execute(

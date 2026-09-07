@@ -15,6 +15,7 @@ from pygent.core import (
     ExecutionEvent,
     ExecutionFailure,
     ExecutionInputDelivery,
+    ExecutionOutcome,
     ExecutionOwnerState,
     ExecutionPhase,
     ExecutionSnapshot,
@@ -315,6 +316,8 @@ class HTTPWorkerClient:
             if response.status_code == 202:
                 await asyncio.sleep(poll_interval)
                 continue
+            if response.status_code == 503 and isinstance(payload.get("error"), dict):
+                raise WorkerRemoteError(ExecutionFailure.from_dict(payload["error"]))
             if response.status_code == 404 or response.status_code >= 500:
                 ref = await self._failover_ref(
                     ref, deadline=deadline, failed=ref.target.target_id
@@ -333,6 +336,34 @@ class HTTPWorkerClient:
                 raise WorkerProtocolError("Worker result response has no result")
             return freeze_json(payload["result"])
 
+    async def _outcome(self, ref: RemoteExecutionHandle) -> ExecutionOutcome:
+        while True:
+            response = await self._client.get(
+                f"{ref.target.endpoint.rstrip('/')}/v1/executions/{ref.execution_id}"
+            )
+            if response.status_code == 404:
+                raise KeyError(f"unknown execution {ref.execution_id!r}")
+            payload = response.json()
+            if response.status_code == 503 and isinstance(payload.get("error"), dict):
+                raise WorkerRemoteError(ExecutionFailure.from_dict(payload["error"]))
+            try:
+                status = ExecutionStatus(payload.get("status"))
+            except (TypeError, ValueError) as exc:
+                raise WorkerProtocolError(
+                    "Worker outcome has an invalid status"
+                ) from exc
+            if status.terminal and payload.get("terminal_sequence") is not None:
+                return ExecutionOutcome(
+                    execution_id=ref.execution_id,
+                    status=status,
+                    attempt_id=payload.get("attempt_id", ref.attempt_id),
+                    terminal_sequence=payload["terminal_sequence"],
+                    error=ExecutionFailure.from_dict(payload["error"])
+                    if payload.get("error") is not None
+                    else None,
+                )
+            await asyncio.sleep(0.02)
+
     async def snapshot(self, ref: RemoteExecutionHandle) -> ExecutionSnapshot:
         response = await self._client.get(
             f"{ref.target.endpoint.rstrip('/')}/v1/executions/{ref.execution_id}"
@@ -340,6 +371,8 @@ class HTTPWorkerClient:
         if response.status_code == 404:
             raise KeyError(f"unknown execution {ref.execution_id!r}")
         payload = response.json()
+        if response.status_code == 503 and isinstance(payload.get("error"), dict):
+            raise WorkerRemoteError(ExecutionFailure.from_dict(payload["error"]))
         raw_status = payload.get("status")
         try:
             status = ExecutionStatus(raw_status)
@@ -357,9 +390,7 @@ class HTTPWorkerClient:
             status=status,
             phase=phase,
             owner_state=(
-                ExecutionOwnerState.TERMINAL
-                if terminal
-                else ExecutionOwnerState.ACTIVE
+                ExecutionOwnerState.TERMINAL if terminal else ExecutionOwnerState.ACTIVE
             ),
             attempt_id=cast(str, attempt_id),
             last_sequence=cast(int, last_sequence),
@@ -428,7 +459,11 @@ class HTTPWorkerClient:
         try:
             response = await self._client.post(
                 f"{ref.target.endpoint.rstrip('/')}/v1/executions/{ref.execution_id}/inputs",
-                json={"input_id": input_id, "kind": kind, "value": thaw_json(freeze_json(value))},
+                json={
+                    "input_id": input_id,
+                    "kind": kind,
+                    "value": thaw_json(freeze_json(value)),
+                },
             )
         except httpx.TransportError as exc:
             raise WorkerUnavailableError(

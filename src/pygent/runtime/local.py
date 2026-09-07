@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, TypeVar
@@ -131,12 +132,15 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
             tuple[str, str], tuple[CapacityPolicy, _ResourceGate]
         ] = {}
         self._executions: dict[str, _ExecutionRecord] = {}
+        self._completed_executions: deque[_ExecutionRecord] = deque()
+        self._cleanup_tasks: set[asyncio.Task[Any]] = set()
         self._idempotency_records: dict[
             tuple[str, str, str], tuple[str, _ExecutionRecord]
         ] = {}
         self._remote_modules: dict[str, Any] = {}
         self._external_waiters: dict[
-            tuple[str, str], tuple[_ExecutionRecord, asyncio.Future[Mapping[str, JsonValue]]]
+            tuple[str, str],
+            tuple[_ExecutionRecord, asyncio.Future[Mapping[str, JsonValue]]],
         ] = {}
         self._external_lock = asyncio.Lock()
         self._tool_tasks: ToolTaskManager | None = None
@@ -149,9 +153,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
         self.deployment_namespace = deployment_namespace
         self._model_store_opened = False
         self._model_store_open_task: asyncio.Task[None] | None = None
-        self._profile_publications: dict[
-            tuple[object, ...], asyncio.Task[Any]
-        ] = {}
+        self._profile_publications: dict[tuple[object, ...], asyncio.Task[Any]] = {}
         self._model_resource_resolvers: dict[str, Any] = {}
         self._resident_model_invokers: dict[
             str, tuple[Any, ModelResourceOwnership]
@@ -754,7 +756,9 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
         registry = self._tool_registry
         if registry is None:
             registry = ExecutorRegistry()
-        if not isinstance(registry, ExecutorRegistry):  # pragma: no cover - attach invariant
+        if not isinstance(
+            registry, ExecutorRegistry
+        ):  # pragma: no cover - attach invariant
             raise TypeError("attached registry must be an ExecutorRegistry")
         if not replace_existing:
             for tool_id, version in identities:
@@ -762,7 +766,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
                     raise ValueError(
                         f"executor already registered for {tool_id}@{version}"
                     )
-        for (spec, executor) in items:
+        for spec, executor in items:
             registry.register(
                 spec.tool_id,
                 spec.version,

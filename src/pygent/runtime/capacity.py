@@ -17,6 +17,7 @@ import uuid
 import weakref
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, cast
 
@@ -31,6 +32,9 @@ _TRANSACTION_LOCKS: weakref.WeakValueDictionary[str, threading.Lock] = (
     weakref.WeakValueDictionary()
 )
 _TRANSACTION_LOCKS_GUARD = threading.Lock()
+_release_owner: ContextVar[asyncio.Task[Any] | None] = ContextVar(
+    "capacity_release_owner", default=None
+)
 
 
 def _submission_lock(path: Path) -> asyncio.Lock:
@@ -190,7 +194,7 @@ class _SQLiteLeasePool:
             raise
 
     def release(self) -> None:
-        task = asyncio.current_task()
+        task = _release_owner.get() or asyncio.current_task()
         if task is None:  # pragma: no cover - asyncio API invariant
             raise RuntimeError("capacity release requires an asyncio Task")
         held = self._held.pop(task, None)
@@ -201,7 +205,7 @@ class _SQLiteLeasePool:
         self._coordinator._schedule_release(self._owner_key, lease_id, fence)
 
     async def release_async(self) -> None:
-        task = asyncio.current_task()
+        task = _release_owner.get() or asyncio.current_task()
         if task is None:  # pragma: no cover - asyncio API invariant
             raise RuntimeError("capacity release requires an asyncio Task")
         held = self._held.pop(task, None)

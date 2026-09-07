@@ -12,12 +12,14 @@ from typing import TYPE_CHECKING, Any, cast
 import aiosqlite
 
 from ._history_types import (
+    ExecutionState,
     HistoryConflictError,
     StoredExecution,
+    _execution_write,
     _json,
     _load,
     _prepare_json,
-    _serialized_write,
+    _serialized_access,
 )
 
 
@@ -48,12 +50,11 @@ class ExecutionHistoryMixin:
             self,
             operation: Callable[[aiosqlite.Connection], Awaitable[Any]],
             *,
+            execution_id: str | None = None,
             batch_key: str | None = None,
             batch_payload: object | None = None,
             batch_operation: (
-                Callable[
-                    [aiosqlite.Connection, list[object]], Awaitable[list[object]]
-                ]
+                Callable[[aiosqlite.Connection, list[object]], Awaitable[list[object]]]
                 | None
             ) = None,
         ) -> Any: ...
@@ -64,6 +65,13 @@ class ExecutionHistoryMixin:
         """Atomically claim one durable recovery attempt across processes."""
 
         async def operation(db: aiosqlite.Connection) -> int | None:
+            async with db.execute(
+                "SELECT terminal_sequence FROM executions WHERE execution_id=?",
+                (execution_id,),
+            ) as cursor:
+                terminal = await cursor.fetchone()
+            if terminal is not None and terminal[0] is not None:
+                return None
             await db.execute(
                 "DELETE FROM execution_claims "
                 "WHERE execution_id=? AND expires_at<=unixepoch('subsec')",
@@ -99,7 +107,8 @@ class ExecutionHistoryMixin:
         async with self._write_lock:
             cursor = await self._db().execute(
                 "UPDATE execution_claims SET expires_at=unixepoch('subsec')+? "
-                "WHERE execution_id=? AND owner_id=? AND fencing_token=?",
+                "WHERE execution_id=? AND owner_id=? AND fencing_token=? "
+                "AND expires_at>unixepoch('subsec')",
                 (lease_ttl, execution_id, owner_id, fencing_token),
             )
             await self._db().commit()
@@ -256,31 +265,26 @@ class ExecutionHistoryMixin:
         assert existing is not None
         return existing, True
 
-    @_serialized_write
+    @_execution_write
     async def commit_model_admission(
         self, execution_id: str, *, admission_id: str, manifest_digest: str
     ) -> None:
         db = self._db()
-        try:
-            cursor = await db.execute(
-                "UPDATE executions SET model_admission_id=?,model_admission_digest=?,"
-                "model_admission_status='committed',updated_at=CURRENT_TIMESTAMP "
-                "WHERE execution_id=? AND model_admission_status IN ('preparing','committed')",
-                (admission_id, manifest_digest, execution_id),
-            )
-            if cursor.rowcount != 1:
-                raise HistoryConflictError("model admission intent is not preparing")
-            await db.execute(
-                "INSERT OR IGNORE INTO execution_model_admissions(execution_id,admission_id) "
-                "VALUES(?,?)",
-                (execution_id, admission_id),
-            )
-            await db.commit()
-        except BaseException:
-            await db.rollback()
-            raise
+        cursor = await db.execute(
+            "UPDATE executions SET model_admission_id=?,model_admission_digest=?,"
+            "model_admission_status='committed',updated_at=CURRENT_TIMESTAMP "
+            "WHERE execution_id=? AND model_admission_status IN ('preparing','committed')",
+            (admission_id, manifest_digest, execution_id),
+        )
+        if cursor.rowcount != 1:
+            raise HistoryConflictError("model admission intent is not preparing")
+        await db.execute(
+            "INSERT OR IGNORE INTO execution_model_admissions(execution_id,admission_id) "
+            "VALUES(?,?)",
+            (execution_id, admission_id),
+        )
 
-    @_serialized_write
+    @_execution_write
     async def add_model_admission_ref(
         self, execution_id: str, admission_id: str
     ) -> None:
@@ -289,7 +293,6 @@ class ExecutionHistoryMixin:
             "VALUES(?,?)",
             (execution_id, admission_id),
         )
-        await self._db().commit()
 
     async def list_model_admission_refs(self, execution_id: str) -> tuple[str, ...]:
         rows = await (
@@ -301,7 +304,7 @@ class ExecutionHistoryMixin:
         ).fetchall()
         return tuple(str(row[0]) for row in rows)
 
-    @_serialized_write
+    @_execution_write
     async def abort_model_admission(self, execution_id: str) -> None:
         await self._db().execute(
             "UPDATE executions SET model_admission_status='aborted',"
@@ -309,9 +312,8 @@ class ExecutionHistoryMixin:
             "AND model_admission_status='preparing'",
             (execution_id,),
         )
-        await self._db().commit()
 
-    @_serialized_write
+    @_execution_write
     async def delete_execution(self, execution_id: str) -> None:
         db = self._db()
         for table in (
@@ -322,14 +324,16 @@ class ExecutionHistoryMixin:
             "execution_input_consumers",
             "execution_inputs",
             "execution_inboxes",
+            "execution_cancellations",
         ):
-            await db.execute(f"DELETE FROM {table} WHERE execution_id=?", (execution_id,))
+            await db.execute(
+                f"DELETE FROM {table} WHERE execution_id=?", (execution_id,)
+            )
         await db.execute(
             "DELETE FROM execution_model_admissions WHERE execution_id=?",
             (execution_id,),
         )
         await db.execute("DELETE FROM executions WHERE execution_id=?", (execution_id,))
-        await db.commit()
 
     async def update_execution(
         self,
@@ -368,10 +372,58 @@ class ExecutionHistoryMixin:
 
         await self._queue_transaction(
             operation,
+            execution_id=execution_id,
             batch_key="update_execution",
             batch_payload=batch_item,
             batch_operation=self._batch_update_executions,
         )
+
+    @_serialized_access
+    async def _execution_status(self, execution_id: str) -> ExecutionState | None:
+        async with self._db().execute(
+            "SELECT e.status,e.phase,e.attempt_id,e.terminal_sequence,e.trace_id,"
+            "e.submitted_at_unix_ns,e.updated_at_unix_ns,e.error_json,"
+            "EXISTS(SELECT 1 FROM execution_claims c WHERE c.execution_id=e.execution_id "
+            "AND c.expires_at>unixepoch('subsec')),"
+            "COALESCE((SELECT MAX(event_index) FROM events WHERE execution_id=e.execution_id),-1) "
+            "FROM executions e WHERE e.execution_id=?",
+            (execution_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return (
+            None
+            if row is None
+            else ExecutionState(
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+                row[6],
+                _load(row[7]),
+                bool(row[8]),
+                row[9],
+            )
+        )
+
+    async def _request_execution_cancel(self, execution_id: str) -> bool:
+        async def operation(db: aiosqlite.Connection) -> bool:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO execution_cancellations(execution_id) "
+                "SELECT execution_id FROM executions WHERE execution_id=? AND terminal_sequence IS NULL",
+                (execution_id,),
+            )
+            return cursor.rowcount == 1
+
+        return bool(await self._queue_transaction(operation))
+
+    async def _execution_cancel_requested(self, execution_id: str) -> bool:
+        async with self._db().execute(
+            "SELECT 1 FROM execution_cancellations WHERE execution_id=?",
+            (execution_id,),
+        ) as cursor:
+            return await cursor.fetchone() is not None
 
     async def get_execution(self, execution_id: str) -> StoredExecution | None:
         return await self._select_run("execution_id", execution_id)
@@ -481,7 +533,9 @@ class ExecutionHistoryMixin:
                 )
             cursor = await db.execute(
                 "UPDATE executions SET status=?,phase='terminal',output_json=?,error_json=?,"
-                "terminal_sequence=?,updated_at_unix_ns=?,updated_at=CURRENT_TIMESTAMP "
+                "terminal_sequence=?,updated_at_unix_ns=?,updated_at=CURRENT_TIMESTAMP, "
+                "model_admission_status=CASE WHEN model_admission_status='preparing' "
+                "THEN 'aborted' ELSE model_admission_status END "
                 "WHERE execution_id=? "
                 "AND terminal_sequence IS NULL",
                 update_values,
@@ -492,10 +546,13 @@ class ExecutionHistoryMixin:
                 "UPDATE execution_inboxes SET sealed=1 WHERE execution_id=?",
                 (execution_id,),
             )
-            await db.execute("DELETE FROM execution_claims WHERE execution_id=?", (execution_id,))
+            await db.execute(
+                "DELETE FROM execution_claims WHERE execution_id=?", (execution_id,)
+            )
 
         await self._queue_transaction(
             operation,
+            execution_id=execution_id,
             batch_key="finalize_execution",
             batch_payload=batch_item,
             batch_operation=self._batch_finalize_executions,
@@ -546,7 +603,9 @@ class ExecutionHistoryMixin:
             )
         cursor = await db.executemany(
             "UPDATE executions SET status=?,phase='terminal',output_json=?,error_json=?,"
-            "terminal_sequence=?,updated_at_unix_ns=?,updated_at=CURRENT_TIMESTAMP "
+            "terminal_sequence=?,updated_at_unix_ns=?,updated_at=CURRENT_TIMESTAMP, "
+            "model_admission_status=CASE WHEN model_admission_status='preparing' "
+            "THEN 'aborted' ELSE model_admission_status END "
             "WHERE execution_id=? AND terminal_sequence IS NULL",
             [item.update_values for item in items],
         )

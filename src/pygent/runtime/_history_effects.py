@@ -16,12 +16,13 @@ from ._history_types import (
     HistoryStoreError,
     NonDeterministicReplayError,
     StoredEffect,
+    _execution_write,
     _json,
     _json_frozen,
     _load,
     _prepare_json,
     _prepared_json_digest,
-    _serialized_write,
+    _serialized_access,
 )
 
 
@@ -56,17 +57,16 @@ class EffectHistoryMixin:
             self,
             operation: Callable[[aiosqlite.Connection], Awaitable[Any]],
             *,
+            execution_id: str | None = None,
             batch_key: str | None = None,
             batch_payload: object | None = None,
             batch_operation: (
-                Callable[
-                    [aiosqlite.Connection, list[object]], Awaitable[list[object]]
-                ]
+                Callable[[aiosqlite.Connection, list[object]], Awaitable[list[object]]]
                 | None
             ) = None,
         ) -> Any: ...
 
-    @_serialized_write
+    @_execution_write
     async def record_effect(
         self,
         *,
@@ -102,9 +102,7 @@ class EffectHistoryMixin:
                     result_json,
                 ),
             )
-            await db.commit()
         except aiosqlite.IntegrityError as exc:
-            await db.rollback()
             existing = await self.replay_effect(
                 execution_id=execution_id,
                 module_path=module_path,
@@ -158,6 +156,7 @@ class EffectHistoryMixin:
             spec_json,
             frozen_spec,
         )
+
         async def operation(
             db: aiosqlite.Connection,
         ) -> tuple[StoredEffect, bool]:
@@ -206,6 +205,7 @@ class EffectHistoryMixin:
             tuple[StoredEffect, bool],
             await self._queue_transaction(
                 operation,
+                execution_id=execution_id,
                 batch_key="begin_effect",
                 batch_payload=batch_item,
                 batch_operation=self._batch_begin_effects,
@@ -233,10 +233,13 @@ class EffectHistoryMixin:
                 (payload, execution_id, module_path, call_index),
             )
             if cursor.rowcount != 1:
-                raise HistoryConflictError("effect is not in a completable started state")
+                raise HistoryConflictError(
+                    "effect is not in a completable started state"
+                )
 
         await self._queue_transaction(
             operation,
+            execution_id=execution_id,
             batch_key="complete_effect",
             batch_payload=batch_item,
             batch_operation=self._batch_complete_effects,
@@ -307,7 +310,7 @@ class EffectHistoryMixin:
             raise HistoryConflictError("effect batch contains an invalid started state")
         return [None] * len(items)
 
-    @_serialized_write
+    @_execution_write
     async def mark_effect_unknown(
         self, *, execution_id: str, module_path: str, call_index: int
     ) -> None:
@@ -318,7 +321,6 @@ class EffectHistoryMixin:
         )
         if cursor.rowcount not in (0, 1):  # pragma: no cover - SQLite invariant
             raise HistoryStoreError("invalid effect update cardinality")
-        await self._db().commit()
 
     async def replay_effect(
         self,
@@ -371,7 +373,7 @@ class EffectHistoryMixin:
             result=result,
         )
 
-    @_serialized_write
+    @_execution_write
     async def save_checkpoint(
         self,
         *,
@@ -385,7 +387,6 @@ class EffectHistoryMixin:
             "graph_hash=excluded.graph_hash,state_json=excluded.state_json",
             (execution_id, checkpoint_index, graph_hash, _json(state)),
         )
-        await self._db().commit()
 
     async def load_checkpoint(
         self, *, execution_id: str, graph_hash: str
@@ -420,6 +421,7 @@ class EffectHistoryMixin:
             _payload = _json(event)
         await self._queue_event(execution_id, index, _payload)
 
+    @_serialized_access
     async def last_event_index(self, *, execution_id: str) -> int:
         cursor = await self._db().execute(
             "SELECT COALESCE(MAX(event_index), -1) FROM events WHERE execution_id=?",
@@ -428,6 +430,7 @@ class EffectHistoryMixin:
         row = await cursor.fetchone()
         return -1 if row is None else int(row[0])
 
+    @_serialized_access
     async def events_after(
         self, *, execution_id: str, after: int = -1, limit: int = 256
     ) -> tuple[JsonValue, ...]:
@@ -441,6 +444,7 @@ class EffectHistoryMixin:
         rows = await cursor.fetchall()
         return tuple(value for row in rows if (value := _load(row[0])) is not None)
 
+    @_serialized_access
     async def events_tail(
         self, *, execution_id: str, limit: int = 256
     ) -> tuple[JsonValue, ...]:
