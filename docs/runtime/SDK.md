@@ -603,9 +603,10 @@ durable Handle，历史读取必须显式调用 `get_execution_handle()`。恢�
 四个 SQLite batch/capacity 参数和 `max_retained_executions` 都必须是正整数。
 普通 Journal 写入只让出一个事件循环轮次来聚合并发事件，并让同一批事件共享提交回执；
 生产者只在有界 pending event 容量耗尽时等待，订阅游标仍只推进到已经提交的 sequence。
-并发 Execution create/claim/update、effect begin/complete 和 terminal 操作共享有界物理事务；任一请求失败时整批
+并发 Execution create/claim/update、effect begin/complete、Inbox receive 和 terminal 操作共享有界物理事务；任一请求失败时整批
 回滚并逐项重试隔离。effect 仍必须在外部操作前提交 started、操作后提交 completed，terminal
 仍在等待此前 Journal 后原子提交事件、Outcome、Snapshot 与 terminal sequence。
+不同 Execution 的 Inbox receive 在同一事务中批量检查回放回执、消费者和顺序游标；同一 Execution 的读取仍按队列顺序裁决。空读回执和封箱仍持久化，返回的 payload 只在按各自 limit 选定后读取。
 默认值适合普通服务，部署者可以按并发量和本地内存预算调整。
 
 所有 managed Handle 都提供 `send_input(input_id=..., kind=..., value=...)`。返回的 `ExecutionInputDelivery.status` 为 `accepted`、`duplicate` 或 `execution_finished`；重复 `input_id` 保留原 sequence。Module 通过 `receive_execution_inputs(kinds=..., limit=16, seal_if_empty=False)` 按 Execution input sequence 获取 opaque 输入。单条输入不设固定字节大小上限；单 Execution 最多 256 条未终结输入、单次 receive 最大 256；每个 kind 只能由一个 Module path 消费。最终消费者使用 `seal_if_empty=True` 原子关闭空 Inbox，避免最后读取和 Execution finalization 之间丢消息。direct Handle 的 send 明确抛出 `DirectExecutionError`，direct Module receive 固定返回空 tuple。

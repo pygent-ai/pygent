@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar, cast
 
 import aiosqlite
@@ -19,6 +20,17 @@ from ._execution_inputs import (
 from ._history_types import _json, _load
 
 _T = TypeVar("_T")
+
+
+@dataclass(frozen=True, slots=True)
+class _ReceiveInputs:
+    execution_id: str
+    module_path: str
+    receive_index: int
+    kinds: tuple[str, ...]
+    limit: int
+    seal_if_empty: bool
+    request_json: str
 
 
 class ExecutionInputHistoryMixin:
@@ -122,81 +134,171 @@ class ExecutionInputHistoryMixin:
             separators=(",", ":"),
         )
 
-        async def operation(db: aiosqlite.Connection) -> tuple[ExecutionInput, ...]:
-            receipt = await (
-                await db.execute(
-                    "SELECT request_json,batch_json FROM execution_input_receives "
-                    "WHERE execution_id=? AND module_path=? AND receive_index=?",
-                    (execution_id, module_path, receive_index),
-                )
-            ).fetchone()
-            if receipt is not None:
-                if receipt[0] != request_json:
-                    raise RuntimeError(
-                        "replayed execution input receive changed its request"
-                    )
-                values = json.loads(receipt[1])
-                return tuple(ExecutionInput.from_dict(item) for item in values)
-            await db.execute(
-                "INSERT OR IGNORE INTO execution_inboxes(execution_id,next_sequence,sealed) VALUES(?,0,0)",
-                (execution_id,),
-            )
-            for kind in kinds:
-                owner = await (
-                    await db.execute(
-                        "SELECT module_path FROM execution_input_consumers WHERE execution_id=? AND kind=?",
-                        (execution_id, kind),
-                    )
-                ).fetchone()
-                if owner is not None and owner[0] != module_path:
-                    raise ExecutionInputConsumerError(
-                        f"execution input kind {kind!r} is owned by {owner[0]!r}"
-                    )
-                await db.execute(
-                    "INSERT OR IGNORE INTO execution_input_consumers(execution_id,kind,module_path,last_sequence) VALUES(?,?,?,-1)",
-                    (execution_id, kind, module_path),
-                )
-            placeholders = ",".join("?" for _ in kinds)
-            rows = await (
-                await db.execute(
-                    "SELECT i.input_id,i.sequence,i.kind,i.value_json "
-                    "FROM execution_inputs i JOIN execution_input_consumers c "
-                    "ON c.execution_id=i.execution_id AND c.kind=i.kind "
-                    f"WHERE i.execution_id=? AND i.kind IN ({placeholders}) "
-                    "AND i.sequence>c.last_sequence ORDER BY i.sequence LIMIT ?",
-                    (execution_id, *kinds, limit),
-                )
-            ).fetchall()
-            selected = tuple(
-                ExecutionInput(
-                    row[0], int(row[1]), row[2], cast(JsonValue, _load(row[3]))
-                )
-                for row in rows
-            )
-            for item in selected:
-                await db.execute(
-                    "UPDATE execution_input_consumers SET last_sequence=MAX(last_sequence,?) "
-                    "WHERE execution_id=? AND kind=?",
-                    (item.sequence, execution_id, item.kind),
-                )
-            if not selected and seal_if_empty:
-                await db.execute(
-                    "UPDATE execution_inboxes SET sealed=1 WHERE execution_id=?",
-                    (execution_id,),
-                )
-            batch_json = json.dumps(
-                [item.to_dict() for item in selected],
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            )
-            await db.execute(
-                "INSERT INTO execution_input_receives VALUES(?,?,?,?,?)",
-                (execution_id, module_path, receive_index, request_json, batch_json),
-            )
-            return selected
+        request = _ReceiveInputs(
+            execution_id,
+            module_path,
+            receive_index,
+            kinds,
+            limit,
+            seal_if_empty,
+            request_json,
+        )
+
+        async def operation(db: aiosqlite.Connection) -> object:
+            return (await self._batch_receive_inputs(db, [request]))[0]
 
         return cast(
             tuple[ExecutionInput, ...],
-            await self._queue_transaction(operation, execution_id=execution_id),
+            await self._queue_transaction(
+                operation,
+                execution_id=execution_id,
+                batch_key="receive_execution_inputs",
+                batch_payload=request,
+                batch_operation=self._batch_receive_inputs,
+            ),
         )
+
+    async def _batch_receive_inputs(
+        self, db: aiosqlite.Connection, payloads: list[object]
+    ) -> list[object]:
+        requests = [cast(_ReceiveInputs, item) for item in payloads]
+        by_execution = {item.execution_id: item for item in requests}
+        if len(by_execution) != len(requests):
+            # Receives on one execution may advance the same cursor. Preserve
+            # their original order using the transaction queue's isolated retry.
+            raise RuntimeError(
+                "overlapping execution input receives require ordered transactions"
+            )
+        receipts = await db.execute_fetchall(
+            "SELECT h.execution_id,h.request_json,h.batch_json "
+            "FROM json_each(?) r JOIN execution_input_receives h "
+            "ON h.execution_id=json_extract(r.value,'$[0]') "
+            "AND h.module_path=json_extract(r.value,'$[1]') "
+            "AND h.receive_index=json_extract(r.value,'$[2]')",
+            (
+                json.dumps(
+                    [(r.execution_id, r.module_path, r.receive_index) for r in requests]
+                ),
+            ),
+        )
+        results: dict[str, tuple[ExecutionInput, ...]] = {}
+        for execution_id, original_request, batch_json in receipts:
+            if original_request != by_execution[execution_id].request_json:
+                raise RuntimeError(
+                    "replayed execution input receive changed its request"
+                )
+            results[execution_id] = tuple(
+                ExecutionInput.from_dict(item) for item in json.loads(batch_json)
+            )
+        pending = [r for r in requests if r.execution_id not in results]
+        if not pending:
+            return [results[r.execution_id] for r in requests]
+        consumers = [
+            (r.execution_id, kind, r.module_path, r.limit)
+            for r in pending
+            for kind in r.kinds
+        ]
+        wanted = json.dumps(consumers)
+        owners = await db.execute_fetchall(
+            "SELECT c.execution_id,c.kind,c.module_path "
+            "FROM json_each(?) r JOIN execution_input_consumers c "
+            "ON c.execution_id=json_extract(r.value,'$[0]') "
+            "AND c.kind=json_extract(r.value,'$[1]')",
+            (wanted,),
+        )
+        for execution_id, kind, owner in owners:
+            if owner != by_execution[execution_id].module_path:
+                raise ExecutionInputConsumerError(
+                    f"execution input kind {kind!r} is owned by {owner!r}"
+                )
+        await db.executemany(
+            "INSERT OR IGNORE INTO execution_inboxes(execution_id,next_sequence,sealed) VALUES(?,0,0)",
+            [(r.execution_id,) for r in pending],
+        )
+        await db.executemany(
+            "INSERT OR IGNORE INTO execution_input_consumers"
+            "(execution_id,kind,module_path,last_sequence) VALUES(?,?,?,-1)",
+            [
+                (execution_id, kind, module_path)
+                for execution_id, kind, module_path, _ in consumers
+            ],
+        )
+        if len(pending) == 1:
+            request = pending[0]
+            # A single inbox can stop its index scan at LIMIT instead of
+            # ranking every pending input for a cross-execution window.
+            rows = await db.execute_fetchall(
+                "SELECT i.execution_id,i.input_id,i.sequence,i.kind,i.value_json "
+                "FROM execution_inputs i JOIN execution_input_consumers c "
+                "ON c.execution_id=i.execution_id AND c.kind=i.kind "
+                "WHERE i.execution_id=? AND i.kind IN (SELECT value FROM json_each(?)) "
+                "AND i.sequence>c.last_sequence ORDER BY i.sequence LIMIT ?",
+                (request.execution_id, json.dumps(request.kinds), request.limit),
+            )
+        else:
+            rows = await db.execute_fetchall(
+                "SELECT i.execution_id,i.input_id,i.sequence,i.kind,i.value_json FROM ("
+                "SELECT i.execution_id,i.sequence,"
+                "json_extract(r.value,'$[3]') AS batch_limit,"
+                "ROW_NUMBER() OVER (PARTITION BY i.execution_id ORDER BY i.sequence) AS position "
+                "FROM json_each(?) r JOIN execution_inputs i "
+                "ON i.execution_id=json_extract(r.value,'$[0]') "
+                "AND i.kind=json_extract(r.value,'$[1]') "
+                "JOIN execution_input_consumers c ON c.execution_id=i.execution_id AND c.kind=i.kind "
+                "WHERE i.sequence>c.last_sequence) selected "
+                "JOIN execution_inputs i ON i.execution_id=selected.execution_id "
+                "AND i.sequence=selected.sequence WHERE position<=batch_limit "
+                "ORDER BY i.execution_id,i.sequence",
+                (wanted,),
+            )
+        selected: dict[str, list[ExecutionInput]] = {
+            r.execution_id: [] for r in pending
+        }
+        cursors: dict[tuple[str, str], int] = {}
+        for execution_id, input_id, sequence, kind, value_json in rows:
+            selected[execution_id].append(
+                ExecutionInput(
+                    input_id, int(sequence), kind, cast(JsonValue, _load(value_json))
+                )
+            )
+            cursors[execution_id, kind] = int(sequence)
+        if cursors:
+            await db.executemany(
+                "UPDATE execution_input_consumers SET last_sequence=MAX(last_sequence,?) "
+                "WHERE execution_id=? AND kind=?",
+                [
+                    (sequence, execution_id, kind)
+                    for (execution_id, kind), sequence in cursors.items()
+                ],
+            )
+        sealed = [
+            (r.execution_id,)
+            for r in pending
+            if r.seal_if_empty and not selected[r.execution_id]
+        ]
+        if sealed:
+            await db.executemany(
+                "UPDATE execution_inboxes SET sealed=1 WHERE execution_id=?", sealed
+            )
+        await db.executemany(
+            "INSERT INTO execution_input_receives VALUES(?,?,?,?,?)",
+            [
+                (
+                    r.execution_id,
+                    r.module_path,
+                    r.receive_index,
+                    r.request_json,
+                    json.dumps(
+                        [item.to_dict() for item in selected[r.execution_id]],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ),
+                )
+                for r in pending
+            ],
+        )
+        results.update(
+            (execution_id, tuple(items)) for execution_id, items in selected.items()
+        )
+        return [results[r.execution_id] for r in requests]
