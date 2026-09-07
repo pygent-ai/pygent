@@ -385,7 +385,7 @@ async def test_failed_finalization_wakes_subscriber_without_fabricating_terminal
 
 @pytest.mark.asyncio
 async def test_deadline_bounds_finalization_and_close_joins_pending_commit(tmp_path):
-    entered, release = asyncio.Event(), asyncio.Event()
+    entered, release, forwarded = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     class GatedHistory(SQLiteHistoryStore):
         async def finalize_execution(self, *args, **kwargs):
@@ -395,6 +395,7 @@ async def test_deadline_bounds_finalization_and_close_joins_pending_commit(tmp_p
 
     class Echo(Module):
         async def forward(self, message, context):
+            forwarded.set()
             return AIMessage(content="done"), context
 
     async with GatedHistory(tmp_path / "slow.sqlite3") as store:
@@ -402,11 +403,12 @@ async def test_deadline_bounds_finalization_and_close_joins_pending_commit(tmp_p
         handle = await runtime.bind(Echo()).start(
             UserMessage(content="hello"),
             Context(),
-            execution=ExecutionOptions(deadline=time.monotonic() + 0.1),
+            execution=ExecutionOptions(deadline=time.monotonic() + 1),
         )
         await entered.wait()
+        assert forwarded.is_set()
         with pytest.raises(HistoryStoreError, match="cleanup"):
-            await asyncio.wait_for(handle.result(), 2)
+            await asyncio.wait_for(handle.result(), 3)
         assert (await handle.snapshot()).terminal_sequence is None
         closing = asyncio.create_task(runtime.close())
         await asyncio.sleep(0)
