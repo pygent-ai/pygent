@@ -706,7 +706,11 @@ class HTTPWorkerApp:
                 run.invocation.deadline
                 if run.invocation.deadline is not None
                 else monotonic()
-            ) + 1.0
+            # Durable finalization may wait for an aiosqlite worker thread under
+            # host contention. Keep the wait bounded, but below the renewed
+            # five-second ownership lease to avoid reporting a healthy commit as
+            # unconfirmed solely because its thread was scheduled late.
+            ) + 4.0
         return run.cleanup_deadline
 
     @staticmethod
