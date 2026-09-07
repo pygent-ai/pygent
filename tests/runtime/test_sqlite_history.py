@@ -734,3 +734,16 @@ async def test_failed_claim_batch_rolls_back_before_individual_retry(tmp_path, m
         assert len(set(results)) == 4 and None not in results
         rows = await store._db().execute_fetchall("SELECT COUNT(*) FROM execution_fences")
         assert rows[0][0] == 4
+
+
+def test_canonical_encoder_keeps_each_concurrent_traversal_independent():
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+
+    from pygent.core import freeze_json, thaw_json
+    from pygent.runtime._history_types import _json_frozen
+
+    values = [freeze_json({"id": i, "nested": [{"unicode": "\u4e0a\u6d77", "float": -0.0}]}) for i in range(100)]
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        actual = list(executor.map(_json_frozen, values))
+    assert actual == [json.dumps(thaw_json(v), sort_keys=True, separators=(",", ":")) for v in values]

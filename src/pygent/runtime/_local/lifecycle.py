@@ -104,8 +104,8 @@ class _LifecycleMixin:
         if active is not None:
             return _LocalExecutionHandle(active)
         idempotency_identity: tuple[str, str, str] | None = None
-        invocation_digest = hashlib.sha256(repr(invocation).encode("utf-8")).hexdigest()
         if options.idempotency_key is not None:
+            invocation_digest = hashlib.sha256(repr(invocation).encode("utf-8")).hexdigest()
             idempotency_identity = (
                 bound.binding.name,
                 options.identity or "",

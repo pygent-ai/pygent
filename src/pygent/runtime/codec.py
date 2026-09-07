@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 from pygent.core import (
@@ -33,6 +33,7 @@ from pygent.tool import (
 
 from .context_codec import (
     DEFAULT_CONTEXT_CODECS,
+    ContextCodec,
     ContextCodecError,
     ContextCodecRegistry,
 )
@@ -74,6 +75,12 @@ def _thaw(value: object) -> object:
     return thaw_json(cast(JsonValue, value))
 
 
+def _retain_json(value: object) -> object:
+    if isinstance(value, FrozenJsonObject) and type(value) is not FrozenJsonObject:
+        return _thaw(value)
+    return value
+
+
 def _object(value: object, name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping) or any(
         not isinstance(key, str) for key in value
@@ -89,14 +96,20 @@ def _only(value: Mapping[str, Any], allowed: set[str], name: str) -> None:
 
 
 def tool_definition_to_dict(value: ToolDefinition) -> dict[str, object]:
+    return _tool_definition_value(value, _thaw)
+
+
+def _tool_definition_value(
+    value: ToolDefinition, project: Callable[[object], object]
+) -> dict[str, object]:
     if type(value) is not ToolDefinition:
         raise WireCodecError("unsupported ToolDefinition subtype")
     return {
         "name": value.name,
         "description": value.description,
-        "parameters": _thaw(value.parameters),
+        "parameters": project(value.parameters),
         "output_schema": (
-            None if value.output_schema is None else _thaw(value.output_schema)
+            None if value.output_schema is None else project(value.output_schema)
         ),
     }
 
@@ -119,13 +132,15 @@ def tool_definition_from_dict(value: object) -> ToolDefinition:
         raise WireCodecError("invalid ToolDefinition") from exc
 
 
-def _tool_spec_to_dict(value: ToolSpec) -> dict[str, object]:
+def _tool_spec_to_dict(
+    value: ToolSpec, project: Callable[[object], object] = _thaw
+) -> dict[str, object]:
     if type(value) is not ToolSpec:
         raise WireCodecError("unsupported ToolSpec subtype")
     return {
         "tool_id": value.tool_id,
         "version": value.version,
-        "definition": tool_definition_to_dict(value.definition),
+        "definition": _tool_definition_value(value.definition, project),
         "side_effect": value.side_effect.value,
         "idempotency": value.idempotency.value,
         "timeout": value.timeout,
@@ -173,13 +188,15 @@ def _tool_spec_from_dict(value: object) -> ToolSpec:
         raise WireCodecError("invalid ToolSpec") from exc
 
 
-def _tool_call_to_dict(value: ToolCall) -> dict[str, object]:
+def _tool_call_to_dict(
+    value: ToolCall, project: Callable[[object], object] = _thaw
+) -> dict[str, object]:
     if type(value) is not ToolCall:
         raise WireCodecError("unsupported ToolCall subtype")
     return {
         "call_id": value.call_id,
         "name": value.name,
-        "arguments": _thaw(value.arguments),
+        "arguments": project(value.arguments),
         "tool_id": value.tool_id,
         "tool_version": value.tool_version,
         "idempotency_key": value.idempotency_key,
@@ -213,7 +230,9 @@ def _tool_call_from_dict(value: object) -> ToolCall:
         raise WireCodecError("invalid ToolCall") from exc
 
 
-def _tool_task_to_dict(value: ToolTask | None) -> object:
+def _tool_task_to_dict(
+    value: ToolTask | None, project: Callable[[object], object] = _thaw
+) -> object:
     if value is None:
         return None
     if type(value) is not ToolTask:
@@ -225,7 +244,7 @@ def _tool_task_to_dict(value: ToolTask | None) -> object:
         "version": value.version,
         "state": value.state.value,
         "job_id": value.job_id,
-        "metadata": _thaw(value.metadata),
+        "metadata": project(value.metadata),
     }
 
 
@@ -260,15 +279,17 @@ def tool_task_from_dict(value: object) -> ToolTask | None:
     return _tool_task_from_dict(value)
 
 
-def _tool_result_to_dict(value: ToolResult) -> dict[str, object]:
+def _tool_result_to_dict(
+    value: ToolResult, project: Callable[[object], object] = _thaw
+) -> dict[str, object]:
     if type(value) is not ToolResult:
         raise WireCodecError("unsupported ToolResult subtype")
     return {
         "call_id": value.call_id,
         "name": value.name,
         "status": value.status,
-        "task": _tool_task_to_dict(value.task),
-        "output": _thaw(value.output),
+        "task": _tool_task_to_dict(value.task, project),
+        "output": project(value.output),
         "error": value.error,
         "error_kind": value.error_kind,
         "error_code": value.error_code,
@@ -317,6 +338,12 @@ def tool_result_from_dict(value: object) -> ToolResult:
 
 
 def message_to_dict(value: Message) -> dict[str, object]:
+    return _message_value(value, _thaw)
+
+
+def _message_value(
+    value: Message, project: Callable[[object], object]
+) -> dict[str, object]:
     if type(value) not in (
         Message,
         UserMessage,
@@ -334,20 +361,20 @@ def message_to_dict(value: Message) -> dict[str, object]:
         "content": value.content,
         "slot": value.slot,
         "kind": value.kind,
-        "data": _thaw(value.data),
-        "metadata": _thaw(value.metadata),
+        "data": project(value.data),
+        "metadata": project(value.metadata),
     }
     if isinstance(value, AIMessage):
-        data["tool_calls"] = [_tool_call_to_dict(call) for call in value.tool_calls]
-        data["usage"] = _thaw(value.usage)
+        data["tool_calls"] = [_tool_call_to_dict(call, project) for call in value.tool_calls]
+        data["usage"] = project(value.usage)
     elif isinstance(value, ToolMessage):
-        data["results"] = [_tool_result_to_dict(result) for result in value.results]
+        data["results"] = [_tool_result_to_dict(result, project) for result in value.results]
     elif isinstance(value, ToolAuthorizationRequest):
         data.update(
             {
                 "message_type": "tool.authorization.request",
-                "call": _tool_call_to_dict(value.call),
-                "spec": _tool_spec_to_dict(value.spec),
+                "call": _tool_call_to_dict(value.call, project),
+                "spec": _tool_spec_to_dict(value.spec, project),
                 "permissions": list(value.permissions),
             }
         )
@@ -444,6 +471,12 @@ def message_from_dict(value: object) -> Message:
 def context_to_dict(
     value: Context, *, registry: ContextCodecRegistry = DEFAULT_CONTEXT_CODECS
 ) -> dict[str, object]:
+    return _context_value(value, registry, _thaw)
+
+
+def _context_value(
+    value: Context, registry: ContextCodecRegistry, project: Callable[[object], object]
+) -> dict[str, object]:
     try:
         codec = registry.for_value(value)
         return {
@@ -451,7 +484,11 @@ def context_to_dict(
             "version": codec.version,
             "codec": codec.codec,
             "codec_digest": codec.codec_digest,
-            "data": codec.encode(value),
+            "data": (
+                codec._encode(value, project)
+                if project is _retain_json and type(codec) is ContextCodec
+                else codec.encode(value)
+            ),
         }
     except ContextCodecError as exc:
         raise WireCodecError("invalid or unregistered Context") from exc
@@ -490,8 +527,8 @@ def invocation_to_dict(
 ) -> FrozenJsonObject:
     return freeze_json_object(
         {
-            "message": message_to_dict(message),
-            "context": context_to_dict(context, registry=registry),
+            "message": _message_value(message, _retain_json),
+            "context": _context_value(context, registry, _retain_json),
         }
     )
 

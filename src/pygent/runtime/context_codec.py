@@ -5,12 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import types
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass
 from types import MappingProxyType
 from typing import Any, Union, cast, get_args, get_origin, get_type_hints
 
-from pygent.core import Context, FrozenJsonObject, Message, freeze_json, thaw_json
+from pygent.core import Context, FrozenJsonObject, Message, freeze_json
 from pygent.tool import ToolDefinition
 
 CONTEXT_CODEC_NAME = "pygent-dataclass-json-v1"
@@ -71,8 +71,10 @@ def _context_hints(context_type: type[Context]) -> dict[str, object]:
     return {**resolved, **_BASE_ANNOTATIONS}
 
 
-def _encode_value(value: object, annotation: object) -> object:
-    from .codec import message_to_dict, tool_definition_to_dict
+def _encode_value(
+    value: object, annotation: object, project: Callable[[object], object]
+) -> object:
+    from .codec import _message_value, _tool_definition_value
 
     origin = get_origin(annotation)
     args = get_args(annotation)
@@ -85,24 +87,24 @@ def _encode_value(value: object, annotation: object) -> object:
     if annotation is FrozenJsonObject:
         if not isinstance(value, FrozenJsonObject):
             raise ContextCodecError("expected FrozenJsonObject")
-        return thaw_json(value)
+        return project(value)
     if isinstance(annotation, type) and issubclass(annotation, Message):
         if not isinstance(value, cast(type[Any], annotation)):
             raise ContextCodecError("Context Message value has the wrong type")
-        return message_to_dict(value)
+        return _message_value(value, project)
     if annotation is ToolDefinition:
         if type(value) is not ToolDefinition:
             raise ContextCodecError("expected ToolDefinition")
-        return tool_definition_to_dict(value)
+        return _tool_definition_value(value, project)
     if origin is tuple:
         if not isinstance(value, tuple):
             raise ContextCodecError("expected tuple")
-        return [_encode_value(item, args[0]) for item in value]
+        return [_encode_value(item, args[0], project) for item in value]
     if origin in (Union, types.UnionType):
         successes: list[object] = []
         for candidate in args:
             try:
-                successes.append(_encode_value(value, candidate))
+                successes.append(_encode_value(value, candidate, project))
             except (ContextCodecError, TypeError, ValueError):
                 pass
         if len(successes) != 1:
@@ -113,7 +115,7 @@ def _encode_value(value: object, annotation: object) -> object:
             raise ContextCodecError("nested Context dataclass has the wrong type")
         hints = get_type_hints(annotation)
         return {
-            item.name: _encode_value(getattr(value, item.name), hints[item.name])
+            item.name: _encode_value(getattr(value, item.name), hints[item.name], project)
             for item in fields(annotation)
         }
     raise ContextCodecError(f"unsupported Context annotation: {annotation!r}")
@@ -233,10 +235,17 @@ class ContextCodec:
         return self.schema, self.version, self.codec, self.codec_digest
 
     def encode(self, value: Context) -> dict[str, object]:
+        from .codec import _thaw
+
+        return self._encode(value, _thaw)
+
+    def _encode(
+        self, value: Context, project: Callable[[object], object]
+    ) -> dict[str, object]:
         if type(value) is not self.context_type:
             raise ContextCodecError("Context value does not match codec type")
         return {
-            item.name: _encode_value(getattr(value, item.name), self._hints[item.name])
+            item.name: _encode_value(getattr(value, item.name), self._hints[item.name], project)
             for item in fields(self.context_type)
         }
 

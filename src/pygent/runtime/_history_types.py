@@ -136,18 +136,13 @@ def _json(value: object) -> str:
 def _json_frozen(value: JsonValue) -> str:
     """Serialize an already validated immutable JSON value without re-freezing it."""
 
-    return json.dumps(value, default=_json_container, sort_keys=True, separators=(",", ":"))
+    return _CANONICAL_ENCODER.encode(value)
 
 
 def _json_frozen_object(value: Mapping[str, JsonValue]) -> str:
     """Serialize a validated object whose child values are already immutable JSON."""
 
-    return json.dumps(
-        value,
-        default=_json_container,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    return _CANONICAL_ENCODER.encode(value)
 
 
 def _json_container(value: object) -> dict[str, object]:
@@ -159,6 +154,13 @@ def _json_container(value: object) -> dict[str, object]:
     if isinstance(value, Mapping):
         return dict(value)
     raise TypeError(f"unsupported JSON container: {type(value).__name__}")
+
+
+# JSONEncoder keeps traversal/cycle state local to each encode call. Reuse only
+# its fixed configuration; never retain execution values or serialized payloads.
+_CANONICAL_ENCODER = json.JSONEncoder(
+    default=_json_container, sort_keys=True, separators=(",", ":")
+)
 
 
 def _load(value: str | None) -> JsonValue | None:

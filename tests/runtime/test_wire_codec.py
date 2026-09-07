@@ -9,6 +9,7 @@ from pygent import (
     ToolMessage,
     UserMessage,
 )
+from pygent.core import FrozenJsonObject
 from pygent.runtime.codec import (
     WireCodecError,
     context_from_dict,
@@ -154,3 +155,87 @@ def test_authorization_messages_and_context_round_trip_without_field_loss():
 def test_wire_codec_rejects_unknown_roles_and_fields(payload):
     with pytest.raises(WireCodecError):
         message_from_dict(payload)
+
+
+@pytest.mark.parametrize("message", [
+    UserMessage(metadata={"nested": [{"x": 1}]}),
+    AIMessage(tool_calls=(ToolCall(call_id="c", name="t", arguments={"a": [1, 2]}),), usage={"input_tokens": 3}),
+    ToolMessage(results=(ToolResult(call_id="c", name="t", status="succeeded", output={"a": [1, 2]}),)),
+])
+def test_invocation_retains_frozen_values_and_preserves_mutable_wire_projection(message):
+    from pygent.core import freeze_json_object
+    from pygent.runtime._history_types import _json_frozen
+
+    context = Context(messages=(message,), metadata={"nested": [{"x": 2}]})
+    expected = freeze_json_object({"message": message_to_dict(message), "context": context_to_dict(context)})
+    actual = invocation_to_dict(message, context)
+    assert actual == expected
+    assert _json_frozen(actual) == _json_frozen(expected)
+    assert actual["message"]["metadata"] is message.metadata
+    assert actual["context"]["data"]["metadata"] is context.metadata
+    wire = context_to_dict(context)
+    wire["data"]["metadata"]["nested"][0]["x"] = 99
+    assert context.metadata["nested"][0]["x"] == 2
+
+
+def test_invocation_preserves_custom_context_codec_encode_override():
+    from dataclasses import dataclass, fields
+
+    from pygent.runtime.context_codec import ContextCodec, ContextCodecRegistry
+
+    @dataclass(frozen=True, slots=True)
+    class CustomContext(Context):
+        context_schema = "test.custom-projection"
+        context_schema_version = 1
+
+    class CustomCodec(ContextCodec):
+        def encode(self, value):
+            encoded = super().encode(value)
+            encoded["metadata"]["custom"] = True
+            return encoded
+
+    base = ContextCodec.dataclass(CustomContext)
+    codec = CustomCodec(**{f.name: getattr(base, f.name) for f in fields(base)})
+    registry = ContextCodecRegistry((codec,))
+    result = invocation_to_dict(UserMessage(), CustomContext(), registry=registry)
+    assert result["context"]["data"]["metadata"]["custom"] is True
+
+
+def test_internal_context_projection_keeps_type_validation():
+    from dataclasses import dataclass
+
+    from pygent.runtime.context_codec import ContextCodec, ContextCodecRegistry
+
+    @dataclass(frozen=True, slots=True)
+    class CustomContext(Context):
+        context_schema = "test.projection-validation"
+        context_schema_version = 1
+        count: int = 1
+
+    context = CustomContext()
+    object.__setattr__(context, "count", True)
+    registry = ContextCodecRegistry((ContextCodec.dataclass(CustomContext),))
+    with pytest.raises(WireCodecError):
+        invocation_to_dict(UserMessage(), context, registry=registry)
+
+
+def test_internal_projection_preserves_frozen_subclass_conversion():
+    from dataclasses import dataclass, field
+
+    from pygent.runtime.context_codec import ContextCodec, ContextCodecRegistry
+
+    class CustomJson(FrozenJsonObject):
+        def to_dict(self):
+            return {"custom": True}
+
+    @dataclass(frozen=True, slots=True)
+    class CustomContext(Context):
+        context_schema = "test.json-subclass"
+        context_schema_version = 1
+        payload: FrozenJsonObject = field(default_factory=CustomJson)
+
+    registry = ContextCodecRegistry((ContextCodec.dataclass(CustomContext),))
+    context = CustomContext()
+    expected = context_to_dict(context, registry=registry)
+    actual = invocation_to_dict(UserMessage(), context, registry=registry)
+    assert actual["context"].to_dict() == expected
