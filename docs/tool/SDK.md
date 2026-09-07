@@ -55,7 +55,7 @@ Pydantic 根据类型注解生成 Draft 2020-12 input/output schema，并负责�
 
 ## 标准工具
 
-`pygent.tool.standard` 把 0.1.15 中积累的 Bash、文件和 Web 能力迁移为普通 0.2 Python 工具。它不是第二套 Tool API：每个工具仍由 `@tool` 生成 `ToolDefinition/ToolSpec`，由 `ToolKit` 安装本地 executor，并由 `ToolCallLayer` 完成可见性、授权、admission、执行和结果归一化。
+`pygent.tool.standard` 通过遵循 0.3 契约的普通 Python 工具提供 Bash、文件和 Web 能力。它不是第二套 Tool API：每个工具仍由 `@tool` 生成 `ToolDefinition/ToolSpec`，由 `ToolKit` 安装本地 executor，并由 `ToolCallLayer` 完成可见性、授权、admission、执行和结果归一化。
 
 ```python
 from pygent import Context, ToolAuthorizationDecision
@@ -222,7 +222,7 @@ ToolDefinition、ToolSpec、ToolCall、ToolTask 与 ToolResult 是封闭的 port
 
 ## 外部沙箱 executor
 
-E2B、Daytona、Modal、自托管容器或任意其他外部沙箱不形成第二套 Tool API。开发者只需把 provider SDK 包装为现有 `ToolExecutor`；Pygent 不要求 provider 实现统一的模板、快照、PTY、文件系统或生命周期对象。框架只标准化工具执行入口、沙箱能力证明和 managed admission。以下最小公共装配面是 0.2 Tool SDK 契约，provider adapter 可以拥有更多私有能力，但不能把它们加入 portable Tool 值：
+E2B、Daytona、Modal、自托管容器或任意其他外部沙箱不形成第二套 Tool API。开发者只需把 provider SDK 包装为现有 `ToolExecutor`；Pygent 不要求 provider 实现统一的模板、快照、PTY、文件系统或生命周期对象。框架只标准化工具执行入口、沙箱能力证明和 managed admission。以下最小公共装配面是 0.3 Tool SDK 契约，provider adapter 可以拥有更多私有能力，但不能把它们加入 portable Tool 值：
 
 > 参考实现已经提供 `SandboxExecutorSupport`、`runtime.register_tool()`、sandbox bind preflight、managed invocation 复核与结构化 admission reason。手工传入 `tool.sandbox.*` capability 会被拒绝；沙箱能力只能从当前注册的兼容 executor 派生。
 

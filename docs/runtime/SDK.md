@@ -80,7 +80,7 @@ Runtime 只通过 `runtime.create_binding()` 创建治理域和签发配置权�
 
 ## Child 的三种放置方式
 
-以下示例冻结 0.2.x 的三种方式；它们都不改变 `forward()`：
+以下示例冻结 0.3 的三种方式；它们都不改变 `forward()`：
 
 ```python
 class MainAgent(Agent[UserMessage, AIMessage]):
@@ -542,7 +542,7 @@ result = await runtime.deliver_external(
 
 ## Deadline 与取消
 
-Root deadline 从 `start()` 被调用时开始，覆盖提交、history/store 初始化、Binding 与计划准备、模型 profile admission、资源与容量排队、`forward()`、清理和 finalization。Runtime 内部每一个 await 都必须使用剩余预算并同时响应 Execution cancellation 与 Runtime shutdown。终态提交可以使用有硬上限的 cleanup grace 保证记录完整，但不得继续业务执行。
+Root deadline 从 `start()` 被调用时开始，覆盖提交、history/store 初始化、Binding 与计划准备、模型 profile admission、资源与容量排队、`forward()`、清理和 finalization。Runtime 内部每一个 await 都必须使用剩余预算并同时响应 Execution cancellation 与 Runtime shutdown。终态提交可以使用有硬上限的 cleanup grace 完成记录，但不得继续业务执行。持久化设施不可用时不得伪造提交成功；保留已经提交的恢复事实并通过现有错误通道暴露失败。cleanup grace 不替代资源级关闭的 join 与回收责任。
 
 配置与 profile 发布不是 Execution 的隐藏前置步骤；它们使用 `ensure_profile(..., deadline=...)` 的独立控制面预算。业务请求只读取并 pin 已发布快照。
 
@@ -567,7 +567,7 @@ Child 不能放宽 Parent deadline。Parent deadline 到达时，正在排队、
 
 普通 `forward()` 的局部变量、任意第三方 `await` 和 Python coroutine continuation 不属于默认 checkpoint。Durable Runtime 不得在没有显式状态与重放契约时承诺从任意源码位置继续。详细要求见 [持久化与恢复边界](DURABILITY.md)。
 
-0.2.x 参考 Runtime 在受管调用边界自动记录 durable history，恢复时重新执行 `forward()` 并重放已提交结果；用户不调用 `step()` 或 checkpoint API。自动记录点、确定性限制和动态策略见 [透明恢复与确定性重放](REPLAY.md)。
+0.3 参考 Runtime 在受管调用边界自动记录 durable history，恢复时重新执行 `forward()` 并重放已提交结果；用户不调用 `step()` 或 checkpoint API。自动记录点、确定性限制和动态策略见 [透明恢复与确定性重放](REPLAY.md)。
 
 ## Durable eligibility
 

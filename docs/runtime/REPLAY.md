@@ -1,6 +1,6 @@
 # 透明恢复与确定性重放
 
-本文描述 Runtime 的透明恢复方案。它是 [持久化与恢复边界](DURABILITY.md) 的可调整实现策略，不是 Pygent 第一原则。0.2.x 参考实现以 `SQLiteHistoryStore` 和 ExecutionScope effect 边界交付了其中的确定性重放核心；suspend/compaction 等扩展控制面仍不是公共契约。
+本文描述 Runtime 的透明恢复方案。它是 [持久化与恢复边界](DURABILITY.md) 的可调整实现策略，不是 Pygent 第一原则。0.3 参考实现以 `SQLiteHistoryStore` 和 ExecutionScope effect 边界交付了其中的确定性重放核心；suspend/compaction 等扩展控制面仍不是公共契约。
 
 ## 定位
 

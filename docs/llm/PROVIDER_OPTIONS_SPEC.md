@@ -1,7 +1,7 @@
 # Provider 路由选项规范
 
 状态：Implemented
-目标版本：Pygent 0.2.x 兼容升级
+目标契约：Pygent 0.3
 
 本文从属于 [Pygent 第一原则](../FEATURES.md)、[LLM 第一原则](FEATURES.md) 与 [Runtime 第一原则](../runtime/FEATURES.md)，并服从现有 [LLM SDK](SDK.md)、[Runtime SDK](../runtime/SDK.md) 及 [动态模型组规范](DYNAMIC_MODEL_GROUP_SPEC.md)。如有冲突，以上级契约为准。
 

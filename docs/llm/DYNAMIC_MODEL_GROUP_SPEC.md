@@ -1,7 +1,7 @@
 # Deferred and Dynamic Model Group Specification
 
 - Status: Proposed
-- Target: Pygent post-0.2 design review
+- Target: Pygent 0.3 deployment contract
 - Audience: framework maintainers, Runtime implementers, Agent application developers
 - Scope: `pygent.llm`, `pygent.runtime`, managed Agent execution
 - Normative language: MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are requirements keywords
@@ -44,7 +44,7 @@ execution may use the new snapshot.
 
 This specification is subordinate to:
 
-1. the repository-wide [Pygent 0.2 first principles](../FEATURES.md);
+1. the repository-wide [Pygent 0.3 first principles](../FEATURES.md);
 2. the [LLM first principles](FEATURES.md);
 3. the [Runtime first principles](../runtime/FEATURES.md);
 4. the existing LLM and Runtime SDK contracts.

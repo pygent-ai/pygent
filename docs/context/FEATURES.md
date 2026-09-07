@@ -1,6 +1,6 @@
 # Context 第一原则
 
-本文从属于 [Pygent 0.2 第一原则](../FEATURES.md)。只能澄清，不能与其冲突。
+本文从属于 [Pygent 0.3 第一原则](../FEATURES.md)。只能澄清，不能与其冲突。
 
 1. **Agent 上下文值**：Context 是框架提供的不可变 Agent 上下文值。它可以作为普通 Module 的输入或输出，也可以被 RecurrentModule 选作 state；Context 本身不依赖 RecurrentModule。基础字段表示当前模型可见投影，并以唯一 `projection_revision` 标识投影版本；用户 Context 子类可以增加有限历史视图、工具状态、文件状态和其他领域数据。
 2. **受约束扩展**：用户 Context 子类必须声明稳定 schema 和版本，保持 frozen、slots 与值语义；全部实例字段必须可由严格、有限、递归冻结的 JSON 数据编码。继承不会开放任意 Python 对象旁路。

@@ -1,4 +1,4 @@
-"""Governance tests for the Pygent 0.2 documentation and test layout."""
+"""Governance tests for the Pygent 0.3 documentation and test layout."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ DATA_DIRECTORIES = {"fixtures"}
 DESIGN_DOCUMENT_DIRECTORIES = {"agents"}
 
 
-def test_02_documentation_has_one_directory_per_public_module():
+def test_03_documentation_has_one_directory_per_public_module():
     assert {path.name for path in DOCS_ROOT.iterdir() if path.is_file()} == ROOT_DOCUMENTS
     assert {path.name for path in DOCS_ROOT.iterdir() if path.is_dir()} == (
         MODULES | DESIGN_DOCUMENT_DIRECTORIES
@@ -34,7 +34,7 @@ def test_each_module_has_first_principles_then_sdk_contract():
         sdk = (module_root / "SDK.md").read_text(encoding="utf-8")
         principle_title = principles.splitlines()[0].removeprefix("# ")
 
-        assert "[Pygent 0.2 第一原则](../FEATURES.md)" in principles
+        assert "[Pygent 0.3 第一原则](../FEATURES.md)" in principles
         assert "第二级契约" in sdk
         assert f"[{principle_title}](FEATURES.md)" in sdk
         assert "```python" in sdk

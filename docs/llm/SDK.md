@@ -182,7 +182,7 @@ route = ModelRoute(
 
 固定模型的生产部署可以继续直接声明 ModelRoute，完全不查询目录。不要在 `forward()` 中覆盖模型、修改已经冻结的 Layer，或在 bind/compile 时自动请求 `/v1/models`。固定路径的每请求模型选择从服务端允许的预构造 Layer/BoundModule 集合中完成；延迟托管路径则从 Binding 句柄已经验证发布的 profile 中选择。模型目录表示查询当时的可见性，不是长期可用性或能力证明。
 
-0.2 不在 `forward()` 中接受 provider 私有参数字典、stream 开关、client、credential 或 route 强制覆盖。direct execution 使用 ModelCallLayer 声明的本地 adapter 配置，调用方管理其连接生命周期与外部 deadline；managed execution 的本次请求信息进入可选 ExecutionOptions，secret、endpoint 与 client 等部署资源由 Runtime 根据 Binding 中的稳定资源引用解析。`ModelRoute` 选择、retry 与 fallback 始终由 ModelInvoker 决定，Runtime 不解释 Provider 路由逻辑。
+0.3 不在 `forward()` 中接受 provider 私有参数字典、stream 开关、client、credential 或 route 强制覆盖。direct execution 使用 ModelCallLayer 声明的本地 adapter 配置，调用方管理其连接生命周期与外部 deadline；managed execution 的本次请求信息进入可选 ExecutionOptions，secret、endpoint 与 client 等部署资源由 Runtime 根据 Binding 中的稳定资源引用解析。`ModelRoute` 选择、retry 与 fallback 始终由 ModelInvoker 决定，Runtime 不解释 Provider 路由逻辑。
 
 所有 route、retry、fallback、容量等待和 attempt 必须消耗同一有限 effective deadline 与取消预算；adapter 不得建立隐藏的第二套重试或 deadline 预算。`ExecutionOptions.deadline` 是不可被流式进展延长的整体硬截止。`RetryPolicy.attempt_idle_timeout_seconds` 是 Provider 无进展窗口：非流式调用从请求开始等待完整响应；流式调用从请求开始等待首个有效 Provider 数据帧，并在每个后续有效数据帧到达后重新计时。SSE 注释和空行不算进展。`ModelCallLayer` 声明 `requires_finite_deadline=True`，因此 managed Root 或任意包含它的 Module 图在没有有限 `ExecutionOptions.deadline` 时必须于 admission 阶段 fail closed，不能等到 Provider I/O 后才失败。direct execution 不启用该 Runtime 门禁，外部整体 deadline 仍由调用方负责。
 

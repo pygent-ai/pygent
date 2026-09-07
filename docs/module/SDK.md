@@ -204,7 +204,7 @@ async with bound.stream(message, context) as stream:
     message, context = await stream.final_result()
 ```
 
-direct `invoke()`、本地 Child 调用和 `stream().final_result()` 返回具体 Module 声明的结果类型。上例使用当前 managed Runtime 已支持的 Message/Context 具体契约，因此托管结果仍是 `(message, context)`；普通 Module 可以在本地返回其他类型，但本次变更不扩展 managed/remote 结果协议。
+direct `invoke()`、本地 Child 调用和 `stream().final_result()` 返回具体 Module 声明的结果类型。上例使用当前 managed Runtime 已支持的 Message/Context 具体契约，因此托管结果仍是 `(message, context)`；普通 Module 可以在本地返回其他类型，managed/remote 结果仍须满足其声明的 codec 与调用契约。
 
 托管执行的 `execution_id`、attempt、状态、usage、取消、后台继续和可重连订阅属于独立 Execution Handle 控制面。需要这些信息的调用方显式进入该高级 API；普通 `invoke()` 不因运行元数据而返回 `ExecutionResult` 包装。
 

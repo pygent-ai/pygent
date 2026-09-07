@@ -199,7 +199,7 @@ Parallel Child 使用独立受管执行流：
 - Parent coroutine 使用 RESUME Item 重新获得 lease，与其他 Ready Item 一起参与公平调度；
 - Parent scope 结束前必须消费、取消或由 Runtime 自动取消并 join 全部结构化 Child。
 
-通用 Parallel Child 的 0.2.x SDK 入口是 Module 继承的 `gather()`；它不是 Agent 专用入口，也不提供 `detached=True` 改变结构化所有权。工具调用的 detach 是另一个边界：普通工具与 Agent-backed Tool 都通过独立 ToolTask admission 获得新身份，需要 durable recovery 时由独立 Job 承载该 ToolTask。调用不再作为 Child，Parent 只保留稳定引用，新任务仍受 Binding 与资源治理。
+通用 Parallel Child 的 0.3 SDK 入口是 Module 继承的 `gather()`；它不是 Agent 专用入口，也不提供 `detached=True` 改变结构化所有权。工具调用的 detach 是另一个边界：普通工具与 Agent-backed Tool 都通过独立 ToolTask admission 获得新身份，需要 durable recovery 时由独立 Job 承载该 ToolTask。调用不再作为 Child，Parent 只保留稳定引用，新任务仍受 Binding 与资源治理。
 
 ## Execution Lease
 

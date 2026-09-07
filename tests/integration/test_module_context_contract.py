@@ -37,7 +37,7 @@ def test_first_principles_define_free_calls_and_explicit_recurrence():
     assert "**RecurrentModule 是可选的标准 Module**" in call_spec
     assert "不预先限制业务值类型、附加参数、返回结构或泛型参数数量" in call_spec
     assert "Context 本身不依赖 RecurrentModule" in call_spec
-    assert "**本次变更不扩展可移植执行协议**" in call_spec
+    assert "**可移植执行协议显式声明**" in call_spec
 
 
 def test_module_document_defines_custom_events_without_a_stream_forward():

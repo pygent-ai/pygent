@@ -1,6 +1,6 @@
 # Runtime 持久化与恢复边界
 
-本文定义 Runtime 在本地执行、分布式 placement 与 durable recovery 之间的能力边界。它从属于 [Pygent 0.2 第一原则](../FEATURES.md) 和 [Runtime 第一原则](FEATURES.md)。0.2.x 参考实现提供 `LocalRuntime`、`SQLiteHistoryStore`、HTTP Worker/SSE、稳定 Execution 恢复和受管 Model/Tool effect 重放；本页同时明确这些能力不能推出任意 coroutine 或外部副作用 exactly-once。
+本文定义 Runtime 在本地执行、分布式 placement 与 durable recovery 之间的能力边界。它从属于 [Pygent 0.3 第一原则](../FEATURES.md) 和 [Runtime 第一原则](FEATURES.md)。0.3 参考实现提供 `LocalRuntime`、`SQLiteHistoryStore`、HTTP Worker/SSE、稳定 Execution 恢复和受管 Model/Tool effect 重放；本页同时明确这些能力不能推出任意 coroutine 或外部副作用 exactly-once。
 
 ## 能力分级
 
@@ -73,7 +73,7 @@ Message 与 Context 可以构成边界数据，但不足以描述完整执行状
 
 如果未来提供 `CheckpointableModule` 或显式 Step API，该能力必须是普通 `forward()` 之上的附加契约，不能假设任意 Python coroutine 可自动序列化。
 
-0.2.x 参考实现不要求用户显式声明 Step，但要求 Module 显式声明上述边界重试与 effect 安全资格：Runtime 在自身可观察的 Execution、Model、Tool 和事件边界记录 durable history，并通过重新执行合格的 `forward()`、返回已提交 effect 结果的方式重建局部状态。该方案仍不序列化 coroutine，也不恢复任意 Python 指令；详细设计见 [透明恢复与确定性重放](REPLAY.md)。
+0.3 参考实现不要求用户显式声明 Step，但要求 Module 显式声明上述边界重试与 effect 安全资格：Runtime 在自身可观察的 Execution、Model、Tool 和事件边界记录 durable history，并通过重新执行合格的 `forward()`、返回已提交 effect 结果的方式重建局部状态。该方案仍不序列化 coroutine，也不恢复任意 Python 指令；详细设计见 [透明恢复与确定性重放](REPLAY.md)。
 
 ## 故障矩阵
 
@@ -107,7 +107,7 @@ Durable Runtime 至少需要区分：
 
 Runtime 默认只能提供 at-least-once 执行语义。只有底层 Provider、Tool 和业务 Store 都参与同一幂等或事务协议时，才可以对特定边界声明更强保证；不得笼统宣称 exactly-once Agent 执行。
 
-每一个 attempt（包括首次执行）都必须先为逻辑 Execution 原子获取带 TTL 与单调 fencing token 的 owner claim；同一时刻只有一个 attempt owner 可以执行，heartbeat 丢失会取消旧 owner。恢复不是特殊 owner 模式，而是取得新 claim 并创建新 `attempt_id`。claim 只避免并发双执行，不提升外部副作用保证；外部提交仍必须按 EffectSpec、幂等键或资源 fencing 处理。
+每一个 attempt（包括首次执行）都必须先为逻辑 Execution 原子获取带 TTL 与单调 fencing token 的 owner claim；同一时刻只有一个有效 attempt owner，heartbeat 丢失后旧 owner 必须停止新业务工作并取消清理，受管持久提交拒绝过期 fencing token。恢复不是特殊 owner 模式，而是取得新 claim 并创建新 `attempt_id`。claim 与 fencing 约束有效执行权及受管提交，不证明失联进程或远端请求已经停止，不提升外部副作用保证；外部提交仍必须按 EffectSpec、幂等键或资源 fencing 处理。
 
 附着与恢复严格分离。`get_execution_handle(execution_id)` 只读取 snapshot、outcome 和 journal，或向当前 owner 写入取消请求；它不得取得 claim 或启动 `forward()`。只有显式 `recover()` 能在验证 ExecutionPlan、恢复资格和原 admission manifest 后取得新 claim。
 

@@ -1,6 +1,6 @@
-# Pygent 0.2
+# Pygent 0.3
 
-[FEATURES.md](FEATURES.md) 是 0.2 的最高契约。其余文档只负责展开，不得改变第一原则的语义。统一执行控制面、事件信封与兼容边界见 [Execution contract](EXECUTION.md)。
+[FEATURES.md](FEATURES.md) 是 0.3 的最高契约。其余文档只负责展开，不得改变第一原则的语义。统一执行控制面、事件信封与兼容边界见 [Execution contract](EXECUTION.md)。
 
 [第一原则验收矩阵](runtime/ACCEPTANCE.md) 将这些契约映射到可重复执行的测试、发布门禁与可选在线验收。
 
@@ -10,7 +10,7 @@
 2. 模块 `SDK.md`：用户使用方式，是模块第二级契约。
 3. 模块 `README.md`：详细边界和运行语义。
 
-发生冲突时依次服从：总第一原则、模块第一原则、SDK 示例、详细说明、测试与实现。
+发生冲突时依次服从：总第一原则、模块第一原则、SDK 与 Execution 协议、详细说明、测试与实现。第一原则定义责任和不变量；具体算法、内部类名及存储布局放在实现说明中。文档 0.3 不改变包版本或独立管理的 wire/schema 版本。
 
 ## 学习路线
 
@@ -30,7 +30,7 @@
 - [LLM](llm/README.md)：模型调用、fallback、连接与流事件。
 - [Tool](tool/README.md)：工具声明、批量执行、授权与结果。
 
-0.2 冻结 Agent、LLM、Tool 三个能力域，并新增统一 Execution 控制面；Module 与 Context 是它们共同依赖的基础契约，Runtime 是按需接入的托管执行能力，不是普通本地调用的前置条件，也不是额外的业务能力域。
+0.3 以 Agent、LLM、Tool 为能力域，以统一 Execution 为执行控制面；Module 与 Context 是它们共同依赖的基础契约，Runtime 是按需接入的托管执行能力，不是普通本地调用的前置条件，也不是额外的业务能力域。
 
 ## 按需要选择接口层
 
@@ -55,7 +55,7 @@
 - `ExecutionScope` 是框架内部或 Runtime SPI 类型，不从顶层导出，普通用户不直接构造。
 - 用户自定义基础设施 Module 若需要受管 effect、Model/Tool permit、部署资源解析或稳定幂等身份，从 `pygent.core` 导入 `Infrastructure` 与 `current_infrastructure()`；这些名称不是顶层 Application API，也不要求普通业务 Module 理解 ExecutionScope。
 
-移动这些导入是 0.2 breaking contract 的一部分。自动补全中出现的顶层名称应代表普通用户可以直接理解和构造的对象，不能以 re-export 把 Deployment API 与 Runtime SPI 重新摊平。
+上述路径是各层的规范公开导入边界。自动补全中出现的顶层名称应代表普通用户可以直接理解和构造的对象，不能以 re-export 把 Deployment API 与 Runtime SPI 重新摊平。
 
 旧的顶层基础设施导入不提供别名、警告桥接或懒加载，必须直接从上述规范子包导入；例如 `from pygent import Runtime` 会失败，应改为 `from pygent.runtime import Runtime`。
 
@@ -85,7 +85,7 @@ async with Echo().stream(message, context) as stream:
 
 直接执行不要求调用方创建 Runtime、Binding 或 ExecutionOptions。`invoke()`/`stream()` 在当前进程中建立框架内部的 direct execution scope，使 `forward()` 内的 `await self.child(*args, **kwargs)` 与事件发送保持统一；该 scope 不是用户可配置的 Runtime，也不提供框架级容量治理、远程 placement、跨进程恢复或多 Execution 调度。调用方使用 `asyncio`、服务限流器或外部设施自行管理 Root 并发、deadline 与进程生命周期。
 
-Root 只通过 `invoke()` 或 `stream()` 启动。`await module(*args, **kwargs)` 保留为活动 execution scope 内的 Child 调用；在 Root 外直接使用 `__call__()` 必须给出明确错误并引导调用 `invoke()`，从而避免同一个语法同时表示 Root 和 Child。
+Root 通过 `start()`、`invoke()` 或 `stream()` 启动。`await module(*args, **kwargs)` 保留为活动 execution scope 内的 Child 调用；在 Root 外直接使用 `__call__()` 必须给出明确错误并引导调用 `invoke()`，从而避免同一个语法同时表示 Root 和 Child。
 
 直接执行必须支持普通用户 Module 和声明为 direct-capable 的本地 Agent、LLM、Tool 依赖。需要托管资源解析、远程目标、共享容量或持久能力的 Module 在未绑定执行时必须明确拒绝，不得静默伪装为已治理执行。
 

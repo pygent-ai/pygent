@@ -19,7 +19,7 @@ class RecurrentModule(Module):
 
 Module 不规定业务参数数量、名称或结果形状，调用形状由具体 `forward()` 定义。RecurrentModule 是框架提供的可选标准 Module，用来表达显式状态递推，语义上对应 `(input, state) -> (output, next_state)`；它不固定业务值类型、附加参数、返回结构或泛型参数数量，也不是 Agent 专用基类。Message 与 Context 是内置 Agent/LLM 能力常用的一组 portable 值，因此 `(Message, Context) -> (Message, Context)` 是重要的 RecurrentModule 用法，但不是所有 Module 的统一端口。
 
-本地 direct execution 可以传递普通 Python 值。进入 managed、remote、worker 或 durable 边界时，Module 必须满足对应 Runtime 已支持并验证的调用契约；本次变更不定义任意 Python 值的通用 codec。现有 Message/Context recurrent contract 继续提供主要可移植路径，Message 的 `kind` 和严格 JSON `data` 仍是推荐的领域信封。
+本地 direct execution 可以传递普通 Python 值。进入 managed、remote、worker 或 durable 边界时，Module 必须满足对应 Runtime 已支持并验证的调用契约；不得以类型猜测或隐式 pickle 代替已声明的 codec。现有 Message/Context recurrent contract 继续提供主要可移植路径，Message 的 `kind` 和严格 JSON `data` 仍是推荐的领域信封。
 
 ## 调用与组合
 

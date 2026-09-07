@@ -1,6 +1,6 @@
 # Tool 第一原则
 
-本文从属于 [Pygent 0.2 第一原则](../FEATURES.md)。只能澄清，不能与其冲突。
+本文从属于 [Pygent 0.3 第一原则](../FEATURES.md)。只能澄清，不能与其冲突。
 
 1. **工具定义是声明**：ToolDefinition 只描述模型可见的名称与 schema，不持有权限、执行策略或运行资源。
 2. **统一消息端口**：ToolCallLayer 执行 `(AIMessage, Context) -> (ToolMessage, Context)`。
