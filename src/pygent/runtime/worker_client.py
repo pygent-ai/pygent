@@ -314,7 +314,11 @@ class HTTPWorkerClient:
                 continue
             payload = response.json()
             if response.status_code == 202:
-                await asyncio.sleep(poll_interval)
+                # A zero interval must still give the remote owner and its
+                # persistence worker time to advance. This is especially
+                # important for in-process ASGI transports, where an unbounded
+                # polling loop can otherwise starve claim renewal.
+                await asyncio.sleep(max(poll_interval, 0.001))
                 continue
             if response.status_code == 503 and isinstance(payload.get("error"), dict):
                 raise WorkerRemoteError(ExecutionFailure.from_dict(payload["error"]))
