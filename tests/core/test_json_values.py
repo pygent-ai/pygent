@@ -238,3 +238,33 @@ def test_large_json_values_have_no_node_count_limit(mode):
     if mode in {"patch", "default"}:
         expected["origin"] = "child"
     assert thaw_json(result) == expected
+
+
+@pytest.mark.parametrize("freeze", [freeze_json, json_values.freeze_json_object])
+def test_frozen_objects_are_reused_without_mapping_key_lookups(freeze, monkeypatch):
+    frozen = json_values.freeze_json_object({"nested": {"items": [1, 2, 3]}})
+
+    def forbidden(*args):
+        raise AssertionError("immutable traversal must not perform key lookups")
+
+    monkeypatch.setattr(FrozenJsonObject, "__getitem__", forbidden)
+    assert freeze(frozen) is frozen
+    wrapped = freeze({"wrapped": frozen})
+    assert wrapped._items[0][1] is frozen
+
+
+@pytest.mark.parametrize("freeze", [freeze_json, json_values.freeze_json_object])
+def test_reused_root_still_obeys_current_depth_limit(freeze, monkeypatch):
+    frozen = json_values.freeze_json_object({"nested": [[None]]})
+    monkeypatch.setattr(json_values, "MAX_JSON_DEPTH", 2)
+    with pytest.raises(JsonValueError, match="maximum depth"):
+        freeze(frozen)
+
+
+def test_frozen_subclass_still_validates_custom_mapping_items():
+    class CustomFrozen(FrozenJsonObject):
+        def items(self):
+            return [("invalid", float("nan"))]
+
+    with pytest.raises(JsonValueError, match="finite"):
+        freeze_json(CustomFrozen())

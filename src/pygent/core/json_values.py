@@ -81,7 +81,8 @@ def freeze_json(value: object) -> JsonValue:
 def freeze_json_object(value: JsonObjectInput = ()) -> FrozenJsonObject:
     """Validate and freeze a mapping or iterable of key/value pairs."""
 
-    if type(value) is FrozenJsonObject and not value._items:
+    if type(value) is FrozenJsonObject:
+        _validate_frozen_depth(value, state=_FreezeState(set()), depth=0)
         return value
     if type(value) in (dict, tuple, list) and not value:
         return _EMPTY_JSON_OBJECT
@@ -121,7 +122,8 @@ def _freeze_json_object_with_default(
     try:
         pairs = cast(
             Iterable[tuple[str, object]],
-            value.items() if isinstance(value, Mapping) else value,
+            value._items if type(value) is FrozenJsonObject
+            else value.items() if isinstance(value, Mapping) else value,
         )
         frozen_items: list[tuple[str, JsonValue]] = []
         seen: set[str] = set()
@@ -187,22 +189,44 @@ def _patch_frozen_json_object(
     return patched
 
 
-def _validate_frozen_depth(value: JsonValue, *, state: _FreezeState) -> None:
-    pending = [(value, 1)]
+def _validate_frozen_depth(
+    value: JsonValue, *, state: _FreezeState, depth: int = 1
+) -> None:
+    children: Iterator[JsonValue]
+    pending = [(value, depth)]
     while pending:
         current, depth = pending.pop()
         state.visit(depth=depth)
-        if isinstance(current, FrozenJsonObject):
-            pending.extend(
-                (item, depth + 1) for _, item in reversed(current._items)
-            )
+        if type(current) is FrozenJsonObject:
+            children = (item for _, item in current._items)
         elif isinstance(current, tuple):
-            pending.extend((item, depth + 1) for item in reversed(current))
+            children = iter(current)
+        else:
+            continue
+        child_depth = depth + 1
+        for item in children:
+            # Immutable scalars need no reconstruction or per-leaf work item.
+            if child_depth > MAX_JSON_DEPTH:
+                state.visit(depth=child_depth)
+            if type(item) is FrozenJsonObject or isinstance(item, tuple):
+                pending.append((item, child_depth))
 
 
 def _freeze(value: object, *, state: _FreezeState, depth: int) -> JsonValue:
     state.visit(depth=depth)
 
+    value_type = type(value)
+    if value is None or value_type is str or value_type is int or value_type is bool:
+        return cast(JsonScalar, value)
+    if type(value) is dict:
+        return _freeze_mapping(value, state=state, depth=depth)
+    if type(value) is list or type(value) is tuple:
+        return _freeze_sequence(value, state=state, depth=depth)
+    if type(value) is FrozenJsonObject:
+        # Construction already normalized this immutable tree. Revalidate its
+        # depth in the new parent, but do not rebuild or look up every key.
+        _validate_frozen_depth(value, state=state, depth=depth)
+        return value
     if isinstance(value, Enum):
         return _freeze(value.value, state=state, depth=depth)
     if value is None or isinstance(value, (str, bool, int)):
@@ -211,14 +235,6 @@ def _freeze(value: object, *, state: _FreezeState, depth: int) -> JsonValue:
         if not math.isfinite(value):
             raise JsonValueError("JSON numbers must be finite")
         return value
-    if isinstance(value, FrozenJsonObject):
-        # Existing frozen values still have to participate in the current
-        # depth and cycle checks.  Treating them as trusted leaves
-        # lets repeated shallow wrapping create a value that construction
-        # accepts but wire thawing cannot traverse safely.
-        return _freeze_mapping(
-            cast(Mapping[object, object], value), state=state, depth=depth
-        )
     if isinstance(value, Mapping):
         return _freeze_mapping(value, state=state, depth=depth)
     if isinstance(value, (list, tuple)):
@@ -279,6 +295,9 @@ def _freeze_pairs(
 def thaw_json(value: JsonValue | Mapping[str, object]) -> object:
     """Convert an immutable JSON value to built-in dict/list containers."""
 
+    value_type = type(value)
+    if value is None or value_type in (str, int, float, bool):
+        return value
     if isinstance(value, FrozenJsonObject):
         return value.to_dict()
     if isinstance(value, tuple):

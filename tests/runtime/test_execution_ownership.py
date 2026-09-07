@@ -414,3 +414,162 @@ async def test_deadline_bounds_finalization_and_close_joins_pending_commit(tmp_p
         release.set()
         await asyncio.wait_for(closing, 1)
         assert (await store.get_execution(handle.execution_id)).status == "succeeded"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [1, 200, 1000])
+async def test_cancellation_queries_are_store_scoped(tmp_path, count):
+    async with SQLiteHistoryStore(tmp_path / "watch.sqlite3") as store:
+        queries = []
+        await store._db().set_trace_callback(
+            lambda sql: queries.append(sql) if "SELECT execution_id FROM execution_cancellations" in sql else None
+        )
+        owners = [asyncio.create_task(asyncio.Event().wait()) for _ in range(count)]
+        try:
+            for index, owner in enumerate(owners):
+                store._watch_execution_cancel(str(index), owner)
+            await asyncio.sleep(0.23)
+            assert 1 <= len(queries) <= 6
+            assert not any(owner.done() for owner in owners)
+            for index, owner in enumerate(owners):
+                store._unwatch_execution_cancel(str(index), owner)
+            watcher = store._cancel_watcher
+            await asyncio.wait_for(asyncio.shield(watcher), 1)
+            total = len(queries)
+            await asyncio.sleep(0.06)
+            assert len(queries) == total
+        finally:
+            for owner in owners:
+                owner.cancel()
+            await asyncio.gather(*owners, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cancel_watcher_failure_stops_owners_and_can_restart(tmp_path, monkeypatch):
+    async with SQLiteHistoryStore(tmp_path / "broken-watch.sqlite3") as store:
+        original = store._db().execute_fetchall
+
+        async def broken(*args, **kwargs):
+            raise HistoryStoreError("read failed")
+
+        monkeypatch.setattr(store._db(), "execute_fetchall", broken)
+        owners = [asyncio.create_task(asyncio.Event().wait()) for _ in range(4)]
+        for index, owner in enumerate(owners):
+            store._watch_execution_cancel(str(index), owner)
+        await asyncio.wait_for(asyncio.gather(*owners, return_exceptions=True), 1)
+        assert all(owner.cancelled() for owner in owners)
+        assert not store._cancel_owners
+        monkeypatch.setattr(store._db(), "execute_fetchall", original)
+        owner = asyncio.create_task(asyncio.Event().wait())
+        store._watch_execution_cancel("new", owner)
+        await asyncio.sleep(0.06)
+        assert not owner.done()
+    assert store._cancel_watcher is None
+    await asyncio.gather(owner, return_exceptions=True)
+    assert owner.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_rolled_back_cancel_does_not_cancel_owner(tmp_path):
+    async with SQLiteHistoryStore(tmp_path / "rollback-watch.sqlite3") as store:
+        owner = asyncio.create_task(asyncio.Event().wait())
+        store._watch_execution_cancel("run", owner)
+        try:
+            async with store._write_lock:
+                await store._db().execute("INSERT INTO execution_cancellations VALUES('run')")
+                await asyncio.sleep(0.08)
+                await store._db().rollback()
+            await asyncio.sleep(0.08)
+            assert not owner.done()
+            # Removing a stale attempt must not unregister its replacement.
+            stale = asyncio.create_task(asyncio.sleep(0))
+            store._unwatch_execution_cancel("run", stale)
+            assert store._cancel_owners["run"] is owner
+            await stale
+        finally:
+            store._unwatch_execution_cancel("run", owner)
+            owner.cancel()
+            await asyncio.gather(owner, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_local_cancel_notifies_without_poll_and_watcher_drops_caller_context(tmp_path, monkeypatch):
+    from contextvars import ContextVar
+
+    tenant = ContextVar("test_tenant", default=None)
+    async with SQLiteHistoryStore(tmp_path / "local-watch.sqlite3") as store:
+        await store.create_execution(execution_id="run", request_id="req", plan_id="plan", input={})
+        observed = asyncio.Event()
+        original = store._db().execute_fetchall
+
+        async def read(*args, **kwargs):
+            assert tenant.get() is None
+            observed.set()
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(store._db(), "execute_fetchall", read)
+        owner = asyncio.create_task(asyncio.Event().wait())
+        token = tenant.set("tenant-specific-value")
+        try:
+            store._watch_execution_cancel("run", owner)
+        finally:
+            tenant.reset(token)
+        await asyncio.wait_for(observed.wait(), 1)
+        # Exclude the watcher so cancellation must be delivered synchronously
+        # after the local request commits, without waiting for a polling tick.
+        store._cancel_watcher.cancel()
+        await asyncio.gather(store._cancel_watcher, return_exceptions=True)
+        assert await store._request_execution_cancel("run")
+        assert owner.cancelling()
+        await asyncio.gather(owner, return_exceptions=True)
+        assert owner.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_store_close_joins_registered_owner_before_closing_connection(tmp_path):
+    store = await SQLiteHistoryStore(tmp_path / "close-watch.sqlite3").open()
+    entered = asyncio.Event()
+    exited = asyncio.Event()
+
+    async def owner():
+        try:
+            entered.set()
+            await asyncio.Event().wait()
+        finally:
+            await store._db().execute_fetchall("SELECT 1")
+            exited.set()
+
+    task = asyncio.create_task(owner())
+    await entered.wait()
+    store._watch_execution_cancel("run", task)
+    await store.close()
+    assert exited.is_set() and task.cancelled()
+    assert store._connection is None
+
+
+@pytest.mark.asyncio
+async def test_shared_watcher_receives_cancellation_from_another_process(tmp_path):
+    import sys
+
+    path = tmp_path / "process-watch.sqlite3"
+    async with SQLiteHistoryStore(path) as store:
+        owner = asyncio.create_task(asyncio.Event().wait())
+        store._watch_execution_cancel("run", owner)
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-c",
+            "import sqlite3, sys; db = sqlite3.connect(sys.argv[1]); "
+            "db.execute(\"INSERT INTO execution_cancellations VALUES('run')\"); "
+            "db.commit(); db.close()",
+            str(path),
+        )
+        try:
+            assert await asyncio.wait_for(process.wait(), 5) == 0
+            await asyncio.wait_for(asyncio.gather(owner, return_exceptions=True), 2)
+            assert owner.cancelled()
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            store._unwatch_execution_cancel("run", owner)
+            owner.cancel()
+            await asyncio.gather(owner, return_exceptions=True)

@@ -24,6 +24,13 @@ from ._history_types import (
 
 
 @dataclass(frozen=True, slots=True)
+class _ClaimExecutionBatchItem:
+    execution_id: str
+    owner_id: str
+    lease_ttl: float
+
+
+@dataclass(frozen=True, slots=True)
 class _BeginExecutionBatchItem:
     values: tuple[object, ...]
     stored: StoredExecution
@@ -46,6 +53,7 @@ class ExecutionHistoryMixin:
         _write_lock: asyncio.Lock
 
         def _db(self) -> aiosqlite.Connection: ...
+        def _cancel_execution_owner(self, execution_id: str) -> None: ...
         async def _queue_transaction(
             self,
             operation: Callable[[aiosqlite.Connection], Awaitable[Any]],
@@ -65,36 +73,79 @@ class ExecutionHistoryMixin:
         """Atomically claim one durable recovery attempt across processes."""
 
         async def operation(db: aiosqlite.Connection) -> int | None:
-            async with db.execute(
-                "SELECT terminal_sequence FROM executions WHERE execution_id=?",
-                (execution_id,),
-            ) as cursor:
-                terminal = await cursor.fetchone()
-            if terminal is not None and terminal[0] is not None:
+            tokens = await db.execute_fetchall(
+                "INSERT INTO execution_fences(fencing_token) "
+                "SELECT NULL WHERE NOT EXISTS(SELECT 1 FROM executions "
+                "WHERE execution_id=? AND terminal_sequence IS NOT NULL) "
+                "AND NOT EXISTS(SELECT 1 FROM execution_claims "
+                "WHERE execution_id=? AND expires_at>unixepoch('subsec')) "
+                "RETURNING fencing_token",
+                (execution_id, execution_id),
+            )
+            token = next(iter(tokens), None)
+            if token is None:
                 return None
             await db.execute(
-                "DELETE FROM execution_claims "
-                "WHERE execution_id=? AND expires_at<=unixepoch('subsec')",
-                (execution_id,),
+                "INSERT INTO execution_claims VALUES(?,?,?,unixepoch('subsec')+?) "
+                "ON CONFLICT(execution_id) DO UPDATE SET owner_id=excluded.owner_id,"
+                "fencing_token=excluded.fencing_token,expires_at=excluded.expires_at",
+                (execution_id, owner_id, token[0], lease_ttl),
             )
-            row = await (
-                await db.execute(
-                    "SELECT owner_id FROM execution_claims WHERE execution_id=?",
-                    (execution_id,),
-                )
-            ).fetchone()
-            if row is not None:
-                return None
-            cursor = await db.execute("INSERT INTO execution_fences DEFAULT VALUES")
-            token = cursor.lastrowid
-            assert token is not None
-            await db.execute(
-                "INSERT INTO execution_claims VALUES(?,?,?,unixepoch('subsec')+?)",
-                (execution_id, owner_id, token, lease_ttl),
-            )
-            return int(token)
+            return int(token[0])
 
-        return cast(int | None, await self._queue_transaction(operation))
+        return cast(
+            int | None,
+            await self._queue_transaction(
+                operation,
+                batch_key="claim_execution",
+                batch_payload=_ClaimExecutionBatchItem(execution_id, owner_id, lease_ttl),
+                batch_operation=self._batch_claim_executions,
+            ),
+        )
+
+    async def _batch_claim_executions(
+        self, db: aiosqlite.Connection, payloads: list[object]
+    ) -> list[object]:
+        items = [cast(_ClaimExecutionBatchItem, item) for item in payloads]
+        identities = tuple(item.execution_id for item in items)
+        if len(set(identities)) != len(items):
+            # Conflicting contenders must be evaluated in original queue order.
+            raise HistoryConflictError("claim batch contains competing owners")
+        placeholders = ",".join("?" for _ in items)
+        blocked = {
+            row[0]
+            for row in await db.execute_fetchall(
+                "SELECT execution_id FROM executions WHERE terminal_sequence IS NOT NULL "
+                f"AND execution_id IN ({placeholders}) UNION ALL "
+                "SELECT execution_id FROM execution_claims WHERE expires_at>unixepoch('subsec') "
+                f"AND execution_id IN ({placeholders})",
+                identities + identities,
+            )
+        }
+        eligible = [item for item in items if item.execution_id not in blocked]
+        if not eligible:
+            return [None] * len(items)
+        tokens = await db.execute_fetchall(
+            "INSERT INTO execution_fences(fencing_token) VALUES "
+            + ",".join("(NULL)" for _ in eligible)
+            + " RETURNING fencing_token"
+        )
+        # Fence identities are globally increasing, but RETURNING row order is
+        # irrelevant: each admitted owner needs one distinct fresh identity.
+        claimed = {
+            item.execution_id: int(row[0])
+            for item, row in zip(eligible, tokens, strict=True)
+        }
+        await db.executemany(
+            "INSERT INTO execution_claims VALUES(?,?,?,unixepoch('subsec')+?) "
+            "ON CONFLICT(execution_id) DO UPDATE SET owner_id=excluded.owner_id,"
+            "fencing_token=excluded.fencing_token,expires_at=excluded.expires_at",
+            [
+                (item.execution_id, item.owner_id, claimed[item.execution_id], item.lease_ttl)
+                for item in eligible
+            ],
+        )
+        return [claimed.get(item.execution_id) for item in items]
 
     async def renew_execution_claim(
         self,
@@ -416,14 +467,10 @@ class ExecutionHistoryMixin:
             )
             return cursor.rowcount == 1
 
-        return bool(await self._queue_transaction(operation))
-
-    async def _execution_cancel_requested(self, execution_id: str) -> bool:
-        async with self._db().execute(
-            "SELECT 1 FROM execution_cancellations WHERE execution_id=?",
-            (execution_id,),
-        ) as cursor:
-            return await cursor.fetchone() is not None
+        accepted = bool(await self._queue_transaction(operation))
+        if accepted:
+            self._cancel_execution_owner(execution_id)
+        return accepted
 
     async def get_execution(self, execution_id: str) -> StoredExecution | None:
         return await self._select_run("execution_id", execution_id)

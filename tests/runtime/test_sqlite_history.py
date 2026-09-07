@@ -47,7 +47,7 @@ def test_transaction_batch_bounds_must_be_positive_integers(tmp_path, name, valu
 
 def test_validated_json_object_serialization_reuses_frozen_children():
     payload = freeze_json_object(
-        {"nested": {"value": 1}, "sequence": [True, None, "上海"]}
+        {"nested": {"value": 1}, "sequence": [True, None, "涓婃捣"]}
     )
 
     assert _json_frozen_object({"data": payload, "sequence": 3}) == json.dumps(
@@ -64,7 +64,7 @@ def test_validated_json_object_serialization_reuses_frozen_children():
 
 def test_prepared_json_reuses_frozen_root_and_preserves_digest_bytes():
     payload = freeze_json_object(
-        {"message": "上海", "nested": {"enabled": True}, "sequence": [1, 2]}
+        {"message": "涓婃捣", "nested": {"enabled": True}, "sequence": [1, 2]}
     )
     expected = json.dumps(
         thaw_json(payload),
@@ -645,3 +645,92 @@ async def test_failed_transaction_request_isolated_from_valid_peer(tmp_path):
         assert succeeded is None
         stored = await store.get_execution("valid")
         assert stored is not None and stored.status == "succeeded"
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_native_json_traversal_preserves_canonical_history_bytes(seed):
+    import json
+    import random
+
+    from pygent.core import freeze_json, freeze_json_object, thaw_json
+    from pygent.runtime._history_types import _json, _json_frozen, _json_frozen_object
+
+    rng = random.Random(seed)
+
+    def tree(depth):
+        if depth == 0:
+            return rng.choice([None, True, False, 0, -1, 2**63, -0.0, 1.25e-9, "上海\n\\\""])
+        return {str(i): [tree(depth - 1), tree(depth - 1)] for i in range(3)}
+
+    value = freeze_json(tree(3))
+    expected = json.dumps(thaw_json(value), sort_keys=True, separators=(",", ":"))
+    assert _json(value) == _json_frozen(value) == _json_frozen_object(value) == expected
+    assert _json_frozen_object({"root": value}) == json.dumps(
+        {"root": thaw_json(value)}, sort_keys=True, separators=(",", ":")
+    )
+    assert _json_frozen(freeze_json_object({"b": (), "a": {}})) == '{"a":{},"b":[]}'
+
+
+@pytest.mark.asyncio
+async def test_batched_claims_preserve_active_terminal_and_expired_owners(tmp_path):
+    class CountingStore(SQLiteHistoryStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.batches = []
+
+        async def _batch_claim_executions(self, db, payloads):
+            self.batches.append(len(payloads))
+            return await super()._batch_claim_executions(db, payloads)
+
+    async with CountingStore(tmp_path / "claim-batch.sqlite3") as store:
+        active = await store.claim_execution(execution_id="active", owner_id="old", lease_ttl=30)
+        expired = await store.claim_execution(execution_id="expired", owner_id="old", lease_ttl=30)
+        await store._db().execute("UPDATE execution_claims SET expires_at=0 WHERE execution_id='expired'")
+        await store._db().commit()
+        await store.create_execution(execution_id="terminal", request_id="done", plan_id="plan", input={})
+        await store.finalize_execution("terminal", status="succeeded", output={}, error=None,
+                                      terminal_events=((0, {"sequence": 0}),), terminal_sequence=0)
+        identities = ["active", "terminal", "expired"] + [f"fresh-{i}" for i in range(32)]
+        results = await asyncio.gather(*(
+            store.claim_execution(execution_id=identity, owner_id="new", lease_ttl=30)
+            for identity in identities
+        ))
+        assert results[:2] == [None, None]
+        assert results[2] > expired
+        assert len(set(results[2:])) == 33
+        assert max(store.batches) > 1
+        assert await store.renew_execution_claim(execution_id="active", owner_id="old",
+                                                 fencing_token=active, lease_ttl=30)
+
+
+@pytest.mark.asyncio
+async def test_two_stores_cannot_win_the_same_claim_batch(tmp_path):
+    path = tmp_path / "claim-race.sqlite3"
+    async with SQLiteHistoryStore(path) as first, SQLiteHistoryStore(path) as second:
+        async def claim(store, owner):
+            return await asyncio.gather(*(
+                store.claim_execution(execution_id=str(i), owner_id=owner, lease_ttl=30)
+                for i in range(32)
+            ))
+        left, right = await asyncio.gather(claim(first, "left"), claim(second, "right"))
+        assert all((a is None) != (b is None) for a, b in zip(left, right, strict=True))
+        assert len({token for token in left + right if token is not None}) == 32
+
+
+@pytest.mark.asyncio
+async def test_failed_claim_batch_rolls_back_before_individual_retry(tmp_path, monkeypatch):
+    async with SQLiteHistoryStore(tmp_path / "claim-rollback.sqlite3") as store:
+        original = store._batch_claim_executions
+
+        async def fail_after_write(db, payloads):
+            await original(db, payloads)
+            raise RuntimeError("injected batch failure")
+
+        monkeypatch.setattr(store, "_batch_claim_executions", fail_after_write)
+        results = await asyncio.gather(*(
+            store.claim_execution(execution_id=str(i), owner_id="owner", lease_ttl=30)
+            for i in range(4)
+        ))
+        assert len(set(results)) == 4 and None not in results
+        rows = await store._db().execute_fetchall("SELECT COUNT(*) FROM execution_fences")
+        assert rows[0][0] == 4

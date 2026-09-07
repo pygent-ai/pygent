@@ -61,12 +61,12 @@ async def validate_writers(
     if not unique:
         return
     placeholders = ",".join("?" for _ in unique)
-    async with db.execute(
+    rows = await db.execute_fetchall(
         "SELECT execution_id,owner_id,fencing_token,expires_at>unixepoch('subsec') "
         f"FROM execution_claims WHERE execution_id IN ({placeholders})",
         tuple(item.execution_id for item in unique),
-    ) as cursor:
-        claims = {row[0]: row[1:] for row in await cursor.fetchall()}
+    )
+    claims = {row[0]: row[1:] for row in rows}
     for authority in unique:
         claim = claims.get(authority.execution_id)
         if authority.fencing_token is None:

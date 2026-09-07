@@ -331,21 +331,13 @@ class _LifecycleMixin:
             return None
         claim_history = record.history
         owner_task = asyncio.current_task()
+        assert owner_task is not None
+        claim_history._watch_execution_cancel(record.execution_id, owner_task)
 
         async def heartbeat() -> None:
             try:
-                next_renewal = time.monotonic() + self._recovery_lease_ttl / 3
                 while True:
-                    await asyncio.sleep(min(0.05, self._recovery_lease_ttl / 3))
-                    if await claim_history._execution_cancel_requested(
-                        record.execution_id
-                    ):
-                        if owner_task is not None:
-                            owner_task.cancel()
-                        return
-                    if time.monotonic() < next_renewal:
-                        continue
-                    next_renewal = time.monotonic() + self._recovery_lease_ttl / 3
+                    await asyncio.sleep(self._recovery_lease_ttl / 3)
                     renewed = await claim_history.renew_execution_claim(
                         execution_id=record.execution_id,
                         owner_id=cast(str, record.owner_id),
@@ -584,6 +576,9 @@ class _LifecycleMixin:
                 )
                 raise
             finally:
+                owner = asyncio.current_task()
+                if record.history is not None and owner is not None:
+                    record.history._unwatch_execution_cancel(record.execution_id, owner)
                 if claim_heartbeat is not None:
                     claim_heartbeat.cancel()
                 if deadline_timer is not None:

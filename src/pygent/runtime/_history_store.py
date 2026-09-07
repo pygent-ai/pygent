@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
+import json
+from collections import Counter, deque
 from collections.abc import Awaitable, Callable
+from contextvars import Context
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self, TypeVar, cast
@@ -86,6 +88,8 @@ class SQLiteHistoryStore(
                 raise ValueError(f"{name} must be a positive integer")
         self.path = str(path)
         self._connection: aiosqlite.Connection | None = None
+        self._cancel_owners: dict[str, asyncio.Task[Any]] = {}
+        self._cancel_watcher: asyncio.Task[None] | None = None
         self._write_lock = asyncio.Lock()
         self._event_batches: deque[_EventBatch] = deque()
         self._event_flush_task: asyncio.Task[None] | None = None
@@ -256,7 +260,62 @@ class SQLiteHistoryStore(
         await self._connection.commit()
         return self
 
+    def _watch_execution_cancel(self, execution_id: str, owner: asyncio.Task[Any]) -> None:
+        self._db()
+        self._cancel_owners[execution_id] = owner
+        if self._cancel_watcher is None or self._cancel_watcher.done():
+            self._cancel_watcher = asyncio.create_task(
+                self._watch_cancellations(),
+                name="pygent-sqlite-cancellations",
+                context=Context(),
+            )
+
+    def _unwatch_execution_cancel(self, execution_id: str, owner: asyncio.Task[Any]) -> None:
+        if self._cancel_owners.get(execution_id) is owner:
+            del self._cancel_owners[execution_id]
+
+    def _cancel_execution_owner(self, execution_id: str) -> None:
+        owner = self._cancel_owners.pop(execution_id, None)
+        if owner is not None:
+            owner.cancel()
+
+    async def _watch_cancellations(self) -> None:
+        try:
+            while self._cancel_owners:
+                await asyncio.sleep(0.05)
+                owners = self._cancel_owners.copy()
+                if not owners:
+                    return
+                # One queue round-trip per Store tick, independent of owner count.
+                # The read lock excludes cancellation requests that later roll back.
+                async with self._write_lock:
+                    rows = await self._db().execute_fetchall(
+                        "SELECT execution_id FROM execution_cancellations "
+                        "WHERE execution_id IN (SELECT value FROM json_each(?))",
+                        (json.dumps(tuple(owners)),),
+                    )
+                for (execution_id,) in rows:
+                    if self._cancel_owners.get(execution_id) is owners[execution_id]:
+                        self._cancel_execution_owner(execution_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - stop owners when cancellation cannot be observed
+            owners, self._cancel_owners = self._cancel_owners, {}
+            for owner in owners.values():
+                owner.cancel()
+
     async def close(self) -> None:
+        if asyncio.current_task() in self._cancel_owners.values():
+            raise HistoryStoreError("an execution cannot close its own history store")
+        owners, self._cancel_owners = self._cancel_owners, {}
+        for owner in owners.values():
+            owner.cancel()
+        watcher, self._cancel_watcher = self._cancel_watcher, None
+        if watcher is not None:
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
+        if owners:
+            await asyncio.gather(*owners.values(), return_exceptions=True)
         flush_task = self._event_flush_task
         if flush_task is not None:
             await asyncio.shield(flush_task)
@@ -310,7 +369,6 @@ class SQLiteHistoryStore(
         committed = batch.committed.get(authority)
         if committed is None:
             committed = loop.create_future()
-            committed.add_done_callback(_consume_future_exception)
             batch.committed[authority] = committed
         batch.events.append(
             _QueuedEvent(execution_id, index, payload, authority, on_commit, on_error)
@@ -375,6 +433,8 @@ class SQLiteHistoryStore(
                     receipt.set_result(None)
                 else:
                     receipt.set_exception(error)
+                    # Observe unused receipts without scheduling a callback per writer.
+                    receipt.exception()
 
     async def _commit_event_batch(self, batch: list[_QueuedEvent]) -> None:
         db = self._db()
@@ -430,7 +490,6 @@ class SQLiteHistoryStore(
             self._db()
             loop = asyncio.get_running_loop()
             committed: asyncio.Future[object] = loop.create_future()
-            committed.add_done_callback(_consume_future_exception)
             self._transaction_queue.append(
                 _TransactionRequest(
                     cast(Callable[..., Awaitable[object]], operation),
@@ -484,6 +543,9 @@ class SQLiteHistoryStore(
         async with self._write_lock:
             await db.execute("BEGIN IMMEDIATE")
             try:
+                authorities = Counter(
+                    item.authority for item in batch if item.authority is not None
+                )
                 terminal_owners = {
                     item.authority
                     for item in batch
@@ -491,7 +553,7 @@ class SQLiteHistoryStore(
                     and item.authority is not None
                 }
                 if terminal_owners and any(
-                    sum(item.authority == owner for item in batch) > 1
+                    authorities[owner] > 1
                     for owner in terminal_owners
                 ):
                     # A terminal write ends this authority. Re-run such mixed
@@ -501,9 +563,7 @@ class SQLiteHistoryStore(
                     )
                 await validate_writers(
                     db,
-                    tuple(
-                        item.authority for item in batch if item.authority is not None
-                    ),
+                    tuple(authorities),
                 )
                 results: list[object] = []
                 index = 0
@@ -565,6 +625,7 @@ class SQLiteHistoryStore(
             self._transaction_capacity.release()
             if not request.committed.done():
                 request.committed.set_exception(exc)
+                request.committed.exception()
 
     async def __aenter__(self) -> Self:
         return await self.open()
@@ -576,8 +637,3 @@ class SQLiteHistoryStore(
         if self._connection is None:
             raise HistoryStoreError("SQLiteHistoryStore is not open")
         return self._connection
-
-
-def _consume_future_exception(future: asyncio.Future[Any]) -> None:
-    if not future.cancelled():
-        future.exception()

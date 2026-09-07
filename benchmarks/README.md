@@ -69,3 +69,26 @@ For base/head gates, run the same profile three times on the same machine, reduc
 each matching stage to its median, then use `compare` with the reduced JSON
 objects. The default gate rejects throughput loss greater than 15% or P95 growth
 greater than 25%. Real-model reports are trend evidence only.
+
+
+### Durable concurrency regression
+
+Run `python benchmarks/durable_concurrency.py --source src --concurrency 200`
+(and repeat with 500 and 1000). The benchmark reuses the synthetic durable Agent
+scenario: two model calls and one tool call per execution. It measures elapsed
+and process CPU time, P95, throughput, cancellation SELECT count, and correctness.
+For A/B runs, pass isolated revision source roots with the same native extension;
+use fresh processes/databases, interleave versions, and retain every sample.
+These are source comparisons, not installed-wheel or Lora-specific certification.
+The Store cancellation watcher should issue at most about 20 queries/second,
+regardless of active execution count; do not infer throughput acceptance from
+query counts alone. Compare full throughput and cancellation latency separately.
+
+Use `--cpus 0,2` to hold the benchmark child process on the same logical CPUs
+for both revisions (requires psutil). Retain unconstrained samples as well; affinity
+does not eliminate competing host load and does not certify production topology.
+
+For shared JSON-path regression checks, use `--scenario direct-invoke`,
+`--scenario local-invoke`, or `--scenario react-tool-invoke`. The first two
+exercise a model call; the last exercises the Agent/tool loop without SQLite.
+Compare each scenario only against the same scenario on the baseline revision.

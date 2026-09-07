@@ -12,7 +12,7 @@ from typing import Concatenate, Literal, ParamSpec, Protocol, TypeVar
 
 import aiosqlite
 
-from pygent.core import FrozenJsonObject, JsonValue, freeze_json, thaw_json
+from pygent.core import FrozenJsonObject, JsonValue, freeze_json
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -136,17 +136,29 @@ def _json(value: object) -> str:
 def _json_frozen(value: JsonValue) -> str:
     """Serialize an already validated immutable JSON value without re-freezing it."""
 
-    return json.dumps(thaw_json(value), sort_keys=True, separators=(",", ":"))
+    return json.dumps(value, default=_json_container, sort_keys=True, separators=(",", ":"))
 
 
 def _json_frozen_object(value: Mapping[str, JsonValue]) -> str:
     """Serialize a validated object whose child values are already immutable JSON."""
 
     return json.dumps(
-        {key: thaw_json(item) for key, item in value.items()},
+        value,
+        default=_json_container,
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _json_container(value: object) -> dict[str, object]:
+    """Let the native JSON encoder traverse children instead of pre-thawing them."""
+    if type(value) is FrozenJsonObject:
+        return dict(value._items)
+    if isinstance(value, FrozenJsonObject):
+        return value.to_dict()
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(f"unsupported JSON container: {type(value).__name__}")
 
 
 def _load(value: str | None) -> JsonValue | None:
