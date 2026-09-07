@@ -67,7 +67,7 @@ if __name__ == "__main__":
     parser.add_argument("--cpus", help="Optional CPU affinity, e.g. 0,2 (requires psutil)")
     args = parser.parse_args()
     if args.cpus:
-        import psutil
+        import psutil  # type: ignore[import-untyped]
 
         psutil.Process().cpu_affinity([int(cpu) for cpu in args.cpus.split(",")])
     if args.concurrency < 1:
