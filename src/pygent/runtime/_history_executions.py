@@ -155,11 +155,15 @@ class ExecutionHistoryMixin:
         fencing_token: int,
         lease_ttl: float,
     ) -> bool:
+        """Extend the current token's lease, even if its takeover window opened.
+
+        Expiration makes the claim available to a contender; only replacement of
+        the persisted fencing token revokes the current writer.
+        """
         async with self._write_lock:
             cursor = await self._db().execute(
                 "UPDATE execution_claims SET expires_at=unixepoch('subsec')+? "
-                "WHERE execution_id=? AND owner_id=? AND fencing_token=? "
-                "AND expires_at>unixepoch('subsec')",
+                "WHERE execution_id=? AND owner_id=? AND fencing_token=?",
                 (lease_ttl, execution_id, owner_id, fencing_token),
             )
             await self._db().commit()

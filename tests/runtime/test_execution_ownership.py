@@ -18,7 +18,7 @@ from pygent.runtime._history_ownership import owner_scope
 
 
 @pytest.mark.asyncio
-async def test_expired_writer_cannot_mutate_or_release_new_owner(tmp_path):
+async def test_expired_writer_remains_valid_until_new_owner_takes_over(tmp_path):
     path = tmp_path / "fences.sqlite3"
     async with SQLiteHistoryStore(path) as old, SQLiteHistoryStore(path) as new:
         await old.create_execution(
@@ -30,13 +30,22 @@ async def test_expired_writer_cannot_mutate_or_release_new_owner(tmp_path):
         # Advance the persisted lease deterministically, without a timing race.
         await old._db().execute("UPDATE execution_claims SET expires_at=0")
         await old._db().commit()
-        assert not await old.renew_execution_claim(
+        assert await old.renew_execution_claim(
             execution_id="run", owner_id="old", fencing_token=first, lease_ttl=10
         )
+        with owner_scope("run", "old", first):
+            await old.update_execution("run", status="running")
+        # Expiration opens the claim to takeover; it does not itself revoke the
+        # current fencing token.
+        await old._db().execute("UPDATE execution_claims SET expires_at=0")
+        await old._db().commit()
         second = await new.claim_execution(
             execution_id="run", owner_id="new", lease_ttl=10
         )
         assert second > first
+        assert not await old.renew_execution_claim(
+            execution_id="run", owner_id="old", fencing_token=first, lease_ttl=10
+        )
         with owner_scope("run", "old", first):
             operations = (
                 old.update_execution("run", status="failed"),
@@ -80,6 +89,106 @@ async def test_expired_writer_cannot_mutate_or_release_new_owner(tmp_path):
             )
             is None
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["model", "tool"])
+async def test_long_model_or_tool_wait_keeps_claim_and_terminal_outcome(
+    tmp_path, boundary
+):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class WaitingModel(Module):
+        async def forward(self, message, context):
+            entered.set()
+            await release.wait()
+            return AIMessage(content="done"), context
+
+    class WaitingTool(WaitingModel):
+        pass
+
+    class Root(Module):
+        def __init__(self):
+            super().__init__()
+            self.model = WaitingModel()
+            self.tool = WaitingTool()
+
+        async def forward(self, message, context):
+            return await getattr(self, boundary)(message, context)
+
+    async with (
+        SQLiteHistoryStore(tmp_path / "long-wait.sqlite3") as history,
+        LocalRuntime(history=history) as runtime,
+    ):
+        runtime._recovery_lease_ttl = 0.03
+        handle = await runtime.bind(Root()).start(
+            UserMessage(content="hello"), Context()
+        )
+        await entered.wait()
+        await asyncio.sleep(0.12)
+        release.set()
+        assert (await handle.result())[0].content == "done"
+        stored = await history.get_execution(handle.execution_id)
+        assert stored.status == "succeeded"
+        assert stored.terminal_sequence is not None
+
+
+@pytest.mark.asyncio
+async def test_event_loop_stall_past_lease_does_not_cancel_only_owner(tmp_path):
+    class Stalling(Module):
+        async def forward(self, message, context):
+            # Model and tool implementations can contain short synchronous
+            # sections that delay every task on the loop, including heartbeat.
+            time.sleep(0.08)  # noqa: ASYNC251 - intentionally stall heartbeat
+            return AIMessage(content="done"), context
+
+    async with (
+        SQLiteHistoryStore(tmp_path / "loop-stall.sqlite3") as history,
+        LocalRuntime(history=history) as runtime,
+    ):
+        runtime._recovery_lease_ttl = 0.03
+        handle = await runtime.bind(Stalling()).start(
+            UserMessage(content="hello"), Context()
+        )
+        assert (await handle.result())[0].content == "done"
+        outcome = await handle.outcome()
+        stored = await history.get_execution(handle.execution_id)
+        assert outcome.status is ExecutionStatus.SUCCEEDED
+        assert stored.status == "succeeded"
+        assert stored.phase == "terminal"
+        assert stored.terminal_sequence == outcome.terminal_sequence
+
+
+@pytest.mark.asyncio
+async def test_sqlite_write_pause_past_lease_does_not_cancel_only_owner(tmp_path):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Waiting(Module):
+        async def forward(self, message, context):
+            entered.set()
+            await release.wait()
+            return AIMessage(content="done"), context
+
+    async with (
+        SQLiteHistoryStore(tmp_path / "sqlite-pause.sqlite3") as history,
+        LocalRuntime(history=history) as runtime,
+    ):
+        runtime._recovery_lease_ttl = 0.03
+        handle = await runtime.bind(Waiting()).start(
+            UserMessage(content="hello"), Context()
+        )
+        await entered.wait()
+        await history._write_lock.acquire()
+        try:
+            await asyncio.sleep(0.08)
+        finally:
+            history._write_lock.release()
+        await asyncio.sleep(0.02)
+        release.set()
+        assert (await handle.outcome()).status is ExecutionStatus.SUCCEEDED
+        stored = await history.get_execution(handle.execution_id)
+        assert stored.status == "succeeded"
+        assert stored.terminal_sequence is not None
 
 
 @pytest.mark.asyncio

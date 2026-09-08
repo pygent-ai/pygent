@@ -107,7 +107,7 @@ Durable Runtime 至少需要区分：
 
 Runtime 默认只能提供 at-least-once 执行语义。只有底层 Provider、Tool 和业务 Store 都参与同一幂等或事务协议时，才可以对特定边界声明更强保证；不得笼统宣称 exactly-once Agent 执行。
 
-每一个 attempt（包括首次执行）都必须先为逻辑 Execution 原子获取带 TTL 与单调 fencing token 的 owner claim；同一时刻只有一个有效 attempt owner，heartbeat 丢失后旧 owner 必须停止新业务工作并取消清理，受管持久提交拒绝过期 fencing token。恢复不是特殊 owner 模式，而是取得新 claim 并创建新 `attempt_id`。claim 与 fencing 约束有效执行权及受管提交，不证明失联进程或远端请求已经停止，不提升外部副作用保证；外部提交仍必须按 EffectSpec、幂等键或资源 fencing 处理。
+每一个 attempt（包括首次执行）都必须先为逻辑 Execution 原子获取带 TTL 与单调 fencing token 的 owner claim；同一时刻只有一个当前 attempt owner。TTL 到期只允许恢复方原子接管，不自行撤销仍为当前值的 fencing token；没有接管时原 owner 可以续租并继续受管提交。接管必须写入更高 token，之后旧 owner 的续租与受管持久提交均被拒绝，旧 owner 必须停止新业务工作并取消清理。恢复不是特殊 owner 模式，而是取得新 claim 并创建新 `attempt_id`。claim 与 fencing 约束有效执行权及受管提交，不证明失联进程或远端请求已经停止，不提升外部副作用保证；外部提交仍必须按 EffectSpec、幂等键或资源 fencing 处理。
 
 附着与恢复严格分离。`get_execution_handle(execution_id)` 只读取 snapshot、outcome 和 journal，或向当前 owner 写入取消请求；它不得取得 claim 或启动 `forward()`。只有显式 `recover()` 能在验证 ExecutionPlan、恢复资格和原 admission manifest 后取得新 claim。
 

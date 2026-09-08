@@ -23,7 +23,7 @@ Pygent 以可共享的 Module 定义组合计算，以显式输入输出传递�
 
 ## 所有权、终结与恢复
 
-12. **有效 owner 唯一**：每个实际 attempt 只有一个有效执行 owner。需要跨进程恢复时，首次与恢复 attempt 都必须取得 owner lease 与 fencing token；受管持久提交验证有效所有权并拒绝过期 token。失去所有权后必须停止发起新业务工作并取消清理；本地 Task 退出不能证明远端副作用停止，未确认操作仍按幂等和结果未知契约处理。
+12. **有效 owner 唯一**：每个实际 attempt 只有一个有效执行 owner。需要跨进程恢复时，首次与恢复 attempt 都必须取得 owner lease 与 fencing token；lease TTL 到期只开放原子接管窗口，不自行撤销数据库中仍为当前值的 token。接管必须写入更高 token，受管持久提交验证当前 token 并拒绝已被取代的旧 writer。确认失去所有权后必须停止发起新业务工作并取消清理；本地 Task 退出不能证明远端副作用停止，未确认操作仍按幂等和结果未知契约处理。
 13. **业务预算统一，清理责任持续**：Execution deadline 从提交开始，覆盖准备、pin、准入、排队、业务执行和终结，不因阶段切换、重试或流式进展重新计时。到期后不再开始新的业务工作；停止、回收与原子终结只使用明确且有硬上限的 cleanup grace，不成为额外业务预算。未确认完成不得报告成功、已释放或安全可重试。资源级关闭仍须履行其 join 与回收责任；配置和发布使用独立显式 deadline。
 14. **Journal 是终态权威**：terminal span events、唯一 Execution terminal event、冻结 Outcome、终态 Snapshot 与 terminal sequence 原子提交。提交确认前不得发布成功终态或伪造持久结果；提交失败必须保留故障及已有恢复事实，由声明的恢复协议处理。订阅只有交付 terminal sequence 才能正常结束；读取失败或取消观察不能伪装为正常完成。
 15. **观察与执行所有权分离**：Handle 是稳定控制面引用，不拥有业务 coroutine。attach 可以观察、等待或请求取消，不创建 attempt；recover 必须另行验证资格、取得有效 owner 并创建新 attempt。独立观察者退出不改变执行生命周期；拥有型 stream 退出和结构化父子取消按各自所有权传播。具体等待与取消方式由统一 Execution 契约定义。

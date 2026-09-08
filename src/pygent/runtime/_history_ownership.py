@@ -56,13 +56,18 @@ def write_authority(execution_id: str) -> WriteAuthority:
 async def validate_writers(
     db: aiosqlite.Connection, authorities: Sequence[WriteAuthority]
 ) -> None:
-    """Validate the whole batch under its BEGIN IMMEDIATE write lock."""
+    """Validate current fencing tokens under the batch's BEGIN IMMEDIATE lock.
+
+    Lease expiry opens a takeover window but does not revoke a writer by itself.
+    A successful takeover replaces the token before releasing the SQLite write
+    lock, so matching the persisted token is the authoritative fence.
+    """
     unique = tuple(dict.fromkeys(authorities))
     if not unique:
         return
     placeholders = ",".join("?" for _ in unique)
     rows = await db.execute_fetchall(
-        "SELECT execution_id,owner_id,fencing_token,expires_at>unixepoch('subsec') "
+        "SELECT execution_id,owner_id,fencing_token "
         f"FROM execution_claims WHERE execution_id IN ({placeholders})",
         tuple(item.execution_id for item in unique),
     )
@@ -75,7 +80,6 @@ async def validate_writers(
             valid = claim is not None and claim == (
                 authority.owner_id,
                 authority.fencing_token,
-                1,
             )
         if not valid:
             raise HistoryConflictError("execution writer no longer owns a valid lease")
