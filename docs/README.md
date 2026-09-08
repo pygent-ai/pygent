@@ -29,6 +29,7 @@
 - [Agent 渐进式教程](agent/TUTORIAL.md)：从最小 Agent 到托管执行和动态模型配置。
 - [LLM](llm/README.md)：模型调用、fallback、连接与流事件。
 - [Tool](tool/README.md)：工具声明、批量执行、授权与结果。
+- [Cross-framework resource benchmark](../benchmarks/FRAMEWORK_RESOURCE_BENCHMARK.md): English report covering the loop, durable-runtime, and service-runtime lanes, including limitations and optimization targets.
 
 0.3 以 Agent、LLM、Tool 为能力域，以统一 Execution 为执行控制面；Module 与 Context 是它们共同依赖的基础契约，Runtime 是按需接入的托管执行能力，不是普通本地调用的前置条件，也不是额外的业务能力域。
 
