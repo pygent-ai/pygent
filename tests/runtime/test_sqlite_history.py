@@ -704,6 +704,82 @@ async def test_batched_claims_preserve_active_terminal_and_expired_owners(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_concurrent_claim_renewals_share_transactions_and_keep_results(tmp_path):
+    class CountingStore(SQLiteHistoryStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.transaction_sizes = []
+            self.renew_batch_sizes = []
+
+        async def _run_transaction_batch(self, batch):
+            self.transaction_sizes.append(len(batch))
+            return await super()._run_transaction_batch(batch)
+
+        async def _batch_renew_execution_claims(self, db, payloads):
+            self.renew_batch_sizes.append(len(payloads))
+            return await super()._batch_renew_execution_claims(db, payloads)
+
+    async with CountingStore(tmp_path / "renew-batch.sqlite3") as store:
+        claims = await asyncio.gather(
+            *(
+                store.claim_execution(
+                    execution_id=f"run-{index}", owner_id="old", lease_ttl=30
+                )
+                for index in range(32)
+            )
+        )
+        await store._db().execute(
+            "UPDATE execution_claims SET expires_at=0 WHERE execution_id='run-0'"
+        )
+        await store._db().commit()
+        replacement = await store.claim_execution(
+            execution_id="run-0", owner_id="new", lease_ttl=30
+        )
+        store.transaction_sizes.clear()
+
+        results = await asyncio.gather(
+            store.renew_execution_claim(
+                execution_id="run-0",
+                owner_id="old",
+                fencing_token=claims[0],
+                lease_ttl=30,
+            ),
+            store.renew_execution_claim(
+                execution_id="run-0",
+                owner_id="new",
+                fencing_token=replacement,
+                lease_ttl=30,
+            ),
+            *(
+                store.renew_execution_claim(
+                    execution_id=f"run-{index}",
+                    owner_id="old",
+                    fencing_token=claims[index],
+                    lease_ttl=30,
+                )
+                for index in range(1, 32)
+            ),
+        )
+
+        assert results == [False, True] + [True] * 31
+        assert store.renew_batch_sizes == [len(results)]
+        assert store.transaction_sizes == [len(results)]
+
+        missing = await asyncio.gather(
+            *(
+                store.renew_execution_claim(
+                    execution_id=f"missing-{index}",
+                    owner_id="none",
+                    fencing_token=-1,
+                    lease_ttl=30,
+                )
+                for index in range(4)
+            )
+        )
+        assert missing == [False] * 4
+
+
+@pytest.mark.asyncio
 async def test_two_stores_cannot_win_the_same_claim_batch(tmp_path):
     path = tmp_path / "claim-race.sqlite3"
     async with SQLiteHistoryStore(path) as first, SQLiteHistoryStore(path) as second:

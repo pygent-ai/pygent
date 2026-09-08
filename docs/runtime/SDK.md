@@ -603,7 +603,7 @@ durable Handle，历史读取必须显式调用 `get_execution_handle()`。恢�
 四个 SQLite batch/capacity 参数和 `max_retained_executions` 都必须是正整数。
 普通 Journal 写入只让出一个事件循环轮次来聚合并发事件，并让同一批事件共享提交回执；
 生产者只在有界 pending event 容量耗尽时等待，订阅游标仍只推进到已经提交的 sequence。
-并发 Execution create/claim/update、effect begin/complete、Inbox receive 和 terminal 操作共享有界物理事务；任一请求失败时整批
+并发 Execution create/claim/renew/update、effect begin/complete、Inbox receive 和 terminal 操作共享有界物理事务；任一请求失败时整批
 回滚并逐项重试隔离。effect 仍必须在外部操作前提交 started、操作后提交 completed，terminal
 仍在等待此前 Journal 后原子提交事件、Outcome、Snapshot 与 terminal sequence。
 不同 Execution 的 Inbox receive 在同一事务中批量检查回放回执、消费者和顺序游标；同一 Execution 的读取仍按队列顺序裁决。空读回执和封箱仍持久化，返回的 payload 只在按各自 limit 选定后读取。

@@ -31,6 +31,14 @@ class _ClaimExecutionBatchItem:
 
 
 @dataclass(frozen=True, slots=True)
+class _RenewExecutionBatchItem:
+    execution_id: str
+    owner_id: str
+    fencing_token: int
+    lease_ttl: float
+
+
+@dataclass(frozen=True, slots=True)
 class _BeginExecutionBatchItem:
     values: tuple[object, ...]
     stored: StoredExecution
@@ -160,14 +168,59 @@ class ExecutionHistoryMixin:
         Expiration makes the claim available to a contender; only replacement of
         the persisted fencing token revokes the current writer.
         """
-        async with self._write_lock:
-            cursor = await self._db().execute(
+        async def operation(db: aiosqlite.Connection) -> bool:
+            cursor = await db.execute(
                 "UPDATE execution_claims SET expires_at=unixepoch('subsec')+? "
                 "WHERE execution_id=? AND owner_id=? AND fencing_token=?",
                 (lease_ttl, execution_id, owner_id, fencing_token),
             )
-            await self._db().commit()
             return cursor.rowcount == 1
+
+        return cast(
+            bool,
+            await self._queue_transaction(
+                operation,
+                batch_key="renew_execution_claim",
+                batch_payload=_RenewExecutionBatchItem(
+                    execution_id, owner_id, fencing_token, lease_ttl
+                ),
+                batch_operation=self._batch_renew_execution_claims,
+            ),
+        )
+
+    async def _batch_renew_execution_claims(
+        self, db: aiosqlite.Connection, payloads: list[object]
+    ) -> list[object]:
+        items = [cast(_RenewExecutionBatchItem, item) for item in payloads]
+        identities = tuple(dict.fromkeys(item.execution_id for item in items))
+        placeholders = ",".join("?" for _ in identities)
+        claims = {
+            row[0]: (row[1], row[2])
+            for row in await db.execute_fetchall(
+                "SELECT execution_id,owner_id,fencing_token FROM execution_claims "
+                f"WHERE execution_id IN ({placeholders})",
+                identities,
+            )
+        }
+        valid: list[object] = [
+            claims.get(item.execution_id) == (item.owner_id, item.fencing_token)
+            for item in items
+        ]
+        await db.executemany(
+            "UPDATE execution_claims SET expires_at=unixepoch('subsec')+? "
+            "WHERE execution_id=? AND owner_id=? AND fencing_token=?",
+            [
+                (
+                    item.lease_ttl,
+                    item.execution_id,
+                    item.owner_id,
+                    item.fencing_token,
+                )
+                for item, admitted in zip(items, valid, strict=True)
+                if admitted
+            ],
+        )
+        return valid
 
     async def release_execution_claim(
         self, *, execution_id: str, owner_id: str, fencing_token: int
