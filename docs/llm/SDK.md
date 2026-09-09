@@ -238,9 +238,9 @@ async with model.stream(message, context) as stream:
 ```python
 bound_model = model.bind(runtime, binding=binding)
 
-ai_message, context = await bound_model.invoke(message, context, run=run)
+ai_message, context = await bound_model.invoke(message, context, execution=run)
 
-async with bound_model.stream(message, context, run=run) as stream:
+async with bound_model.stream(message, context, execution=run) as stream:
     async for event in stream:
         ...
     ai_message, context = await stream.final_result()

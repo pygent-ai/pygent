@@ -11,7 +11,7 @@ Pygent 以可共享的 Module 定义组合计算，以显式输入输出传递�
 3. **无隐藏调用状态**：Module 可以持有定义配置、子 Module 和显式部署资源，不持有某次调用的输入、局部结果、recurrent state、请求或业务会话状态。调用状态通过参数、局部变量与返回值流转；同一 Module 定义可以并发复用。
 4. **定义共享，调用独立**：同一 Module 可以被多条属性路径引用，每次调用拥有独立身份与局部状态。用户通过声明子 Module 和一个 `forward()` 表达计算；Child 由当前执行范围建立调用关系，用户无需操作 ExecutionScope。
 5. **业务持久状态外置**：业务服务负责状态加载、权威提交、历史版本与冲突处理。Context 是显式的不可变调用值；Runtime 可以保存恢复所需的输入、结果和执行事实，但不得成为第二个业务会话状态源。
-6. **公开值可移植**：Message、Context 及其用户子类、ToolDefinition、ToolSpec、ToolTask、ToolResult 与 ExecutionEvent 的扩展数据具有稳定 schema，并由严格、有限、递归冻结的 JSON 值组成，不携带连接、锁、协程、handler、Store、client 或任意活 Python 对象。本地 direct Module 可以使用普通 Python 值；跨进程与恢复只使用已声明并验证的 codec，不使用 pickle 或按 Python 类名恢复对象。
+6. **公开值可移植**：Message 及框架内置变体、Context 及符合契约的用户子类、ToolDefinition、ToolSpec、ToolTask、ToolResult 与 ExecutionEvent 的扩展数据具有稳定 schema，并由严格、有限、递归冻结的 JSON 值组成，不携带连接、锁、协程、handler、Store、client 或任意活 Python 对象。Message 是封闭的 portable value；用户通过稳定的 `kind` 与严格 JSON `data` 表达领域消息，不通过 Python 子类扩展 wire 类型。本地 direct Module 可以使用普通 Python 值；跨进程与恢复只使用已声明并验证的 codec，不使用 pickle 或按 Python 类名恢复对象。
 
 ## 执行与部署
 

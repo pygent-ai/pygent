@@ -292,7 +292,7 @@ parent RUNNING
 
 ## 外部信号受管等待
 
-`wait_external()` 是 Runtime 的通用能力，用于审批、补充参数、验证码或人工选择等短时外部信号；它不把审批语义固化到 Agent 或 Runtime。Module 决定等待的业务含义，并把返回的 JSON 值转换为领域 Message；Runtime 只管理等待身份、反馈匹配、调度和生命周期。
+`wait_external()` 是 Runtime 的通用能力，用于审批、补充参数、验证码或人工选择等短时外部信号；它不把审批语义固化到 Agent 或 Runtime。Module 决定等待的业务含义，并把返回的 JSON 值转换为具有稳定 `kind` 与严格 JSON `data` 的 Message；Runtime 只管理等待身份、反馈匹配、调度和生命周期。
 
 ```python
 decision = await self.wait_external(
@@ -332,7 +332,7 @@ RUNNING
 - 相同 `(kind, key)` 的重复注册必须拒绝；重复、过期或取消后的反馈必须返回明确状态，不能恢复两次。
 - deadline、调用方取消和 immediate shutdown 必须原子注销 waiter；反馈与取消竞态只能有一个结果获胜。
 - 该能力只提供进程存活期间的调度 RESUME，不提供 Worker 故障恢复、调用栈迁移或持久化 continuation。
-- 预期等待达到小时或天时，应返回领域 `ApprovalRequiredMessage` 等结果并结束当前 Execution；外部保存业务状态，反馈到达后使用新 Message 和当前有效 Context 创建新 Execution。
+- 预期等待达到小时或天时，应返回 `Message(kind="approval.requested", data=...)` 等应用领域结果并结束当前 Execution；外部保存业务状态，反馈到达后使用新的领域 Message 和当前有效 Context 创建新 Execution。示例 kind 不属于 Runtime 保留协议。
 
 `LocalRuntime` 已实现 `wait_external()` 与 `deliver_external()` 的进程内有界等待语义。它释放并重新获取 runnable lease，但不持久化 Python continuation；跨进程长等待仍应结束当前 Execution，待反馈后创建新 Execution。
 

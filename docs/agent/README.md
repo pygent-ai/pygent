@@ -46,11 +46,11 @@ Binding 不与 Agent 一一对应，且 direct execution 不创建 Binding。托
 
 ## Handoff 与 human-in-the-loop
 
-Pygent 不为 Agent 冻结一套专用 handoff、审批或终止对象。用户可以声明 `HandoffMessage`、`ApprovalRequiredMessage`、`ApprovalMessage` 等领域 Message，并用普通 Module 决定路由、校验和上下文演进。
+Pygent 不为 Agent 冻结一套专用 handoff、审批或终止对象。Message 是封闭的 portable value；用户通过 `Message(kind="handoff.requested", data=...)`、`Message(kind="approval.requested", data=...)`、`Message(kind="approval.approved", data=...)` 等稳定 kind 与严格 JSON data 表达领域消息，并用普通 Module 决定路由、校验和上下文演进。这些名称是应用领域示例，不是 Pygent 保留的全局消息协议。
 
 已经运行的 `forward()` 不能在任意位置被外部调用者注入新参数；反馈必须到达一个事先声明的等待边界。支持两种模式：
 
-1. **进程内短等待**：自定义 ApprovalModule 创建审批 ID，通过 Runtime 的 [`wait_external()`](../runtime/README.md#外部信号受管等待) 等待；服务收到用户反馈后按审批 ID 完成该等待，`await approval_module(...)` 随后返回 ApprovalMessage。该方式会暂停当前 `forward()` 及同步等待它的 Parent 调用链，持续占用 live execution、Task、调用栈和内存；它不阻塞线程或其他独立 Execution，但要求原进程和调用栈持续存活，只适合有 deadline 和 waiter 上限的短等待，不提供故障恢复。
-2. **跨请求长等待**：Module 返回 ApprovalRequiredMessage 或发布审批事件后结束当前 Execution；业务服务外置保存审批事实和当前 Context。用户反馈到达后，服务构造 ApprovalMessage，并以保存的当前有效 Context 启动新 Execution。这是没有 durable Runtime 时的推荐生产模式。
+1. **进程内短等待**：自定义 ApprovalModule 创建审批 ID，通过 Runtime 的 [`wait_external()`](../runtime/README.md#外部信号受管等待) 等待；服务收到用户反馈后按审批 ID 完成该等待，`await approval_module(...)` 随后返回 `Message(kind="approval.approved", data=...)` 或应用定义的终止消息。该方式会暂停当前 `forward()` 及同步等待它的 Parent 调用链，持续占用 live execution、Task、调用栈和内存；它不阻塞线程或其他独立 Execution，但要求原进程和调用栈持续存活，只适合有 deadline 和 waiter 上限的短等待，不提供故障恢复。
+2. **跨请求长等待**：Module 返回 `Message(kind="approval.requested", data=...)` 或发布审批事件后结束当前 Execution；业务服务外置保存审批事实和当前 Context。用户反馈到达后，服务构造 `Message(kind="approval.approved", data=...)` 或应用定义的终止消息，并以保存的当前有效 Context 启动新 Execution。凡是无法合理限定为秒级或分钟级的等待，都应使用这种生产模式；即使 Runtime 支持 durable recovery，也不表示它能够持久化或迁移 Python coroutine continuation。
 
 自定义 Module 可以表达上述业务语义，但不能仅靠普通 Python `await` 获得跨进程持久挂起、Worker 故障恢复或调用栈迁移能力。handoff 若只是当前执行树中的子 Module 路由，可以在同一 Execution 内完成；若转交后需要独立生命周期，应结束当前 Execution，并由服务创建新的 Root Execution。

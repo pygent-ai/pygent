@@ -364,7 +364,7 @@ handle = await runtime.get_execution_handle(execution_id)
 snapshot = await handle.snapshot()
 
 # 只有恢复控制器才调用；它会验证资格、获取 owner lease 并创建新 attempt。
-recovered = await runtime.recover(execution_id, compatible_bound_module)
+recovered = await runtime.recover(compatible_bound_module, execution_id)
 ```
 
 不要在 `forward()` 中通过另一个 BoundModule 的 `invoke()` 调用子 Agent。那会创建新的 Root 并切断当前父子树；原始、预绑定和远程 Child 都应直接 `await self.child(...)`，由当前 ExecutionScope 建立结构化关系并应用对应 placement。
@@ -506,19 +506,38 @@ except ExecutionAdmissionError:
 用户可以在自定义 Module 中声明一个明确的外部等待点：
 
 ```python
-class ApprovalModule(Module[ActionMessage, ApprovalMessage]):
-    async def forward(self, message: ActionMessage, context: Context):
+class ApprovalModule(Module[Message, Message]):
+    async def forward(self, message: Message, context: Context):
+        if message.kind != "approval.requested":
+            raise ValueError("expected approval.requested")
+        payload = dict(message.data)
+        approval_id = payload.get("approval_id")
+        action = payload.get("action")
+        if not isinstance(approval_id, str) or not approval_id:
+            raise ValueError("approval_id must be a non-empty string")
+        if not isinstance(action, str):
+            raise ValueError("action must be a string")
+
         value = await self.wait_external(
             kind="approval",
-            key=message.approval_id,
-            request={"action": message.action},
+            key=approval_id,
+            request={"action": action},
             timeout=60.0,
         )
 
-        decision = ApprovalMessage(
-            approval_id=message.approval_id,
-            approved=value["approved"],
-            comment=value.get("comment", ""),
+        approved = value.get("approved")
+        comment = value.get("comment", "")
+        if type(approved) is not bool:
+            raise ValueError("approved must be a boolean")
+        if not isinstance(comment, str):
+            raise ValueError("comment must be a string")
+        decision = Message(
+            kind="approval.approved" if approved else "workflow.terminated",
+            data={
+                "approval_id": approval_id,
+                "approved": approved,
+                "comment": comment,
+            },
         )
         return decision, context + decision
 ```
@@ -538,7 +557,7 @@ result = await runtime.deliver_external(
 
 `wait_external()` 会暂停当前 `forward()` 以及同步等待它的 Parent 调用链。Runtime 应让该执行流进入 `WAITING_EXTERNAL` 并释放 runnable lease，因此不会阻塞线程、event loop 或其他独立 Execution；但它仍保留 live execution、owner Task、调用栈、局部变量和 Context 引用。Module 定义本身不会被全局锁住，前提是 Module 不保存请求级可变状态。effective deadline 取 Execution deadline、局部 `timeout` 与 `ExecutionCapacityPolicy.max_external_wait_seconds` 三者中的最早值；即使调用方给出很远的 deadline，挂起 Task 也不能越过部署策略硬上限。deadline、取消或关闭后 waiter 必须原子注销，允许相同 `(kind, key)` 在后续 Execution 中安全复用。
 
-调用方必须把它当作有成本的短等待：每个等待都要有 deadline，Runtime 必须限制 waiter 和 live execution 数；进程退出会丢失 coroutine continuation。无法合理限定为秒级或分钟级的审批应立即返回 `ApprovalRequiredMessage` 并结束当前 Execution，用户反馈到达后再创建新 Execution。
+上述 `approval.requested`、`approval.approved` 与 `workflow.terminated` 是与 Module SDK 示例一致的应用领域 kind，不是 Runtime 保留的全局消息协议。调用方必须把外部等待当作有成本的短等待：每个等待都要有 deadline，Runtime 必须限制 waiter 和 live execution 数；进程退出会丢失 coroutine continuation。无法合理限定为秒级或分钟级的审批应立即返回 `Message(kind="approval.requested", data=...)` 并结束当前 Execution，用户反馈到达后再以 `Message(kind="approval.approved", data=...)` 或其他应用定义的终止消息创建新 Execution。
 
 ## Deadline 与取消
 

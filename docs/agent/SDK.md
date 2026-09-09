@@ -202,43 +202,55 @@ Agent 构造函数不接收当前 Session 或 Store。基础 `Context` 仍适用
 
 ## 自定义 handoff 与审批
 
-handoff 和审批使用普通类型化 Message，不要求 Agent 专用控制协议：
+handoff 和审批使用普通可移植 Message 的稳定 `kind` 与严格 JSON `data`，不要求 Agent 专用控制协议，也不通过 Python 子类扩展 Message。以下 kind 与 Module SDK 示例一致，但仍由应用拥有，不是 Pygent 保留的全局消息协议：
 
 ```python
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ApprovalRequiredMessage(Message):
-    approval_id: str
-    action: str
+approval_requested = Message(
+    kind="approval.requested",
+    data={"approval_id": "approval-123", "action": "publish release"},
+)
 
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ApprovalMessage(Message):
-    approval_id: str
-    approved: bool
+approval_approved = Message(
+    kind="approval.approved",
+    data={"approval_id": "approval-123", "approved": True},
+)
 ```
 
 进程内短等待写法如下；`wait_external()` 由 Runtime ExecutionScope 提供，用户不覆盖它：
 
 ```python
-class ApprovalModule(Module[ApprovalRequiredMessage, ApprovalMessage]):
-    async def forward(self, message, context):
+class ApprovalModule(Module[Message, Message]):
+    async def forward(self, message: Message, context: Context):
+        if message.kind != "approval.requested":
+            raise ValueError("expected approval.requested")
+        payload = dict(message.data)
+        approval_id = payload.get("approval_id")
+        action = payload.get("action")
+        if not isinstance(approval_id, str) or not approval_id:
+            raise ValueError("approval_id must be a non-empty string")
+        if not isinstance(action, str):
+            raise ValueError("action must be a string")
+
         value = await self.wait_external(
             kind="approval",
-            key=message.approval_id,
-            request={"action": message.action},
+            key=approval_id,
+            request={"action": action},
             timeout=60.0,
         )
 
-        decision = ApprovalMessage(
-            approval_id=message.approval_id,
-            approved=value["approved"],
+        approved = value.get("approved")
+        if type(approved) is not bool:
+            raise ValueError("approved must be a boolean")
+        decision = Message(
+            kind="approval.approved" if approved else "workflow.terminated",
+            data={"approval_id": approval_id, "approved": approved},
         )
         return decision, context + decision
 ```
 
 外部反馈按 `approval_id` 通过 Runtime 或共享信号适配器完成等待。`wait_external()` 会暂停当前 `forward()` 和同步等待它的 Parent Agent；虽然不会阻塞线程、event loop 或其他独立 Execution，但会持续保留 live execution、Task、调用栈、局部变量和内存。它必须同时受当前 Execution deadline 与局部 `timeout` 限制，effective deadline 取两者中更早者；如果两者都没有提供有限值，Runtime 必须拒绝注册 waiter。Binding 还必须限制 waiter 与 live execution 数，该能力只用于秒级或分钟级短等待。
 
-长等待应返回 ApprovalRequiredMessage 并结束当前 Execution，服务保存 Context；反馈到达后，以 ApprovalMessage 和保存的当前有效 Context 创建新 Execution。Execution Inbox 可以在短时运行过程中向选择消费该 `kind` 的 Module 追加 portable 输入，但它不保存 Python 调用栈，也不替代长等待的新 Execution。完整调度与竞态要求见 [Runtime 外部信号受管等待](../runtime/README.md#外部信号受管等待)。
+长等待应返回 `Message(kind="approval.requested", data=...)` 并结束当前 Execution，服务保存 Context；反馈到达后，以 `Message(kind="approval.approved", data=...)` 或其他应用定义的终止消息和保存的当前有效 Context 创建新 Execution。Execution Inbox 可以在短时运行过程中向选择消费该 `kind` 的 Module 追加 portable 输入，但它不保存 Python 调用栈，也不替代长等待的新 Execution。完整调度与竞态要求见 [Runtime 外部信号受管等待](../runtime/README.md#外部信号受管等待)。
 
 ## ReAct 运行中 Projection Operation
 

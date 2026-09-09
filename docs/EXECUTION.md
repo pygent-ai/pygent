@@ -25,7 +25,7 @@ Every public `ExecutionEvent` is strict JSON and contains `schema_version`, glob
 
 Finalization appends all terminal span events, the one Execution terminal event, the frozen `ExecutionOutcome`, terminal snapshot, and `terminal_sequence` atomically. A subscription ends only after its cursor has yielded `terminal_sequence`. Reading a terminal status is never sufficient to stop a live or durable subscription.
 
-`runtime.get_execution_handle(execution_id)` attaches to an existing execution and never creates an attempt. `runtime.recover(execution_id, ...)` is a separate privileged operation that validates recovery eligibility, obtains a fenced owner lease, and creates a new `attempt_id`.
+`runtime.get_execution_handle(execution_id)` attaches to an existing execution and never creates an attempt. On a Runtime implementation that explicitly supports durable recovery, the separate privileged operation—for example, `LocalRuntime.recover(compatible_bound_module, execution_id)`—validates recovery eligibility, obtains a fenced owner lease, and creates a new `attempt_id`. The base `Runtime` protocol does not imply that every implementation supports recovery.
 
 Remote events are imported into the parent execution and receive a new parent-stream `sequence`. Their `event_id` is preserved and `data` includes `origin_execution_id` and `origin_sequence`, allowing reconnect deduplication without claiming global clock ordering.
 
