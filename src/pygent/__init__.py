@@ -50,6 +50,7 @@ from .llm import (
     ModelSpec,
     ProviderCatalog,
     ProviderPreset,
+    ProviderProtocolPreset,
     RetryPolicy,
 )
 from .runtime.context_codec import ContextCodec
@@ -98,6 +99,7 @@ __all__ = [
     "Module",
     "ProviderCatalog",
     "ProviderPreset",
+    "ProviderProtocolPreset",
     "PygentAgent",
     "PygentAgentContext",
     "ReActBudgetExceeded",

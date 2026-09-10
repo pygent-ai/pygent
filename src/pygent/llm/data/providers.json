@@ -3,28 +3,60 @@
   "providers": {
     "deepseek": {
       "display_name": "DeepSeek",
-      "protocols": ["openai_chat_completions"],
       "default_protocol": "openai_chat_completions",
-      "base_url": "https://api.deepseek.com",
-      "authentication": "bearer",
-      "api_key_env": "DEEPSEEK_API_KEY",
-      "provider_options_schema": {
-        "type": "object",
-        "properties": {
-          "thinking": {
+      "protocols": {
+        "openai_chat_completions": {
+          "protocol": "openai_chat_completions",
+          "base_url": "https://api.deepseek.com",
+          "authentication": "bearer",
+          "api_key_env": "DEEPSEEK_API_KEY",
+          "provider_options_schema": {
             "type": "object",
             "properties": {
-              "type": {"type": "string", "enum": ["enabled", "disabled"]}
+              "thinking": {
+                "type": "object",
+                "properties": {
+                  "type": {"type": "string", "enum": ["enabled", "disabled"]}
+                },
+                "required": ["type"],
+                "additionalProperties": false
+              },
+              "reasoning_effort": {
+                "type": "string",
+                "enum": ["low", "high", "max"]
+              }
             },
-            "required": ["type"],
-            "additionalProperties": false
-          },
-          "reasoning_effort": {
-            "type": "string",
-            "enum": ["low", "high", "max"]
+            "additionalProperties": true
           }
         },
-        "additionalProperties": true
+        "anthropic_messages": {
+          "protocol": "anthropic_messages",
+          "base_url": "https://api.deepseek.com/anthropic",
+          "authentication": "bearer",
+          "api_key_env": "DEEPSEEK_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "anthropic": {
+      "display_name": "Anthropic",
+      "default_protocol": "anthropic_messages",
+      "protocols": {
+        "anthropic_messages": {
+          "protocol": "anthropic_messages",
+          "base_url": "https://api.anthropic.com",
+          "authentication": "bearer",
+          "api_key_env": "ANTHROPIC_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
       }
     }
   }

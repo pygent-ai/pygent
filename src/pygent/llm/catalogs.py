@@ -22,7 +22,6 @@ from .configuration import (
     _exact_fields,
     _non_empty,
     _object,
-    _string_tuple,
     _validated_url,
 )
 
@@ -41,37 +40,34 @@ def _schema_version(value: Mapping[str, object], label: str) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class ProviderPreset:
-    provider: str
-    display_name: str
-    protocols: tuple[str, ...]
-    default_protocol: str
+class ProviderProtocolPreset:
+    protocol: str
     base_url: str
     authentication: str
     api_key_env: str | None
     provider_options_schema: FrozenJsonObject
 
     @classmethod
-    def from_mapping(cls, provider: str, value: Mapping[str, object]) -> ProviderPreset:
+    def from_mapping(
+        cls, protocol: str, value: Mapping[str, object]
+    ) -> ProviderProtocolPreset:
         _exact_fields(
             value,
             frozenset(
                 {
-                    "display_name",
-                    "protocols",
-                    "default_protocol",
+                    "protocol",
                     "base_url",
                     "authentication",
                     "api_key_env",
                     "provider_options_schema",
                 }
             ),
-            "provider preset",
+            "provider protocol preset",
         )
-        protocols = _string_tuple(value["protocols"], "provider protocols")
-        default_protocol = _non_empty(value["default_protocol"], "default_protocol")
-        if default_protocol not in protocols:
-            raise ValueError("default_protocol must be present in protocols")
+        protocol = _non_empty(protocol, "protocol")
+        declared_protocol = _non_empty(value["protocol"], "protocol")
+        if declared_protocol != protocol:
+            raise ValueError("provider protocol preset protocol must match its key")
         authentication = _non_empty(value["authentication"], "authentication")
         if authentication not in {"bearer", "none"}:
             raise ValueError("authentication must be bearer or none")
@@ -82,14 +78,46 @@ class ProviderPreset:
             raise ValueError("api_key_env must be null when authentication is none")
         schema = _object(value["provider_options_schema"], "provider_options_schema")
         return cls(
-            provider=_non_empty(provider, "provider"),
-            display_name=_non_empty(value["display_name"], "display_name"),
-            protocols=protocols,
-            default_protocol=default_protocol,
+            protocol=protocol,
             base_url=_validated_url(value["base_url"], "base_url"),
             authentication=authentication,
             api_key_env=cast(str | None, api_key_env),
             provider_options_schema=freeze_json_object(schema),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderPreset:
+    provider: str
+    display_name: str
+    protocols: Mapping[str, ProviderProtocolPreset]
+    default_protocol: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "protocols", MappingProxyType(dict(self.protocols)))
+
+    @classmethod
+    def from_mapping(cls, provider: str, value: Mapping[str, object]) -> ProviderPreset:
+        _exact_fields(
+            value,
+            frozenset({"display_name", "protocols", "default_protocol"}),
+            "provider preset",
+        )
+        raw_protocols = _object(value["protocols"], "protocols")
+        protocols = {
+            protocol: ProviderProtocolPreset.from_mapping(
+                protocol, _object(item, "provider protocol preset")
+            )
+            for protocol, item in raw_protocols.items()
+        }
+        default_protocol = _non_empty(value["default_protocol"], "default_protocol")
+        if default_protocol not in protocols:
+            raise ValueError("default_protocol must be present in protocols")
+        return cls(
+            provider=_non_empty(provider, "provider"),
+            display_name=_non_empty(value["display_name"], "display_name"),
+            protocols=protocols,
+            default_protocol=default_protocol,
         )
 
 
@@ -241,4 +269,5 @@ __all__ = [
     "ModelCapabilityCatalog",
     "ProviderCatalog",
     "ProviderPreset",
+    "ProviderProtocolPreset",
 ]

@@ -19,6 +19,7 @@ from .catalogs import (
     ModelCapabilityCatalog,
     ProviderCatalog,
     ProviderPreset,
+    ProviderProtocolPreset,
 )
 from .configuration import (
     CredentialRef,
@@ -125,6 +126,7 @@ __all__ = [
     "OpenAICompatibleClient",
     "ProviderCatalog",
     "ProviderPreset",
+    "ProviderProtocolPreset",
     "RetryPolicy",
     "openai_compatible_adapters",
 ]
