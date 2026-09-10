@@ -53,7 +53,7 @@ Root 调用使用 `invoke()` 或 `stream()`；只有 `forward()` 内的 Child �
 
 模型由三个部分组成：
 
-- `ModelGroupConfig` 声明 route 和 fallback 顺序；
+- `ModelEntry` 声明一个完整模型，`ModelGroup.models` 的顺序就是 fallback 顺序；
 - `RetryPolicy` 与 `GenerationConfig` 声明稳定策略；
 - `ModelCallLayer` 把这些声明变成可组合的 Module。
 
@@ -150,7 +150,7 @@ Agent 图不需要修改，只替换 Root 入口：
 async with agent.stream(message, context) as stream:
     async for event in stream:
         if event.kind == "model.output.reset":
-            reset_rendered_output(event.data["route_id"], event.data["attempt"])
+            reset_rendered_output(event.data["model_key"], event.data["attempt"])
         elif event.kind == "model.text.delta":
             render(event.data["text"])
     answer, next_context = await stream.final_result()
@@ -219,11 +219,7 @@ finally:
 当 Agent 定义要先于具体模型部署创建时，声明 deferred ModelGroup：
 
 ```python
-requirement = ModelGroupConfig.deferred(
-    name="tutorial-assistant",
-    max_concurrency=8,
-    capacity_key="tutorial-model",
-)
+requirement = ModelGroup.deferred(name="tutorial-assistant")
 agent = build_agent(requirement)
 bound = binding.bind(agent)
 group = bound.model_groups.get(requirement)
@@ -234,15 +230,13 @@ group = bound.model_groups.get(requirement)
 ```python
 await group.ensure_profile(
     profile="quick",
-    routes=(ModelRoute("primary", "openai", "fast-model"),),
-    fallback=FallbackPolicy(("primary",)),
+    models=config.model_groups["quick"].models,
     invoker=quick_invoker,
     deadline=monotonic() + 30.0,
 )
 await group.ensure_profile(
     profile="quality",
-    routes=(ModelRoute("primary", "openai", "quality-model"),),
-    fallback=FallbackPolicy(("primary",)),
+    models=config.model_groups["quality"].models,
     invoker=quality_invoker,
     deadline=monotonic() + 30.0,
 )
@@ -300,7 +294,7 @@ profile 在 admission 时被固定；执行中的 retry/fallback 不会重新读
 ## 下一步
 
 - [Agent SDK](SDK.md)：自定义组合、direct/managed 与 handoff。
-- [LLM SDK](../llm/SDK.md)：route、retry、fallback、事件与动态模型组。
+- [LLM SDK](../llm/SDK.md)：模型配置、retry、fallback、事件与动态模型组。
 - [Tool SDK](../tool/SDK.md)：Python 工具、授权、detach 与 Agent-backed Tool。
 - [Runtime SDK](../runtime/SDK.md)：Binding、父子执行、并发、恢复与 Worker。
 - [Execution contract](../EXECUTION.md)：统一执行和事件语义。

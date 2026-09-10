@@ -197,7 +197,7 @@ async with agent.stream(message, context) as stream:
 async with bound.stream(message, context) as stream:
     async for event in stream:
         if event.kind == "model.output.reset":
-            reset_rendered_output(event.data["route_id"], event.data["attempt"])
+            reset_rendered_output(event.data["model_key"], event.data["attempt"])
         elif event.kind == "model.text.delta":
             print(event.data["text"], end="")
 

@@ -63,8 +63,7 @@ assistant = binding.model_groups.get(assistant_group)
 
 snapshot = await assistant.ensure_profile(
     profile="balanced",
-    routes=balanced_routes,
-    fallback=balanced_fallback,
+    models=balanced_models,
     invoker=balanced_invoker,
     resource_ref=balanced_resource_ref,
     make_default=True,
@@ -318,7 +317,7 @@ message, context = await bound.invoke(
 )
 ```
 
-`model_calls` 的 key 必须对应 ExecutionPlan 中声明的延迟模型组。它不能引入新的模型组，也不能覆盖 route、credential、client、retry 或 fallback。Runtime 在 admission 时把 profile 名称解析为精确快照，并把选择与实际生成参数纳入 effect identity；执行和 retry 期间不再查询当前默认值。应用若要会话粘性，应自行在会话状态中保存 profile 名称，并在各次 Root 调用中重复传入，而不是修改 Agent 或创建会话私有 ModelGroup。
+`model_calls` 的 key 必须对应 ExecutionPlan 中声明的延迟模型组。它不能引入新的模型组，也不能覆盖模型语义、credential、client、retry 或 fallback。Runtime 在 admission 时把 profile 名称解析为精确快照，并把选择与实际生成参数纳入 effect identity；执行和 retry 期间不再查询当前默认值。应用若要会话粘性，应自行在会话状态中保存 profile 名称，并在各次 Root 调用中重复传入，而不是修改 Agent 或创建会话私有 ModelGroup。
 
 流式观察不创建另一套调度语义：
 

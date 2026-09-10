@@ -18,7 +18,7 @@
 | durable Tool Job occurrence 身份、原子 admission、owner claim、恢复资格与计划/版本/capability 校验 | `tests/runtime/test_durable_tool_jobs.py`、`tests/runtime/test_durable_tool_tasks.py`、`tests/runtime/test_http_worker.py` |
 | REQUIRED durability 的逐节点 recovery/effect 资格与明确降级报告 | `tests/runtime/test_durability_eligibility.py` |
 | 内置与用户 Infrastructure Module 共用 effect/resource/resolver SPI | `tests/runtime/test_public_infrastructure.py` |
-| LLM route/retry/fallback、托管有限 deadline、stream/usage/工具定义投影 | `tests/llm/`、`tests/runtime/test_execution_plan.py` |
+| LLM model/retry/fallback、托管有限 deadline、stream/usage/工具定义投影 | `tests/llm/`、`tests/runtime/test_execution_plan.py` |
 | Provider 取消清理有界、`OUTCOME_UNKNOWN` fail-closed、client 隔离与显式取消/managed deadline 终态 | `tests/llm/test_invoker.py`、`tests/performance/test_model_retry.py`、`tests/runtime/` |
 | Tool 定义、授权、执行、顺序、detach、副作用不确定性 | `tests/tool/` |
 | MCP stdio/SSE 适配与错误边界 | `tests/mcp/` |

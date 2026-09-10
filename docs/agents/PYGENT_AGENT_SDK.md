@@ -328,7 +328,7 @@ async with handle.subscribe() as events:
             )
 ```
 
-事件包含 `route_id`、`attempt`、唯一 `request_id`、稳定 `request_digest` 和完整
+事件包含 `model_key`、`attempt`、唯一 `request_id`、稳定 `request_digest` 和完整
 provider-neutral request。Request 包含 provider/model、System Prompt、历史消息、current、
 effective tools、有效 generation settings 和 projection revision。
 

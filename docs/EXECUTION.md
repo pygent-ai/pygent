@@ -39,7 +39,7 @@ Model events use a closed vocabulary. Every logical call emits `model.started` a
 
 Terminal model failures expose Provider-neutral diagnostics through `ModelCallError` and its portable `ExecutionFailure.details`. Each failed attempt may retain a closed sanitized `reason_code` and a validated numeric `http_status`; these values survive managed effects, durable replay and Worker transport. Provider response messages, arbitrary Provider codes or headers, raw bodies, credentials, endpoints and internal exception chains never cross that boundary. The fixed `model.*` event payloads remain aggregate lifecycle observations and do not carry Provider diagnostics.
 
-`model.usage` is an attempt-scoped cumulative snapshot. Its fixed counters are `input_tokens`, `output_tokens`, `total_tokens`, `cached_input_tokens`, and `reasoning_tokens`; unavailable counters are `null`. Consumers take the last snapshot for one `(span_id, route_id, attempt)` and sum final snapshots across attempts. Provider-specific usage objects never cross this boundary.
+`model.usage` is an attempt-scoped cumulative snapshot. Its fixed counters are `input_tokens`, `output_tokens`, `total_tokens`, `cached_input_tokens`, and `reasoning_tokens`; unavailable counters are `null`. Consumers take the last snapshot for one `(span_id, model_key, attempt)` and sum final snapshots across attempts. Provider-specific usage objects never cross this boundary.
 
 The successful attempt's available canonical counters are also frozen onto the returned `AIMessage.usage` so ordinary Module composition and durable replay can use request accounting without consuming their own event stream. Adapters and request snapshots never project historical message usage back to a Provider.
 
