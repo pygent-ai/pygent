@@ -30,7 +30,7 @@ def model_entry(
     ].materialize(context_tokens=1_000_000, max_output_tokens=384_000)
     capabilities = replace(
         capabilities,
-        streaming=ModelStreamingCapabilities(text=streaming),
+        streaming=ModelStreamingCapabilities(output=("text",) if streaming else ()),
     )
     return ModelEntry(
         name,
@@ -94,7 +94,9 @@ class _ConfiguredInvoker:
             if mode is not None:
                 capabilities = replace(
                     entry.spec.capabilities,
-                    streaming=ModelStreamingCapabilities(text=mode.streaming),
+                    streaming=ModelStreamingCapabilities(
+                        output=("text",) if mode.streaming else ()
+                    ),
                 )
                 entry = replace(entry, spec=replace(entry.spec, capabilities=capabilities))
             models.append(entry)

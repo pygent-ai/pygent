@@ -16,6 +16,7 @@ from pygent.llm import (
     ModelEntry,
     ModelErrorKind,
     ModelGroup,
+    ModelLimits,
     ModelSpec,
     ModelStreamingCapabilities,
     OpenAICompatibleAdapter,
@@ -65,15 +66,20 @@ def _entry(
     model_id: str,
     *,
     preset: str = "text",
-    max_output_tokens: int = 4096,
+    max_output_tokens: int | None = 4096,
+    streaming_output: tuple[str, ...] = (),
 ) -> ModelEntry:
     capabilities = CapabilityPresetCatalog.builtin().presets[preset].materialize(
         context_tokens=32_768,
-        max_output_tokens=max_output_tokens,
+        max_output_tokens=max_output_tokens or 4096,
     )
     capabilities = replace(
         capabilities,
-        streaming=ModelStreamingCapabilities(text=False),
+        streaming=ModelStreamingCapabilities(output=streaming_output),
+        limits=ModelLimits(
+            context_tokens=32_768,
+            max_output_tokens=max_output_tokens,
+        ),
     )
     return ModelEntry(
         name,
@@ -227,3 +233,38 @@ async def test_matching_capabilities_emit_no_warning() -> None:
     async with execution.subscribe() as events:
         captured = [event async for event in events]
     assert "model.capability.warning" not in [event.kind for event in captured]
+
+
+@pytest.mark.asyncio
+async def test_invoker_uses_non_streaming_transport_without_text_streaming() -> None:
+    client = FakeClient([_completion("non-streamed")])
+    entry = _entry(
+        "primary",
+        "model",
+        max_output_tokens=None,
+        streaming_output=(),
+    )
+    invoker = DefaultModelInvoker(
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
+        clients={"primary": client},
+    )
+
+    execution = invoker.execute(
+        model_group=ModelGroup("assistant", (entry,)),
+        retry_policy=RetryPolicy(),
+        generation=GenerationConfig(max_output_tokens=128),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    )
+    result = await execution.result()
+    async with execution.subscribe() as events:
+        captured = [event async for event in events]
+
+    assert result.message.content == "non-streamed"
+    warnings = [
+        event for event in captured if event.kind == "model.capability.warning"
+    ]
+    assert all(
+        "limits.max_output_tokens" not in event.data["missing_capabilities"]
+        for event in warnings
+    )

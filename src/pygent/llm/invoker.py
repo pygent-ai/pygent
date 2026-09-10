@@ -476,7 +476,7 @@ class DefaultModelInvoker:
         idle_timeout_seconds: float | None,
         cancel_event: asyncio.Event | None,
     ) -> AsyncIterator[ModelProviderStreamPart]:
-        if model.capabilities.streaming.text:
+        if "text" in model.capabilities.streaming.output:
             decoder = adapter.create_stream_decoder(request)
             owner = self._open_stream_owner(client, model, payload)
             try:
@@ -618,6 +618,7 @@ def _missing_capabilities(
         missing.append("structured_output.json_schema")
     if (
         generation.max_output_tokens is not None
+        and capabilities.limits.max_output_tokens is not None
         and generation.max_output_tokens > capabilities.limits.max_output_tokens
     ):
         missing.append("limits.max_output_tokens")

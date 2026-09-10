@@ -7,7 +7,7 @@
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {"input": ["text"], "output": ["text"]},
-        "streaming": {"text": true},
+        "streaming": {"output": ["text"]},
         "tools": {
           "call": true,
           "choice": ["none", "auto", "required", "named"],
@@ -24,7 +24,7 @@
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {"input": ["text"], "output": ["text"]},
-        "streaming": {"text": true},
+        "streaming": {"output": ["text"]},
         "tools": {
           "call": true,
           "choice": ["none", "auto", "required", "named"],
@@ -41,7 +41,7 @@
       "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {"input": ["text"], "output": ["text"]},
-        "streaming": {"text": true},
+        "streaming": {"output": ["text"]},
         "tools": {
           "call": true,
           "choice": ["none", "auto", "required", "named"],
@@ -58,7 +58,7 @@
       "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {"input": ["text"], "output": ["text"]},
-        "streaming": {"text": true},
+        "streaming": {"output": ["text"]},
         "tools": {
           "call": true,
           "choice": ["none", "auto", "required", "named"],
@@ -75,7 +75,7 @@
       "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {"input": ["text", "image"], "output": ["text"]},
-        "streaming": {"text": true},
+        "streaming": {"output": ["text"]},
         "tools": {
           "call": true,
           "choice": ["none", "auto", "required", "named"],
@@ -92,7 +92,7 @@
       "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {"input": ["text", "image"], "output": ["text"]},
-        "streaming": {"text": true},
+        "streaming": {"output": ["text"]},
         "tools": {
           "call": true,
           "choice": ["none", "auto", "required", "named"],
@@ -109,7 +109,7 @@
       "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {"input": ["text", "image"], "output": ["text"]},
-        "streaming": {"text": true},
+        "streaming": {"output": ["text"]},
         "tools": {
           "call": true,
           "choice": ["none", "auto", "required", "named"],
@@ -126,7 +126,7 @@
       "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {"input": ["text", "image"], "output": ["text"]},
-        "streaming": {"text": true},
+        "streaming": {"output": ["text"]},
         "tools": {
           "call": true,
           "choice": ["none", "auto", "required", "named"],

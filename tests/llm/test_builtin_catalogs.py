@@ -61,7 +61,7 @@ def test_builtin_model_capabilities_use_provider_model_protocol_key() -> None:
         ("deepseek", "deepseek-v4-flash", "openai_chat_completions")
     ]
     assert capabilities.modalities.input == ("text",)
-    assert capabilities.streaming.text
+    assert capabilities.streaming.output == ("text",)
     assert capabilities.tools.call
     assert capabilities.structured_output.json_object
     assert not capabilities.structured_output.json_schema
@@ -88,7 +88,7 @@ def test_builtin_anthropic_capabilities_are_complete(
 
     assert capabilities.modalities.input == ("text", "image")
     assert capabilities.modalities.output == ("text",)
-    assert capabilities.streaming.text
+    assert capabilities.streaming.output == ("text",)
     assert capabilities.tools.call
     assert capabilities.tools.choice == ("none", "auto", "required", "named")
     assert capabilities.tools.parallel
@@ -129,7 +129,7 @@ def test_capability_presets_expand_to_complete_capabilities(
 
     assert capabilities.modalities.input == ("text",)
     assert capabilities.modalities.output == ("text",)
-    assert capabilities.streaming.text
+    assert capabilities.streaming.output == ("text",)
     assert capabilities.structured_output.json_object is structured
     assert capabilities.structured_output.json_schema is structured
     assert capabilities.tools.call is tools

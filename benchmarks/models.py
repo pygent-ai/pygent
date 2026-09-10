@@ -481,7 +481,7 @@ def build_resources(
     ].materialize(context_tokens=128_000, max_output_tokens=8_192)
     capabilities = ModelCapabilities(
         modalities=capabilities.modalities,
-        streaming=ModelStreamingCapabilities(text=streaming),
+        streaming=ModelStreamingCapabilities(output=("text",) if streaming else ()),
         tools=capabilities.tools,
         structured_output=capabilities.structured_output,
         reasoning=capabilities.reasoning,
