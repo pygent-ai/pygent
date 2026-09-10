@@ -76,6 +76,32 @@ jobs:
           name: pygent-sdist
           path: dist/*.tar.gz
 
+  publish-catalog-snapshots:
+    needs: verify-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare catalog snapshots
+        shell: bash
+        run: |
+          mkdir release-catalogs
+          cp src/pygent/llm/data/providers.json release-catalogs/
+          cp src/pygent/llm/data/model_capabilities.json release-catalogs/
+          cp src/pygent/llm/data/capability_presets.json release-catalogs/
+          cd release-catalogs
+          sha256sum *.json > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: catalog-snapshots
+          path: release-catalogs/*
+      - name: Attach catalogs to GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" release-catalogs/* --clobber
+
   verify-wheels:
     needs: build-wheels
     strategy:
