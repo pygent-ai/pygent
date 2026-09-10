@@ -16,7 +16,7 @@ Pygent 把模型信息分成两个不可混合的投影：
 每个 `ModelSpec` 必须携带完整的 `ModelCapabilities`：
 
 - `modalities.input`、`modalities.output`；
-- `streaming.text`；
+- `streaming.output`；
 - `tools.call`、`tools.choice`、`tools.parallel`；
 - `structured_output.json_object`、`structured_output.json_schema`；
 - `reasoning.supported`、`reasoning.controllable`；
@@ -26,7 +26,7 @@ Pygent 提供 `ProviderCatalog`、`ModelCapabilityCatalog` 和 `CapabilityPreset
 
 Capabilities 不用于自动选模型。调用与声明不一致时，框架发出 `model.capability.warning`，但仍调用用户指定的模型。第一版检查文本输入/输出、工具调用、显式 `tool_choice`、JSON Schema 和输出 token 上限。匹配路径不构造警告事件；retry 不重复警告，fallback 只在实际进入对应模型时检查。
 
-`capabilities.streaming.text` 直接决定使用 streaming 或 non-streaming transport，不存在第二份 transport capability 配置。
+模态使用 `text`、`image`、`audio`、`video` 四个封闭值，`streaming.output` 必须是 `modalities.output` 的子集。`limits` 中无法由官方资料确认的值保存为 `null`。当前文本调用检查 `"text" in capabilities.streaming.output` 来决定 streaming 或 non-streaming transport，不存在第二份 transport capability 配置。
 
 ## Provider、protocol 与连接解耦
 
@@ -37,13 +37,13 @@ Provider 是开放字符串。Provider preset 只提供 UI/配置默认值；Ada
 - `OPENAI_CHAT_COMPLETIONS`：`openai_chat_completions`；
 - `ANTHROPIC_MESSAGES`：`anthropic_messages`。
 
-`ModelSpec.protocol` 仍保存开放字符串，第三方 Adapter 可以定义自己的 protocol。内置 Provider 目录按 protocol 提供连接默认值：DeepSeek 官方同时提供 OpenAI Chat Completions 与 Anthropic Messages endpoint，Anthropic 官方提供 Messages endpoint。目录只提供 base URL、credential 环境变量名和表单 schema，不提供或读取真实 API key。
+`ModelSpec.protocol` 仍保存开放字符串，第三方 Adapter 可以定义自己的 protocol。内置 Provider 目录按 protocol 提供连接默认值：DeepSeek 官方和 Alibaba Cloud Token Plan 各自提供 OpenAI Chat Completions 与 Anthropic Messages endpoint，Anthropic 官方提供 Messages endpoint。目录只提供 base URL、credential 环境变量名和表单 schema，不提供或读取真实 API key。
 
-内置能力目录按 `(provider, model_id, protocol)` 区分同一模型的不同服务与协议。DeepSeek 收录 `deepseek-v4-flash`、`deepseek-v4-pro` 的两种协议条目；Anthropic 收录 `claude-fable-5-1`、`claude-opus-5`、`claude-sonnet-5` 和 `claude-haiku-4-5-20251001`。
+内置能力目录按 `(provider, model_id, protocol)` 区分同一模型的不同服务与协议。DeepSeek 收录 `deepseek-v4-flash`、`deepseek-v4-pro` 的两种协议条目；Anthropic 收录四个官方模型；Alibaba Cloud Token Plan 收录 18 个官方 Model ID 和 27 条分协议记录。其中 OpenAI Chat Completions 与 Anthropic Messages 可由内置 Adapter 执行，五个 DashScope 图像、视频、音频 protocol 只进入目录，第一版没有内置 Adapter。
 
 Provider 私有生成语义放在 `ModelSpec.provider_options`。连接、secret、认证头、代理、TLS、retry、deadline、stream 开关和框架保留请求字段不能放入其中。第三方 Adapter 只有实现 `ModelProviderSpecValidator` 才能接受非空选项。
 
-Anthropic Messages 请求必须由 `GenerationConfig.max_output_tokens` 提供正整数，没有框架默认值。需要工具循环回传的 Provider 私有 thinking/reasoning 状态保存在 `AIMessage.continuation`；该值只交给 Provider 与 protocol 同时匹配的后续请求，不进入公开事件、请求摘要或 `repr`。
+Anthropic Messages 请求必须由 `GenerationConfig.max_output_tokens` 提供正整数，没有框架默认值。需要工具循环回传的 Provider 私有 thinking/reasoning 状态保存在 `AIMessage.continuation`；该值只交给 Provider 与 protocol 同时匹配的后续请求，不进入公开事件、请求摘要或 `repr`。OpenAI Chat Completions 不维护 Provider 白名单：响应实际携带合法 `reasoning_content` 时才创建对应 continuation。
 
 ## Layer 与执行
 

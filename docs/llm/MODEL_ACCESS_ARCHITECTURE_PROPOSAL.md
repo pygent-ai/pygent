@@ -42,7 +42,7 @@ Provider preset、模型能力目录和协议 Adapter 相互独立：
 
 多个 Provider 可以使用同一个 protocol 和 Adapter。模型组、retry 和 fallback 不解释 Provider 协议；`ModelInvoker` 选中 `ModelSpec` 后，由对应 protocol 的 Adapter 完成实际调用。
 
-内置协议枚举提供 `openai_chat_completions` 与 `anthropic_messages` 两个精确 wire contract，但 `ModelSpec.protocol` 继续接受开放字符串。内置 Provider preset 包含 DeepSeek 官方的两种协议入口，以及 Anthropic 官方 Messages 入口。同一个 DeepSeek 模型可以由用户显式选择任一协议，Pygent 不自动探测或切换。
+内置协议枚举提供 `openai_chat_completions` 与 `anthropic_messages` 两个精确 wire contract，但 `ModelSpec.protocol` 继续接受开放字符串。内置 Provider preset 包含 DeepSeek 官方与 Alibaba Cloud Token Plan 的两种协议入口，以及 Anthropic 官方 Messages 入口。同一 Provider 上的模型可以由用户显式选择其公开的协议，Pygent 不自动探测或切换。Token Plan 的图像、视频和音频目录使用开放的 `dashscope_*` protocol；第一版只提供目录记录，不提供这些协议的内置 Adapter。
 
 Provider preset 和模型能力目录使用两级发布：
 
@@ -71,7 +71,7 @@ capabilities:
     input: [text]
     output: [text]
   streaming:
-    text: true
+    output: [text]
   tools:
     call: true
     choice: [none, auto, required, named]
@@ -86,6 +86,8 @@ capabilities:
     context_tokens: 131072
     max_output_tokens: 8192
 ```
+
+模态取值封闭为 `text`、`image`、`audio`、`video`，`streaming.output` 必须是输出模态的子集。两个 limits 在无法由官方资料确认时保存为 `null`。
 
 ## 4. 多模型只组合 ModelSpec
 

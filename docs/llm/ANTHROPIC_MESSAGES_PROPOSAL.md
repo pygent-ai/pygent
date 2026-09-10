@@ -181,11 +181,11 @@ DeepSeek 通过 `anthropic_messages` 返回的 thinking block 使用相同布局
 
 ### OpenAI-compatible continuation
 
-DeepSeek 的 OpenAI-compatible thinking 使用：
+OpenAI Chat Completions 响应实际包含合法 `reasoning_content` 时，Adapter 使用当前模型的 Provider；例如：
 
 ```python
 ModelContinuation(
-    provider="deepseek",
+    provider="aliyun_token_plan",
     protocol="openai_chat_completions",
     data={
         "version": 1,
@@ -194,13 +194,13 @@ ModelContinuation(
 )
 ```
 
-后续工具调用请求将 `reasoning_content` 放回对应 assistant message。官方 OpenAI Chat Completions 响应不生成该 continuation。
+后续工具调用请求只在 Provider 与 protocol 同时匹配时将 `reasoning_content` 放回对应 assistant message。Adapter 不维护 Provider 白名单；字段不存在时不生成 continuation，字段存在但不是字符串时拒绝响应。
 
 ## 有状态流解码
 
 Adapter 的流解析改为每次模型调用创建独立的流解码器。解码器持有单次调用的可变解析状态；Adapter 本身不保存调用状态，因此仍可并发复用。
 
-- OpenAI-compatible 解码器保持现有文本、工具、usage 和结束事件行为，并为 DeepSeek 累积 `reasoning_content`；
+- OpenAI-compatible 解码器保持现有文本、工具、usage 和结束事件行为，并在响应实际携带时累积 `reasoning_content`；
 - Anthropic 解码器组合 content block、thinking delta、signature delta、tool input JSON delta、usage 和终止事件；
 - 解码器在 block 或消息结构不完整时返回现有 invalid-response 错误。
 
@@ -260,7 +260,7 @@ DeepSeek 的既有模型能力保持不变，并为相同 model ID 增加 `anthr
 - transport 抽取前后的 OpenAI-compatible 请求、SSE、TLS、超时、关闭和错误行为一致；
 - Anthropic 非流式与流式文本、system、tools、tool choice、tool result、structured output、thinking、usage、错误和不完整流；
 - Anthropic `max_output_tokens` 的必填约束和 provider options 严格校验；
-- DeepSeek OpenAI-compatible `reasoning_content` 的非流式、流式和工具循环回传；
+- OpenAI-compatible `reasoning_content` 的非流式、流式、Provider 绑定和工具循环回传；
 - DeepSeek Anthropic endpoint 的文本、工具、thinking 和 continuation；
 - continuation 的不可变性、codec、持久化、digest、脱敏、retry/reset、direct/managed/fallback 一致性；
 - Provider/model 目录 JSON 与打包产物。

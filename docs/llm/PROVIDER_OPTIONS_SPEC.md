@@ -34,7 +34,7 @@ ModelSpec(
 - streaming transport 开关；
 - `model`、消息、工具和框架生成的请求字段。
 
-连接信息使用 `ModelConnection`，streaming transport 使用 `ModelCapabilities.streaming.text`，retry 使用 Layer 的 `RetryPolicy`。
+连接信息使用 `ModelConnection`，streaming transport 使用 `ModelCapabilities.streaming.output`，retry 使用 Layer 的 `RetryPolicy`。
 
 ## 校验职责
 
@@ -45,7 +45,7 @@ class ModelProviderSpecValidator(Protocol):
     def validate_model(self, model: ModelSpec) -> None: ...
 ```
 
-Invoker 和动态 profile 发布在 Provider I/O 前调用该校验。非空选项配合未实现 validator 的第三方 Adapter 时 fail closed。DeepSeek 私有 schema 由 OpenAI-compatible Adapter 根据 `ModelSpec.provider == "deepseek"` 校验，而 Adapter 本身仍按 `protocol == "openai_chat_completions"` 分派。
+Invoker 和动态 profile 发布在 Provider I/O 前调用该校验。非空选项配合未实现 validator 的第三方 Adapter 时 fail closed。DeepSeek 与 Alibaba Cloud Token Plan 的私有 schema 由 OpenAI-compatible Adapter 根据 `ModelSpec.provider` 校验，而 Adapter 本身仍按 `protocol == "openai_chat_completions"` 分派。
 
 ## 投影与安全
 
@@ -63,6 +63,8 @@ Provider options 进入以下确定性投影：
 ## OpenAI-compatible 投影
 
 Adapter 先生成框架拥有的请求字段，再合并通过校验的 Provider options。冲突字段、非法 token limit、非 JSON 数值和嵌套 secret 名称在发送前拒绝。每个 fallback 模型只使用自己的 `ModelSpec.provider_options`。
+
+Alibaba Cloud Token Plan 严格接受 `enable_thinking`、`preserve_thinking`、`reasoning_effort`、`thinking`、`thinking_budget` 和 `tool_stream`。布尔字段不接受整数替代；`reasoning_effort` 使用固定枚举；`thinking` 只能是 `adaptive` 或 `disabled` 的单字段对象；`thinking_budget` 是非负整数。未知字段在 I/O 前拒绝。
 
 ## Anthropic Messages 投影
 

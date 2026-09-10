@@ -35,7 +35,7 @@ models:
     provider_options: {}
     capabilities:
       modalities: {input: [text], output: [text]}
-      streaming: {text: true}
+      streaming: {output: [text]}
       tools:
         call: true
         choice: [none, auto, required, named]
@@ -49,7 +49,7 @@ model_groups:
     models: [deepseek_primary]
 ```
 
-解析严格拒绝未知字段、空名称、重复组条目、未知模型引用、不完整 capabilities、非法 URL、URL 内嵌凭据，以及同时设置 `credential.env` 和 `credential.none`。解析阶段不会读取 `DEEPSEEK_API_KEY`。
+解析严格拒绝未知字段、空名称、重复组条目、未知模型引用、不完整 capabilities、非法 URL、URL 内嵌凭据，以及同时设置 `credential.env` 和 `credential.none`。模态只能是 `text`、`image`、`audio`、`video`，`streaming.output` 必须属于输出模态；无法确认的 token limit 显式写 `null`。解析阶段不会读取 `DEEPSEEK_API_KEY`。
 
 ## Direct：单模型
 
@@ -113,7 +113,7 @@ model_layer = ModelCallLayer(
 )
 ```
 
-DeepSeek 官方也可以使用同一 Adapter。用户在配置时把该模型条目的 `protocol` 设为 `anthropic_messages`，并采用 DeepSeek Provider preset 中该协议的 `https://api.deepseek.com/anthropic` 连接；使用 OpenAI Chat Completions 时则选择 `openai_chat_completions` 和 `https://api.deepseek.com`。Pygent 不自动探测或切换协议。
+DeepSeek 官方和 Alibaba Cloud Token Plan 都可以使用同一 Adapter。用户必须在配置中显式选择对应 Provider preset 的 `anthropic_messages` endpoint；使用 OpenAI Chat Completions 时则选择该 Provider 的 `openai_chat_completions` endpoint。Pygent 不自动探测或切换协议。
 
 ## Direct：多模型 fallback
 
@@ -182,7 +182,14 @@ providers = ProviderCatalog.builtin()
 capabilities = ModelCapabilityCatalog.builtin().models[
     ("deepseek", "deepseek-v4-flash", "openai_chat_completions")
 ]
+
+token_plan = providers.providers["aliyun_token_plan"]
+token_plan_capabilities = ModelCapabilityCatalog.builtin().models[
+    ("aliyun_token_plan", "qwen3.8-max", "openai_chat_completions")
+]
 ```
+
+Token Plan 的 OpenAI preset 使用 `ALIYUN_TOKEN_PLAN_OPENAI_API_KEY` 和 `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`；Anthropic preset 使用 `ALIYUN_TOKEN_PLAN_ANTHROPIC_API_KEY` 和 `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic`。应用把所选 preset 与完整 capability 记录复制进普通 `ModelConfig` Mapping。目录同时展示图像、视频和音频模型；其五个 `dashscope_*` protocol 第一版没有内置 Adapter，应用应只在自行装配对应 Adapter 后标记为可执行。
 
 自定义模型可以从模板展开；两个 limits 必须显式提供：
 
@@ -216,6 +223,15 @@ entry = ModelEntry(
 
 `provider_options` 是冻结的模型语义。DeepSeek 校验依据 `ModelSpec.provider`，实际 Adapter 分派依据 `ModelSpec.protocol`。
 
+Alibaba Cloud Token Plan 的 OpenAI 扩展字段为 `enable_thinking`、`preserve_thinking`、`reasoning_effort`、`thinking`、`thinking_budget` 和 `tool_stream`。Adapter 对字段、类型和枚举做闭集校验；例如：
+
+```python
+provider_options={
+    "enable_thinking": True,
+    "thinking_budget": 4096,
+}
+```
+
 Anthropic Messages 的私有选项为 `thinking`、`output_config`、`service_tier` 和 `stop_sequences`，字段和值由 Adapter 严格校验。例如：
 
 ```python
@@ -229,7 +245,7 @@ provider_options={
 
 ## Provider continuation
 
-DeepSeek OpenAI Chat Completions 的 `reasoning_content`，以及 Anthropic Messages 的 thinking/signature block，会规范化为 `AIMessage.continuation`。ReAct 工具循环会把它原样回传给 Provider 与 protocol 同时匹配的后续请求；不匹配时忽略。Continuation 会随 Message 经过 Worker、effect 与 SQLite 持久化，但不会出现在 `repr`、公开模型事件或 prepared-request snapshot 中。应用通常不需要读取或修改它。
+任意 OpenAI Chat Completions Provider 的响应实际返回合法 `reasoning_content` 时，以及 Anthropic Messages 返回 thinking/signature block 时，Adapter 会将其规范化为 `AIMessage.continuation`。ReAct 工具循环会把它原样回传给 Provider 与 protocol 同时匹配的后续请求；不匹配时忽略。Continuation 会随 Message 经过 Worker、effect 与 SQLite 持久化，但不会出现在 `repr`、公开模型事件或 prepared-request snapshot 中。应用通常不需要读取或修改它。
 
 ## 能力警告与事件
 

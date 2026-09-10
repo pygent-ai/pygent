@@ -4,6 +4,7 @@ import json
 import sqlite3
 import time
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -21,7 +22,10 @@ from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import (
     ModelDeploymentUnavailableError,
     ModelGroupConfigurationError,
+    ModelLimits,
+    ModelModalities,
     ModelResourceRef,
+    ModelStreamingCapabilities,
 )
 from pygent.llm._model_spec_codec import model_entry_value
 from pygent.llm.layer import _model_effect_request
@@ -208,18 +212,24 @@ async def test_sqlite_round_trip_and_tampered_provider_options_fail_closed(
     path = tmp_path / "models.sqlite3"
     store = await SQLiteModelDeploymentStore(path).open()
     requirement = _requirement()
+    entry = model_entry(
+        "main",
+        "deepseek",
+        "deepseek-chat",
+        provider_options={"thinking": {"type": "disabled"}},
+    )
+    capabilities = replace(
+        entry.spec.capabilities,
+        modalities=ModelModalities(input=("text", "image"), output=("image",)),
+        streaming=ModelStreamingCapabilities(output=()),
+        limits=ModelLimits(context_tokens=None, max_output_tokens=None),
+    )
+    entry = replace(entry, spec=replace(entry.spec, capabilities=capabilities))
     snapshot = build_snapshot(
         scope_id="scope",
         requirement=requirement,
         profile="quality",
-        models=(
-            model_entry(
-                "main",
-                "deepseek",
-                "deepseek-chat",
-                provider_options={"thinking": {"type": "disabled"}},
-            ),
-        ),
+        models=(entry,),
         resources=None,
     )
     await store.ensure_profile(snapshot, make_default=True)
@@ -229,6 +239,7 @@ async def test_sqlite_round_trip_and_tampered_provider_options_fail_closed(
 
     restored = await SQLiteModelDeploymentStore(path).open()
     current = await restored.current("scope", "assistant", "quality")
+    assert current.model_group.models[0].spec.capabilities == capabilities
     assert current.model_group.models[0].spec.provider_options["thinking"]["type"] == "disabled"  # type: ignore[index]
     assert await restored.get_admission(admission.admission_id) is not None
     await restored.close()
