@@ -220,10 +220,10 @@ def _model_trace(events: list[Any]) -> _ModelTrace:
             )
         if kind != "model.usage" or not isinstance(span_id, str):
             continue
-        route_id = data.get("route_id")
+        model_key = data.get("model_key")
         attempt = data.get("attempt")
         if (
-            not isinstance(route_id, str)
+            not isinstance(model_key, str)
             or not isinstance(attempt, int)
             or isinstance(attempt, bool)
         ):
@@ -231,7 +231,7 @@ def _model_trace(events: list[Any]) -> _ModelTrace:
             continue
         prompt = data.get("input_tokens")
         completion = data.get("output_tokens")
-        usage_by_attempt[(span_id, route_id, attempt)] = (
+        usage_by_attempt[(span_id, model_key, attempt)] = (
             prompt if isinstance(prompt, int) and not isinstance(prompt, bool) else 0,
             completion
             if isinstance(completion, int) and not isinstance(completion, bool)
@@ -361,8 +361,7 @@ class ScenarioSession:
         for profile in ("default", "alternate"):
             await group.ensure_profile(
                 profile=profile,
-                routes=configured.routes,
-                fallback=configured.fallback,
+                models=configured.models,
                 invoker=self.resources.invoker,
                 deadline=monotonic() + 5,
             )

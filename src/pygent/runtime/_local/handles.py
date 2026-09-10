@@ -19,7 +19,7 @@ from pygent.core import (
     thaw_json,
 )
 from pygent.core._module_contracts import _execution_scope
-from pygent.llm import ModelCallError, ModelGroupConfig
+from pygent.llm import ModelCallError, ModelGroup
 
 from .._history_store import SQLiteHistoryStore
 from .._history_types import ExecutionState, StoredExecution
@@ -475,7 +475,7 @@ class _LocalBoundModule(Generic[InputMessageT, OutputMessageT]):
             for model_group in (
                 getattr(item, "model_group", None) for item in graph.values()
             )
-            if isinstance(model_group, ModelGroupConfig)
+            if isinstance(model_group, ModelGroup)
             and model_group.is_deferred
         }
         self.model_groups = ModelGroupCollection(

@@ -29,9 +29,9 @@ from pygent.runtime import (
 )
 
 from .agent import (
-    INVALID_ROUTE_ID,
+    INVALID_MODEL_KEY,
     MODEL_GROUP,
-    VALID_ROUTE_ID,
+    VALID_MODEL_KEY,
     LiveAgentConfig,
     LiveAgentResources,
     benchmark_context,
@@ -115,15 +115,15 @@ def aggregate_samples(
         for event in sample.events:
             event_data = cast(FrozenJsonObject, event.data)
             if event.kind == "model.attempt.failed":
-                route = event_data.get("route_id")
+                route = event_data.get("model_key")
                 kind = event_data.get("error_kind")
                 if isinstance(kind, str):
                     attempt_kinds[kind] += 1
-                primary_failed = primary_failed or route == INVALID_ROUTE_ID
+                primary_failed = primary_failed or route == INVALID_MODEL_KEY
             elif event.kind == "model.attempt.succeeded":
                 fallback_succeeded = (
                     fallback_succeeded
-                    or event_data.get("route_id") == VALID_ROUTE_ID
+                    or event_data.get("model_key") == VALID_MODEL_KEY
                 )
             elif event.kind == "model.usage":
                 for event_key, report_key in (

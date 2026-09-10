@@ -9,13 +9,7 @@ import pytest
 from pygent import (
     AIMessage,
     Context,
-    FallbackPolicy,
-    GenerationConfig,
-    ModelCallLayer,
-    ModelGroupConfig,
-    ModelRoute,
     Module,
-    RetryPolicy,
     ToolAuthorizationDecision,
     ToolCall,
     ToolCallLayer,
@@ -24,7 +18,6 @@ from pygent import (
     UserMessage,
 )
 from pygent.core._module_contracts import _execution_scope
-from pygent.llm.spi import ModelProviderResponse
 from pygent.runtime import (
     CapacityPolicy,
     CapacityScope,
@@ -560,70 +553,6 @@ def test_sqlite_capacity_rejects_cross_process_policy_conflict(tmp_path) -> None
                 capacity_key="stable-owner",
             ),
         )
-
-
-class BlockingInvoker:
-    def __init__(self) -> None:
-        self.entered = asyncio.Event()
-        self.release = asyncio.Event()
-
-    def execute(self, **kwargs):
-        from pygent.llm import ModelExecution
-
-        async def operation(emit):
-            self.entered.set()
-            await self.release.wait()
-            return ModelProviderResponse(AIMessage(content="ok"))
-
-        return ModelExecution(operation)
-
-
-@pytest.mark.asyncio
-async def test_model_group_max_concurrency_is_enforced_by_managed_runtime() -> None:
-    runtime = LocalRuntime()
-    invoker = BlockingInvoker()
-    runtime.register_model_invoker("logical-a", invoker)
-    runtime.register_model_invoker("logical-b", invoker)
-
-    def layer(name: str) -> ModelCallLayer:
-        return ModelCallLayer(
-            model_group=ModelGroupConfig(
-                name=name,
-                routes=(ModelRoute("only", "openai", "test"),),
-                fallback=FallbackPolicy(("only",)),
-                max_concurrency=1,
-                capacity_key="shared-model",
-            ),
-            retry_policy=RetryPolicy(),
-            generation=GenerationConfig(),
-        )
-
-    binding = runtime.create_binding(
-        name="model-group",
-        execution_capacity=execution_capacity(),
-        model_capacity=CapacityPolicy.passthrough(),
-        tool_capacity=CapacityPolicy.passthrough(),
-    )
-    first_bound = binding.bind(layer("logical-a"))
-    second_bound = binding.bind(layer("logical-b"))
-
-    first = await first_bound.start(
-        UserMessage(content="one"),
-        Context(),
-        execution=ExecutionOptions(deadline=time.monotonic() + 3),
-    )
-    await invoker.entered.wait()
-    second = await second_bound.start(
-        UserMessage(content="two"),
-        Context(),
-        execution=ExecutionOptions(deadline=time.monotonic() + 3),
-    )
-    with pytest.raises(ExecutionAdmissionError, match="model:shared-model"):
-        await second.result()
-
-    invoker.release.set()
-    await first.result()
-    await runtime.close()
 
 
 def test_capacity_scope_contract_rejects_false_ownership_claims() -> None:

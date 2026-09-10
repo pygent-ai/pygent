@@ -9,7 +9,7 @@ from typing import Any
 
 from pygent.core import Module, RemoteModule
 from pygent.core.definition import module_definition_config
-from pygent.llm import ModelGroupConfig
+from pygent.llm import ModelGroup
 
 from .plan import CodeArtifactSpec, ExecutionPlan, ModelRequirement, ModuleSpec
 
@@ -183,15 +183,13 @@ def _local_module_spec(
         (
             ModelRequirement(
                 group_name=model_group.name,
-                capacity_key=model_group.capacity_key or model_group.name,
-                max_concurrency=model_group.max_concurrency,
                 allow_profile_override=bool(getattr(policy, "allow_profile_override", False)),
                 overridable_generation=tuple(
                     sorted(getattr(policy, "overridable_generation", ()))
                 ),
             ),
         )
-        if isinstance(model_group, ModelGroupConfig) and model_group.is_deferred
+        if isinstance(model_group, ModelGroup) and model_group.is_deferred
         else ()
     )
     return ModuleSpec(

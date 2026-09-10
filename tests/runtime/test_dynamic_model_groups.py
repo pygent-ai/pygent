@@ -12,13 +12,11 @@ import pytest
 from pygent import (
     AIMessage,
     Context,
-    FallbackPolicy,
     GenerationConfig,
     ModelCallLayer,
     ModelCallOptions,
     ModelCallPolicy,
-    ModelGroupConfig,
-    ModelRoute,
+    ModelGroup,
     RetryPolicy,
     UserMessage,
 )
@@ -51,6 +49,7 @@ from pygent.runtime import (
     WorkerTarget,
     WorkerUnavailableError,
 )
+from tests.support.model_specs import model_entry
 
 
 class _Invoker:
@@ -107,14 +106,12 @@ class _CommitThenBlockAdmissionStore(InMemoryModelDeploymentStore):
         return admission
 
 
-def _requirement(name: str = "assistant") -> ModelGroupConfig:
-    return ModelGroupConfig.deferred(
-        name=name, max_concurrency=2, capacity_key=f"capacity:{name}"
-    )
+def _requirement(name: str = "assistant") -> ModelGroup:
+    return ModelGroup.deferred(name=name)
 
 
 def _layer(
-    requirement: ModelGroupConfig,
+    requirement: ModelGroup,
     *,
     allow_profile: bool = True,
 ) -> ModelCallLayer:
@@ -132,8 +129,8 @@ def _layer(
 async def _configure(handle: object, profile: str, invoker: _Invoker) -> None:
     await handle.ensure_profile(  # type: ignore[attr-defined]
         profile=profile,
-        routes=(ModelRoute("main", "test", profile),),
-        fallback=FallbackPolicy(("main",)),
+        models=(model_entry("main", "test", profile),),
+
         invoker=invoker,
         deadline=time.monotonic() + 2,
     )
@@ -143,13 +140,12 @@ async def _configure(handle: object, profile: str, invoker: _Invoker) -> None:
 def test_deferred_and_concrete_group_invariants_and_frozen_options() -> None:
     deferred = _requirement()
     assert deferred.is_deferred
-    with pytest.raises(ValueError, match="concrete model group routes"):
-        ModelGroupConfig("empty", (), FallbackPolicy(()))
-    with pytest.raises(ValueError, match="deferred model group routes"):
-        ModelGroupConfig(
+    with pytest.raises(ValueError, match="concrete model group models"):
+        ModelGroup("empty", ())
+    with pytest.raises(ValueError, match="deferred model group models"):
+        ModelGroup(
             "bad",
-            (ModelRoute("main", "test", "x"),),
-            FallbackPolicy(("main",)),
+            (model_entry("main", "test", "x"),),
             resolution=deferred.resolution,
         )
 
@@ -401,10 +397,9 @@ async def test_direct_deferred_and_fixed_profile_override_fail_closed() -> None:
         await deferred.invoke(UserMessage(content="x"), Context())
 
     fixed = ModelCallLayer(
-        model_group=ModelGroupConfig(
+        model_group=ModelGroup(
             "fixed",
-            (ModelRoute("main", "test", "fixed"),),
-            FallbackPolicy(("main",)),
+            (model_entry("main", "test", "fixed"),),
         ),
         retry_policy=RetryPolicy(),
         generation=GenerationConfig(),
@@ -430,12 +425,12 @@ class _Resolver:
         self.validated = 0
         self.leases = 0
 
-    async def validate(self, model_group: ModelGroupConfig, resources: object) -> None:
+    async def validate(self, model_group: ModelGroup, resources: object) -> None:
         del model_group, resources
         self.validated += 1
 
     @asynccontextmanager
-    async def acquire(self, model_group: ModelGroupConfig, resources: object):
+    async def acquire(self, model_group: ModelGroup, resources: object):
         del model_group, resources
         self.leases += 1
         yield self.invoker
@@ -465,8 +460,8 @@ async def test_durable_manifest_is_committed_and_purge_releases_it(
         )
         await group.ensure_profile(
             profile="default",
-            routes=(ModelRoute("main", "test", "durable"),),
-            fallback=FallbackPolicy(("main",)),
+            models=(model_entry("main", "test", "durable"),),
+
             resource_ref=ref,
             deadline=time.monotonic() + 2,
         )
@@ -642,27 +637,27 @@ async def test_runtime_closes_owned_resident_once_and_never_closes_borrowed() ->
     group = bound.model_groups.get(requirement)
     owned = _ClosableInvoker("owned")
     borrowed = _ClosableInvoker("borrowed")
-    routes = (ModelRoute("main", "test", "x"),)
+    models = (model_entry("main", "test", "x"),)
     await group.ensure_profile(
         profile="owned-a",
-        routes=routes,
-        fallback=FallbackPolicy(("main",)),
+        models=models,
+
         invoker=owned,
         ownership=ModelResourceOwnership.OWNED,
         deadline=time.monotonic() + 2,
     )
     await group.ensure_profile(
         profile="owned-b",
-        routes=routes,
-        fallback=FallbackPolicy(("main",)),
+        models=models,
+
         invoker=owned,
         ownership=ModelResourceOwnership.OWNED,
         deadline=time.monotonic() + 2,
     )
     await group.ensure_profile(
         profile="borrowed",
-        routes=routes,
-        fallback=FallbackPolicy(("main",)),
+        models=models,
+
         invoker=borrowed,
         deadline=time.monotonic() + 2,
     )
@@ -684,8 +679,8 @@ async def test_store_open_and_identical_profile_publication_are_single_flight() 
         asyncio.create_task(
             group.ensure_profile(
                 profile="default",
-                routes=(ModelRoute("main", "test", "shared"),),
-                fallback=FallbackPolicy(("main",)),
+                models=(model_entry("main", "test", "shared"),),
+
                 invoker=invoker,
                 make_default=True,
                 deadline=deadline,
@@ -712,8 +707,8 @@ async def test_pre_admission_deadline_returns_handle_and_rolls_back_orphan_pin()
     group = bound.model_groups.get(requirement)
     await group.ensure_profile(
         profile="default",
-        routes=(ModelRoute("main", "test", "default"),),
-        fallback=FallbackPolicy(("main",)),
+        models=(model_entry("main", "test", "default"),),
+
         invoker=_Invoker("default"),
         make_default=True,
         deadline=time.monotonic() + 2,

@@ -12,10 +12,8 @@ from pygent import (
 )
 from pygent.llm import (
     DefaultModelInvoker,
-    FallbackPolicy,
-    ModelGroupConfig,
+    ModelGroup,
     ModelProviderRequest,
-    ModelRoute,
     ModelStreamEvent,
     OpenAICompatibleAdapter,
     RetryPolicy,
@@ -23,11 +21,14 @@ from pygent.llm import (
 from pygent.llm._request_snapshot import (
     prepared_request_event,
 )
+from tests.support.model_specs import model_entry
 
 
 def request(*, content: str = "question") -> ModelProviderRequest:
+    entry = model_entry("primary", "openai", "model-1")
     return ModelProviderRequest(
-        route=ModelRoute("primary", "openai", "model-1"),
+        model_key=entry.name,
+        model=entry.spec,
         message=UserMessage(content=content),
         context=Context(
             system_prompt="fixed prompt",
@@ -74,7 +75,8 @@ def test_prepared_request_is_stable_allowlisted_and_validated() -> None:
 def test_historical_message_usage_does_not_change_the_request_snapshot() -> None:
     without_usage = request()
     with_usage = ModelProviderRequest(
-        route=without_usage.route,
+        model_key=without_usage.model_key,
+        model=without_usage.model,
         message=without_usage.message,
         context=Context(
             system_prompt=without_usage.context.system_prompt,
@@ -87,7 +89,8 @@ def test_historical_message_usage_does_not_change_the_request_snapshot() -> None
         tools=without_usage.tools,
     )
     baseline = ModelProviderRequest(
-        route=without_usage.route,
+        model_key=without_usage.model_key,
+        model=without_usage.model,
         message=without_usage.message,
         context=Context(
             system_prompt=without_usage.context.system_prompt,
@@ -133,14 +136,13 @@ async def test_large_snapshot_reaches_provider_io() -> None:
     content = "x" * (2 * 1024 * 1024)
     client = RecordingClient()
     invoker = DefaultModelInvoker(
-        adapters={"openai": OpenAICompatibleAdapter()},
-        clients={"openai": client},
+        adapters={"openai_compatible": OpenAICompatibleAdapter()},
+        clients={"primary": client},
     )
     execution = invoker.execute(
-        model_group=ModelGroupConfig(
+        model_group=ModelGroup(
             "snapshot-limit",
-            (ModelRoute("primary", "openai", "model-1"),),
-            FallbackPolicy(("primary",)),
+            (model_entry("primary", "openai", "model-1"),),
         ),
         retry_policy=RetryPolicy(max_attempts_per_route=1),
         generation=GenerationConfig(),

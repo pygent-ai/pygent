@@ -147,12 +147,7 @@ class Infrastructure(Protocol):
     @property
     def managed_execution_id(self) -> str | None: ...
 
-    def model_permit(
-        self,
-        resource_key: str | None = None,
-        *,
-        max_concurrency: int | None = None,
-    ) -> AbstractAsyncContextManager[CapacityPermit]: ...
+    def model_permit(self) -> AbstractAsyncContextManager[CapacityPermit]: ...
 
     def tool_permit(
         self, resource_key: str | None = None

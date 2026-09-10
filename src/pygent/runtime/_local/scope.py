@@ -47,7 +47,6 @@ from pygent.tool.executors import validate_executor_sandbox
 
 from .._deadline import _ExecutionDeadlineExpired
 from ..api import (
-    CapacityPolicy,
     ExecutionAdmissionError,
     ExecutionOptions,
     ExecutionPhase,
@@ -571,33 +570,11 @@ class _ManagedScope(ExecutionScope):
         )
 
     @asynccontextmanager
-    async def model_permit(
-        self,
-        resource_key: str | None = None,
-        *,
-        max_concurrency: int | None = None,
-    ) -> AsyncIterator[CapacityPermit]:
+    async def model_permit(self) -> AsyncIterator[CapacityPermit]:
         frame = _execution_frame.get()
         if frame is None:  # pragma: no cover - managed scope invariant
             raise RuntimeError("managed model wait has no execution frame")
-        gates = [frame.binding_state.model]
-        binding_policy = frame.binding_state.policy.model_capacity
-        if (
-            resource_key is not None
-            and max_concurrency is not None
-            and binding_policy.capacity_key != resource_key
-        ):
-            gates.append(
-                frame.runtime._shared_resource_gate(
-                    "model",
-                    resource_key,
-                    CapacityPolicy.limited(
-                        max_concurrency=max_concurrency,
-                        max_queue_size=binding_policy.max_queue_size or 0,
-                    ),
-                )
-            )
-        async with self._resource_permits(gates) as permit:
+        async with self._resource_permits([frame.binding_state.model]) as permit:
             yield permit
 
     @asynccontextmanager

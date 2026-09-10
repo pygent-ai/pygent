@@ -11,13 +11,11 @@ import pytest
 from pygent import (
     AIMessage,
     ExponentialBackoff,
-    FallbackPolicy,
     GenerationConfig,
     IdempotencyPolicy,
     ModelCallLayer,
     ModelErrorKind,
-    ModelGroupConfig,
-    ModelRoute,
+    ModelGroup,
     Module,
     ReActLayer,
     RetryPolicy,
@@ -42,6 +40,7 @@ from pygent.runtime.plan import (
     PlanVersionError,
 )
 from pygent.tool import ExecutorRegistry
+from tests.support.model_specs import model_entry
 
 
 def _portable_plan() -> ExecutionPlan:
@@ -259,11 +258,9 @@ def _compiled_agent(
         required_permissions=("calculate",),
     )
     model = ModelCallLayer(
-        model_group=ModelGroupConfig(
+        model_group=ModelGroup(
             name="assistant",
-            routes=(ModelRoute("primary", "openai", model_name),),
-            fallback=FallbackPolicy(("primary",)),
-            max_concurrency=3,
+            models=(model_entry("primary", "openai", model_name),),
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=retry_attempts,

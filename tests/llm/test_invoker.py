@@ -15,21 +15,24 @@ from pygent import (
 )
 from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import (
-    DefaultModelInvoker,
     ExponentialBackoff,
-    FallbackPolicy,
     GenerationConfig,
     ModelCallError,
     ModelErrorKind,
     ModelFailureReason,
-    ModelGroupConfig,
-    ModelProviderCapabilities,
     ModelProviderError,
-    ModelRoute,
     OpenAICompatibleAdapter,
     RetryPolicy,
 )
 from pygent.llm import invoker as invoker_module
+from tests.support.model_specs import (
+    configured_invoker,
+    model_entry,
+    transport_mode,
+)
+from tests.support.model_specs import (
+    model_group as make_model_group,
+)
 
 
 class FakeClient:
@@ -134,14 +137,14 @@ def completion(content="ok", usage=None, finish_reason=None) -> FrozenJsonObject
     return freeze_json_object({"choices": [choice], "usage": usage or {}})
 
 
-def group() -> ModelGroupConfig:
-    return ModelGroupConfig(
+def group():
+    return make_model_group(
         name="assistant",
-        routes=(
-            ModelRoute("primary", "openai", "first"),
-            ModelRoute("fallback", "openai", "second"),
+        models=(
+            model_entry("primary", "openai", "first"),
+            model_entry("fallback", "openai", "second"),
         ),
-        fallback=FallbackPolicy(("primary", "fallback")),
+        order=("primary", "fallback"),
     )
 
 
@@ -149,10 +152,10 @@ def group() -> ModelGroupConfig:
 async def test_retry_then_fallback_and_usage_events():
     primary = FakeClient([httpx.ConnectError("offline"), httpx.ConnectError("offline")])
     fallback = FakeClient([completion(usage={"total_tokens": 7})])
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": primary, "fallback": fallback},
-        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+        capabilities={"openai": transport_mode(streaming=False)},
     )
     execution = invoker.execute(
         model_group=group(),
@@ -178,10 +181,10 @@ async def test_retry_then_fallback_and_usage_events():
 @pytest.mark.asyncio
 async def test_default_retry_policy_allows_two_total_attempts():
     primary = FakeClient([httpx.ConnectError("offline"), completion("recovered")])
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": primary, "fallback": FakeClient([completion("unused")])},
-        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+        capabilities={"openai": transport_mode(streaming=False)},
     )
 
     result = await invoker.execute(
@@ -219,10 +222,10 @@ async def test_non_streaming_output_limit_retries_before_exposing_partial_answer
             completion("complete", finish_reason="stop"),
         ]
     )
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": primary, "fallback": FakeClient([])},
-        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+        capabilities={"openai": transport_mode(streaming=False)},
     )
     execution = invoker.execute(
         model_group=group(),
@@ -254,15 +257,15 @@ async def test_non_streaming_output_limit_retries_before_exposing_partial_answer
 @pytest.mark.asyncio
 async def test_non_streaming_content_filter_fails_without_successful_output():
     client = FakeClient([completion("blocked", finish_reason="content_filter")])
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": client},
-        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+        capabilities={"openai": transport_mode(streaming=False)},
     )
-    model_group = ModelGroupConfig(
+    model_group = make_model_group(
         name="assistant",
-        routes=(ModelRoute("primary", "openai", "first"),),
-        fallback=FallbackPolicy(("primary",)),
+        models=(model_entry("primary", "openai", "first"),),
+        order=("primary",),
     )
     execution = invoker.execute(
         model_group=model_group,
@@ -299,10 +302,10 @@ async def test_absolute_deadline_covers_provider_wait():
                 await asyncio.sleep(0.01)
                 raise
 
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"openai": SlowClient([])},
-        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+        capabilities={"openai": transport_mode(streaming=False)},
     )
     with pytest.raises(ModelCallError) as raised:
         await invoker.execute(
@@ -324,12 +327,12 @@ async def test_cancellation_cleanup_timeout_is_terminal_and_quarantines_client(
     monkeypatch.setattr(invoker_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
     primary = CancellationSwallowingClient()
     fallback = FakeClient([completion("fallback")])
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": primary, "fallback": fallback},
         capabilities={
-            "primary": ModelProviderCapabilities(streaming=streaming),
-            "fallback": ModelProviderCapabilities(streaming=False),
+            "primary": transport_mode(streaming=streaming),
+            "fallback": transport_mode(streaming=False),
         },
     )
 
@@ -397,16 +400,16 @@ async def test_close_waits_for_running_stream_anext_before_closing_client(
 ):
     monkeypatch.setattr(invoker_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
     client = CloseSensitiveStreamingClient()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": client},
-        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+        capabilities={"primary": transport_mode(streaming=True)},
     )
     execution = invoker.execute(
-        model_group=ModelGroupConfig(
+        model_group=make_model_group(
             name="close-race",
-            routes=(ModelRoute("primary", "openai", "first"),),
-            fallback=FallbackPolicy(("primary",)),
+            models=(model_entry("primary", "openai", "first"),),
+            order=("primary",),
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=1,
@@ -446,16 +449,16 @@ async def test_close_cancels_active_execution_before_closing_stream_client(
 ):
     monkeypatch.setattr(invoker_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
     client = CloseSensitiveStreamingClient()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": client},
-        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+        capabilities={"primary": transport_mode(streaming=True)},
     )
     execution = invoker.execute(
-        model_group=ModelGroupConfig(
+        model_group=make_model_group(
             name="active-close-race",
-            routes=(ModelRoute("primary", "openai", "first"),),
-            fallback=FallbackPolicy(("primary",)),
+            models=(model_entry("primary", "openai", "first"),),
+            order=("primary",),
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=1,
@@ -508,10 +511,10 @@ async def test_close_is_idempotent_and_rejects_new_executions() -> None:
             self.close_calls += 1
 
     client = CountingCloseClient()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"openai": client},
-        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+        capabilities={"openai": transport_mode(streaming=False)},
     )
     await asyncio.gather(invoker.aclose(), invoker.aclose())
     assert client.close_calls == 1
@@ -534,10 +537,10 @@ async def test_explicit_task_cancellation_stays_cancelled_when_cleanup_is_unknow
 ):
     monkeypatch.setattr(invoker_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
     client = CancellationSwallowingClient()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": client, "fallback": FakeClient([completion()])},
-        capabilities={"primary": ModelProviderCapabilities(streaming=False)},
+        capabilities={"primary": transport_mode(streaming=False)},
     )
     execution = invoker.execute(
         model_group=group(),
@@ -561,10 +564,10 @@ async def test_explicit_task_cancellation_stays_cancelled_when_cleanup_is_unknow
 async def test_explicit_cancellation_is_not_retried():
     cancel = asyncio.Event()
     cancel.set()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"openai": FakeClient([completion()])},
-        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+        capabilities={"openai": transport_mode(streaming=False)},
     )
     with pytest.raises(asyncio.CancelledError):
         await invoker.execute(
@@ -586,7 +589,7 @@ async def test_stream_normalizes_text_usage_and_completion():
             freeze_json_object({"done": True}),
         ]
     )
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"openai": client},
     )
@@ -611,7 +614,7 @@ async def test_stream_normalizes_text_usage_and_completion():
     ]
     usage = next(event.data for event in events if event.kind == "model.usage")
     assert usage.to_dict() == {
-        "route_id": "primary",
+        "model_key": "primary",
         "attempt": 1,
         "mode": "cumulative",
         "final": True,
@@ -637,10 +640,10 @@ async def test_stream_idle_timeout_resets_after_every_provider_frame() -> None:
             await asyncio.sleep(0.02)
             yield freeze_json_object({"done": True})
 
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": ActiveStreamClient([])},
-        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+        capabilities={"primary": transport_mode(streaming=True)},
     )
     started = time.monotonic()
     result = await invoker.execute(
@@ -678,10 +681,10 @@ async def test_first_stream_frame_idle_timeout_retries_before_public_output() ->
             yield freeze_json_object({"done": True})
 
     client = SlowFirstFrameClient()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": client},
-        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+        capabilities={"primary": transport_mode(streaming=True)},
     )
     result = await invoker.execute(
         model_group=group(),
@@ -741,10 +744,10 @@ async def test_stream_idle_timeout_resets_partial_output_and_retries() -> None:
             yield freeze_json_object({"done": True})
 
     client = StalledStreamClient()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": client},
-        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+        capabilities={"primary": transport_mode(streaming=True)},
     )
     execution = invoker.execute(
         model_group=group(),
@@ -774,7 +777,7 @@ async def test_stream_idle_timeout_resets_partial_output_and_retries() -> None:
         "model.attempt.started", kinds.index("model.output.reset")
     )
     reset = next(event.data for event in events if event.kind == "model.output.reset")
-    assert reset.to_dict() == {"route_id": "primary", "attempt": 1}
+    assert reset.to_dict() == {"model_key": "primary", "attempt": 1}
     await invoker.aclose()
 
 
@@ -795,16 +798,16 @@ async def test_stream_idle_timeout_exhaustion_keeps_last_partial_output() -> Non
             yield freeze_json_object({"done": True})
 
     client = AlwaysStalledStreamClient()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": client},
-        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+        capabilities={"primary": transport_mode(streaming=True)},
     )
     execution = invoker.execute(
-        model_group=ModelGroupConfig(
+        model_group=make_model_group(
             name="idle-exhaustion",
-            routes=(ModelRoute("primary", "openai", "first"),),
-            fallback=FallbackPolicy(("primary",)),
+            models=(model_entry("primary", "openai", "first"),),
+            order=("primary",),
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=2,
@@ -850,16 +853,16 @@ async def test_stream_partial_idle_timeout_obeys_retry_on_policy() -> None:
             yield freeze_json_object({"done": True})
 
     client = StalledStreamClient()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": client},
-        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+        capabilities={"primary": transport_mode(streaming=True)},
     )
     execution = invoker.execute(
-        model_group=ModelGroupConfig(
+        model_group=make_model_group(
             name="idle-policy",
-            routes=(ModelRoute("primary", "openai", "first"),),
-            fallback=FallbackPolicy(("primary",)),
+            models=(model_entry("primary", "openai", "first"),),
+            order=("primary",),
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=2,
@@ -897,16 +900,16 @@ async def test_stream_partial_output_is_not_reset_when_backoff_exhausts_deadline
             yield freeze_json_object({"done": True})
 
     client = StalledStreamClient()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": client},
-        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+        capabilities={"primary": transport_mode(streaming=True)},
     )
     execution = invoker.execute(
-        model_group=ModelGroupConfig(
+        model_group=make_model_group(
             name="idle-backoff-deadline",
-            routes=(ModelRoute("primary", "openai", "first"),),
-            fallback=FallbackPolicy(("primary",)),
+            models=(model_entry("primary", "openai", "first"),),
+            order=("primary",),
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=2,
@@ -950,12 +953,12 @@ async def test_stream_partial_idle_timeout_resets_before_fallback_route() -> Non
             freeze_json_object({"done": True}),
         ]
     )
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": PartialPrimary([]), "fallback": fallback},
         capabilities={
-            "primary": ModelProviderCapabilities(streaming=True),
-            "fallback": ModelProviderCapabilities(streaming=True),
+            "primary": transport_mode(streaming=True),
+            "fallback": transport_mode(streaming=True),
         },
     )
     execution = invoker.execute(
@@ -976,7 +979,7 @@ async def test_stream_partial_idle_timeout_resets_before_fallback_route() -> Non
 
     assert result.message.content == "fallback-complete"
     assert [event.kind for event in events].count("model.output.reset") == 1
-    assert events[-1].data["route_id"] == "fallback"
+    assert events[-1].data["model_key"] == "fallback"
     await invoker.aclose()
 
 
@@ -991,10 +994,10 @@ async def test_execution_deadline_still_bounds_an_active_provider_stream() -> No
                     {"choices": [{"delta": {"content": "x"}}]}
                 )
 
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": EndlessActiveStreamClient([])},
-        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+        capabilities={"primary": transport_mode(streaming=True)},
     )
     execution = invoker.execute(
         model_group=group(),
@@ -1026,12 +1029,12 @@ async def test_streaming_output_limit_fails_as_partial_without_retrying():
             ),
         ]
     )
-    model_group = ModelGroupConfig(
+    model_group = make_model_group(
         name="assistant",
-        routes=(ModelRoute("primary", "openai", "first"),),
-        fallback=FallbackPolicy(("primary",)),
+        models=(model_entry("primary", "openai", "first"),),
+        order=("primary",),
     )
-    execution = DefaultModelInvoker(
+    execution = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": client},
     ).execute(
@@ -1068,10 +1071,10 @@ async def test_stream_owner_does_not_create_a_task_for_each_provider_item(
             freeze_json_object({"done": True}),
         ]
     )
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": client, "fallback": client},
-        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
+        capabilities={"primary": transport_mode(streaming=True)},
     )
     task_names: list[str | None] = []
     create_task = asyncio.create_task
@@ -1100,7 +1103,7 @@ async def test_stream_rejects_transport_eof_without_completion_marker():
     client = FakeClient(
         [freeze_json_object({"choices": [{"delta": {"content": "partial"}}]})]
     )
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"openai": client},
     )
@@ -1133,7 +1136,7 @@ async def test_stream_retries_only_when_failure_precedes_public_output():
             yield freeze_json_object({"done": True})
 
     client = FlakyStreamClient()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"openai": client},
     )
@@ -1175,7 +1178,7 @@ async def test_stream_fallback_emits_attempt_lifecycle_before_public_output():
             freeze_json_object({"done": True}),
         ]
     )
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": primary, "fallback": fallback},
     )
@@ -1190,7 +1193,7 @@ async def test_stream_fallback_emits_attempt_lifecycle_before_public_output():
         events = [event async for event in subscription]
     await execution.result()
     lifecycle = [
-        (event.kind, event.data["route_id"], event.data.get("error_kind"))
+        (event.kind, event.data["model_key"], event.data.get("error_kind"))
         for event in events
         if ".attempt." in event.kind
     ]
@@ -1287,7 +1290,7 @@ async def test_stream_emits_fixed_reasoning_and_multiple_tool_call_events():
             freeze_json_object({"done": True}),
         ]
     )
-    execution = DefaultModelInvoker(
+    execution = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"openai": client},
     ).execute(
@@ -1362,7 +1365,7 @@ async def test_stream_synthesizes_a_missing_tool_call_id():
             )
         ]
     )
-    result = await DefaultModelInvoker(
+    result = await configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"openai": client},
     ).execute(
@@ -1406,7 +1409,7 @@ async def test_invalid_tool_arguments_never_emit_model_completed():
             freeze_json_object({"done": True}),
         ]
     )
-    execution = DefaultModelInvoker(
+    execution = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"openai": client},
     ).execute(

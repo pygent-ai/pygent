@@ -150,16 +150,16 @@ def test_model_trace_uses_last_cumulative_usage_snapshot_per_attempt():
     events = [
         event(0, "execution.started", span="root", parent=None, timestamp=1_000_000),
         event(1, "model.started", timestamp=2_000_000),
-        event(2, "model.attempt.started", data={"route_id": "r", "attempt": 1}),
+        event(2, "model.attempt.started", data={"model_key": "r", "attempt": 1}),
         event(
             3,
             "model.usage",
-            data={"route_id": "r", "attempt": 1, "input_tokens": 2, "output_tokens": 1},
+            data={"model_key": "r", "attempt": 1, "input_tokens": 2, "output_tokens": 1},
         ),
         event(
             4,
             "model.usage",
-            data={"route_id": "r", "attempt": 1, "input_tokens": 3, "output_tokens": 2},
+            data={"model_key": "r", "attempt": 1, "input_tokens": 3, "output_tokens": 2},
         ),
         event(5, "model.text.delta", timestamp=4_000_000),
         event(6, "model.completed", timestamp=7_000_000),

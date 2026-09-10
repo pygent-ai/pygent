@@ -1,17 +1,32 @@
 """Application-owned LLM declarations using the public Pygent SDK."""
 
 from pygent import (
+    CapabilityPresetCatalog,
     ExponentialBackoff,
-    FallbackPolicy,
     GenerationConfig,
     ModelCallLayer,
+    ModelEntry,
     ModelErrorKind,
-    ModelGroupConfig,
-    ModelRoute,
+    ModelGroup,
+    ModelSpec,
     RetryPolicy,
     ToolDefinition,
 )
 from pygent.llm.spi import ModelInvoker
+
+
+def _model(name: str, provider: str, model_id: str) -> ModelEntry:
+    return ModelEntry(
+        name,
+        ModelSpec(
+            provider=provider,
+            model_id=model_id,
+            protocol="openai_compatible",
+            capabilities=CapabilityPresetCatalog.builtin()
+            .presets["text_tools_structured_reasoning"]
+            .materialize(context_tokens=128_000, max_output_tokens=8_192),
+        ),
+    )
 
 
 def build_assistant_model(
@@ -20,22 +35,20 @@ def build_assistant_model(
     tools: tuple[ToolDefinition, ...] = (),
 ) -> ModelCallLayer:
     return ModelCallLayer(
-        model_group=ModelGroupConfig(
+        model_group=ModelGroup(
             name="assistant",
-            routes=(
-                ModelRoute(
+            models=(
+                _model(
                     "assistant-primary",
                     provider="openai",
-                    model="assistant",
+                    model_id="assistant",
                 ),
-                ModelRoute(
+                _model(
                     "assistant-fallback",
                     provider="qwen",
-                    model="assistant-backup",
+                    model_id="assistant-backup",
                 ),
             ),
-            fallback=FallbackPolicy(order=("assistant-primary", "assistant-fallback")),
-            max_concurrency=32,
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=2,
@@ -58,11 +71,9 @@ def build_assistant_model(
 
 def build_reviewer_model(*, invoker: ModelInvoker | None = None) -> ModelCallLayer:
     return ModelCallLayer(
-        model_group=ModelGroupConfig(
+        model_group=ModelGroup(
             name="reviewer",
-            routes=(ModelRoute("review", provider="openai", model="reviewer"),),
-            fallback=FallbackPolicy(order=("review",)),
-            max_concurrency=8,
+            models=(_model("review", provider="openai", model_id="reviewer"),),
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=1,

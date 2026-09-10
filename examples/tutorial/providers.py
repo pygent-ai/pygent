@@ -10,7 +10,7 @@ from typing import cast
 from pygent import (
     AIMessage,
     FrozenJsonObject,
-    ModelGroupConfig,
+    ModelGroup,
     ToolCall,
     ToolMessage,
     freeze_json_object,
@@ -42,8 +42,8 @@ class OfflineModelInvoker:
 
         async def operation(emit: object) -> ModelProviderResponse:
             self.calls += 1
-            model_group = cast(ModelGroupConfig, kwargs["model_group"])
-            route_id = model_group.routes[0].route_id
+            model_group = cast(ModelGroup, kwargs["model_group"])
+            model_key = model_group.models[0].name
             attempt = 1
 
             async def publish(kind: str, data: dict[str, object]) -> None:
@@ -55,7 +55,7 @@ class OfflineModelInvoker:
             )
             await publish(
                 ModelEventKind.ATTEMPT_STARTED.value,
-                {"route_id": route_id, "attempt": attempt},
+                {"model_key": model_key, "attempt": attempt},
             )
 
             message = kwargs["message"]
@@ -69,7 +69,7 @@ class OfflineModelInvoker:
                 response = AIMessage(content=content)
                 await publish(
                     ModelEventKind.TEXT_DELTA.value,
-                    {"route_id": route_id, "attempt": attempt, "text": content},
+                    {"model_key": model_key, "attempt": attempt, "text": content},
                 )
             else:
                 response = AIMessage(
@@ -90,7 +90,7 @@ class OfflineModelInvoker:
             await publish(
                 ModelEventKind.USAGE.value,
                 {
-                    "route_id": route_id,
+                    "model_key": model_key,
                     "attempt": attempt,
                     "mode": "cumulative",
                     "final": True,
@@ -102,12 +102,12 @@ class OfflineModelInvoker:
             )
             await publish(
                 ModelEventKind.ATTEMPT_SUCCEEDED.value,
-                {"route_id": route_id, "attempt": attempt},
+                {"model_key": model_key, "attempt": attempt},
             )
             await publish(
                 ModelEventKind.COMPLETED.value,
                 {
-                    "route_id": route_id,
+                    "model_key": model_key,
                     "attempt": attempt,
                     "finish_reason": "tool_calls" if response.tool_calls else "stop",
                     "provider_request_id": f"tutorial-{self.label}-{self.calls}",
@@ -181,7 +181,7 @@ def build_live_invoker(config: LiveModelConfig) -> ModelInvoker:
         verify_ssl=config.verify_ssl,
     )
     return DefaultModelInvoker(
-        adapters={"openai": OpenAICompatibleAdapter()},
+        adapters={"openai_compatible": OpenAICompatibleAdapter()},
         clients={"primary": client},
     )
 

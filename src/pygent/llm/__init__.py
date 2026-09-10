@@ -44,7 +44,6 @@ from .openai_compatible import (
 )
 from .types import (
     ExponentialBackoff,
-    FallbackPolicy,
     GenerationConfig,
     ModelAttempt,
     ModelCallError,
@@ -54,7 +53,6 @@ from .types import (
     ModelDeploymentUnavailableError,
     ModelErrorKind,
     ModelFailureReason,
-    ModelGroupConfig,
     ModelGroupConfigurationError,
     ModelGroupError,
     ModelGroupResolution,
@@ -65,7 +63,6 @@ from .types import (
     ModelResourceOwnership,
     ModelResourceRef,
     ModelResourceResolver,
-    ModelRoute,
     RetryPolicy,
 )
 
@@ -76,7 +73,6 @@ __all__ = [
     "DefaultModelInvoker",
     "EventSink",
     "ExponentialBackoff",
-    "FallbackPolicy",
     "GenerationConfig",
     "ModelAttempt",
     "ModelCallError",
@@ -96,7 +92,6 @@ __all__ = [
     "ModelExecution",
     "ModelFailureReason",
     "ModelGroup",
-    "ModelGroupConfig",
     "ModelGroupConfigurationError",
     "ModelGroupError",
     "ModelGroupResolution",
@@ -119,7 +114,6 @@ __all__ = [
     "ModelResourceOwnership",
     "ModelResourceRef",
     "ModelResourceResolver",
-    "ModelRoute",
     "ModelSpec",
     "ModelStreamEvent",
     "ModelStreamingCapabilities",

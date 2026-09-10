@@ -7,8 +7,8 @@ import pytest
 
 from examples.live_agent import benchmark as benchmark_module
 from examples.live_agent.agent import (
-    INVALID_ROUTE_ID,
-    VALID_ROUTE_ID,
+    INVALID_MODEL_KEY,
+    VALID_MODEL_KEY,
     LiveAgentConfig,
     benchmark_context,
     benchmark_message,
@@ -144,8 +144,8 @@ async def test_mock_transport_fallback_tools_context_isolation_and_metrics():
     assert valid_key not in serialized
     assert "models.example" not in serialized
     assert "unit-model" not in serialized
-    assert INVALID_ROUTE_ID not in serialized
-    assert VALID_ROUTE_ID not in serialized
+    assert INVALID_MODEL_KEY not in serialized
+    assert VALID_MODEL_KEY not in serialized
 
     direct_resources = build_live_resources(
         config, transport=httpx.MockTransport(handler)
@@ -154,6 +154,7 @@ async def test_mock_transport_fallback_tools_context_isolation_and_metrics():
         "unit-model",
         model_invoker=direct_resources.invoker,
         executor_registry=direct_resources.registry,
+        streaming=False,
     )
     invoked = await direct_agent.invoke(
         benchmark_message(10), benchmark_context("direct-invoke", direct_tool)

@@ -8,32 +8,35 @@ import pytest
 
 from pygent import (
     Context,
-    FallbackPolicy,
     GenerationConfig,
-    ModelGroupConfig,
-    ModelRoute,
     RetryPolicy,
     UserMessage,
 )
 from pygent.core import FrozenJsonObject, JsonValueError, freeze_json_object
 from pygent.llm import (
-    DefaultModelInvoker,
     ModelCallError,
+    ModelEntry,
     ModelErrorKind,
     ModelGroupConfigurationError,
-    ModelProviderCapabilities,
     ModelProviderError,
     ModelProviderRequest,
     OpenAICompatibleAdapter,
     openai_compatible_adapters,
 )
+from tests.support.model_specs import (
+    configured_invoker,
+    model_entry,
+    model_group,
+    transport_mode,
+)
 
 
 def _request(
-    route: ModelRoute, generation: GenerationConfig | None = None
+    entry: ModelEntry, generation: GenerationConfig | None = None
 ) -> ModelProviderRequest:
     return ModelProviderRequest(
-        route=route,
+        model_key=entry.name,
+        model=entry.spec,
         message=UserMessage(content="hello"),
         context=Context(),
         generation=generation or GenerationConfig(),
@@ -45,17 +48,17 @@ def test_model_route_provider_options_are_keyword_only_frozen_and_hidden() -> No
         "thinking": {"type": "disabled"},
         "items": [1, {"ok": True}],
     }
-    route = ModelRoute("main", "deepseek", "deepseek-chat", provider_options=raw)
+    route = model_entry("main", "deepseek", "deepseek-chat", provider_options=raw)
     cast(dict[str, str], raw["thinking"])["type"] = "enabled"
     cast(list[object], raw["items"]).append(2)
 
-    assert isinstance(route.provider_options, FrozenJsonObject)
-    thinking = cast(FrozenJsonObject, route.provider_options["thinking"])
+    assert isinstance(route.spec.provider_options, FrozenJsonObject)
+    thinking = cast(FrozenJsonObject, route.spec.provider_options["thinking"])
     assert thinking["type"] == "disabled"
-    assert route.provider_options["items"] == (1, freeze_json_object({"ok": True}))
+    assert route.spec.provider_options["items"] == (1, freeze_json_object({"ok": True}))
     assert "disabled" not in repr(route)
     with pytest.raises(TypeError):
-        ModelRoute("main", "deepseek", "deepseek-chat", {})  # type: ignore[call-arg]
+        model_entry("main", "deepseek", "deepseek-chat", {})  # type: ignore[call-arg]
 
 
 @pytest.mark.parametrize(
@@ -69,43 +72,43 @@ def test_model_route_provider_options_are_keyword_only_frozen_and_hidden() -> No
 )
 def test_model_route_rejects_non_json_provider_options(value: object) -> None:
     with pytest.raises(JsonValueError):
-        ModelRoute("main", "custom", "model", provider_options=value)  # type: ignore[arg-type]
+        model_entry("main", "custom", "model", provider_options=value)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("value", [[], "options", 1, None])
 def test_model_route_rejects_non_object_provider_options(value: object) -> None:
-    with pytest.raises(JsonValueError):
-        ModelRoute("main", "custom", "model", provider_options=value)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        model_entry("main", "custom", "model", provider_options=value)  # type: ignore[arg-type]
 
 
 def test_openai_compatible_projects_deepseek_and_generic_options() -> None:
-    deepseek = ModelRoute(
+    deepseek = model_entry(
         "main",
         "deepseek",
         "deepseek-chat",
         provider_options={"thinking": {"type": "disabled"}},
     )
-    payload = OpenAICompatibleAdapter("deepseek").build_request(_request(deepseek))
+    payload = OpenAICompatibleAdapter().build_request(_request(deepseek))
     assert payload["thinking"] == freeze_json_object({"type": "disabled"})
 
-    custom = ModelRoute(
+    custom = model_entry(
         "main",
         "custom",
         "custom-model",
         provider_options={"vendor_feature": {"mode": "fast"}},
     )
-    payload = OpenAICompatibleAdapter("custom").build_request(_request(custom))
+    payload = OpenAICompatibleAdapter().build_request(_request(custom))
     assert payload["vendor_feature"] == freeze_json_object({"mode": "fast"})
-    assert "deepseek" in openai_compatible_adapters()
+    assert set(openai_compatible_adapters()) == {"openai_compatible"}
 
 
 @pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
 def test_openai_compatible_accepts_one_route_token_limit(field: str) -> None:
-    route = ModelRoute(
+    route = model_entry(
         "main", "custom", "model", provider_options={field: 4096}
     )
 
-    payload = OpenAICompatibleAdapter("custom").build_request(_request(route))
+    payload = OpenAICompatibleAdapter().build_request(_request(route))
 
     assert payload[field] == 4096
     assert set(payload) & {"max_tokens", "max_completion_tokens"} == {field}
@@ -113,19 +116,19 @@ def test_openai_compatible_accepts_one_route_token_limit(field: str) -> None:
 
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "4096"])
 def test_openai_compatible_rejects_invalid_route_token_limit(value: object) -> None:
-    route = ModelRoute(
+    route = model_entry(
         "main", "custom", "model", provider_options={"max_tokens": value}
     )
 
     with pytest.raises(ModelProviderError) as raised:
-        OpenAICompatibleAdapter("custom").build_request(_request(route))
+        OpenAICompatibleAdapter().build_request(_request(route))
 
     assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
 
 
 def test_openai_compatible_rejects_ambiguous_or_conflicting_token_limits() -> None:
-    adapter = OpenAICompatibleAdapter("custom")
-    both = ModelRoute(
+    adapter = OpenAICompatibleAdapter()
+    both = model_entry(
         "main",
         "custom",
         "model",
@@ -134,7 +137,7 @@ def test_openai_compatible_rejects_ambiguous_or_conflicting_token_limits() -> No
     with pytest.raises(ModelProviderError):
         adapter.build_request(_request(both))
 
-    configured = ModelRoute(
+    configured = model_entry(
         "main", "custom", "model", provider_options={"max_completion_tokens": 1024}
     )
     with pytest.raises(ModelProviderError) as raised:
@@ -159,9 +162,9 @@ def test_openai_compatible_rejects_ambiguous_or_conflicting_token_limits() -> No
 def test_openai_compatible_rejects_reserved_or_nonportable_options(
     options: dict[str, object],
 ) -> None:
-    route = ModelRoute("main", "custom", "model", provider_options=options)
+    route = model_entry("main", "custom", "model", provider_options=options)
     with pytest.raises(ModelProviderError) as raised:
-        OpenAICompatibleAdapter("custom").build_request(_request(route))
+        OpenAICompatibleAdapter().build_request(_request(route))
     assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
     assert "not-allowed" not in str(raised.value)
 
@@ -171,19 +174,19 @@ def test_openai_compatible_rejects_reserved_or_nonportable_options(
     [{"type": "automatic"}, {"type": "disabled", "extra": True}, "disabled"],
 )
 def test_deepseek_thinking_schema_is_strict(thinking: object) -> None:
-    route = ModelRoute(
+    route = model_entry(
         "main",
         "deepseek",
         "deepseek-chat",
         provider_options={"thinking": thinking},
     )
     with pytest.raises(ModelProviderError) as raised:
-        OpenAICompatibleAdapter("deepseek").build_request(_request(route))
+        OpenAICompatibleAdapter().build_request(_request(route))
     assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
 
 
 class _NoValidatorAdapter:
-    provider = "custom"
+    protocol = "openai_compatible"
 
     def build_request(self, request: object) -> FrozenJsonObject:
         del request
@@ -241,18 +244,18 @@ class _OutcomeClient(_CountingClient):
 @pytest.mark.asyncio
 async def test_third_party_adapter_without_validator_fails_closed_before_io() -> None:
     client = _CountingClient()
-    route = ModelRoute(
+    route = model_entry(
         "main", "custom", "model", provider_options={"vendor_feature": True}
     )
-    invoker = DefaultModelInvoker(
-        adapters={"custom": _NoValidatorAdapter()},  # type: ignore[dict-item]
-        clients={"custom": client},
+    invoker = configured_invoker(
+        adapters={"openai_compatible": _NoValidatorAdapter()},
+        clients={"main": client},
     )
     with pytest.raises(ModelGroupConfigurationError):
-        invoker.validate_route(route)
+        invoker.validate_model(route)
 
     execution = invoker.execute(
-        model_group=ModelGroupConfig("custom", (route,), FallbackPolicy(("main",))),
+        model_group=model_group("custom", (route,), ("main",)),
         retry_policy=RetryPolicy(),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
@@ -271,28 +274,26 @@ async def test_fallback_routes_receive_only_their_own_provider_options() -> None
         freeze_json_object({"choices": [{"message": {"content": "fallback"}}]})
     )
     routes = (
-        ModelRoute(
+        model_entry(
             "primary",
             "openai",
             "primary-model",
             provider_options={"primary_feature": True},
         ),
-        ModelRoute(
+        model_entry(
             "fallback",
             "openai",
             "fallback-model",
             provider_options={"fallback_feature": True},
         ),
     )
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"primary": primary, "fallback": fallback},
-        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+        capabilities={"openai": transport_mode(streaming=False)},
     )
     response = await invoker.execute(
-        model_group=ModelGroupConfig(
-            "fallback", routes, FallbackPolicy(("primary", "fallback"))
-        ),
+        model_group=model_group("fallback", routes, ("primary", "fallback")),
         retry_policy=RetryPolicy(max_attempts_per_route=1),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),

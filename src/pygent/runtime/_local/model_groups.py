@@ -8,14 +8,13 @@ from collections.abc import Mapping
 from typing import Any
 
 from pygent.llm import (
-    FallbackPolicy,
-    ModelGroupConfig,
+    ModelEntry,
+    ModelGroup,
     ModelGroupConfigurationError,
     ModelProfileSnapshot,
     ModelResourceBundle,
     ModelResourceOwnership,
     ModelResourceRef,
-    ModelRoute,
 )
 
 from ..model_deployment import build_snapshot
@@ -24,9 +23,9 @@ from ..model_deployment import build_snapshot
 class ModelGroupHandle:
     __slots__ = ("_runtime", "_scope_id", "requirement")
 
-    def __init__(self, runtime: Any, scope_id: str, requirement: ModelGroupConfig) -> None:
+    def __init__(self, runtime: Any, scope_id: str, requirement: ModelGroup) -> None:
         if not requirement.is_deferred:
-            raise ValueError("ModelGroupHandle requires a deferred ModelGroupConfig")
+            raise ValueError("ModelGroupHandle requires a deferred ModelGroup")
         self._runtime = runtime
         self._scope_id = scope_id
         self.requirement = requirement
@@ -39,8 +38,7 @@ class ModelGroupHandle:
         self,
         *,
         profile: str,
-        routes: tuple[ModelRoute, ...],
-        fallback: FallbackPolicy,
+        models: tuple[ModelEntry, ...],
         invoker: Any | None = None,
         resource_ref: ModelResourceRef | None = None,
         resource_bundle: ModelResourceBundle | None = None,
@@ -57,19 +55,16 @@ class ModelGroupHandle:
         if resource_ref is not None and resource_bundle is not None:
             raise ValueError("provide resource_ref or resource_bundle, not both")
         resources = resource_bundle
-        prepared_routes = tuple(routes)
+        prepared_models = tuple(models)
         if resource_ref is not None:
-            resources = ModelResourceBundle.shared(prepared_routes, resource_ref)
+            resources = ModelResourceBundle.shared(prepared_models, resource_ref)
         if invoker is None and resources is None:
             raise ModelGroupConfigurationError(
                 "a dynamic profile requires an invoker or reconstructable resources"
             )
-        prepared_group = ModelGroupConfig(
+        prepared_group = ModelGroup(
             name=self.requirement.name,
-            routes=prepared_routes,
-            fallback=fallback,
-            max_concurrency=self.requirement.max_concurrency,
-            capacity_key=self.requirement.capacity_key,
+            models=prepared_models,
         )
         if isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
             raise TypeError("deadline must be an absolute monotonic timestamp")
@@ -83,15 +78,15 @@ class ModelGroupHandle:
                 async with asyncio.timeout(remaining):
                     await self._runtime._ensure_model_store_open()
                     if invoker is not None:
-                        validate_route = getattr(invoker, "validate_route", None)
-                        for route in prepared_group.routes:
-                            if not route.provider_options:
+                        validate_model = getattr(invoker, "validate_model", None)
+                        for model in prepared_group.models:
+                            if not model.spec.provider_options:
                                 continue
-                            if not callable(validate_route):
+                            if not callable(validate_model):
                                 raise ModelGroupConfigurationError(
-                                    "non-empty provider options require an invoker route validator"
+                                    "non-empty provider options require an invoker model validator"
                                 )
-                            validate_route(route)
+                            validate_model(model)
                     if resources is not None:
                         resolver = self._runtime._model_resource_resolvers.get(
                             resources.resolver_id
@@ -101,7 +96,7 @@ class ModelGroupHandle:
                                 f"no model resource resolver {resources.resolver_id!r} is registered"
                             )
                         validate = getattr(resolver, "validate", None)
-                        if any(route.provider_options for route in prepared_group.routes) and not callable(validate):
+                        if any(model.spec.provider_options for model in prepared_group.models) and not callable(validate):
                             raise ModelGroupConfigurationError(
                                 "non-empty provider options require resource validation"
                             )
@@ -111,8 +106,7 @@ class ModelGroupHandle:
                         scope_id=self._scope_id,
                         requirement=self.requirement,
                         profile=profile,
-                        routes=prepared_routes,
-                        fallback=fallback,
+                        models=prepared_models,
                         resources=resources,
                     )
                     result = await self._runtime.model_deployment_store.ensure_profile(
@@ -190,7 +184,7 @@ class ModelGroupHandle:
                 raise ModelGroupConfigurationError(
                     "profile has no reconstructable resource for catalog discovery"
                 )
-            resource_ref = snapshot.resources.route_resources[0][1]
+            resource_ref = snapshot.resources.model_resources[0][1]
         resolver = self._runtime._model_resource_resolvers.get(resource_ref.resolver_id)
         if resolver is None:
             raise ModelGroupConfigurationError(
@@ -209,15 +203,15 @@ class ModelGroupCollection:
         self,
         runtime: Any,
         scope_id: str,
-        requirements: Mapping[str, ModelGroupConfig] | None = None,
+        requirements: Mapping[str, ModelGroup] | None = None,
     ) -> None:
         self._runtime = runtime
         self._scope_id = scope_id
         self._requirements = None if requirements is None else dict(requirements)
 
-    def get(self, requirement: ModelGroupConfig) -> ModelGroupHandle:
-        if not isinstance(requirement, ModelGroupConfig) or not requirement.is_deferred:
-            raise TypeError("get() requires a deferred ModelGroupConfig")
+    def get(self, requirement: ModelGroup) -> ModelGroupHandle:
+        if not isinstance(requirement, ModelGroup) or not requirement.is_deferred:
+            raise TypeError("get() requires a deferred ModelGroup")
         if self._requirements is not None:
             declared = self._requirements.get(requirement.name)
             if declared is None or declared != requirement:

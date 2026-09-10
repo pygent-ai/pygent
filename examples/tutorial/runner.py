@@ -7,9 +7,7 @@ from time import monotonic
 
 from pygent import (
     Context,
-    FallbackPolicy,
     ModelCallOptions,
-    ModelRoute,
     UserMessage,
 )
 from pygent.llm import ModelResourceOwnership
@@ -97,16 +95,14 @@ async def run_managed_demo(
         group = bound.model_groups.get(requirement)
         await group.ensure_profile(
             profile="quick",
-            routes=(ModelRoute("primary", "offline", "quick"),),
-            fallback=FallbackPolicy(("primary",)),
+            models=fixed_model_group("quick").models,
             invoker=quick,
             ownership=ModelResourceOwnership.OWNED,
             deadline=monotonic() + 5,
         )
         await group.ensure_profile(
             profile="quality",
-            routes=(ModelRoute("primary", "offline", "quality"),),
-            fallback=FallbackPolicy(("primary",)),
+            models=fixed_model_group("quality").models,
             invoker=quality,
             ownership=ModelResourceOwnership.OWNED,
             deadline=monotonic() + 5,

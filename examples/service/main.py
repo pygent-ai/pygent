@@ -25,7 +25,7 @@ class DemoModelInvoker:
     async def _invoke(self, emit, **kwargs):
         group = kwargs["model_group"].name
         message = kwargs["message"]
-        route_id = "demo"
+        model_key = "demo"
         attempt = 1
         await emit(
             ModelEventKind.STARTED.value,
@@ -35,19 +35,19 @@ class DemoModelInvoker:
         content = f"{prefix}: {message.content}"
         await emit(
             ModelEventKind.ATTEMPT_STARTED.value,
-            freeze_json_object({"route_id": route_id, "attempt": attempt}),
+            freeze_json_object({"model_key": model_key, "attempt": attempt}),
         )
         await emit(
             ModelEventKind.TEXT_DELTA.value,
             freeze_json_object(
-                {"route_id": route_id, "attempt": attempt, "text": content}
+                {"model_key": model_key, "attempt": attempt, "text": content}
             ),
         )
         await emit(
             ModelEventKind.USAGE.value,
             freeze_json_object(
                 {
-                    "route_id": route_id,
+                    "model_key": model_key,
                     "attempt": attempt,
                     "mode": "cumulative",
                     "final": True,
@@ -62,13 +62,13 @@ class DemoModelInvoker:
         )
         await emit(
             ModelEventKind.ATTEMPT_SUCCEEDED.value,
-            freeze_json_object({"route_id": route_id, "attempt": attempt}),
+            freeze_json_object({"model_key": model_key, "attempt": attempt}),
         )
         await emit(
             ModelEventKind.COMPLETED.value,
             freeze_json_object(
                 {
-                    "route_id": route_id,
+                    "model_key": model_key,
                     "attempt": attempt,
                     "finish_reason": "stop",
                     "provider_request_id": f"demo-{group}",

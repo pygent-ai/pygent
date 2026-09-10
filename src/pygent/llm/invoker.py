@@ -310,9 +310,7 @@ class DefaultModelInvoker:
             )
             payload = adapter.build_request(request)
             for number in range(1, retry_policy.max_attempts_per_route + 1):
-                prepared_event = prepared_request_event(
-                    request, model_key=model_key, attempt=number
-                )
+                prepared_event = prepared_request_event(request, attempt=number)
                 emitted = False
                 completed = False
                 attempt_usage = freeze_json_object()

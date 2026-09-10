@@ -80,20 +80,11 @@ class PlanIntegrityError(PlanValidationError):
 @dataclass(frozen=True, slots=True)
 class ModelRequirement:
     group_name: str
-    capacity_key: str
-    max_concurrency: int | None
     allow_profile_override: bool = False
     overridable_generation: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_text(self.group_name, "model_requirement.group_name")
-        _require_text(self.capacity_key, "model_requirement.capacity_key")
-        if self.max_concurrency is not None and (
-            not isinstance(self.max_concurrency, int)
-            or isinstance(self.max_concurrency, bool)
-            or self.max_concurrency <= 0
-        ):
-            raise PlanValidationError("model requirement max_concurrency must be positive")
         if not isinstance(self.allow_profile_override, bool):
             raise PlanValidationError("allow_profile_override must be a bool")
         values = _text_tuple(
@@ -105,8 +96,6 @@ class ModelRequirement:
     def to_dict(self) -> dict[str, object]:
         return {
             "group_name": self.group_name,
-            "capacity_key": self.capacity_key,
-            "max_concurrency": self.max_concurrency,
             "allow_profile_override": self.allow_profile_override,
             "overridable_generation": list(self.overridable_generation),
         }
@@ -115,16 +104,12 @@ class ModelRequirement:
     def from_dict(cls, value: Mapping[str, object]) -> ModelRequirement:
         allowed = {
             "group_name",
-            "capacity_key",
-            "max_concurrency",
             "allow_profile_override",
             "overridable_generation",
         }
         _reject_unknown_fields(value, allowed, "model requirement")
         return cls(
             group_name=_require_text(value.get("group_name"), "model_requirement.group_name"),
-            capacity_key=_require_text(value.get("capacity_key"), "model_requirement.capacity_key"),
-            max_concurrency=value.get("max_concurrency"),  # type: ignore[arg-type]
             allow_profile_override=value.get("allow_profile_override", False),  # type: ignore[arg-type]
             overridable_generation=_text_tuple(
                 value.get("overridable_generation", ()),

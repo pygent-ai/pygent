@@ -14,17 +14,19 @@ from typing import cast
 
 from pygent import (
     AIMessage,
+    CapabilityPresetCatalog,
     Context,
     ContextCodec,
     ExponentialBackoff,
-    FallbackPolicy,
     GenerationConfig,
     IdempotencyPolicy,
     ModelCallLayer,
     ModelCallPolicy,
+    ModelCapabilities,
+    ModelEntry,
     ModelErrorKind,
-    ModelGroupConfig,
-    ModelRoute,
+    ModelGroup,
+    ModelSpec,
     Module,
     ReActLayer,
     RetryPolicy,
@@ -39,8 +41,8 @@ from pygent import (
 from pygent.core import FrozenJsonObject, JsonValue, freeze_json_object
 from pygent.llm import (
     DefaultModelInvoker,
-    ModelProviderCapabilities,
     ModelProviderClient,
+    ModelStreamingCapabilities,
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
 )
@@ -49,7 +51,7 @@ from pygent.tool import ExecutorRegistry, LocalToolExecutor
 from .config import ModelSettings
 
 MODEL_GROUP = "benchmark-success-model"
-ROUTE_ID = "success-only"
+MODEL_KEY = "success-only"
 TOOL_NAME = "benchmark_add"
 TOOL_ID = "benchmark.add"
 TOOL_PERMISSION = "benchmark:add"
@@ -206,9 +208,9 @@ class SyntheticSuccessClient:
         return wants_tool, request_index(payload)
 
     async def invoke(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> FrozenJsonObject:
-        del route
+        del model
         index = request_index(payload)
         started = perf_counter()
         self.tracker.enter(index)
@@ -250,9 +252,9 @@ class SyntheticSuccessClient:
             self.tracker.record(index, started)
 
     async def stream(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> AsyncIterator[FrozenJsonObject]:
-        del route
+        del model
         index = request_index(payload)
         started = perf_counter()
         self.tracker.enter(index)
@@ -319,13 +321,13 @@ class TrackedClient:
         self.tracker = ConcurrencyTracker()
 
     async def invoke(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> FrozenJsonObject:
         index = request_index(payload)
         started = perf_counter()
         self.tracker.enter(index)
         try:
-            response = await self.client.invoke(route, payload)
+            response = await self.client.invoke(model, payload)
             self.tracker.record_usage(index, response)
             return response
         finally:
@@ -333,13 +335,13 @@ class TrackedClient:
             self.tracker.record(index, started)
 
     async def stream(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> AsyncIterator[FrozenJsonObject]:
         index = request_index(payload)
         started = perf_counter()
         self.tracker.enter(index)
         try:
-            async for event in self.client.stream(route, payload):
+            async for event in self.client.stream(model, payload):
                 self.tracker.record_usage(index, event)
                 yield event
         finally:
@@ -385,7 +387,7 @@ class ModelResources:
     invoker: DefaultModelInvoker
     tracker: ConcurrencyTracker
     tool_durations_ms: dict[int, list[float]]
-    configured_group: ModelGroupConfig
+    configured_group: ModelGroup
 
     async def aclose(self) -> None:
         await self.invoker.aclose()
@@ -474,23 +476,38 @@ def build_resources(
     else:
         raise ValueError(f"unsupported backend {backend!r}")
 
+    capabilities = CapabilityPresetCatalog.builtin().presets[
+        "text_tools_structured_reasoning"
+    ].materialize(context_tokens=128_000, max_output_tokens=8_192)
+    capabilities = ModelCapabilities(
+        modalities=capabilities.modalities,
+        streaming=ModelStreamingCapabilities(text=streaming),
+        tools=capabilities.tools,
+        structured_output=capabilities.structured_output,
+        reasoning=capabilities.reasoning,
+        limits=capabilities.limits,
+    )
     invoker = DefaultModelInvoker(
-        adapters={"openai": OpenAICompatibleAdapter()},
-        clients=cast(Mapping[str, ModelProviderClient], {ROUTE_ID: client}),
-        capabilities={"openai": ModelProviderCapabilities(streaming=streaming)},
+        adapters={"openai_compatible": OpenAICompatibleAdapter()},
+        clients=cast(Mapping[str, ModelProviderClient], {MODEL_KEY: client}),
     )
     definition, tools, registry, tool_durations = _tool_resources(settings)
-    configured_group = ModelGroupConfig(
+    configured_group = ModelGroup(
         name=MODEL_GROUP,
-        routes=(ModelRoute(ROUTE_ID, "openai", model_name),),
-        fallback=FallbackPolicy((ROUTE_ID,)),
-        capacity_key="benchmark-model-resource",
+        models=(
+            ModelEntry(
+                MODEL_KEY,
+                ModelSpec(
+                    "openai",
+                    model_name,
+                    "openai_compatible",
+                    capabilities=capabilities,
+                ),
+            ),
+        ),
     )
     model_group = (
-        ModelGroupConfig.deferred(
-            name=MODEL_GROUP,
-            capacity_key="benchmark-model-resource",
-        )
+        ModelGroup.deferred(name=MODEL_GROUP)
         if dynamic_model
         else configured_group
     )

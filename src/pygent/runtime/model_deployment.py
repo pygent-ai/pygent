@@ -15,17 +15,16 @@ from typing import Any, Protocol, Self, TypeVar, cast
 import aiosqlite
 
 from pygent.llm import (
-    FallbackPolicy,
     ModelDeploymentConflictError,
     ModelDeploymentUnavailableError,
-    ModelGroupConfig,
+    ModelEntry,
+    ModelGroup,
     ModelProfileSelectionError,
     ModelProfileSnapshot,
     ModelResourceBundle,
     ModelResourceRef,
-    ModelRoute,
 )
-from pygent.llm._route_codec import model_route_from_value, model_route_value
+from pygent.llm._model_spec_codec import model_entry_from_value, model_entry_value
 
 _AsyncMethodT = TypeVar(
     "_AsyncMethodT", bound=Callable[..., Coroutine[Any, Any, Any]]
@@ -53,13 +52,10 @@ def _digest(value: object) -> str:
     return "sha256:" + hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
 
 
-def _group_value(group: ModelGroupConfig) -> dict[str, object]:
+def _group_value(group: ModelGroup) -> dict[str, object]:
     return {
         "name": group.name,
-        "routes": [model_route_value(route) for route in group.routes],
-        "fallback": list(group.fallback.order),
-        "max_concurrency": group.max_concurrency,
-        "capacity_key": group.capacity_key,
+        "models": [model_entry_value(model) for model in group.models],
         "resolution": group.resolution.value,
     }
 
@@ -96,17 +92,26 @@ def _bundle_from_value(value: object) -> ModelResourceBundle | None:
         return None
     if not isinstance(value, Mapping):
         raise TypeError("stored model resource bundle must be an object")
-    raw_routes = value.get("route_resources")
-    if not isinstance(raw_routes, list):
-        raise TypeError("stored route_resources must be an array")
+    if set(value) != {
+        "resolver_id",
+        "model_resources",
+        "capacity_owner_id",
+        "coordinator_domain",
+    }:
+        raise ValueError("stored model resource bundle fields do not match the current schema")
+    raw_models = value.get("model_resources")
+    if not isinstance(raw_models, list):
+        raise TypeError("stored model_resources must be an array")
     items: list[tuple[str, ModelResourceRef]] = []
-    for item in raw_routes:
+    for item in raw_models:
         if not isinstance(item, Mapping) or not isinstance(item.get("resource"), Mapping):
-            raise TypeError("stored route resource must be an object")
-        items.append((str(item["route_id"]), _resource_ref_from_value(item["resource"])))
+            raise TypeError("stored model resource must be an object")
+        if set(item) != {"model_key", "resource"}:
+            raise ValueError("stored model resource fields do not match the current schema")
+        items.append((str(item["model_key"]), _resource_ref_from_value(item["resource"])))
     return ModelResourceBundle(
         resolver_id=str(value["resolver_id"]),
-        route_resources=tuple(items),
+        model_resources=tuple(items),
         capacity_owner_id=str(value["capacity_owner_id"]),
         coordinator_domain=str(value["coordinator_domain"]),
     )
@@ -116,22 +121,23 @@ def _snapshot_from_value(value: Mapping[str, object]) -> ModelProfileSnapshot:
     raw_group = value.get("model_group")
     if not isinstance(raw_group, Mapping):
         raise TypeError("stored model group must be an object")
-    routes_value = raw_group.get("routes")
-    if not isinstance(routes_value, list):
-        raise TypeError("stored model routes must be an array")
-    if any(not isinstance(item, Mapping) for item in routes_value):
-        raise TypeError("stored model route must be an object")
-    routes = tuple(
-        model_route_from_value(item)
-        for item in routes_value
+    if set(raw_group) != {"name", "models", "resolution"}:
+        raise ValueError("stored model group fields do not match the current schema")
+    models_value = raw_group.get("models")
+    if not isinstance(models_value, list):
+        raise TypeError("stored model entries must be an array")
+    if any(not isinstance(item, Mapping) for item in models_value):
+        raise TypeError("stored model entry must be an object")
+    models = tuple(
+        model_entry_from_value(item)
+        for item in models_value
         if isinstance(item, Mapping)
     )
-    group = ModelGroupConfig(
+    if raw_group.get("resolution") != "concrete":
+        raise ValueError("stored model profile must contain a concrete model group")
+    group = ModelGroup(
         name=str(raw_group["name"]),
-        routes=routes,
-        fallback=FallbackPolicy(tuple(str(item) for item in raw_group.get("fallback", ()))),
-        max_concurrency=raw_group.get("max_concurrency"),  # type: ignore[arg-type]
-        capacity_key=raw_group.get("capacity_key"),  # type: ignore[arg-type]
+        models=models,
     )
     resources = _bundle_from_value(value.get("resources"))
     expected_digest = _digest(
@@ -781,28 +787,24 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
 def build_snapshot(
     *,
     scope_id: str,
-    requirement: ModelGroupConfig,
+    requirement: ModelGroup,
     profile: str,
-    routes: tuple[ModelRoute, ...],
-    fallback: FallbackPolicy,
+    models: tuple[ModelEntry, ...],
     resources: ModelResourceBundle | None,
 ) -> ModelProfileSnapshot:
     if not requirement.is_deferred:
-        raise ValueError("dynamic profiles require a deferred ModelGroupConfig")
+        raise ValueError("dynamic profiles require a deferred ModelGroup")
     if not isinstance(profile, str) or not profile:
         raise ValueError("profile must be a non-empty string")
-    group = ModelGroupConfig(
+    group = ModelGroup(
         name=requirement.name,
-        routes=routes,
-        fallback=fallback,
-        max_concurrency=requirement.max_concurrency,
-        capacity_key=requirement.capacity_key,
+        models=models,
     )
     if resources is not None:
-        route_ids = {route.route_id for route in routes}
-        resource_ids = {route_id for route_id, _ in resources.route_resources}
-        if route_ids != resource_ids:
-            raise ValueError("resource bundle must map every route exactly once")
+        model_keys = {model.name for model in models}
+        resource_keys = {model_key for model_key, _ in resources.model_resources}
+        if model_keys != resource_keys:
+            raise ValueError("resource bundle must map every model exactly once")
     portable = {
         "scope_id": scope_id,
         "group": _group_value(group),

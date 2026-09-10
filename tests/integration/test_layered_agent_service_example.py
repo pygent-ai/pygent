@@ -31,7 +31,9 @@ def test_example_builds_a_user_authored_module_graph():
     assert isinstance(agent.react.model, ModelCallLayer)
     assert isinstance(agent.react.tools, ToolCallLayer)
     assert agent.react.model.model_group.name == "assistant"
-    assert agent.react.model.model_group.fallback.order == (
+    assert tuple(
+        model.name for model in agent.react.model.model_group.models
+    ) == (
         "assistant-primary",
         "assistant-fallback",
     )
@@ -97,10 +99,10 @@ def test_example_uses_inherited_events_and_current_sdk_names():
     tool_source = (service_root / "tools.py").read_text("utf-8")
 
     assert "await self.emit(" in agent_source
-    assert "ModelGroupConfig(" not in agent_source
+    assert "ModelGroup(" not in agent_source
     assert "RetryPolicy(" not in agent_source
     assert "GenerationConfig(" not in agent_source
-    assert "ModelGroupConfig(" in model_source
+    assert "ModelGroup(" in model_source
     assert "RetryPolicy(" in model_source
     assert "GenerationConfig(" in model_source
     assert "ModelConfig" not in model_source

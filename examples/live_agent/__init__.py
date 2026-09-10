@@ -1,8 +1,8 @@
 """Opt-in live OpenAI-compatible Agent and concurrency benchmark."""
 
 from .agent import (
-    INVALID_ROUTE_ID,
-    VALID_ROUTE_ID,
+    INVALID_MODEL_KEY,
+    VALID_MODEL_KEY,
     LiveAgentConfig,
     LiveAgentResources,
     ProviderConcurrencyTracker,
@@ -11,8 +11,8 @@ from .agent import (
 )
 
 __all__ = [
-    "INVALID_ROUTE_ID",
-    "VALID_ROUTE_ID",
+    "INVALID_MODEL_KEY",
+    "VALID_MODEL_KEY",
     "LiveAgentConfig",
     "LiveAgentResources",
     "ProviderConcurrencyTracker",

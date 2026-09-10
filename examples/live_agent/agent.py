@@ -12,15 +12,17 @@ import httpx
 
 from pygent import (
     AIMessage,
+    CapabilityPresetCatalog,
     Context,
     ExponentialBackoff,
-    FallbackPolicy,
     GenerationConfig,
     IdempotencyPolicy,
     ModelCallLayer,
+    ModelCapabilities,
+    ModelEntry,
     ModelErrorKind,
-    ModelGroupConfig,
-    ModelRoute,
+    ModelGroup,
+    ModelSpec,
     Module,
     ReActLayer,
     RetryPolicy,
@@ -36,15 +38,15 @@ from pygent.core import FrozenJsonObject, JsonValue
 from pygent.llm import (
     DefaultModelInvoker,
     ModelInvoker,
-    ModelProviderCapabilities,
     ModelProviderClient,
+    ModelStreamingCapabilities,
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
 )
 from pygent.tool import ExecutorRegistry, LocalToolExecutor
 
-INVALID_ROUTE_ID = "invalid-primary"
-VALID_ROUTE_ID = "configured-fallback"
+INVALID_MODEL_KEY = "invalid-primary"
+VALID_MODEL_KEY = "configured-fallback"
 MODEL_GROUP = "live-agent"
 TOOL_NAME = "benchmark_add"
 TOOL_PERMISSION = "benchmark:add"
@@ -145,20 +147,20 @@ class _TrackedClient:
         self._closed = False
 
     async def invoke(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> FrozenJsonObject:
         self._tracker.entered()
         try:
-            return await self._client.invoke(route, payload)
+            return await self._client.invoke(model, payload)
         finally:
             self._tracker.exited()
 
     async def stream(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> AsyncIterator[FrozenJsonObject]:
         self._tracker.entered()
         try:
-            async for item in self._client.stream(route, payload):
+            async for item in self._client.stream(model, payload):
                 yield item
         finally:
             self._tracker.exited()
@@ -229,6 +231,7 @@ def build_live_agent(
     *,
     model_invoker: ModelInvoker | None = None,
     executor_registry: ExecutorRegistry | None = None,
+    streaming: bool = True,
 ) -> tuple[LiveBenchmarkAgent, ToolDefinition]:
     definition = ToolDefinition(
         name=TOOL_NAME,
@@ -265,15 +268,34 @@ def build_live_agent(
         executor_registry=executor_registry,
         max_concurrency=4,
     )
+    capabilities = CapabilityPresetCatalog.builtin().presets[
+        "text_tools_structured_reasoning"
+    ].materialize(context_tokens=128_000, max_output_tokens=8_192)
+    capabilities = ModelCapabilities(
+        modalities=capabilities.modalities,
+        streaming=ModelStreamingCapabilities(text=streaming),
+        tools=capabilities.tools,
+        structured_output=capabilities.structured_output,
+        reasoning=capabilities.reasoning,
+        limits=capabilities.limits,
+    )
     model = ModelCallLayer(
-        model_group=ModelGroupConfig(
+        model_group=ModelGroup(
             name=MODEL_GROUP,
-            routes=(
-                ModelRoute(INVALID_ROUTE_ID, "openai", model_name),
-                ModelRoute(VALID_ROUTE_ID, "openai", model_name),
+            models=(
+                ModelEntry(
+                    INVALID_MODEL_KEY,
+                    ModelSpec(
+                        "openai", model_name, "openai_compatible", capabilities=capabilities
+                    ),
+                ),
+                ModelEntry(
+                    VALID_MODEL_KEY,
+                    ModelSpec(
+                        "openai", model_name, "openai_compatible", capabilities=capabilities
+                    ),
+                ),
             ),
-            fallback=FallbackPolicy((INVALID_ROUTE_ID, VALID_ROUTE_ID)),
-            capacity_key="configured-endpoint-model",
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=1,
@@ -323,18 +345,10 @@ def build_live_resources(
         transport=transport,
     )
     invoker = DefaultModelInvoker(
-        adapters={"openai": OpenAICompatibleAdapter()},
+        adapters={"openai_compatible": OpenAICompatibleAdapter()},
         clients=cast(
             Mapping[str, ModelProviderClient],
-            {INVALID_ROUTE_ID: primary, VALID_ROUTE_ID: fallback},
-        ),
-        capabilities=(
-            {
-                INVALID_ROUTE_ID: ModelProviderCapabilities(streaming=False),
-                VALID_ROUTE_ID: ModelProviderCapabilities(streaming=False),
-            }
-            if isinstance(transport, httpx.MockTransport)
-            else None
+            {INVALID_MODEL_KEY: primary, VALID_MODEL_KEY: fallback},
         ),
     )
     registry = ExecutorRegistry()
@@ -351,7 +365,10 @@ def build_live_resources(
     registry.register(
         "benchmark.add", "1.0.0", LocalToolExecutor(add)
     )
-    agent, definition = build_live_agent(config.model_name)
+    agent, definition = build_live_agent(
+        config.model_name,
+        streaming=not isinstance(transport, httpx.MockTransport),
+    )
     return LiveAgentResources(agent, invoker, registry, tracker, definition)
 
 
@@ -376,11 +393,11 @@ def benchmark_message(index: int) -> UserMessage:
 
 
 __all__ = [
-    "INVALID_ROUTE_ID",
+    "INVALID_MODEL_KEY",
     "MODEL_GROUP",
     "TOOL_NAME",
     "TOOL_PERMISSION",
-    "VALID_ROUTE_ID",
+    "VALID_MODEL_KEY",
     "BenchmarkAuthorization",
     "LiveAgentConfig",
     "LiveAgentResources",

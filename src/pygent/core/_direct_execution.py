@@ -364,13 +364,8 @@ class _DirectExecutionScope:
         )
 
     @asynccontextmanager
-    async def model_permit(
-        self,
-        resource_key: str | None = None,
-        *,
-        max_concurrency: int | None = None,
-    ) -> AsyncIterator[CapacityPermit]:
-        permit = CapacityPermit(owner_key=resource_key)
+    async def model_permit(self) -> AsyncIterator[CapacityPermit]:
+        permit = CapacityPermit(owner_key=None)
         token = _capacity_permit.set(permit)
         try:
             yield permit

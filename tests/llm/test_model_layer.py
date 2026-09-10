@@ -20,17 +20,12 @@ from pygent.core import (
 )
 from pygent.core._module_contracts import _execution_scope
 from pygent.llm import (
-    DefaultModelInvoker,
-    FallbackPolicy,
     GenerationConfig,
     ModelCallError,
     ModelCallLayer,
     ModelExecution,
     ModelFailureReason,
-    ModelGroupConfig,
-    ModelProviderCapabilities,
     ModelProviderResponse,
-    ModelRoute,
     ModelStreamEvent,
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
@@ -44,6 +39,12 @@ from pygent.runtime import (
     LocalRuntime,
 )
 from pygent.tool import ToolDefinition, ToolResult
+from tests.support.model_specs import (
+    configured_invoker,
+    model_entry,
+    model_group,
+    transport_mode,
+)
 
 
 class RecordingInvoker:
@@ -76,13 +77,13 @@ def test_public_model_stream_events_remain_strictly_validated() -> None:
     with pytest.raises(ValueError, match="data fields must be exactly"):
         ModelStreamEvent("model.started", {})
     reset = ModelStreamEvent(
-        "model.output.reset", {"route_id": "primary", "attempt": 1}
+        "model.output.reset", {"model_key": "primary", "attempt": 1}
     )
     assert reset.kind == "model.output.reset"
     with pytest.raises(ValueError, match="data fields must be exactly"):
         ModelStreamEvent(
             "model.output.reset",
-            {"route_id": "primary", "attempt": 1, "reason": "free-form"},
+            {"model_key": "primary", "attempt": 1, "reason": "free-form"},
         )
 
 
@@ -99,10 +100,10 @@ async def test_public_model_execution_operations_do_not_use_trusted_events() -> 
 
 def layer(invoker=None) -> ModelCallLayer:
     return ModelCallLayer(
-        model_group=ModelGroupConfig(
+        model_group=model_group(
             "assistant",
-            (ModelRoute("main", "openai", "test"),),
-            FallbackPolicy(("main",)),
+            (model_entry("main", "openai", "test"),),
+            ("main",),
         ),
         retry_policy=RetryPolicy(),
         generation=GenerationConfig(),
@@ -165,10 +166,10 @@ async def test_managed_deadline_remains_execution_deadline_when_provider_ignores
             return None
 
     client = StuckClient()
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"main": client},
-        capabilities={"main": ModelProviderCapabilities(streaming=False)},
+        capabilities={"main": transport_mode(streaming=False)},
     )
     runtime = LocalRuntime()
     handle = await runtime.bind(layer(invoker)).start(
@@ -231,7 +232,7 @@ async def test_streaming_invoker_drives_module_stream_and_final_result():
         async def aclose(self):
             return None
 
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"openai": StreamingClient()},
     )
@@ -299,7 +300,7 @@ async def test_managed_scope_can_supply_deployment_model_invoker() -> None:
             return None
 
         @asynccontextmanager
-        async def model_permit(self, resource_key=None, *, max_concurrency=None):
+        async def model_permit(self):
             yield
 
         async def execute_effect(self, *, spec, request, operation):
@@ -352,10 +353,10 @@ async def test_raw_provider_fields_do_not_leak_to_message_context_or_events() ->
         async def aclose(self):
             return None
 
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"main": RawClient()},
-        capabilities={"openai": ModelProviderCapabilities(streaming=False)},
+        capabilities={"openai": transport_mode(streaming=False)},
     )
     model = layer(invoker)
     original_context = Context(metadata={"request": "safe"})
@@ -416,21 +417,21 @@ async def test_provider_errors_are_sanitized_for_invoke_stream_and_run_events() 
     )
 
     def failing_layer(*, streaming: bool) -> ModelCallLayer:
-        invoker = DefaultModelInvoker(
+        invoker = configured_invoker(
             adapters={"openai": OpenAICompatibleAdapter()},
             clients={"primary": provider_client, "fallback": provider_client},
             capabilities={
-                "openai": ModelProviderCapabilities(streaming=streaming)
+                "openai": transport_mode(streaming=streaming)
             },
         )
         return ModelCallLayer(
-            model_group=ModelGroupConfig(
+            model_group=model_group(
                 "sanitized-errors",
                 (
-                    ModelRoute("primary", "openai", "test"),
-                    ModelRoute("fallback", "openai", "test"),
+                    model_entry("primary", "openai", "test"),
+                    model_entry("fallback", "openai", "test"),
                 ),
-                FallbackPolicy(("primary", "fallback")),
+                ("primary", "fallback"),
             ),
             retry_policy=RetryPolicy(max_attempts_per_route=1),
             generation=GenerationConfig(),

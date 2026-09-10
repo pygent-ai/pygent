@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from pygent import (
     AIMessage,
+    CapabilityPresetCatalog,
     Context,
-    FallbackPolicy,
     GenerationConfig,
     ModelCallLayer,
     ModelCallPolicy,
-    ModelGroupConfig,
-    ModelRoute,
+    ModelEntry,
+    ModelGroup,
+    ModelSpec,
     Module,
     ReActLayer,
     RetryPolicy,
@@ -79,30 +80,35 @@ class TutorialAgent(Module[UserMessage, AIMessage]):
         return await self.react(message, context)
 
 
-def fixed_model_group(model_name: str = "offline-tutorial") -> ModelGroupConfig:
+def fixed_model_group(model_name: str = "offline-tutorial") -> ModelGroup:
     """Build the fixed route used by direct/offline and direct/live execution."""
 
-    return ModelGroupConfig(
+    return ModelGroup(
         name=TUTORIAL_MODEL_GROUP,
-        routes=(ModelRoute("primary", provider="openai", model=model_name),),
-        fallback=FallbackPolicy(("primary",)),
-        max_concurrency=8,
-        capacity_key="tutorial-model",
+        models=(
+            ModelEntry(
+                "primary",
+                ModelSpec(
+                    provider="openai",
+                    model_id=model_name,
+                    protocol="openai_compatible",
+                    capabilities=CapabilityPresetCatalog.builtin()
+                    .presets["text_tools"]
+                    .materialize(context_tokens=128_000, max_output_tokens=8_192),
+                ),
+            ),
+        ),
     )
 
 
-def deferred_model_group() -> ModelGroupConfig:
+def deferred_model_group() -> ModelGroup:
     """Declare a deployment requirement without embedding a concrete model."""
 
-    return ModelGroupConfig.deferred(
-        name=TUTORIAL_MODEL_GROUP,
-        max_concurrency=8,
-        capacity_key="tutorial-model",
-    )
+    return ModelGroup.deferred(name=TUTORIAL_MODEL_GROUP)
 
 
 def build_agent(
-    model_group: ModelGroupConfig,
+    model_group: ModelGroup,
     *,
     invoker: ModelInvoker | None = None,
 ) -> TutorialAgent:

@@ -4,18 +4,19 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from pygent.core import (
     ExecutionFailure,
     ExecutionFailureError,
-    FrozenJsonObject,
     JsonObjectInput,
-    JsonValueError,
     freeze_json_object,
 )
+
+if TYPE_CHECKING:
+    from .configuration import ModelEntry, ModelGroup
 
 
 class ModelErrorKind(str, Enum):
@@ -79,107 +80,6 @@ class ModelGroupResolution(str, Enum):
 class ModelResourceOwnership(str, Enum):
     BORROWED = "borrowed"
     OWNED = "owned"
-
-
-@dataclass(frozen=True, slots=True)
-class ModelRoute:
-    route_id: str
-    provider: str
-    model: str
-    provider_options: JsonObjectInput = field(
-        default_factory=dict,
-        kw_only=True,
-        repr=False,
-        metadata={"pygent_omit_if_empty": True},
-    )
-
-    def __post_init__(self) -> None:
-        for name in ("route_id", "provider", "model"):
-            value = getattr(self, name)
-            if not isinstance(value, str) or not value:
-                raise ValueError(f"{name} must be a non-empty string")
-        if not isinstance(self.provider_options, Mapping):
-            raise JsonValueError("provider_options must be a JSON object")
-        options = (
-            self.provider_options
-            if isinstance(self.provider_options, FrozenJsonObject)
-            else freeze_json_object(self.provider_options)
-        )
-        object.__setattr__(self, "provider_options", options)
-
-
-@dataclass(frozen=True, slots=True)
-class FallbackPolicy:
-    order: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        order = tuple(self.order)
-        if any(not isinstance(item, str) or not item for item in order):
-            raise ValueError("fallback order must contain non-empty route IDs")
-        if len(order) != len(set(order)):
-            raise ValueError("fallback order contains duplicate route IDs")
-        object.__setattr__(self, "order", order)
-
-
-@dataclass(frozen=True, slots=True)
-class ModelGroupConfig:
-    name: str
-    routes: tuple[ModelRoute, ...]
-    fallback: FallbackPolicy
-    max_concurrency: int | None = None
-    capacity_key: str | None = None
-    resolution: ModelGroupResolution = ModelGroupResolution.CONCRETE
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not self.name:
-            raise ValueError("model group name must be a non-empty string")
-        if not isinstance(self.resolution, ModelGroupResolution):
-            raise TypeError("resolution must be a ModelGroupResolution")
-        routes = tuple(self.routes)
-        if self.resolution is ModelGroupResolution.CONCRETE and not routes:
-            raise ValueError("concrete model group routes must be non-empty")
-        if self.resolution is ModelGroupResolution.DEFERRED and routes:
-            raise ValueError("deferred model group routes must be empty")
-        if any(not isinstance(route, ModelRoute) for route in routes):
-            raise TypeError("model group routes must contain ModelRoute values")
-        route_ids = tuple(route.route_id for route in routes)
-        if len(route_ids) != len(set(route_ids)):
-            raise ValueError("model group route IDs must be unique")
-        unknown = set(self.fallback.order) - set(route_ids)
-        if unknown:
-            raise ValueError("fallback order references an unknown route")
-        if self.max_concurrency is not None and (
-            not isinstance(self.max_concurrency, int)
-            or isinstance(self.max_concurrency, bool)
-            or self.max_concurrency <= 0
-        ):
-            raise ValueError("max_concurrency must be greater than zero")
-        if self.capacity_key is not None and (
-            not isinstance(self.capacity_key, str) or not self.capacity_key
-        ):
-            raise ValueError("capacity_key must be non-empty when provided")
-        object.__setattr__(self, "routes", routes)
-
-    @classmethod
-    def deferred(
-        cls,
-        *,
-        name: str,
-        max_concurrency: int | None = None,
-        capacity_key: str | None = None,
-    ) -> ModelGroupConfig:
-        return cls(
-            name=name,
-            routes=(),
-            fallback=FallbackPolicy(()),
-            max_concurrency=max_concurrency,
-            capacity_key=capacity_key,
-            resolution=ModelGroupResolution.DEFERRED,
-        )
-
-    @property
-    def is_deferred(self) -> bool:
-        return self.resolution is ModelGroupResolution.DEFERRED
 
 
 _OVERRIDABLE_GENERATION_FIELDS = frozenset(
@@ -277,7 +177,7 @@ class ModelResourceRef:
 @dataclass(frozen=True, slots=True)
 class ModelResourceBundle:
     resolver_id: str
-    route_resources: tuple[tuple[str, ModelResourceRef], ...]
+    model_resources: tuple[tuple[str, ModelResourceRef], ...]
     capacity_owner_id: str
     coordinator_domain: str
 
@@ -286,31 +186,31 @@ class ModelResourceBundle:
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must be a non-empty string")
-        items = tuple(self.route_resources)
-        route_ids = tuple(route_id for route_id, _ in items)
-        if not items or len(route_ids) != len(set(route_ids)):
-            raise ValueError("route_resources must contain unique route IDs")
-        for route_id, ref in items:
-            if not isinstance(route_id, str) or not route_id:
-                raise ValueError("route resource IDs must be non-empty")
+        items = tuple(self.model_resources)
+        model_keys = tuple(model_key for model_key, _ in items)
+        if not items or len(model_keys) != len(set(model_keys)):
+            raise ValueError("model_resources must contain unique model keys")
+        for model_key, ref in items:
+            if not isinstance(model_key, str) or not model_key:
+                raise ValueError("model resource keys must be non-empty")
             if not isinstance(ref, ModelResourceRef):
-                raise TypeError("route resources must contain ModelResourceRef values")
+                raise TypeError("model resources must contain ModelResourceRef values")
             if ref.resolver_id != self.resolver_id:
-                raise ValueError("all route resources must use the bundle resolver")
+                raise ValueError("all model resources must use the bundle resolver")
             if (
                 ref.capacity_owner_id != self.capacity_owner_id
                 or ref.coordinator_domain != self.coordinator_domain
             ):
-                raise ValueError("route resources must share the bundle capacity owner")
-        object.__setattr__(self, "route_resources", items)
+                raise ValueError("model resources must share the bundle capacity owner")
+        object.__setattr__(self, "model_resources", items)
 
     @classmethod
     def shared(
-        cls, routes: tuple[ModelRoute, ...], ref: ModelResourceRef
+        cls, models: tuple[ModelEntry, ...], ref: ModelResourceRef
     ) -> ModelResourceBundle:
         return cls(
             resolver_id=ref.resolver_id,
-            route_resources=tuple((route.route_id, ref) for route in routes),
+            model_resources=tuple((model.name, ref) for model in models),
             capacity_owner_id=ref.capacity_owner_id,
             coordinator_domain=ref.coordinator_domain,
         )
@@ -318,9 +218,9 @@ class ModelResourceBundle:
     def to_dict(self) -> dict[str, object]:
         return {
             "resolver_id": self.resolver_id,
-            "route_resources": [
-                {"route_id": route_id, "resource": ref.to_dict()}
-                for route_id, ref in self.route_resources
+            "model_resources": [
+                {"model_key": model_key, "resource": ref.to_dict()}
+                for model_key, ref in self.model_resources
             ],
             "capacity_owner_id": self.capacity_owner_id,
             "coordinator_domain": self.coordinator_domain,
@@ -335,7 +235,7 @@ class ModelProfileSnapshot:
     snapshot_id: str
     digest: str
     resource_bundle_digest: str | None
-    model_group: ModelGroupConfig
+    model_group: ModelGroup
     resources: ModelResourceBundle | None = None
 
     def __post_init__(self) -> None:
@@ -367,11 +267,11 @@ class ModelResourceResolver(Protocol):
     resolver_id: str
 
     async def validate(
-        self, model_group: ModelGroupConfig, resources: ModelResourceBundle
+        self, model_group: ModelGroup, resources: ModelResourceBundle
     ) -> None: ...
 
     def acquire(
-        self, model_group: ModelGroupConfig, resources: ModelResourceBundle
+        self, model_group: ModelGroup, resources: ModelResourceBundle
     ) -> Any: ...
 
 
@@ -652,7 +552,6 @@ class ModelProviderError(RuntimeError):
 
 __all__ = [
     "ExponentialBackoff",
-    "FallbackPolicy",
     "GenerationConfig",
     "ModelAttempt",
     "ModelCallError",
@@ -662,7 +561,6 @@ __all__ = [
     "ModelDeploymentUnavailableError",
     "ModelErrorKind",
     "ModelFailureReason",
-    "ModelGroupConfig",
     "ModelGroupConfigurationError",
     "ModelGroupError",
     "ModelGroupResolution",
@@ -673,6 +571,5 @@ __all__ = [
     "ModelResourceOwnership",
     "ModelResourceRef",
     "ModelResourceResolver",
-    "ModelRoute",
     "RetryPolicy",
 ]

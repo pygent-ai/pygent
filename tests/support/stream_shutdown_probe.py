@@ -9,14 +9,14 @@ from pygent import (
 )
 from pygent.core import freeze_json_object
 from pygent.llm import (
+    CapabilityPresetCatalog,
     DefaultModelInvoker,
-    FallbackPolicy,
     GenerationConfig,
     ModelCallError,
+    ModelEntry,
     ModelErrorKind,
-    ModelGroupConfig,
-    ModelProviderCapabilities,
-    ModelRoute,
+    ModelGroup,
+    ModelSpec,
     OpenAICompatibleAdapter,
     RetryPolicy,
 )
@@ -64,15 +64,28 @@ async def main() -> None:
     invoker_module._CANCELLATION_CLEANUP_GRACE_SECONDS = 0.01
     client = NestedCancellationResistantClient()
     invoker = DefaultModelInvoker(
-        adapters={"openai": OpenAICompatibleAdapter()},
+        adapters={"openai_compatible": OpenAICompatibleAdapter()},
         clients={"primary": client},
-        capabilities={"primary": ModelProviderCapabilities(streaming=True)},
     )
     execution = invoker.execute(
-        model_group=ModelGroupConfig(
+        model_group=ModelGroup(
             name="shutdown-probe",
-            routes=(ModelRoute("primary", "openai", "probe"),),
-            fallback=FallbackPolicy(("primary",)),
+            models=(
+                ModelEntry(
+                    "primary",
+                    ModelSpec(
+                        provider="openai",
+                        model_id="probe",
+                        protocol="openai_compatible",
+                        capabilities=CapabilityPresetCatalog.builtin()
+                        .presets["text"]
+                        .materialize(
+                            context_tokens=1_024,
+                            max_output_tokens=128,
+                        ),
+                    ),
+                ),
+            ),
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=1,

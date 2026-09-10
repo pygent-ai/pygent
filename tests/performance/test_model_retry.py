@@ -10,20 +10,22 @@ from benchmarks.models import TrackedClient, build_resources
 from pygent import (
     Context,
     ExponentialBackoff,
-    FallbackPolicy,
     GenerationConfig,
     ModelErrorKind,
-    ModelGroupConfig,
-    ModelRoute,
+    ModelSpec,
     RetryPolicy,
     UserMessage,
 )
 from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import (
-    DefaultModelInvoker,
     ModelCallError,
-    ModelProviderCapabilities,
     OpenAICompatibleAdapter,
+)
+from tests.support.model_specs import (
+    configured_invoker,
+    model_entry,
+    model_group,
+    transport_mode,
 )
 
 
@@ -33,9 +35,9 @@ class SlowOnceClient:
         self.closed = False
 
     async def invoke(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> FrozenJsonObject:
-        del route, payload
+        del model, payload
         self.calls += 1
         if self.calls == 1:
             await asyncio.sleep(1)
@@ -47,9 +49,9 @@ class SlowOnceClient:
         )
 
     async def stream(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> AsyncIterator[FrozenJsonObject]:
-        del route, payload
+        del model, payload
         if False:
             yield freeze_json_object({})
 
@@ -89,16 +91,15 @@ async def test_benchmark_resources_project_retry_configuration() -> None:
 async def test_benchmark_attempt_idle_timeout_retries_through_model_policy() -> None:
     provider = SlowOnceClient()
     tracked = TrackedClient(provider)
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"live": tracked},
-        capabilities={"live": ModelProviderCapabilities(streaming=False)},
+        capabilities={"live": transport_mode(streaming=False)},
     )
     execution = invoker.execute(
-        model_group=ModelGroupConfig(
+        model_group=model_group(
             name="retry-check",
-            routes=(ModelRoute("live", "openai", "private"),),
-            fallback=FallbackPolicy(("live",)),
+            models=(model_entry("live", "openai", "private"),),
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=2,
@@ -178,16 +179,15 @@ async def test_benchmark_attempt_idle_timeout_fails_closed_when_cleanup_is_unkno
     )
     provider = StuckClient()
     tracked = TrackedClient(provider)
-    invoker = DefaultModelInvoker(
+    invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
         clients={"live": tracked},
-        capabilities={"live": ModelProviderCapabilities(streaming=streaming)},
+        capabilities={"live": transport_mode(streaming=streaming)},
     )
     execution = invoker.execute(
-        model_group=ModelGroupConfig(
+        model_group=model_group(
             name="unknown-check",
-            routes=(ModelRoute("live", "openai", "private"),),
-            fallback=FallbackPolicy(("live",)),
+            models=(model_entry("live", "openai", "private"),),
         ),
         retry_policy=RetryPolicy(
             max_attempts_per_route=3,

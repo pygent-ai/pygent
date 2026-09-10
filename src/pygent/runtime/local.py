@@ -67,23 +67,25 @@ from .plan import CodeArtifactSpec, ExecutionPlan
 def _validate_deployment_invoker(
     deployment: ModelProfileSnapshot, invoker: object
 ) -> None:
-    routes = tuple(
-        route for route in deployment.model_group.routes if route.provider_options
+    models = tuple(
+        model
+        for model in deployment.model_group.models
+        if model.spec.provider_options
     )
-    if not routes:
+    if not models:
         return
-    validate_route = getattr(invoker, "validate_route", None)
-    if not callable(validate_route):
+    validate_model = getattr(invoker, "validate_model", None)
+    if not callable(validate_model):
         raise ModelDeploymentUnavailableError(
             "current model invoker cannot validate pinned provider options"
         )
-    for route in routes:
+    for model in models:
         try:
-            validate_route(route)
+            validate_model(model)
         except Exception:  # noqa: BLE001 - deployment SPI boundary
             raise ModelDeploymentUnavailableError(
-                "current model adapter no longer supports pinned options for route "
-                f"{route.route_id!r}"
+                "current model adapter no longer supports pinned options for model "
+                f"{model.name!r}"
             ) from None
 
 

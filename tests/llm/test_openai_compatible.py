@@ -16,16 +16,35 @@ from pygent import (
 from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import (
     GenerationConfig,
+    ModelEntry,
     ModelErrorKind,
     ModelFailureReason,
     ModelInfo,
     ModelProviderError,
     ModelProviderRequest,
-    ModelRoute,
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
 )
 from pygent.llm import openai_compatible as openai_compatible_module
+from tests.support.model_specs import model_entry
+
+
+def provider_request(
+    *,
+    entry: ModelEntry,
+    message,
+    context,
+    generation,
+    tools=(),
+) -> ModelProviderRequest:
+    return ModelProviderRequest(
+        model_key=entry.name,
+        model=entry.spec,
+        message=message,
+        context=context,
+        generation=generation,
+        tools=tools,
+    )
 
 
 def _request(
@@ -33,8 +52,8 @@ def _request(
     generation: GenerationConfig | None = None,
     tools: tuple[ToolDefinition, ...] = (),
 ):
-    return ModelProviderRequest(
-        route=ModelRoute("main", "openai", "gpt-test"),
+    return provider_request(
+        entry=model_entry("main", "openai", "gpt-test"),
         message=UserMessage(content="hello"),
         context=Context(system_prompt="be brief"),
         generation=generation or GenerationConfig(),
@@ -85,9 +104,9 @@ async def test_stream_usage_defaults_preserve_options(monkeypatch, native, optio
         )
 
     monkeypatch.setattr(openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient)
-    route = ModelRoute("main", "openai", "gpt-test", provider_options=options)
-    request = ModelProviderRequest(
-        route=route, message=UserMessage(content="hello"), context=Context(),
+    route = model_entry("main", "openai", "gpt-test", provider_options=options)
+    request = provider_request(
+        entry=route, message=UserMessage(content="hello"), context=Context(),
         generation=GenerationConfig(), tools=(),
     )
     adapter = OpenAICompatibleAdapter()
@@ -98,7 +117,7 @@ async def test_stream_usage_defaults_preserve_options(monkeypatch, native, optio
             base_url="https://models.example/v1", client=None if native else http,
         )
         try:
-            streamed = [frame async for frame in client.stream(route, payload)]
+            streamed = [frame async for frame in client.stream(route.spec, payload)]
         finally:
             await client.aclose()
     assert len(bodies) == 1
@@ -319,8 +338,8 @@ def test_structured_output_failure_has_a_specific_closed_reason():
 
 
 def test_tool_result_error_classification_is_visible_to_the_model() -> None:
-    request = ModelProviderRequest(
-        route=ModelRoute("main", "openai", "gpt-test"),
+    request = provider_request(
+        entry=model_entry("main", "openai", "gpt-test"),
         message=ToolMessage(
             results=(
                 ToolResult(
@@ -457,13 +476,13 @@ async def test_provider_http_errors_expose_only_closed_sanitized_diagnostics() -
     client = OpenAICompatibleClient(
         base_url=canaries[1], api_key=canaries[0], client=http_client
     )
-    route = ModelRoute("main", "openai", "gpt-test")
+    route = model_entry("main", "openai", "gpt-test")
     payload = OpenAICompatibleAdapter().build_request(_request())
     try:
         with pytest.raises(ModelProviderError) as invoked:
-            await client.invoke(route, payload)
+            await client.invoke(route.spec, payload)
         with pytest.raises(ModelProviderError) as streamed:
-            async for _ in client.stream(route, payload):
+            async for _ in client.stream(route.spec, payload):
                 pass
     finally:
         await client.aclose()
@@ -747,10 +766,10 @@ async def test_http_and_sse_transport_use_openai_compatible_endpoint():
     client = OpenAICompatibleClient(
         base_url="https://models.example/v1", client=http_client
     )
-    route = ModelRoute("main", "openai", "gpt-test")
+    route = model_entry("main", "openai", "gpt-test")
     payload = OpenAICompatibleAdapter().build_request(_request())
-    full = await client.invoke(route, payload)
-    streamed = [item async for item in client.stream(route, payload)]
+    full = await client.invoke(route.spec, payload)
+    streamed = [item async for item in client.stream(route.spec, payload)]
     assert "stream_options" not in json.loads(requests[0].content)
     assert json.loads(requests[1].content)["stream_options"] == {"include_usage": True}
     assert full["choices"]
@@ -804,12 +823,12 @@ async def test_completed_sse_response_reuses_http1_connection() -> None:
     server = await asyncio.start_server(serve_connection, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
     client = OpenAICompatibleClient(base_url=f"http://127.0.0.1:{port}/v1")
-    route = ModelRoute("main", "openai", "gpt-test")
+    route = model_entry("main", "openai", "gpt-test")
     payload = OpenAICompatibleAdapter().build_request(_request())
 
     try:
         for _ in range(2):
-            streamed = [item async for item in client.stream(route, payload)]
+            streamed = [item async for item in client.stream(route.spec, payload)]
             assert streamed[-1]["done"] is True
         assert connection_count == 1
     finally:
@@ -860,7 +879,8 @@ async def test_done_does_not_wait_for_unknown_length_sse_eof() -> None:
         return [
             item
             async for item in client.stream(
-                ModelRoute("main", "openai", "gpt-test"), freeze_json_object({})
+                model_entry("main", "openai", "gpt-test").spec,
+                freeze_json_object({}),
             )
         ]
 
@@ -929,12 +949,12 @@ async def test_completed_chunked_sse_response_reuses_http1_connection(
     server = await asyncio.start_server(serve_connection, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
     client = OpenAICompatibleClient(base_url=f"http://127.0.0.1:{port}/v1")
-    route = ModelRoute("main", "openai", "gpt-test")
+    route = model_entry("main", "openai", "gpt-test")
     payload = OpenAICompatibleAdapter().build_request(_request())
 
     try:
         for _ in range(2):
-            streamed = [item async for item in client.stream(route, payload)]
+            streamed = [item async for item in client.stream(route.spec, payload)]
             assert streamed[-1]["done"] is True
         assert connection_count == 1
     finally:
@@ -1011,7 +1031,7 @@ async def test_owned_client_close_is_idempotent_and_blocks_reuse():
     await client.aclose()
     with pytest.raises(RuntimeError, match="closed"):
         await client.invoke(
-            ModelRoute("main", "openai", "gpt-test"),
+            model_entry("main", "openai", "gpt-test").spec,
             OpenAICompatibleAdapter().build_request(_request()),
         )
 
@@ -1029,11 +1049,11 @@ async def test_owned_native_transport_bounds_connections_before_http():
 @pytest.mark.asyncio
 async def test_owned_close_rejects_new_native_requests():
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
-    route = ModelRoute("main", "openai", "gpt-test")
+    route = model_entry("main", "openai", "gpt-test")
     payload = OpenAICompatibleAdapter().build_request(_request())
     await client.aclose()
     with pytest.raises(RuntimeError, match="closed"):
-        await client.invoke(route, payload)
+        await client.invoke(route.spec, payload)
 
 
 @pytest.mark.asyncio

@@ -6,13 +6,11 @@ import pytest
 
 from pygent import (
     Context,
-    FallbackPolicy,
     GenerationConfig,
     ModelCallError,
     ModelCallLayer,
     ModelErrorKind,
-    ModelGroupConfig,
-    ModelRoute,
+    ModelGroup,
     RetryPolicy,
     UserMessage,
 )
@@ -23,6 +21,7 @@ from pygent.runtime import (
     LocalRuntime,
     SQLiteHistoryStore,
 )
+from tests.support.model_specs import model_entry
 
 
 class FailingInvoker:
@@ -51,10 +50,9 @@ class FailingInvoker:
 
 def failing_model(invoker: FailingInvoker) -> ModelCallLayer:
     return ModelCallLayer(
-        model_group=ModelGroupConfig(
+        model_group=ModelGroup(
             "durable",
-            (ModelRoute("primary", "openai", "test"),),
-            FallbackPolicy(("primary",)),
+            (model_entry("primary", "openai", "test"),),
         ),
         retry_policy=RetryPolicy(),
         generation=GenerationConfig(),
