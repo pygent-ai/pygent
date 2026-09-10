@@ -146,6 +146,128 @@
           }
         }
       }
+    },
+    "aliyun_token_plan": {
+      "display_name": "Alibaba Cloud Token Plan",
+      "default_protocol": "openai_chat_completions",
+      "protocols": {
+        "openai_chat_completions": {
+          "protocol": "openai_chat_completions",
+          "base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+          "authentication": "bearer",
+          "api_key_env": "ALIYUN_TOKEN_PLAN_OPENAI_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        "anthropic_messages": {
+          "protocol": "anthropic_messages",
+          "base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+          "authentication": "bearer",
+          "api_key_env": "ALIYUN_TOKEN_PLAN_ANTHROPIC_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "thinking": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "const": "disabled"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "const": "enabled"
+                      },
+                      "budget_tokens": {
+                        "type": "integer",
+                        "minimum": 1024
+                      },
+                      "display": {
+                        "type": "string",
+                        "enum": [
+                          "summarized",
+                          "omitted"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "budget_tokens"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "const": "adaptive"
+                      },
+                      "display": {
+                        "type": "string",
+                        "enum": [
+                          "summarized",
+                          "omitted"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "output_config": {
+                "type": "object",
+                "properties": {
+                  "effort": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max"
+                    ]
+                  }
+                },
+                "required": [
+                  "effort"
+                ],
+                "additionalProperties": false
+              },
+              "service_tier": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "standard_only"
+                ]
+              },
+              "stop_sequences": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
     }
   }
 }

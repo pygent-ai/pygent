@@ -136,6 +136,1102 @@
         "reasoning": {"supported": true, "controllable": true},
         "limits": {"context_tokens": 200000, "max_output_tokens": 64000}
       }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen3.8-max",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen3.8-max",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen3.8-flash",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen3.8-flash",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen3.7-max",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen3.7-max",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen3.7-plus",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen3.7-plus",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen3.6-flash",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen3.6-flash",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "deepseek-v4-pro",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "deepseek-v4-pro",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "deepseek-v4-pro-0813",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "deepseek-v4-pro-0813",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "deepseek-v4-flash-0731",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "deepseek-v4-flash-0731",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "glm-5.2",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "glm-5.2",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen-image-3.0-pro",
+      "protocol": "dashscope_multimodal_generation",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "streaming": {
+          "output": []
+        },
+        "tools": {
+          "call": false,
+          "choice": [],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "wan2.7-image",
+      "protocol": "dashscope_multimodal_generation",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "streaming": {
+          "output": []
+        },
+        "tools": {
+          "call": false,
+          "choice": [],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "wan2.7-image-pro",
+      "protocol": "dashscope_multimodal_generation",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "streaming": {
+          "output": []
+        },
+        "tools": {
+          "call": false,
+          "choice": [],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "happyhorse-1.1-i2v",
+      "protocol": "dashscope_video_generation",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "video"
+          ]
+        },
+        "streaming": {
+          "output": []
+        },
+        "tools": {
+          "call": false,
+          "choice": [],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "happyhorse-1.1-t2v",
+      "protocol": "dashscope_video_generation",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "video"
+          ]
+        },
+        "streaming": {
+          "output": []
+        },
+        "tools": {
+          "call": false,
+          "choice": [],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "happyhorse-1.1-r2v",
+      "protocol": "dashscope_video_generation",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "video"
+          ]
+        },
+        "streaming": {
+          "output": []
+        },
+        "tools": {
+          "call": false,
+          "choice": [],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen-audio-3.0-tts-plus",
+      "protocol": "dashscope_speech_synthesis",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "audio"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "audio"
+          ]
+        },
+        "tools": {
+          "call": false,
+          "choice": [],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen-audio-3.0-realtime-plus",
+      "protocol": "dashscope_realtime",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": 40960,
+          "max_output_tokens": 8192
+        }
+      }
+    },
+    {
+      "provider": "aliyun_token_plan",
+      "model_id": "qwen-audio-3.0-asr-flash",
+      "protocol": "dashscope_speech_recognition",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "audio"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": []
+        },
+        "tools": {
+          "call": false,
+          "choice": [],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
     }
   ]
 }

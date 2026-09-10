@@ -8,11 +8,70 @@ from pygent.llm import (
     ProviderCatalog,
 )
 
+ALIYUN_TEXT_MODELS = {
+    "qwen3.8-max",
+    "qwen3.8-flash",
+    "qwen3.7-max",
+    "qwen3.7-plus",
+    "qwen3.6-flash",
+    "deepseek-v4-pro",
+    "deepseek-v4-pro-0813",
+    "deepseek-v4-flash-0731",
+    "glm-5.2",
+}
+
+ALIYUN_SPECIALIZED_MODELS = {
+    "qwen-image-3.0-pro",
+    "wan2.7-image",
+    "wan2.7-image-pro",
+    "happyhorse-1.1-i2v",
+    "happyhorse-1.1-t2v",
+    "happyhorse-1.1-r2v",
+    "qwen-audio-3.0-tts-plus",
+    "qwen-audio-3.0-realtime-plus",
+    "qwen-audio-3.0-asr-flash",
+}
+
+
+def _complete_capability_mapping(
+    *,
+    input_modalities: tuple[str, ...],
+    output_modalities: tuple[str, ...],
+    streaming_output: tuple[str, ...],
+    tools: bool,
+    json_object: bool,
+    json_schema: bool,
+    reasoning: bool,
+    context_tokens: int | None,
+    max_output_tokens: int | None,
+) -> dict[str, object]:
+    return {
+        "modalities": {
+            "input": list(input_modalities),
+            "output": list(output_modalities),
+        },
+        "streaming": {"output": list(streaming_output)},
+        "tools": {
+            "call": tools,
+            "choice": ["none", "auto", "required", "named"] if tools else [],
+            "parallel": tools,
+        },
+        "structured_output": {
+            "json_object": json_object,
+            "json_schema": json_schema,
+        },
+        "reasoning": {"supported": reasoning, "controllable": reasoning},
+        "limits": {
+            "context_tokens": context_tokens,
+            "max_output_tokens": max_output_tokens,
+        },
+    }
+
 
 def test_builtin_provider_catalog_projects_protocol_specific_connections() -> None:
     catalog = ProviderCatalog.builtin()
 
-    assert tuple(catalog.providers) == ("deepseek", "anthropic")
+    assert tuple(catalog.providers) == ("deepseek", "anthropic", "aliyun_token_plan")
     deepseek = catalog.providers["deepseek"]
     assert deepseek.display_name == "DeepSeek"
     assert deepseek.default_protocol == "openai_chat_completions"
@@ -44,10 +103,232 @@ def test_builtin_provider_catalog_projects_protocol_specific_connections() -> No
     )
 
 
+def test_builtin_token_plan_provider_has_two_executable_protocol_presets() -> None:
+    preset = ProviderCatalog.builtin().providers["aliyun_token_plan"]
+
+    assert preset.display_name == "Alibaba Cloud Token Plan"
+    assert preset.default_protocol == "openai_chat_completions"
+    assert set(preset.protocols) == {
+        "openai_chat_completions",
+        "anthropic_messages",
+    }
+    assert (
+        preset.protocols["openai_chat_completions"].base_url
+        == "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+    )
+    assert preset.protocols["openai_chat_completions"].api_key_env == (
+        "ALIYUN_TOKEN_PLAN_OPENAI_API_KEY"
+    )
+    assert (
+        preset.protocols["anthropic_messages"].base_url
+        == "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic"
+    )
+    assert preset.protocols["anthropic_messages"].api_key_env == (
+        "ALIYUN_TOKEN_PLAN_ANTHROPIC_API_KEY"
+    )
+
+
+def test_builtin_token_plan_catalog_has_all_18_models_and_27_records() -> None:
+    records = {
+        key: value
+        for key, value in ModelCapabilityCatalog.builtin().models.items()
+        if key[0] == "aliyun_token_plan"
+    }
+
+    assert {key[1] for key in records} == (
+        ALIYUN_TEXT_MODELS | ALIYUN_SPECIALIZED_MODELS
+    )
+    assert len(records) == 27
+    for model_id in ALIYUN_TEXT_MODELS:
+        assert (
+            "aliyun_token_plan",
+            model_id,
+            "openai_chat_completions",
+        ) in records
+        assert ("aliyun_token_plan", model_id, "anthropic_messages") in records
+
+
+@pytest.mark.parametrize(
+    "model_id,input_modalities",
+    [
+        ("qwen3.8-max", ("text", "image")),
+        ("qwen3.8-flash", ("text", "image")),
+        ("qwen3.7-max", ("text",)),
+        ("qwen3.7-plus", ("text", "image")),
+        ("qwen3.6-flash", ("text", "image")),
+        ("deepseek-v4-pro", ("text",)),
+        ("deepseek-v4-pro-0813", ("text",)),
+        ("deepseek-v4-flash-0731", ("text",)),
+        ("glm-5.2", ("text",)),
+    ],
+)
+@pytest.mark.parametrize(
+    "protocol", ["openai_chat_completions", "anthropic_messages"]
+)
+def test_builtin_token_plan_text_capability_record_is_complete(
+    model_id: str,
+    input_modalities: tuple[str, ...],
+    protocol: str,
+) -> None:
+    modern_qwen = model_id.startswith(("qwen3.7", "qwen3.8"))
+    json_schema = (
+        modern_qwen
+        if protocol == "openai_chat_completions"
+        else model_id != "qwen3.6-flash"
+    )
+
+    capabilities = ModelCapabilityCatalog.builtin().models[
+        ("aliyun_token_plan", model_id, protocol)
+    ]
+
+    assert capabilities.to_mapping() == _complete_capability_mapping(
+        input_modalities=input_modalities,
+        output_modalities=("text",),
+        streaming_output=("text",),
+        tools=True,
+        json_object=True,
+        json_schema=json_schema,
+        reasoning=True,
+        context_tokens=1_000_000,
+        max_output_tokens=None,
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "model_id",
+        "protocol",
+        "input_modalities",
+        "output_modalities",
+        "streaming_output",
+        "tools",
+        "context_tokens",
+        "max_output_tokens",
+    ),
+    [
+        (
+            "qwen-image-3.0-pro",
+            "dashscope_multimodal_generation",
+            ("text", "image"),
+            ("image",),
+            (),
+            False,
+            None,
+            None,
+        ),
+        (
+            "wan2.7-image",
+            "dashscope_multimodal_generation",
+            ("text", "image"),
+            ("image",),
+            (),
+            False,
+            None,
+            None,
+        ),
+        (
+            "wan2.7-image-pro",
+            "dashscope_multimodal_generation",
+            ("text", "image"),
+            ("image",),
+            (),
+            False,
+            None,
+            None,
+        ),
+        (
+            "happyhorse-1.1-i2v",
+            "dashscope_video_generation",
+            ("text", "image"),
+            ("video",),
+            (),
+            False,
+            None,
+            None,
+        ),
+        (
+            "happyhorse-1.1-t2v",
+            "dashscope_video_generation",
+            ("text",),
+            ("video",),
+            (),
+            False,
+            None,
+            None,
+        ),
+        (
+            "happyhorse-1.1-r2v",
+            "dashscope_video_generation",
+            ("text", "image"),
+            ("video",),
+            (),
+            False,
+            None,
+            None,
+        ),
+        (
+            "qwen-audio-3.0-tts-plus",
+            "dashscope_speech_synthesis",
+            ("text",),
+            ("audio",),
+            ("audio",),
+            False,
+            None,
+            None,
+        ),
+        (
+            "qwen-audio-3.0-realtime-plus",
+            "dashscope_realtime",
+            ("text", "audio"),
+            ("text", "audio"),
+            ("text", "audio"),
+            True,
+            40_960,
+            8_192,
+        ),
+        (
+            "qwen-audio-3.0-asr-flash",
+            "dashscope_speech_recognition",
+            ("audio",),
+            ("text",),
+            (),
+            False,
+            None,
+            None,
+        ),
+    ],
+)
+def test_builtin_token_plan_specialized_capability_record_is_complete(
+    model_id: str,
+    protocol: str,
+    input_modalities: tuple[str, ...],
+    output_modalities: tuple[str, ...],
+    streaming_output: tuple[str, ...],
+    tools: bool,
+    context_tokens: int | None,
+    max_output_tokens: int | None,
+) -> None:
+    capabilities = ModelCapabilityCatalog.builtin().models[
+        ("aliyun_token_plan", model_id, protocol)
+    ]
+
+    assert capabilities.to_mapping() == _complete_capability_mapping(
+        input_modalities=input_modalities,
+        output_modalities=output_modalities,
+        streaming_output=streaming_output,
+        tools=tools,
+        json_object=False,
+        json_schema=False,
+        reasoning=False,
+        context_tokens=context_tokens,
+        max_output_tokens=max_output_tokens,
+    )
+
+
 def test_builtin_model_capabilities_use_provider_model_protocol_key() -> None:
     catalog = ModelCapabilityCatalog.builtin()
 
-    assert set(catalog.models) == {
+    expected = {
         ("deepseek", "deepseek-v4-flash", "openai_chat_completions"),
         ("deepseek", "deepseek-v4-pro", "openai_chat_completions"),
         ("deepseek", "deepseek-v4-flash", "anthropic_messages"),
@@ -57,6 +338,27 @@ def test_builtin_model_capabilities_use_provider_model_protocol_key() -> None:
         ("anthropic", "claude-sonnet-5", "anthropic_messages"),
         ("anthropic", "claude-haiku-4-5-20251001", "anthropic_messages"),
     }
+    expected.update(
+        ("aliyun_token_plan", model_id, protocol)
+        for model_id in ALIYUN_TEXT_MODELS
+        for protocol in ("openai_chat_completions", "anthropic_messages")
+    )
+    specialized_protocols = {
+        "qwen-image-3.0-pro": "dashscope_multimodal_generation",
+        "wan2.7-image": "dashscope_multimodal_generation",
+        "wan2.7-image-pro": "dashscope_multimodal_generation",
+        "happyhorse-1.1-i2v": "dashscope_video_generation",
+        "happyhorse-1.1-t2v": "dashscope_video_generation",
+        "happyhorse-1.1-r2v": "dashscope_video_generation",
+        "qwen-audio-3.0-tts-plus": "dashscope_speech_synthesis",
+        "qwen-audio-3.0-realtime-plus": "dashscope_realtime",
+        "qwen-audio-3.0-asr-flash": "dashscope_speech_recognition",
+    }
+    expected.update(
+        ("aliyun_token_plan", model_id, protocol)
+        for model_id, protocol in specialized_protocols.items()
+    )
+    assert set(catalog.models) == expected
     capabilities = catalog.models[
         ("deepseek", "deepseek-v4-flash", "openai_chat_completions")
     ]
