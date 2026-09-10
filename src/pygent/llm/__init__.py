@@ -13,6 +13,11 @@ from ._adapter_contracts import (
     ModelStreamEvent,
 )
 from ._model_execution import ModelExecution
+from .anthropic_messages import (
+    AnthropicMessagesAdapter,
+    AnthropicMessagesClient,
+    anthropic_messages_adapters,
+)
 from .catalog import ModelCatalog, ModelInfo
 from .catalogs import (
     CapabilityPreset,
@@ -70,6 +75,8 @@ from .types import (
 )
 
 __all__ = [
+    "AnthropicMessagesAdapter",
+    "AnthropicMessagesClient",
     "BuiltinModelProtocol",
     "CapabilityPreset",
     "CapabilityPresetCatalog",
@@ -130,5 +137,6 @@ __all__ = [
     "ProviderPreset",
     "ProviderProtocolPreset",
     "RetryPolicy",
+    "anthropic_messages_adapters",
     "openai_compatible_adapters",
 ]
