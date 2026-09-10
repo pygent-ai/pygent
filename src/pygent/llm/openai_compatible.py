@@ -506,8 +506,7 @@ class OpenAICompatibleAdapter:
             elif isinstance(raw_message, dict):
                 reasoning_content = raw_message.get("reasoning_content")
                 if (
-                    request.model.provider == "deepseek"
-                    and "reasoning_content" in raw_message
+                    "reasoning_content" in raw_message
                     and not isinstance(reasoning_content, str)
                 ):
                     raise TypeError
@@ -568,11 +567,9 @@ class OpenAICompatibleAdapter:
 
         usage = _canonical_usage(body.get("usage"))
         continuation = None
-        if request.model.provider == "deepseek" and isinstance(
-            reasoning_content, str
-        ):
+        if isinstance(reasoning_content, str):
             continuation = ModelContinuation(
-                provider="deepseek",
+                provider=request.model.provider,
                 protocol=self.protocol,
                 data={"version": 1, "reasoning_content": reasoning_content},
             )
@@ -619,6 +616,10 @@ class OpenAICompatibleAdapter:
             if delta is None:
                 delta = {}
             if not isinstance(delta, dict):
+                raise TypeError
+            if "reasoning_content" in delta and not isinstance(
+                delta["reasoning_content"], str
+            ):
                 raise TypeError
             reasoning = next(
                 (
@@ -743,37 +744,37 @@ class _OpenAIStreamDecoder:
         self, payload: FrozenJsonObject
     ) -> tuple[ModelProviderStreamPart, ...]:
         parts = self._adapter._decode_stream_payload(self._request, payload)
-        if self._request.model.provider == "deepseek":
-            for part in parts:
-                if part.kind == ModelProviderStreamKind.REASONING:
-                    text = cast(FrozenJsonObject, part.data).get("text")
-                    if isinstance(text, str) and text:
-                        self._reasoning_parts.append(text)
-            if (
-                self._reasoning_parts
-                and not self._continuation_emitted
-                and any(
-                    part.kind == ModelProviderStreamKind.FINISH for part in parts
-                )
-            ):
-                continuation = ModelProviderStreamPart(
-                    "continuation",
-                    {
-                        "provider": "deepseek",
-                        "protocol": self._adapter.protocol,
-                        "data": {
-                            "version": 1,
-                            "reasoning_content": "".join(self._reasoning_parts),
-                        },
+        body = payload.to_dict()
+        choices = body.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            delta = choices[0].get("delta")
+            if isinstance(delta, dict):
+                reasoning_content = delta.get("reasoning_content")
+                if isinstance(reasoning_content, str) and reasoning_content:
+                    self._reasoning_parts.append(reasoning_content)
+        if (
+            self._reasoning_parts
+            and not self._continuation_emitted
+            and any(part.kind == ModelProviderStreamKind.FINISH for part in parts)
+        ):
+            continuation = ModelProviderStreamPart(
+                "continuation",
+                {
+                    "provider": self._request.model.provider,
+                    "protocol": self._adapter.protocol,
+                    "data": {
+                        "version": 1,
+                        "reasoning_content": "".join(self._reasoning_parts),
                     },
-                )
-                finish_index = next(
-                    index
-                    for index, part in enumerate(parts)
-                    if part.kind == ModelProviderStreamKind.FINISH
-                )
-                parts = (*parts[:finish_index], continuation, *parts[finish_index:])
-                self._continuation_emitted = True
+                },
+            )
+            finish_index = next(
+                index
+                for index, part in enumerate(parts)
+                if part.kind == ModelProviderStreamKind.FINISH
+            )
+            parts = (*parts[:finish_index], continuation, *parts[finish_index:])
+            self._continuation_emitted = True
         if any(part.kind == ModelProviderStreamKind.FINISH for part in parts):
             self._completed = True
         return parts
@@ -925,7 +926,6 @@ def _encode_messages(
             continuation is not None
             and continuation.provider == model.provider
             and continuation.protocol == model.protocol
-            and model.provider == "deepseek"
         ):
             data = cast(FrozenJsonObject, continuation.data)
             if (
@@ -936,7 +936,7 @@ def _encode_messages(
             ):
                 raise ModelProviderError(
                     ModelErrorKind.INVALID_REQUEST,
-                    "DeepSeek continuation has an invalid shape",
+                    "OpenAI continuation has an invalid shape",
                 )
             encoded["reasoning_content"] = data["reasoning_content"]
     if isinstance(message, AIMessage) and message.tool_calls:

@@ -81,8 +81,13 @@ def test_openai_stream_decoder_rejects_premature_eof() -> None:
     assert raised.value.reason_code is ModelFailureReason.STREAM_INCOMPLETE
 
 
-def test_deepseek_non_stream_response_preserves_reasoning_continuation() -> None:
-    entry = model_entry("main", "deepseek", "deepseek-reasoner")
+@pytest.mark.parametrize(
+    "provider", ["deepseek", "aliyun_token_plan", "custom_gateway"]
+)
+def test_openai_reasoning_content_creates_provider_scoped_continuation(
+    provider: str,
+) -> None:
+    entry = model_entry("main", provider, "reasoning-model")
     request = provider_request(
         entry=entry,
         message=UserMessage(content="question"),
@@ -108,13 +113,13 @@ def test_deepseek_non_stream_response_preserves_reasoning_continuation() -> None
     )
 
     assert response.message.continuation == ModelContinuation(
-        provider="deepseek",
+        provider=provider,
         protocol="openai_chat_completions",
         data={"version": 1, "reasoning_content": "reasoning"},
     )
 
 
-def test_openai_provider_does_not_fabricate_deepseek_continuation() -> None:
+def test_openai_response_without_reasoning_content_has_no_continuation() -> None:
     response = OpenAICompatibleAdapter().parse_response(
         _request(),
         freeze_json_object(
@@ -123,7 +128,6 @@ def test_openai_provider_does_not_fabricate_deepseek_continuation() -> None:
                     {
                         "message": {
                             "content": "answer",
-                            "reasoning_content": "provider-private",
                         }
                     }
                 ]
@@ -134,12 +138,43 @@ def test_openai_provider_does_not_fabricate_deepseek_continuation() -> None:
     assert response.message.continuation is None
 
 
-def test_deepseek_matching_continuation_is_returned_on_tool_loop() -> None:
-    entry = model_entry("main", "deepseek", "deepseek-reasoner")
+def test_openai_reasoning_content_rejects_non_string_when_present() -> None:
+    entry = model_entry("main", "custom_gateway", "reasoning-model")
+    request = provider_request(
+        entry=entry,
+        message=UserMessage(content="question"),
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+
+    with pytest.raises(ModelProviderError) as raised:
+        OpenAICompatibleAdapter().parse_response(
+            request,
+            freeze_json_object(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "answer",
+                                "reasoning_content": {},
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            ),
+        )
+
+    assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
+
+
+@pytest.mark.parametrize("provider", ["deepseek", "custom_gateway"])
+def test_matching_openai_continuation_is_returned_on_tool_loop(provider: str) -> None:
+    entry = model_entry("main", provider, "reasoning-model")
     message = AIMessage(
         tool_calls=(ToolCall(call_id="call-1", name="lookup", arguments={}),),
         continuation=ModelContinuation(
-            provider="deepseek",
+            provider=provider,
             protocol="openai_chat_completions",
             data={"version": 1, "reasoning_content": "reasoning"},
         ),
@@ -154,6 +189,27 @@ def test_deepseek_matching_continuation_is_returned_on_tool_loop() -> None:
     payload = OpenAICompatibleAdapter().build_request(request).to_dict()
 
     assert payload["messages"][0]["reasoning_content"] == "reasoning"
+
+
+def test_openai_continuation_is_not_replayed_across_providers() -> None:
+    entry = model_entry("main", "custom_gateway", "reasoning-model")
+    message = AIMessage(
+        continuation=ModelContinuation(
+            provider="other_gateway",
+            protocol="openai_chat_completions",
+            data={"version": 1, "reasoning_content": "private"},
+        ),
+    )
+    request = provider_request(
+        entry=entry,
+        message=message,
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+
+    payload = OpenAICompatibleAdapter().build_request(request).to_dict()
+
+    assert "reasoning_content" not in payload["messages"][0]
 
 
 def test_deepseek_matching_malformed_continuation_fails_closed() -> None:
@@ -196,8 +252,11 @@ def test_deepseek_continuation_version_rejects_boolean() -> None:
         OpenAICompatibleAdapter().build_request(request)
 
 
-def test_deepseek_stream_emits_one_continuation_before_finish() -> None:
-    entry = model_entry("main", "deepseek", "deepseek-reasoner")
+@pytest.mark.parametrize("provider", ["deepseek", "aliyun_token_plan", "custom_gateway"])
+def test_openai_stream_emits_one_provider_scoped_continuation_before_finish(
+    provider: str,
+) -> None:
+    entry = model_entry("main", provider, "reasoning-model")
     request = provider_request(
         entry=entry,
         message=UserMessage(content="question"),
@@ -231,6 +290,27 @@ def test_deepseek_stream_emits_one_continuation_before_finish() -> None:
         "finish",
     ]
     assert final[-2].data["data"]["reasoning_content"] == "reasoning"
+    assert final[-2].data["provider"] == provider
+
+
+def test_openai_stream_rejects_non_string_reasoning_content() -> None:
+    entry = model_entry("main", "custom_gateway", "reasoning-model")
+    request = provider_request(
+        entry=entry,
+        message=UserMessage(content="question"),
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+    decoder = OpenAICompatibleAdapter().create_stream_decoder(request)
+
+    with pytest.raises(ModelProviderError) as raised:
+        decoder.feed(
+            freeze_json_object(
+                {"choices": [{"delta": {"reasoning_content": {}}}]}
+            )
+        )
+
+    assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
 
 
 @pytest.mark.asyncio
