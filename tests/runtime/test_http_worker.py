@@ -11,6 +11,7 @@ import pytest
 from pygent import (
     Agent,
     ModelCallError,
+    ModelContinuation,
     ModelErrorKind,
     PygentAgentContext,
 )
@@ -1242,7 +1243,17 @@ async def test_domain_message_and_context_history_cross_http_worker_losslessly()
         data={"operation_id": "op-42"},
         slot="approval/current",
     )
-    initial_context = Context(messages=(prior,), metadata={"tenant": "tenant-1"})
+    model_prior = AIMessage(
+        content="prior model output",
+        continuation=ModelContinuation(
+            provider="anthropic",
+            protocol="anthropic_messages",
+            data={"version": 1, "blocks": []},
+        ),
+    )
+    initial_context = Context(
+        messages=(prior, model_prior), metadata={"tenant": "tenant-1"}
+    )
 
     async with HTTPWorkerClient(
         registry, transport=httpx.ASGITransport(app=worker.app)
@@ -1267,7 +1278,7 @@ async def test_domain_message_and_context_history_cross_http_worker_losslessly()
         slot="handoff/current",
     )
     assert context.metadata == initial_context.metadata
-    assert context.messages == (prior, request, output)
+    assert context.messages == (prior, model_prior, request, output)
     await caller_runtime.close()
     await worker_runtime.close()
 

@@ -92,7 +92,22 @@ class ModelContinuation:
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"ModelContinuation {name} must be a non-empty string")
-        object.__setattr__(self, "data", freeze_json_object(self.data))
+        frozen = freeze_json_object(self.data)
+        object.__setattr__(
+            self, "data", freeze_json_object(_sorted_json_object(frozen))
+        )
+
+
+def _sorted_json_object(value: FrozenJsonObject) -> dict[str, object]:
+    return {key: _sorted_json_value(value[key]) for key in sorted(value)}
+
+
+def _sorted_json_value(value: object) -> object:
+    if isinstance(value, FrozenJsonObject):
+        return _sorted_json_object(value)
+    if isinstance(value, tuple):
+        return [_sorted_json_value(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -7,6 +7,7 @@ import pytest
 from pygent import (
     AIMessage,
     Context,
+    ModelContinuation,
     Module,
     UserMessage,
 )
@@ -18,6 +19,7 @@ from pygent.core import (
     EffectSpec,
     ExecutionRequirements,
     RecoverySafety,
+    thaw_json,
 )
 from pygent.core._module_contracts import _execution_scope
 from pygent.runtime import (
@@ -51,6 +53,24 @@ class CountingEcho(Module[UserMessage, AIMessage]):
         self.counter.calls += 1
         output = AIMessage(content=message.content.upper())
         return output, context + message + output
+
+
+class ContinuationEcho(Module[UserMessage, AIMessage]):
+    execution_requirements = ExecutionRequirements(
+        recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
+        effect_safety=EffectSafety.EFFECT_FREE,
+    )
+
+    async def forward(self, message, context):
+        output = AIMessage(
+            content=message.content,
+            continuation=ModelContinuation(
+                provider="anthropic",
+                protocol="anthropic_messages",
+                data={"version": 1, "blocks": []},
+            ),
+        )
+        return output, context + output
 
 
 class EffectModule(Module[UserMessage, AIMessage]):
@@ -285,6 +305,31 @@ async def test_completed_durable_run_restores_without_reexecuting_forward(tmp_pa
             )
         await restored_runtime.close()
     assert counter.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_completed_durable_run_restores_model_continuation(tmp_path) -> None:
+    path = tmp_path / "continuation.sqlite3"
+    async with SQLiteHistoryStore(path) as history:
+        runtime = LocalRuntime(history=history)
+        handle = await runtime.bind(ContinuationEcho()).start(
+            UserMessage(content="answer"), Context()
+        )
+        expected = await handle.result()
+        execution_id = handle.execution_id
+        await runtime.close()
+
+    async with SQLiteHistoryStore(path) as history:
+        runtime = LocalRuntime(history=history)
+        restored = await runtime.get_execution_handle(execution_id)
+        stored = await history.get_execution(execution_id)
+        assert stored is not None
+        assert thaw_json(stored.output)["message"]["continuation"] is not None
+        actual = await restored.result()
+        assert actual[0].continuation == expected[0].continuation
+        assert actual == expected
+        assert expected[0].continuation is not None
+        await runtime.close()
 
 
 @pytest.mark.asyncio
