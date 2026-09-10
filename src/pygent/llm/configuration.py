@@ -31,6 +31,7 @@ _MODEL_FIELDS = frozenset(
 _CONNECTION_FIELDS = frozenset({"base_url", "credential", "verify_ssl", "proxy"})
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TOOL_CHOICES = frozenset({"none", "auto", "required", "named"})
+_MODEL_MODALITIES = frozenset({"text", "image", "audio", "video"})
 
 
 def _object(value: object, label: str) -> Mapping[str, object]:
@@ -77,37 +78,53 @@ def _positive_int(value: object, label: str) -> int:
     return value
 
 
+def _optional_positive_int(value: object, label: str) -> int | None:
+    if value is None:
+        return None
+    return _positive_int(value, label)
+
+
+def _modalities(value: object, label: str) -> tuple[str, ...]:
+    items = _string_tuple(value, label)
+    unknown = set(items) - _MODEL_MODALITIES
+    if unknown:
+        raise ValueError(
+            f"unsupported {label} values: " + ", ".join(sorted(unknown))
+        )
+    return items
+
+
 @dataclass(frozen=True, slots=True)
 class ModelModalities:
     input: tuple[str, ...]
     output: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "input", _string_tuple(self.input, "modalities.input"))
-        object.__setattr__(self, "output", _string_tuple(self.output, "modalities.output"))
+        object.__setattr__(self, "input", _modalities(self.input, "modalities.input"))
+        object.__setattr__(self, "output", _modalities(self.output, "modalities.output"))
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelModalities:
         _exact_fields(value, frozenset({"input", "output"}), "modalities")
         return cls(
-            input=_string_tuple(value["input"], "modalities.input"),
-            output=_string_tuple(value["output"], "modalities.output"),
+            input=_modalities(value["input"], "modalities.input"),
+            output=_modalities(value["output"], "modalities.output"),
         )
 
 
 @dataclass(frozen=True, slots=True)
 class ModelStreamingCapabilities:
-    text: bool
+    output: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        _bool(self.text, "streaming.text")
+        object.__setattr__(self, "output", _modalities(self.output, "streaming.output"))
 
     @classmethod
     def from_mapping(
         cls, value: Mapping[str, object]
     ) -> ModelStreamingCapabilities:
-        _exact_fields(value, frozenset({"text"}), "streaming")
-        return cls(text=_bool(value["text"], "streaming.text"))
+        _exact_fields(value, frozenset({"output"}), "streaming")
+        return cls(output=_modalities(value["output"], "streaming.output"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,19 +203,21 @@ class ModelReasoningCapabilities:
 
 @dataclass(frozen=True, slots=True)
 class ModelLimits:
-    context_tokens: int
-    max_output_tokens: int
+    context_tokens: int | None
+    max_output_tokens: int | None
 
     def __post_init__(self) -> None:
-        _positive_int(self.context_tokens, "limits.context_tokens")
-        _positive_int(self.max_output_tokens, "limits.max_output_tokens")
+        _optional_positive_int(self.context_tokens, "limits.context_tokens")
+        _optional_positive_int(self.max_output_tokens, "limits.max_output_tokens")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelLimits:
         _exact_fields(value, frozenset({"context_tokens", "max_output_tokens"}), "limits")
         return cls(
-            context_tokens=_positive_int(value["context_tokens"], "limits.context_tokens"),
-            max_output_tokens=_positive_int(
+            context_tokens=_optional_positive_int(
+                value["context_tokens"], "limits.context_tokens"
+            ),
+            max_output_tokens=_optional_positive_int(
                 value["max_output_tokens"], "limits.max_output_tokens"
             ),
         )
@@ -225,6 +244,12 @@ class ModelCapabilities:
         for name, value_type in expected:
             if not isinstance(getattr(self, name), value_type):
                 raise TypeError(f"capabilities.{name} must be {value_type.__name__}")
+        unsupported_streams = set(self.streaming.output) - set(self.modalities.output)
+        if unsupported_streams:
+            raise ValueError(
+                "streaming.output must be a subset of modalities.output: "
+                + ", ".join(sorted(unsupported_streams))
+            )
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelCapabilities:
@@ -250,7 +275,7 @@ class ModelCapabilities:
                 "input": list(self.modalities.input),
                 "output": list(self.modalities.output),
             },
-            "streaming": {"text": self.streaming.text},
+            "streaming": {"output": list(self.streaming.output)},
             "tools": {
                 "call": self.tools.call,
                 "choice": list(self.tools.choice),

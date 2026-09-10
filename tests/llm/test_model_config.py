@@ -25,7 +25,7 @@ from pygent.llm import (
 def _capabilities(**overrides: object) -> dict[str, object]:
     value: dict[str, object] = {
         "modalities": {"input": ["text"], "output": ["text"]},
-        "streaming": {"text": True},
+        "streaming": {"output": ["text"]},
         "tools": {
             "call": True,
             "choice": ["none", "auto", "required", "named"],
@@ -194,7 +194,7 @@ def test_direct_capability_values_normalize_sequences_and_validate_types() -> No
     )
     capabilities = ModelCapabilities(
         modalities=modalities,
-        streaming=ModelStreamingCapabilities(text=True),
+        streaming=ModelStreamingCapabilities(output=("text",)),
         tools=tools,
         structured_output=ModelStructuredOutputCapabilities(
             json_object=True,
@@ -209,9 +209,64 @@ def test_direct_capability_values_normalize_sequences_and_validate_types() -> No
 
     assert capabilities.modalities.input == ("text",)
     assert capabilities.tools.choice == ("none", "auto")
-    with pytest.raises(TypeError, match="streaming.text"):
-        ModelStreamingCapabilities(text=1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="streaming.output"):
+        ModelStreamingCapabilities(output=1)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="reasoning.controllable"):
         ModelReasoningCapabilities(supported=False, controllable=True)
     with pytest.raises(ValueError, match="positive integer"):
         ModelLimits(context_tokens=0, max_output_tokens=4_096)
+
+
+def test_streaming_output_and_nullable_limits_round_trip() -> None:
+    capabilities = ModelCapabilities.from_mapping(
+        _capabilities(
+            modalities={
+                "input": ["text", "image"],
+                "output": ["text", "audio"],
+            },
+            streaming={"output": ["text", "audio"]},
+            limits={"context_tokens": None, "max_output_tokens": None},
+        )
+    )
+
+    assert capabilities.streaming.output == ("text", "audio")
+    assert capabilities.limits == ModelLimits(
+        context_tokens=None,
+        max_output_tokens=None,
+    )
+    assert capabilities.to_mapping()["streaming"] == {
+        "output": ["text", "audio"]
+    }
+    assert capabilities.to_mapping()["limits"] == {
+        "context_tokens": None,
+        "max_output_tokens": None,
+    }
+
+
+@pytest.mark.parametrize("field", ["input", "output"])
+def test_modalities_reject_unknown_values(field: str) -> None:
+    modalities = {"input": ["text"], "output": ["text"]}
+    modalities[field] = ["text", "embedding"]
+
+    with pytest.raises(ValueError, match="unsupported modalities"):
+        ModelCapabilities.from_mapping(
+            _capabilities(
+                modalities=modalities,
+                streaming={"output": ["text"]},
+            )
+        )
+
+
+def test_streaming_output_must_be_output_modality_subset() -> None:
+    with pytest.raises(ValueError, match="streaming.output"):
+        ModelCapabilities.from_mapping(
+            _capabilities(
+                modalities={"input": ["text"], "output": ["text"]},
+                streaming={"output": ["audio"]},
+            )
+        )
+
+
+def test_old_streaming_text_shape_is_rejected() -> None:
+    with pytest.raises(ValueError, match="streaming"):
+        ModelCapabilities.from_mapping(_capabilities(streaming={"text": True}))
