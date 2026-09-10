@@ -198,6 +198,32 @@ class ModelCapabilities:
             limits=ModelLimits.from_mapping(_object(value["limits"], "limits")),
         )
 
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "modalities": {
+                "input": list(self.modalities.input),
+                "output": list(self.modalities.output),
+            },
+            "streaming": {"text": self.streaming.text},
+            "tools": {
+                "call": self.tools.call,
+                "choice": list(self.tools.choice),
+                "parallel": self.tools.parallel,
+            },
+            "structured_output": {
+                "json_object": self.structured_output.json_object,
+                "json_schema": self.structured_output.json_schema,
+            },
+            "reasoning": {
+                "supported": self.reasoning.supported,
+                "controllable": self.reasoning.controllable,
+            },
+            "limits": {
+                "context_tokens": self.limits.context_tokens,
+                "max_output_tokens": self.limits.max_output_tokens,
+            },
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class ModelSpec:

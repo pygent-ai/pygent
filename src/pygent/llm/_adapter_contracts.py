@@ -18,14 +18,13 @@ from pygent.core import (
 )
 from pygent.tool import ToolDefinition
 
+from .configuration import ModelGroup, ModelSpec
 from .types import (
     GenerationConfig,
     ModelAttempt,
     ModelCallError,
     ModelErrorKind,
     ModelFailureReason,
-    ModelGroupConfig,
-    ModelRoute,
     RetryPolicy,
 )
 
@@ -48,6 +47,7 @@ class ModelEventKind(str, Enum):
     """Closed public event vocabulary for one model execution."""
 
     STARTED = "model.started"
+    CAPABILITY_WARNING = "model.capability.warning"
     ATTEMPT_STARTED = "model.attempt.started"
     REQUEST_PREPARED = "model.request.prepared"
     OUTPUT_RESET = "model.output.reset"
@@ -79,7 +79,8 @@ class ModelProviderStreamKind(str, Enum):
 class ModelProviderRequest:
     """One provider-independent request before wire-format conversion."""
 
-    route: ModelRoute
+    model_key: str
+    model: ModelSpec
     message: Message
     context: Context
     generation: GenerationConfig
@@ -158,11 +159,11 @@ class ModelProviderClient(Protocol):
     """Transport client whose lifecycle may be owned by Runtime."""
 
     async def invoke(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> FrozenJsonObject: ...
 
     def stream(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> AsyncIterator[FrozenJsonObject]: ...
 
     async def aclose(self) -> None: ...
@@ -171,7 +172,7 @@ class ModelProviderClient(Protocol):
 class ModelProviderAdapter(Protocol):
     """Provider wire conversion and error normalization boundary."""
 
-    provider: str
+    protocol: str
 
     def build_request(self, request: ModelProviderRequest) -> FrozenJsonObject: ...
 
@@ -187,17 +188,10 @@ class ModelProviderAdapter(Protocol):
 
 
 @runtime_checkable
-class ModelProviderRouteValidator(Protocol):
-    """Optional provider-owned validation for non-empty route options."""
+class ModelProviderSpecValidator(Protocol):
+    """Optional protocol-owned validation for non-empty model options."""
 
-    def validate_route(self, route: ModelRoute) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class ModelProviderCapabilities:
-    """Transport capabilities declared by one provider deployment."""
-
-    streaming: bool = True
+    def validate_model(self, model: ModelSpec) -> None: ...
 
 
 class ModelInvoker(Protocol):
@@ -206,7 +200,7 @@ class ModelInvoker(Protocol):
     def execute(
         self,
         *,
-        model_group: ModelGroupConfig,
+        model_group: ModelGroup,
         retry_policy: RetryPolicy,
         generation: GenerationConfig,
         message: Message,
@@ -264,13 +258,13 @@ def _validated_canonical_usage(raw_usage: JsonObjectInput) -> FrozenJsonObject:
 def _usage_event_payload(
     usage: JsonObjectInput,
     *,
-    route_id: str,
+    model_key: str,
     attempt: int,
     final: bool,
 ) -> dict[str, object]:
     canonical = _validated_canonical_usage(usage)
     return {
-        "route_id": route_id,
+        "model_key": model_key,
         "attempt": attempt,
         "mode": "cumulative",
         "final": final,
@@ -294,7 +288,7 @@ def _tool_item_payload(data: FrozenJsonObject, *, index: int) -> dict[str, objec
     return {
         "item_id": f"tool-{index}",
         "index": index,
-        "route_id": data.get("route_id"),
+        "model_key": data.get("model_key"),
         "attempt": data.get("attempt"),
     }
 
@@ -309,10 +303,10 @@ def _tool_delta_payload(data: FrozenJsonObject, *, index: int) -> dict[str, obje
 
 
 def _attempt_failed_payload(
-    *, route_id: str, attempt: int, kind: ModelErrorKind
+    *, model_key: str, attempt: int, kind: ModelErrorKind
 ) -> dict[str, object]:
     payload: dict[str, object] = {
-        "route_id": route_id,
+        "model_key": model_key,
         "attempt": attempt,
         "error_kind": kind.value,
     }
@@ -322,9 +316,15 @@ def _attempt_failed_payload(
 
 
 def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -> None:
-    common_attempt = {"route_id", "attempt"}
+    common_attempt = {"model_key", "attempt"}
     required: dict[ModelEventKind, set[str]] = {
         ModelEventKind.STARTED: {"model_group"},
+        ModelEventKind.CAPABILITY_WARNING: {
+            "model_key",
+            "provider",
+            "model_id",
+            "missing_capabilities",
+        },
         ModelEventKind.ATTEMPT_STARTED: common_attempt,
         ModelEventKind.REQUEST_PREPARED: common_attempt
         | {"request_id", "request_digest", "request"},
@@ -373,7 +373,16 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
             if not isinstance(data["partial_output"], bool):
                 raise ValueError("partial_output must be a bool")
         return
-    _require_string(data, "route_id")
+    if kind is ModelEventKind.CAPABILITY_WARNING:
+        for key in ("model_key", "provider", "model_id"):
+            _require_string(data, key)
+        missing = data["missing_capabilities"]
+        if not isinstance(missing, tuple) or not missing:
+            raise ValueError("missing_capabilities must be a non-empty array")
+        if any(not isinstance(value, str) or not value for value in missing):
+            raise ValueError("missing_capabilities must contain non-empty strings")
+        return
+    _require_string(data, "model_key")
     attempt = data["attempt"]
     if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
         raise ValueError("attempt must be a positive integer")
@@ -487,30 +496,30 @@ async def _raise_invalid_model_response(
     sink: EventSink | None,
     message: str,
     *,
-    route_id: str | None,
+    model_key: str | None,
     attempt: int | None,
     usage: JsonObjectInput,
     reason_code: ModelFailureReason = ModelFailureReason.INVALID_PROVIDER_RESPONSE,
 ) -> NoReturn:
     attempts: tuple[ModelAttempt, ...] = ()
-    if route_id is not None and attempt is not None:
+    if model_key is not None and attempt is not None:
         await _emit(
             sink,
             ModelEventKind.USAGE,
-            _usage_event_payload(usage, route_id=route_id, attempt=attempt, final=True),
+            _usage_event_payload(usage, model_key=model_key, attempt=attempt, final=True),
         )
         await _emit(
             sink,
             ModelEventKind.ATTEMPT_FAILED,
             {
-                "route_id": route_id,
+                "model_key": model_key,
                 "attempt": attempt,
                 "error_kind": ModelErrorKind.INVALID_RESPONSE.value,
             },
         )
         attempts = (
             ModelAttempt(
-                route_id,
+                model_key,
                 "failed",
                 ModelErrorKind.INVALID_RESPONSE,
                 attempt=attempt,
@@ -521,7 +530,7 @@ async def _raise_invalid_model_response(
         message,
         kind=ModelErrorKind.INVALID_RESPONSE,
         attempts=attempts,
-        partial_output=route_id is not None and attempt is not None,
+        partial_output=model_key is not None and attempt is not None,
     )
 
 

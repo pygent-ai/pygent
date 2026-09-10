@@ -13,7 +13,7 @@ from ._adapter_contracts import ModelProviderRequest
 
 
 def prepared_request_event(
-    request: ModelProviderRequest, *, attempt: int
+    request: ModelProviderRequest, *, model_key: str, attempt: int
 ) -> dict[str, object]:
     projection = _request_projection(request)
     encoded = json.dumps(
@@ -23,7 +23,7 @@ def prepared_request_event(
         ensure_ascii=False,
     ).encode("utf-8")
     return {
-        "route_id": request.route.route_id,
+        "model_key": model_key,
         "attempt": attempt,
         "request_id": f"model-request-{uuid.uuid4().hex}",
         "request_digest": f"sha256:{hashlib.sha256(encoded).hexdigest()}",
@@ -34,8 +34,8 @@ def prepared_request_event(
 def _request_projection(request: ModelProviderRequest) -> dict[str, object]:
     generation = request.generation
     return {
-        "provider": request.route.provider,
-        "model": request.route.model,
+        "provider": request.model.provider,
+        "model": request.model.model_id,
         "system_prompt": request.context.system_prompt,
         "messages": [
             _message_projection(message) for message in request.context.messages

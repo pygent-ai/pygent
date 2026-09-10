@@ -20,11 +20,10 @@ from ._adapter_contracts import (
     EventSink,
     ModelEventKind,
     ModelProviderAdapter,
-    ModelProviderCapabilities,
     ModelProviderClient,
     ModelProviderRequest,
     ModelProviderResponse,
-    ModelProviderRouteValidator,
+    ModelProviderSpecValidator,
     ModelProviderStreamKind,
     ModelProviderStreamPart,
     _attempt_failed_payload,
@@ -35,16 +34,15 @@ from ._adapter_contracts import (
 from ._model_execution import ModelExecution, _ProviderStreamOwner
 from ._request_snapshot import prepared_request_event
 from ._stream_accumulator import ModelStreamAccumulator
+from .configuration import ModelEntry, ModelGroup, ModelSpec
 from .types import (
     GenerationConfig,
     ModelAttempt,
     ModelCallError,
     ModelErrorKind,
     ModelFailureReason,
-    ModelGroupConfig,
     ModelGroupConfigurationError,
     ModelProviderError,
-    ModelRoute,
     RetryPolicy,
 )
 
@@ -59,41 +57,40 @@ class DefaultModelInvoker:
         *,
         adapters: Mapping[str, ModelProviderAdapter],
         clients: Mapping[str, ModelProviderClient],
-        capabilities: Mapping[str, ModelProviderCapabilities] | None = None,
     ) -> None:
         self._adapters = dict(adapters)
         self._clients = dict(clients)
-        self._capabilities = dict(capabilities or {})
         self._quarantined_tasks: dict[int, set[asyncio.Future[Any]]] = {}
         self._active_executions: set[asyncio.Task[Any]] = set()
         self._stream_owner_tasks: set[asyncio.Task[None]] = set()
         self._close_task: asyncio.Task[None] | None = None
         self._closing = False
 
-    def validate_route(self, route: ModelRoute) -> None:
-        """Validate one route during LLM/application deployment preparation."""
+    def validate_model(self, entry: ModelEntry) -> None:
+        """Validate one named model during deployment preparation."""
 
-        adapter = self._adapters.get(route.provider)
-        client = self._clients.get(route.route_id, self._clients.get(route.provider))
+        model = entry.spec
+        adapter = self._adapters.get(model.protocol)
+        client = self._clients.get(entry.name)
         if adapter is None or client is None:
             raise ModelGroupConfigurationError(
-                f"model route {route.route_id!r} has no local provider binding"
+                f"model {entry.name!r} has no local protocol/client binding"
             )
-        if not route.provider_options:
+        if not model.provider_options:
             return
-        if not isinstance(adapter, ModelProviderRouteValidator):
+        if not isinstance(adapter, ModelProviderSpecValidator):
             raise ModelGroupConfigurationError(
-                f"provider adapter for route {route.route_id!r} does not validate provider options"
+                f"protocol adapter for model {entry.name!r} does not validate provider options"
             )
         try:
-            adapter.validate_route(route)
+            adapter.validate_model(model)
         except (TypeError, ValueError, ModelProviderError) as exc:
             raise ModelGroupConfigurationError(str(exc)) from None
 
     def execute(
         self,
         *,
-        model_group: ModelGroupConfig,
+        model_group: ModelGroup,
         retry_policy: RetryPolicy,
         generation: GenerationConfig,
         message: Message,
@@ -133,7 +130,7 @@ class DefaultModelInvoker:
     async def _execute_with_lifecycle(
         self,
         *,
-        model_group: ModelGroupConfig,
+        model_group: ModelGroup,
         retry_policy: RetryPolicy,
         generation: GenerationConfig,
         message: Message,
@@ -253,10 +250,10 @@ class DefaultModelInvoker:
     def _open_stream_owner(
         self,
         client: ModelProviderClient,
-        route: ModelRoute,
+        model: ModelSpec,
         payload: FrozenJsonObject,
     ) -> _ProviderStreamOwner:
-        owner = _ProviderStreamOwner(client, route, payload)
+        owner = _ProviderStreamOwner(client, model, payload)
         self._stream_owner_tasks.add(owner.task)
 
         def release(completed: asyncio.Task[None]) -> None:
@@ -269,7 +266,7 @@ class DefaultModelInvoker:
     async def _stream_events(
         self,
         *,
-        model_group: ModelGroupConfig,
+        model_group: ModelGroup,
         retry_policy: RetryPolicy,
         generation: GenerationConfig,
         message: Message,
@@ -280,16 +277,32 @@ class DefaultModelInvoker:
         event_sink: EventSink | None = None,
     ) -> AsyncIterator[ModelProviderStreamPart]:
         _validate_deadline(deadline)
-        routes = {route.route_id: route for route in model_group.routes}
-        order = model_group.fallback.order or tuple(routes)
         attempts: list[ModelAttempt] = []
         last_kind = ModelErrorKind.UNKNOWN
-        for route_index, route_id in enumerate(order):
-            route = routes[route_id]
-            adapter, client = self._resolve(route)
-            _validate_route_for_request(adapter, route)
+        for model_index, entry in enumerate(model_group.models):
+            model_key = entry.name
+            model = entry.spec
+            adapter, client = self._resolve(entry)
+            _validate_model_for_request(adapter, model)
+            missing_capabilities = _missing_capabilities(
+                model,
+                generation=generation,
+                tools=tools,
+            )
+            if missing_capabilities:
+                await _emit(
+                    event_sink,
+                    ModelEventKind.CAPABILITY_WARNING,
+                    {
+                        "model_key": model_key,
+                        "provider": model.provider,
+                        "model_id": model.model_id,
+                        "missing_capabilities": missing_capabilities,
+                    },
+                )
             request = ModelProviderRequest(
-                route=route,
+                model_key=model_key,
+                model=model,
                 message=message,
                 context=context,
                 generation=generation,
@@ -297,14 +310,16 @@ class DefaultModelInvoker:
             )
             payload = adapter.build_request(request)
             for number in range(1, retry_policy.max_attempts_per_route + 1):
-                prepared_event = prepared_request_event(request, attempt=number)
+                prepared_event = prepared_request_event(
+                    request, model_key=model_key, attempt=number
+                )
                 emitted = False
                 completed = False
                 attempt_usage = freeze_json_object()
                 await _emit(
                     event_sink,
                     ModelEventKind.ATTEMPT_STARTED,
-                    {"route_id": route_id, "attempt": number},
+                    {"model_key": model_key, "attempt": number},
                 )
                 await _emit(
                     event_sink,
@@ -314,7 +329,7 @@ class DefaultModelInvoker:
                 try:
                     self._ensure_client_available(client)
                     async for part in self._transport_events(
-                        route=route,
+                        model=model,
                         adapter=adapter,
                         client=client,
                         request=request,
@@ -330,11 +345,11 @@ class DefaultModelInvoker:
                                 cast(FrozenJsonObject, part.data).get("finish_reason")
                             )
                         part_payload = cast(FrozenJsonObject, part.data).to_dict()
-                        part_payload.update({"route_id": route_id, "attempt": number})
+                        part_payload.update({"model_key": model_key, "attempt": number})
                         part = ModelProviderStreamPart(part.kind, part_payload)
                         if part.kind == ModelProviderStreamKind.USAGE:
                             raw_usage = cast(FrozenJsonObject, part.data).to_dict()
-                            raw_usage.pop("route_id", None)
+                            raw_usage.pop("model_key", None)
                             raw_usage.pop("attempt", None)
                             attempt_usage = _validated_canonical_usage(raw_usage)
                         emitted = emitted or part.kind in {
@@ -354,7 +369,7 @@ class DefaultModelInvoker:
                         )
                     return
                 except asyncio.CancelledError:
-                    attempts.append(ModelAttempt(route_id, "cancelled", attempt=number))
+                    attempts.append(ModelAttempt(model_key, "cancelled", attempt=number))
                     raise
                 except Exception as exc:  # noqa: BLE001 - provider SPI boundary
                     kind = adapter.normalize_error(exc)
@@ -362,7 +377,7 @@ class DefaultModelInvoker:
                     reason_code, http_status = _safe_failure_diagnostics(exc, kind)
                     attempts.append(
                         ModelAttempt(
-                            route_id,
+                            model_key,
                             "failed",
                             kind,
                             attempt=number,
@@ -375,7 +390,7 @@ class DefaultModelInvoker:
                         ModelEventKind.USAGE,
                         _usage_event_payload(
                             attempt_usage,
-                            route_id=route_id,
+                            model_key=model_key,
                             attempt=number,
                             final=True,
                         ),
@@ -384,7 +399,7 @@ class DefaultModelInvoker:
                         event_sink,
                         ModelEventKind.ATTEMPT_FAILED,
                         _attempt_failed_payload(
-                            route_id=route_id,
+                            model_key=model_key,
                             attempt=number,
                             kind=kind,
                         ),
@@ -401,7 +416,7 @@ class DefaultModelInvoker:
                         and kind in retry_policy.retry_on
                         and number < retry_policy.max_attempts_per_route
                     )
-                    can_fallback = has_budget and route_index + 1 < len(order)
+                    can_fallback = has_budget and model_index + 1 < len(model_group.models)
                     retryable_partial = (
                         emitted
                         and reason_code
@@ -435,7 +450,7 @@ class DefaultModelInvoker:
                         yield ModelProviderStreamPart(
                             ModelProviderStreamKind.RESET,
                             {
-                                "route_id": route_id,
+                                "model_key": model_key,
                                 "attempt": number,
                                 "public_output": emitted,
                             },
@@ -451,7 +466,7 @@ class DefaultModelInvoker:
     async def _transport_events(
         self,
         *,
-        route: ModelRoute,
+        model: ModelSpec,
         adapter: ModelProviderAdapter,
         client: ModelProviderClient,
         request: ModelProviderRequest,
@@ -460,12 +475,8 @@ class DefaultModelInvoker:
         idle_timeout_seconds: float | None,
         cancel_event: asyncio.Event | None,
     ) -> AsyncIterator[ModelProviderStreamPart]:
-        capabilities = self._capabilities.get(
-            route.route_id,
-            self._capabilities.get(route.provider, ModelProviderCapabilities()),
-        )
-        if capabilities.streaming:
-            owner = self._open_stream_owner(client, route, payload)
+        if model.capabilities.streaming.text:
+            owner = self._open_stream_owner(client, model, payload)
             try:
                 while True:
                     try:
@@ -489,7 +500,7 @@ class DefaultModelInvoker:
                         self._quarantine(client, owner.task)
         else:
             raw = await _await_budget(
-                client.invoke(route, payload),
+                client.invoke(model, payload),
                 deadline=_earliest_deadline(deadline, idle_timeout_seconds),
                 cancel_event=cancel_event,
                 on_cleanup_stuck=lambda task: self._quarantine(client, task),
@@ -532,7 +543,7 @@ class DefaultModelInvoker:
     async def _reduce_stream(
         self,
         *,
-        model_group: ModelGroupConfig,
+        model_group: ModelGroup,
         retry_policy: RetryPolicy,
         generation: GenerationConfig,
         message: Message,
@@ -558,30 +569,59 @@ class DefaultModelInvoker:
         return await accumulator.finish(event_sink)
 
     def _resolve(
-        self, route: ModelRoute
+        self, entry: ModelEntry
     ) -> tuple[ModelProviderAdapter, ModelProviderClient]:
-        adapter = self._adapters.get(route.provider)
-        client = self._clients.get(route.route_id, self._clients.get(route.provider))
+        adapter = self._adapters.get(entry.spec.protocol)
+        client = self._clients.get(entry.name)
         if adapter is None or client is None:
             raise ModelCallError(
-                f"model route {route.route_id!r} has no local provider binding",
+                f"model {entry.name!r} has no local protocol/client binding",
                 kind=ModelErrorKind.INVALID_REQUEST,
             )
         return adapter, client
 
 
-def _validate_route_for_request(
-    adapter: ModelProviderAdapter, route: ModelRoute
+def _missing_capabilities(
+    model: ModelSpec,
+    *,
+    generation: GenerationConfig,
+    tools: tuple[ToolDefinition, ...],
+) -> tuple[str, ...]:
+    capabilities = model.capabilities
+    missing: list[str] = []
+    if "text" not in capabilities.modalities.input:
+        missing.append("modalities.input.text")
+    if "text" not in capabilities.modalities.output:
+        missing.append("modalities.output.text")
+    if tools and not capabilities.tools.call:
+        missing.append("tools.call")
+    choice = generation.tool_choice
+    if tools and choice is not None:
+        required_choice = "named" if choice not in {"none", "auto", "required"} else choice
+        if required_choice not in capabilities.tools.choice:
+            missing.append(f"tools.choice.{required_choice}")
+    if generation.response_schema is not None and not capabilities.structured_output.json_schema:
+        missing.append("structured_output.json_schema")
+    if (
+        generation.max_output_tokens is not None
+        and generation.max_output_tokens > capabilities.limits.max_output_tokens
+    ):
+        missing.append("limits.max_output_tokens")
+    return tuple(missing)
+
+
+def _validate_model_for_request(
+    adapter: ModelProviderAdapter, model: ModelSpec
 ) -> None:
-    if not route.provider_options:
+    if not model.provider_options:
         return
-    if not isinstance(adapter, ModelProviderRouteValidator):
+    if not isinstance(adapter, ModelProviderSpecValidator):
         raise ModelProviderError(
             ModelErrorKind.INVALID_REQUEST,
-            "provider adapter does not support route options",
+            "protocol adapter does not support provider options",
         )
     try:
-        adapter.validate_route(route)
+        adapter.validate_model(model)
     except ModelProviderError:
         raise
     except (TypeError, ValueError) as exc:

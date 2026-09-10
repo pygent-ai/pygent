@@ -17,9 +17,7 @@ from ._adapter_contracts import (
     ModelStreamEvent,
     _trusted_model_stream_event,
 )
-from .types import (
-    ModelRoute,
-)
+from .configuration import ModelSpec
 
 _PROVIDER_STREAM_TERMINAL = object()
 
@@ -30,11 +28,11 @@ class _ProviderStreamOwner:
     def __init__(
         self,
         client: ModelProviderClient,
-        route: ModelRoute,
+        model: ModelSpec,
         payload: FrozenJsonObject,
     ) -> None:
         self._client = client
-        self._route = route
+        self._model = model
         self._payload = payload
         self._items: asyncio.Queue[FrozenJsonObject | object] = asyncio.Queue(maxsize=1)
         self._stopping = False
@@ -69,7 +67,7 @@ class _ProviderStreamOwner:
         return cast(FrozenJsonObject, item)
 
     async def _run(self) -> None:
-        iterator = self._client.stream(self._route, self._payload).__aiter__()
+        iterator = self._client.stream(self._model, self._payload).__aiter__()
         try:
             async for item in iterator:
                 if self._stopping:

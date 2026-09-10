@@ -74,12 +74,12 @@ class ModelStreamAccumulator:
                     event_sink,
                     ModelEventKind.OUTPUT_RESET,
                     {
-                        "route_id": data["route_id"],
+                        "model_key": data["model_key"],
                         "attempt": data["attempt"],
                     },
                 )
             return
-        route_value = data.get("route_id")
+        route_value = data.get("model_key")
         if isinstance(route_value, str):
             self.selected_route = route_value
         attempt_value = data.get("attempt")
@@ -97,7 +97,7 @@ class ModelStreamAccumulator:
             await self._consume_tool_call(data, event_sink)
         elif part.kind == ModelProviderStreamKind.USAGE:
             usage_data = data.to_dict()
-            usage_data.pop("route_id", None)
+            usage_data.pop("model_key", None)
             usage_data.pop("attempt", None)
             self.usage = _validated_canonical_usage(usage_data)
         elif part.kind == ModelProviderStreamKind.FINISH:
@@ -118,7 +118,7 @@ class ModelStreamAccumulator:
             await _raise_invalid_model_response(
                 event_sink,
                 "model stream returned an invalid tool-call index",
-                route_id=self.selected_route,
+                model_key=self.selected_route,
                 attempt=self.selected_attempt,
                 usage=self.usage,
             )
@@ -161,7 +161,7 @@ class ModelStreamAccumulator:
             ModelEventKind.USAGE,
             _usage_event_payload(
                 self.usage,
-                route_id=self.selected_route,
+                model_key=self.selected_route,
                 attempt=self.selected_attempt,
                 final=True,
             ),
@@ -169,13 +169,13 @@ class ModelStreamAccumulator:
         await _emit(
             event_sink,
             ModelEventKind.ATTEMPT_SUCCEEDED,
-            {"route_id": self.selected_route, "attempt": self.selected_attempt},
+            {"model_key": self.selected_route, "attempt": self.selected_attempt},
         )
         await _emit(
             event_sink,
             ModelEventKind.COMPLETED,
             {
-                "route_id": self.selected_route,
+                "model_key": self.selected_route,
                 "attempt": self.selected_attempt,
                 "finish_reason": self.finish_reason,
                 "provider_request_id": self.provider_request_id,
@@ -185,7 +185,7 @@ class ModelStreamAccumulator:
             message=AIMessage(
                 content=content,
                 tool_calls=tuple(tool_calls),
-                metadata={"route_id": self.selected_route},
+                metadata={"model_key": self.selected_route},
             ),
             usage=self.usage,
             provider_request_id=self.provider_request_id,
@@ -208,7 +208,7 @@ class ModelStreamAccumulator:
             await _raise_invalid_model_response(
                 event_sink,
                 "model output does not match the declared JSON schema",
-                route_id=self.selected_route,
+                model_key=self.selected_route,
                 attempt=self.selected_attempt,
                 usage=self.usage,
                 reason_code=ModelFailureReason.GENERATION_SCHEMA_INVALID,
@@ -226,7 +226,7 @@ class ModelStreamAccumulator:
                     raise TypeError
                 name = _original_tool_name(call["name"], self.tools)
                 call_id = call["call_id"] or _synthetic_tool_call_id(
-                    route_id=self.selected_route or "provider",
+                    model_key=self.selected_route or "provider",
                     provider_request_id=self.provider_request_id,
                     index=index,
                     name=name,
@@ -248,7 +248,7 @@ class ModelStreamAccumulator:
                         "call_id": call_id,
                         "name": name,
                         "arguments": cast(Mapping[str, object], arguments),
-                        "route_id": self.selected_route,
+                        "model_key": self.selected_route,
                         "attempt": self.selected_attempt,
                     },
                 )
@@ -256,7 +256,7 @@ class ModelStreamAccumulator:
                 await _raise_invalid_model_response(
                     event_sink,
                     "model stream returned an invalid tool call",
-                    route_id=self.selected_route,
+                    model_key=self.selected_route,
                     attempt=self.selected_attempt,
                     usage=self.usage,
                     reason_code=ModelFailureReason.TOOL_CALL_INVALID,

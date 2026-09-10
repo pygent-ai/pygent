@@ -30,13 +30,13 @@ from pygent.core import (
 from pygent.tool import ToolCall, ToolDefinition
 
 from ._adapter_contracts import ModelInvoker
-from ._route_codec import model_route_value
+from ._model_spec_codec import model_entry_value
+from .configuration import ModelEntry, ModelGroup
 from .types import (
     GenerationConfig,
     ModelCallError,
     ModelCallOptions,
     ModelCallPolicy,
-    ModelGroupConfig,
     RetryPolicy,
 )
 
@@ -60,7 +60,8 @@ class ModelCallLayer(Module[Message, AIMessage]):
     def __init__(
         self,
         *,
-        model_group: ModelGroupConfig,
+        model: ModelEntry | None = None,
+        model_group: ModelGroup | None = None,
         retry_policy: RetryPolicy,
         generation: GenerationConfig,
         policy: ModelCallPolicy = _DEFAULT_MODEL_CALL_POLICY,
@@ -68,6 +69,14 @@ class ModelCallLayer(Module[Message, AIMessage]):
         invoker: ModelInvoker | None = None,
     ) -> None:
         super().__init__()
+        if (model is None) == (model_group is None):
+            raise ValueError("provide exactly one of model or model_group")
+        if model is not None:
+            if not isinstance(model, ModelEntry):
+                raise TypeError("model must be a ModelEntry")
+            model_group = ModelGroup(name=model.name, models=(model,))
+        if not isinstance(model_group, ModelGroup):
+            raise TypeError("model_group must be a ModelGroup")
         declared_tools = tuple(tools)
         if any(type(tool) is not ToolDefinition for tool in declared_tools):
             raise TypeError("tools must contain ToolDefinition values")
@@ -193,10 +202,7 @@ class ModelCallLayer(Module[Message, AIMessage]):
             )
 
         async def invoke() -> JsonValue:
-            async with infrastructure.model_permit(
-                model_group.capacity_key or model_group.name,
-                max_concurrency=model_group.max_concurrency,
-            ):
+            async with infrastructure.model_permit():
                 if deployment is not None:
                     async with infrastructure.model_deployment_lease(deployment) as item:
                         return await execute_with(cast(ModelInvoker, item))
@@ -286,7 +292,7 @@ def _model_effect_request(
     context: Context,
     tools: tuple[ToolDefinition, ...],
     *,
-    model_group: ModelGroupConfig | None = None,
+    model_group: ModelGroup | None = None,
     generation: GenerationConfig | None = None,
     deployment: object | None = None,
 ) -> FrozenJsonObject:
@@ -299,9 +305,7 @@ def _model_effect_request(
             {
                 "model_group": {
                     "name": model_group.name,
-                    "routes": [model_route_value(route) for route in model_group.routes],
-                    "fallback": list(model_group.fallback.order),
-                    "capacity_key": model_group.capacity_key,
+                    "models": [model_entry_value(model) for model in model_group.models],
                     "profile": getattr(deployment, "profile", None),
                     "snapshot_id": getattr(deployment, "snapshot_id", None),
                     "deployment_digest": getattr(deployment, "digest", None),

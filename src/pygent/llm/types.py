@@ -490,7 +490,7 @@ class GenerationConfig:
 
 @dataclass(frozen=True, slots=True)
 class ModelAttempt:
-    route_id: str
+    model_key: str
     status: Literal["succeeded", "failed", "cancelled"]
     error_kind: ModelErrorKind | None = None
     attempt: int = 1
@@ -498,8 +498,8 @@ class ModelAttempt:
     http_status: int | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.route_id, str) or not self.route_id:
-            raise ValueError("attempt route_id must be non-empty")
+        if not isinstance(self.model_key, str) or not self.model_key:
+            raise ValueError("attempt model_key must be non-empty")
         if self.status not in ("succeeded", "failed", "cancelled"):
             raise ValueError("invalid model attempt status")
         if (
@@ -566,7 +566,7 @@ class ModelCallError(ExecutionFailureError):
                 details={
                     "attempts": [
                         {
-                            "route_id": attempt.route_id,
+                            "model_key": attempt.model_key,
                             "status": attempt.status,
                             "error_kind": (
                                 None
@@ -601,7 +601,7 @@ class ModelCallError(ExecutionFailureError):
             raw_kind = item.get("error_kind")
             attempts.append(
                 ModelAttempt(
-                    route_id=cast(str, item.get("route_id")),
+                    model_key=cast(str, item.get("model_key")),
                     status=cast(Any, item.get("status")),
                     error_kind=(
                         None if raw_kind is None else ModelErrorKind(cast(str, raw_kind))

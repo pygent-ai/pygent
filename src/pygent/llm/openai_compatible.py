@@ -35,11 +35,11 @@ from ._adapter_contracts import (
     _normalized_finish_reason,
 )
 from .catalog import ModelCatalog, ModelInfo
+from .configuration import ModelSpec
 from .types import (
     ModelErrorKind,
     ModelFailureReason,
     ModelProviderError,
-    ModelRoute,
 )
 
 _OPENAI_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -148,8 +148,8 @@ def _validate_no_forbidden_option_keys(value: object) -> None:
             pending.extend(current)
 
 
-def _validate_openai_provider_options(route: ModelRoute) -> None:
-    options = cast(FrozenJsonObject, route.provider_options)
+def _validate_openai_provider_options(model: ModelSpec) -> None:
+    options = cast(FrozenJsonObject, model.provider_options)
     conflicts = set(options) & _OPENAI_RESERVED_PROVIDER_FIELDS
     if conflicts:
         raise ValueError(
@@ -167,7 +167,7 @@ def _validate_openai_provider_options(route: ModelRoute) -> None:
         value = options[key]
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"provider option {key!r} must be a positive integer")
-    if route.provider != "deepseek" or "thinking" not in options:
+    if model.provider != "deepseek" or "thinking" not in options:
         return
     thinking = options["thinking"]
     if not isinstance(thinking, FrozenJsonObject):
@@ -307,7 +307,7 @@ class OpenAICompatibleClient:
         return self._models
 
     async def invoke(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> FrozenJsonObject:
         native_client = self._native_client
         if native_client is not None:
@@ -368,7 +368,7 @@ class OpenAICompatibleClient:
                 admission.release()
 
     async def stream(
-        self, route: ModelRoute, payload: FrozenJsonObject
+        self, model: ModelSpec, payload: FrozenJsonObject
     ) -> AsyncIterator[FrozenJsonObject]:
         body = payload.to_dict()
         body["stream"] = True
@@ -634,19 +634,16 @@ class _OpenAICompatibleModelCatalog:
 class OpenAICompatibleAdapter:
     """OpenAI chat-completions codec shared by compatible providers."""
 
-    def __init__(self, provider: str = "openai") -> None:
-        if not provider:
-            raise ValueError("provider must be non-empty")
-        self.provider = provider
+    protocol = "openai_compatible"
 
-    def validate_route(self, route: ModelRoute) -> None:
+    def validate_model(self, model: ModelSpec) -> None:
         """Validate portable provider options without performing provider I/O."""
 
-        _validate_openai_provider_options(route)
+        _validate_openai_provider_options(model)
 
     def build_request(self, request: ModelProviderRequest) -> FrozenJsonObject:
         try:
-            self.validate_route(request.route)
+            self.validate_model(request.model)
         except (TypeError, ValueError) as exc:
             raise ModelProviderError(ModelErrorKind.INVALID_REQUEST, str(exc)) from None
         messages: list[dict[str, object]] = []
@@ -659,11 +656,11 @@ class OpenAICompatibleAdapter:
             messages.extend(_encode_messages(item, wire_names))
         messages.extend(_encode_messages(request.message, wire_names))
         body: dict[str, object] = {
-            "model": request.route.model,
+            "model": request.model.model_id,
             "messages": messages,
         }
         generation = request.generation
-        options = cast(FrozenJsonObject, request.route.provider_options)
+        options = cast(FrozenJsonObject, request.model.provider_options)
         token_fields = set(options) & _TOKEN_LIMIT_PROVIDER_FIELDS
         if generation.max_output_tokens is not None and token_fields:
             raise ModelProviderError(
@@ -760,7 +757,7 @@ class OpenAICompatibleAdapter:
             tool_calls = _decode_tool_calls(
                 raw_tool_calls,
                 {_openai_tool_name(tool.name): tool.name for tool in request.tools},
-                route_id=request.route.route_id,
+                model_key=request.model_key,
                 provider_request_id=cast(str | None, request_id),
             )
         except (KeyError, TypeError, ValueError) as exc:
@@ -791,7 +788,7 @@ class OpenAICompatibleAdapter:
         message = AIMessage(
             content=content,
             tool_calls=tool_calls,
-            metadata={"route_id": request.route.route_id},
+            metadata={"model_key": request.model_key},
         )
         return ModelProviderResponse(
             message=message,
@@ -936,12 +933,9 @@ class OpenAICompatibleAdapter:
 
 
 def openai_compatible_adapters() -> dict[str, OpenAICompatibleAdapter]:
-    """Return codecs for the initially supported compatible provider names."""
+    """Return the built-in protocol codec."""
 
-    return {
-        name: OpenAICompatibleAdapter(name)
-        for name in ("openai", "glm", "qwen", "deepseek")
-    }
+    return {"openai_compatible": OpenAICompatibleAdapter()}
 
 
 def _validate_catalog_timeout(timeout: float | None) -> None:
@@ -1183,7 +1177,7 @@ def _decode_tool_arguments(value: object) -> Mapping[str, object]:
 
 def _synthetic_tool_call_id(
     *,
-    route_id: str,
+    model_key: str,
     provider_request_id: str | None,
     index: int,
     name: str,
@@ -1191,7 +1185,7 @@ def _synthetic_tool_call_id(
 ) -> str:
     seed = _wire_json(
         {
-            "request": provider_request_id or route_id,
+            "request": provider_request_id or model_key,
             "index": index,
             "name": name,
             "arguments": arguments,
@@ -1204,7 +1198,7 @@ def _decode_tool_calls(
     value: object,
     wire_names: Mapping[str, str] | None = None,
     *,
-    route_id: str = "provider",
+    model_key: str = "provider",
     provider_request_id: str | None = None,
 ) -> tuple[ToolCall, ...]:
     if value is None:
@@ -1229,7 +1223,7 @@ def _decode_tool_calls(
         call_id = item.get("id")
         if call_id is None or call_id == "":
             call_id = _synthetic_tool_call_id(
-                route_id=route_id,
+                model_key=model_key,
                 provider_request_id=provider_request_id,
                 index=index,
                 name=raw_name,
