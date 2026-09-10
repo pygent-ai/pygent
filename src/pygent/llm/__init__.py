@@ -14,6 +14,21 @@ from ._adapter_contracts import (
 )
 from ._model_execution import ModelExecution
 from .catalog import ModelCatalog, ModelInfo
+from .configuration import (
+    CredentialRef,
+    ModelCapabilities,
+    ModelConfig,
+    ModelConnection,
+    ModelEntry,
+    ModelGroup,
+    ModelLimits,
+    ModelModalities,
+    ModelReasoningCapabilities,
+    ModelSpec,
+    ModelStreamingCapabilities,
+    ModelStructuredOutputCapabilities,
+    ModelToolCapabilities,
+)
 from .invoker import DefaultModelInvoker
 from .layer import ModelCallLayer
 from .openai_compatible import (
@@ -49,6 +64,7 @@ from .types import (
 )
 
 __all__ = [
+    "CredentialRef",
     "DefaultModelInvoker",
     "EventSink",
     "ExponentialBackoff",
@@ -59,19 +75,26 @@ __all__ = [
     "ModelCallLayer",
     "ModelCallOptions",
     "ModelCallPolicy",
+    "ModelCapabilities",
     "ModelCatalog",
+    "ModelConfig",
+    "ModelConnection",
     "ModelDeploymentConflictError",
     "ModelDeploymentUnavailableError",
     "ModelErrorKind",
+    "ModelEntry",
     "ModelEventKind",
     "ModelExecution",
     "ModelFailureReason",
     "ModelGroupConfig",
+    "ModelGroup",
     "ModelGroupConfigurationError",
     "ModelGroupError",
     "ModelGroupResolution",
     "ModelInfo",
     "ModelInvoker",
+    "ModelLimits",
+    "ModelModalities",
     "ModelProfileSelectionError",
     "ModelProfileSnapshot",
     "ModelProviderAdapter",
@@ -80,6 +103,7 @@ __all__ = [
     "ModelProviderError",
     "ModelProviderRequest",
     "ModelProviderResponse",
+    "ModelReasoningCapabilities",
     "ModelProviderRouteValidator",
     "ModelProviderStreamKind",
     "ModelProviderStreamPart",
@@ -88,7 +112,11 @@ __all__ = [
     "ModelResourceRef",
     "ModelResourceResolver",
     "ModelRoute",
+    "ModelSpec",
+    "ModelStreamingCapabilities",
     "ModelStreamEvent",
+    "ModelStructuredOutputCapabilities",
+    "ModelToolCapabilities",
     "OpenAICompatibleAdapter",
     "OpenAICompatibleClient",
     "RetryPolicy",

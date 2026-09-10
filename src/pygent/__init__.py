@@ -30,6 +30,7 @@ from .core import (
     thaw_json,
 )
 from .llm import (
+    CredentialRef,
     ExponentialBackoff,
     FallbackPolicy,
     GenerationConfig,
@@ -37,9 +38,15 @@ from .llm import (
     ModelCallLayer,
     ModelCallOptions,
     ModelCallPolicy,
+    ModelCapabilities,
+    ModelConfig,
+    ModelConnection,
     ModelErrorKind,
+    ModelEntry,
     ModelGroupConfig,
+    ModelGroup,
     ModelRoute,
+    ModelSpec,
     RetryPolicy,
 )
 from .runtime.context_codec import ContextCodec
@@ -58,6 +65,7 @@ from .tool import (
 )
 
 __all__ = [
+    "CredentialRef",
     "AIMessage",
     "Agent",
     "Context",
@@ -74,9 +82,15 @@ __all__ = [
     "ModelCallLayer",
     "ModelCallOptions",
     "ModelCallPolicy",
+    "ModelCapabilities",
+    "ModelConfig",
+    "ModelConnection",
     "ModelErrorKind",
+    "ModelEntry",
     "ModelGroupConfig",
+    "ModelGroup",
     "ModelRoute",
+    "ModelSpec",
     "Module",
     "PygentAgent",
     "PygentAgentContext",
