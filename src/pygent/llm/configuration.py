@@ -81,6 +81,10 @@ class ModelModalities:
     input: tuple[str, ...]
     output: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "input", _string_tuple(self.input, "modalities.input"))
+        object.__setattr__(self, "output", _string_tuple(self.output, "modalities.output"))
+
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelModalities:
         _exact_fields(value, frozenset({"input", "output"}), "modalities")
@@ -93,6 +97,9 @@ class ModelModalities:
 @dataclass(frozen=True, slots=True)
 class ModelStreamingCapabilities:
     text: bool
+
+    def __post_init__(self) -> None:
+        _bool(self.text, "streaming.text")
 
     @classmethod
     def from_mapping(
@@ -107,6 +114,17 @@ class ModelToolCapabilities:
     call: bool
     choice: tuple[str, ...]
     parallel: bool
+
+    def __post_init__(self) -> None:
+        _bool(self.call, "tools.call")
+        choices = _string_tuple(self.choice, "tools.choice")
+        unknown = set(choices) - _TOOL_CHOICES
+        if unknown:
+            raise ValueError(
+                "unsupported tools.choice values: " + ", ".join(sorted(unknown))
+            )
+        _bool(self.parallel, "tools.parallel")
+        object.__setattr__(self, "choice", choices)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelToolCapabilities:
@@ -127,6 +145,10 @@ class ModelStructuredOutputCapabilities:
     json_object: bool
     json_schema: bool
 
+    def __post_init__(self) -> None:
+        _bool(self.json_object, "structured_output.json_object")
+        _bool(self.json_schema, "structured_output.json_schema")
+
     @classmethod
     def from_mapping(
         cls, value: Mapping[str, object]
@@ -142,6 +164,12 @@ class ModelStructuredOutputCapabilities:
 class ModelReasoningCapabilities:
     supported: bool
     controllable: bool
+
+    def __post_init__(self) -> None:
+        _bool(self.supported, "reasoning.supported")
+        _bool(self.controllable, "reasoning.controllable")
+        if self.controllable and not self.supported:
+            raise ValueError("reasoning.controllable requires reasoning.supported")
 
     @classmethod
     def from_mapping(
@@ -159,6 +187,10 @@ class ModelReasoningCapabilities:
 class ModelLimits:
     context_tokens: int
     max_output_tokens: int
+
+    def __post_init__(self) -> None:
+        _positive_int(self.context_tokens, "limits.context_tokens")
+        _positive_int(self.max_output_tokens, "limits.max_output_tokens")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelLimits:
@@ -179,6 +211,19 @@ class ModelCapabilities:
     structured_output: ModelStructuredOutputCapabilities
     reasoning: ModelReasoningCapabilities
     limits: ModelLimits
+
+    def __post_init__(self) -> None:
+        expected = (
+            ("modalities", ModelModalities),
+            ("streaming", ModelStreamingCapabilities),
+            ("tools", ModelToolCapabilities),
+            ("structured_output", ModelStructuredOutputCapabilities),
+            ("reasoning", ModelReasoningCapabilities),
+            ("limits", ModelLimits),
+        )
+        for name, value_type in expected:
+            if not isinstance(getattr(self, name), value_type):
+                raise TypeError(f"capabilities.{name} must be {value_type.__name__}")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelCapabilities:

@@ -11,7 +11,13 @@ from pygent.llm import (
     ModelEntry,
     ModelGroup,
     ModelGroupResolution,
+    ModelLimits,
+    ModelModalities,
+    ModelReasoningCapabilities,
     ModelSpec,
+    ModelStreamingCapabilities,
+    ModelStructuredOutputCapabilities,
+    ModelToolCapabilities,
 )
 
 
@@ -161,3 +167,34 @@ def test_model_group_deferred_has_no_concrete_models_or_capacity_fields() -> Non
     assert not hasattr(group, "max_concurrency")
     assert not hasattr(group, "capacity_key")
 
+
+def test_direct_capability_values_normalize_sequences_and_validate_types() -> None:
+    modalities = ModelModalities(input=["text"], output=["text"])  # type: ignore[arg-type]
+    tools = ModelToolCapabilities(
+        call=True,
+        choice=["none", "auto"],  # type: ignore[arg-type]
+        parallel=False,
+    )
+    capabilities = ModelCapabilities(
+        modalities=modalities,
+        streaming=ModelStreamingCapabilities(text=True),
+        tools=tools,
+        structured_output=ModelStructuredOutputCapabilities(
+            json_object=True,
+            json_schema=False,
+        ),
+        reasoning=ModelReasoningCapabilities(
+            supported=True,
+            controllable=False,
+        ),
+        limits=ModelLimits(context_tokens=32_768, max_output_tokens=4_096),
+    )
+
+    assert capabilities.modalities.input == ("text",)
+    assert capabilities.tools.choice == ("none", "auto")
+    with pytest.raises(TypeError, match="streaming.text"):
+        ModelStreamingCapabilities(text=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="reasoning.controllable"):
+        ModelReasoningCapabilities(supported=False, controllable=True)
+    with pytest.raises(ValueError, match="positive integer"):
+        ModelLimits(context_tokens=0, max_output_tokens=4_096)

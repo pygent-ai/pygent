@@ -36,7 +36,11 @@ from pygent.runtime._worker_protocol import (
     WorkerInvocation,
     WorkerRemoteError,
 )
-from pygent.runtime.model_deployment import build_snapshot
+from pygent.runtime.model_deployment import (
+    _snapshot_from_value,
+    _snapshot_value,
+    build_snapshot,
+)
 from pygent.runtime.worker_server import HTTPWorkerApp
 from pygent.runtime.worker_target import _validate_worker_model_admission
 from tests.support.model_specs import model_entry
@@ -247,6 +251,26 @@ async def test_sqlite_round_trip_and_tampered_provider_options_fail_closed(
 
     with pytest.raises(ValueError, match="digest"):
         await SQLiteModelDeploymentStore(path).open()
+
+
+def test_legacy_profile_shape_is_rejected_without_compatibility_parsing() -> None:
+    snapshot = build_snapshot(
+        scope_id="scope",
+        requirement=_requirement(),
+        profile="legacy",
+        models=(model_entry("main", "deepseek", "deepseek-v4-flash"),),
+        resources=None,
+    )
+    value = _snapshot_value(snapshot)
+    value["model_group"] = {
+        "name": "assistant",
+        "routes": [],
+        "fallback": [],
+        "resolution": "concrete",
+    }
+
+    with pytest.raises(ValueError, match="current schema"):
+        _snapshot_from_value(value)
 
 
 class _Resolver:
