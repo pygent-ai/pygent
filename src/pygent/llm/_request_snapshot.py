@@ -7,7 +7,14 @@ import json
 import uuid
 from typing import cast
 
-from pygent.core import AIMessage, JsonValue, Message, ToolMessage, thaw_json
+from pygent.core import (
+    AIMessage,
+    JsonValue,
+    Message,
+    ModelContinuation,
+    ToolMessage,
+    thaw_json,
+)
 
 from ._adapter_contracts import ModelProviderRequest
 
@@ -77,6 +84,7 @@ def _message_projection(message: Message) -> dict[str, object]:
         "slot": message.slot,
     }
     if isinstance(message, AIMessage):
+        value["continuation_digest"] = _continuation_digest(message.continuation)
         value["tool_calls"] = [
             {
                 "call_id": call.call_id,
@@ -106,6 +114,22 @@ def _message_projection(message: Message) -> dict[str, object]:
             for result in message.results
         ]
     return value
+
+
+def _continuation_digest(continuation: ModelContinuation | None) -> str | None:
+    if continuation is None:
+        return None
+    encoded = json.dumps(
+        {
+            "provider": continuation.provider,
+            "protocol": continuation.protocol,
+            "data": thaw_json(cast(JsonValue, continuation.data)),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 __all__ = ["prepared_request_event"]

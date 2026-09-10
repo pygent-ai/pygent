@@ -13,6 +13,7 @@ from pygent.core import (
     FrozenJsonObject,
     JsonValue,
     Message,
+    ModelContinuation,
     ToolMessage,
     UserMessage,
     freeze_json_object,
@@ -367,6 +368,15 @@ def _message_value(
     if isinstance(value, AIMessage):
         data["tool_calls"] = [_tool_call_to_dict(call, project) for call in value.tool_calls]
         data["usage"] = project(value.usage)
+        data["continuation"] = (
+            None
+            if value.continuation is None
+            else {
+                "provider": value.continuation.provider,
+                "protocol": value.continuation.protocol,
+                "data": project(value.continuation.data),
+            }
+        )
     elif isinstance(value, ToolMessage):
         data["results"] = [_tool_result_to_dict(result, project) for result in value.results]
     elif isinstance(value, ToolAuthorizationRequest):
@@ -408,7 +418,7 @@ def message_from_dict(value: object) -> Message:
         }
     else:
         expected = common | (
-            {"tool_calls", "usage"} if role == "assistant" else set()
+            {"tool_calls", "usage", "continuation"} if role == "assistant" else set()
         )
         expected |= {"results"} if role == "tool" else set()
     _only(data, expected, "Message")
@@ -448,10 +458,27 @@ def message_from_dict(value: object) -> Message:
             calls = data.get("tool_calls", [])
             if not isinstance(calls, (list, tuple)):
                 raise TypeError
+            raw_continuation = data["continuation"]
+            continuation = None
+            if raw_continuation is not None:
+                continuation_data = _object(raw_continuation, "Message.continuation")
+                _only(
+                    continuation_data,
+                    {"provider", "protocol", "data"},
+                    "Message.continuation",
+                )
+                continuation = ModelContinuation(
+                    provider=continuation_data["provider"],
+                    protocol=continuation_data["protocol"],
+                    data=_object(
+                        continuation_data["data"], "Message.continuation.data"
+                    ),
+                )
             return AIMessage(
                 **kwargs,
                 tool_calls=tuple(_tool_call_from_dict(item) for item in calls),
                 usage=_object(data["usage"], "Message.usage"),
+                continuation=continuation,
             )
         if role == "tool":
             results = data.get("results", [])

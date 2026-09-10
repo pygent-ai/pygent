@@ -12,6 +12,7 @@ from pygent import (
     AIMessage,
     Context,
     Message,
+    ModelContinuation,
     Module,
     ToolCall,
     ToolDefinition,
@@ -154,6 +155,28 @@ def test_message_and_context_validate_typed_elements():
         Context(messages=["not a message"])  # type: ignore[list-item]
     with pytest.raises(TypeError, match="tools"):
         Context(tools=["search"])  # type: ignore[list-item]
+
+
+def test_model_continuation_is_portable_immutable_and_redacted() -> None:
+    source = {"thinking": {"signature": "secret-signature"}}
+    continuation = ModelContinuation(
+        provider="deepseek",
+        protocol="anthropic_messages",
+        data=source,
+    )
+    message = AIMessage(content="answer", continuation=continuation)
+
+    source["thinking"]["signature"] = "changed"  # type: ignore[index]
+
+    assert continuation.data["thinking"]["signature"] == "secret-signature"
+    assert "secret-signature" not in repr(continuation)
+    assert "secret-signature" not in repr(message)
+    with pytest.raises(ValueError, match="provider"):
+        ModelContinuation(provider="", protocol="anthropic_messages")
+    with pytest.raises(ValueError, match="protocol"):
+        ModelContinuation(provider="deepseek", protocol="")
+    with pytest.raises(TypeError, match="continuation"):
+        AIMessage(continuation=object())  # type: ignore[arg-type]
 
 
 def test_context_and_message_validate_scalar_field_types():

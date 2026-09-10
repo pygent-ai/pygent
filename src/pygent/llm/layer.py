@@ -20,6 +20,7 @@ from pygent.core import (
     FrozenJsonObject,
     JsonValue,
     Message,
+    ModelContinuation,
     Module,
     RecoverySafety,
     ToolMessage,
@@ -243,6 +244,15 @@ def _message_effect_value(message: Message) -> dict[str, object]:
         "metadata": thaw_json(cast(JsonValue, message.metadata)),
     }
     if isinstance(message, AIMessage):
+        value["continuation"] = (
+            None
+            if message.continuation is None
+            else {
+                "provider": message.continuation.provider,
+                "protocol": message.continuation.protocol,
+                "data": thaw_json(cast(JsonValue, message.continuation.data)),
+            }
+        )
         value["tool_calls"] = [
             {
                 "call_id": call.call_id,
@@ -401,12 +411,30 @@ def _message_from_effect(value: JsonValue) -> AIMessage:
     usage = decoded.get("usage", {})
     if not isinstance(usage, Mapping):
         raise TypeError("replayed model usage must be a JSON object")
+    if "continuation" not in raw_message:
+        raise TypeError("replayed model continuation field is required")
+    raw_continuation = raw_message["continuation"]
+    continuation = None
+    if raw_continuation is not None:
+        if not isinstance(raw_continuation, Mapping):
+            raise TypeError("replayed model continuation must be a JSON object")
+        if set(raw_continuation) != {"provider", "protocol", "data"}:
+            raise TypeError("replayed model continuation has invalid fields")
+        continuation_data = raw_continuation["data"]
+        if not isinstance(continuation_data, Mapping):
+            raise TypeError("replayed model continuation data must be a JSON object")
+        continuation = ModelContinuation(
+            provider=cast(str, raw_continuation["provider"]),
+            protocol=cast(str, raw_continuation["protocol"]),
+            data=cast(Mapping[str, object], continuation_data),
+        )
     return AIMessage(
         content=cast(str, raw_message.get("content", "")),
         slot=cast(str | None, raw_message.get("slot")),
         metadata=cast(Mapping[str, object], metadata),
         tool_calls=tuple(calls),
         usage=cast(Mapping[str, object], usage),
+        continuation=continuation,
     )
 
 

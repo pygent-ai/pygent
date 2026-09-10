@@ -52,7 +52,14 @@ from .json_values import (
     freeze_json_object,
     thaw_json,
 )
-from .values import AIMessage, Context, Message, ToolMessage, UserMessage
+from .values import (
+    AIMessage,
+    Context,
+    Message,
+    ModelContinuation,
+    ToolMessage,
+    UserMessage,
+)
 
 __all__ = [
     "EXECUTION_EVENT_SCHEMA_VERSION",
@@ -90,6 +97,7 @@ __all__ = [
     "JsonValue",
     "JsonValueError",
     "Message",
+    "ModelContinuation",
     "Module",
     "ModuleDependency",
     "PlacementMode",

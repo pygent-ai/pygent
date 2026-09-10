@@ -6,6 +6,7 @@ from pygent import (
     AIMessage,
     Context,
     GenerationConfig,
+    ModelContinuation,
     ToolDefinition,
     UserMessage,
     freeze_json_object,
@@ -104,6 +105,30 @@ def test_historical_message_usage_does_not_change_the_request_snapshot() -> None
     assert prepared_request_event(with_usage, attempt=1)["request_digest"] == (
         prepared_request_event(baseline, attempt=1)["request_digest"]
     )
+
+
+def test_snapshot_projects_only_a_digest_of_model_continuation() -> None:
+    continuation = ModelContinuation(
+        provider="deepseek",
+        protocol="anthropic_messages",
+        data={"thinking": [{"signature": "secret-signature"}]},
+    )
+    original = request()
+    value = ModelProviderRequest(
+        model_key=original.model_key,
+        model=original.model,
+        message=original.message,
+        context=Context(messages=(AIMessage(content="history", continuation=continuation),)),
+        generation=original.generation,
+        tools=original.tools,
+    )
+
+    prepared = prepared_request_event(value, attempt=1)
+    historical = prepared["request"]["messages"][0]
+
+    assert historical["continuation_digest"].startswith("sha256:")
+    assert "continuation" not in historical
+    assert "secret-signature" not in repr(prepared)
 
 
 def test_prepared_request_preserves_content_above_one_mib() -> None:

@@ -79,10 +79,27 @@ class UserMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
     role: ClassVar[str] = "user"
 
 
+@dataclass(frozen=True, slots=True)
+class ModelContinuation:
+    """Opaque, portable provider state required by a later model turn."""
+
+    provider: str
+    protocol: str
+    data: JsonObjectInput = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        for name in ("provider", "protocol"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"ModelContinuation {name} must be a non-empty string")
+        object.__setattr__(self, "data", freeze_json_object(self.data))
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AIMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
     tool_calls: tuple[ToolCall, ...] = ()
     usage: JsonObjectInput = ()
+    continuation: ModelContinuation | None = field(default=None, repr=False)
     role: ClassVar[str] = "assistant"
 
     def __post_init__(self) -> None:
@@ -91,6 +108,10 @@ class AIMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
         if any(type(call) is not ToolCall for call in tool_calls):
             raise TypeError("AIMessage.tool_calls must contain only ToolCall values")
         object.__setattr__(self, "tool_calls", tool_calls)
+        if self.continuation is not None and type(self.continuation) is not ModelContinuation:
+            raise TypeError(
+                "AIMessage.continuation must be a ModelContinuation or None"
+            )
         usage = freeze_json_object(self.usage)
         allowed = {
             "input_tokens",
@@ -254,6 +275,7 @@ __all__ = [
     "Context",
     "FrozenJsonObject",
     "Message",
+    "ModelContinuation",
     "ToolMessage",
     "UserMessage",
     "validate_context",

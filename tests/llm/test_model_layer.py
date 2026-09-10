@@ -9,7 +9,9 @@ import httpx
 import pytest
 
 from pygent import (
+    AIMessage,
     Context,
+    ModelContinuation,
     ToolMessage,
     UserMessage,
 )
@@ -31,7 +33,11 @@ from pygent.llm import (
     OpenAICompatibleClient,
     RetryPolicy,
 )
-from pygent.llm.layer import _model_effect_request
+from pygent.llm.layer import (
+    _message_effect_value,
+    _message_from_effect,
+    _model_effect_request,
+)
 from pygent.runtime import (
     ExecutionAdmissionError,
     ExecutionDeadlineExceeded,
@@ -282,6 +288,38 @@ def test_durable_effect_identity_includes_tool_results() -> None:
     second_request = _model_effect_request(model, second, Context(), ())
 
     assert first_request != second_request
+
+
+def test_model_effect_round_trip_preserves_opaque_continuation() -> None:
+    continuation = ModelContinuation(
+        provider="deepseek",
+        protocol="anthropic_messages",
+        data={"thinking": [{"signature": "opaque-signature"}]},
+    )
+    message = AIMessage(content="answer", continuation=continuation)
+    effect_value = freeze_json_object(
+        {
+            "outcome": "succeeded",
+            "message": _message_effect_value(message),
+            "usage": {},
+            "provider_request_id": None,
+        }
+    )
+
+    assert _message_from_effect(effect_value) == message
+
+    raw_message = _message_effect_value(message)
+    raw_message.pop("continuation")
+    missing = freeze_json_object(
+        {
+            "outcome": "succeeded",
+            "message": raw_message,
+            "usage": {},
+            "provider_request_id": None,
+        }
+    )
+    with pytest.raises(TypeError, match="continuation"):
+        _message_from_effect(missing)
 
 
 @pytest.mark.asyncio

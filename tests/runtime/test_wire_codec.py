@@ -6,6 +6,7 @@ from pygent import (
     AIMessage,
     Context,
     Message,
+    ModelContinuation,
     ToolMessage,
     UserMessage,
 )
@@ -59,6 +60,11 @@ def test_message_and_context_wire_round_trip_all_public_variants():
             content="calling",
             tool_calls=(call,),
             usage={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+            continuation=ModelContinuation(
+                provider="deepseek",
+                protocol="anthropic_messages",
+                data={"thinking": [{"signature": "opaque"}]},
+            ),
         ),
         ToolMessage(
             results=(
@@ -90,6 +96,15 @@ def test_message_and_context_wire_round_trip_all_public_variants():
 def test_assistant_wire_requires_usage() -> None:
     value = message_to_dict(AIMessage(content="answer"))
     value.pop("usage")
+
+    with pytest.raises(WireCodecError, match="invalid Message"):
+        message_from_dict(value)
+
+
+def test_assistant_wire_requires_explicit_continuation() -> None:
+    value = message_to_dict(AIMessage(content="answer"))
+    assert value["continuation"] is None
+    value.pop("continuation")
 
     with pytest.raises(WireCodecError, match="invalid Message"):
         message_from_dict(value)
