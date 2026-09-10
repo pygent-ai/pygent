@@ -193,7 +193,7 @@ model_groups:
 
 字段类型、枚举和值域遵循阿里云 OpenAI Chat Completions 协议。未知字段继续在 Provider I/O 前拒绝。Responses API 的 Harness tools、代码解释器和联网搜索不通过这些选项伪装支持。
 
-Alibaba OpenAI 响应中的 `reasoning_content` 使用现有版本化 `ModelContinuation`：
+OpenAI Chat Completions Adapter 不维护支持 `reasoning_content` 的 Provider 白名单。任何使用该 protocol 的模型，只要响应实际返回合法的 `reasoning_content`，都使用现有版本化 `ModelContinuation` 保存它。以 Alibaba Token Plan 为例：
 
 ```python
 ModelContinuation(
@@ -203,7 +203,7 @@ ModelContinuation(
 )
 ```
 
-当响应实际包含 reasoning content 时，流式与非流式调用都保存 continuation；后续工具调用只在 Provider 与 protocol 同时匹配时回传。逻辑不依赖具体 Model ID，不跨 Provider 或 protocol 转换。现有 DeepSeek continuation 行为保持不变。
+流式与非流式调用采用同一规则：字段不存在时不产生 continuation；字段存在时必须是字符串，否则按非法 Provider 响应拒绝。Continuation 的 `provider` 来自当前 `ModelSpec`，后续工具调用只在 Provider 与 protocol 同时匹配时回传。逻辑不依赖 Provider 白名单或具体 Model ID，也不跨 Provider 或 protocol 转换。现有 DeepSeek continuation 自然落入同一条协议规则，行为保持不变。
 
 ## Invoker 与能力警告
 
@@ -239,7 +239,7 @@ Invoker 是否使用流式文本 transport 改为检查：
 - `aliyun_token_plan` 的两个 Provider preset；
 - 18 个 Model ID、27 条能力记录及逐 protocol 差异；
 - Alibaba Provider options 的合法投影和失败关闭；
-- Alibaba `reasoning_content` 的流式、非流式及工具循环续传；
+- OpenAI Chat Completions `reasoning_content` 的响应驱动保存、非法值拒绝、流式与非流式工具循环续传，以及无字段时的既有行为；
 - 未安装的专用协议在网络请求前明确失败；
 - Runtime、Worker、SQLite 和 durable replay 的新能力投影 round trip；
 - wheel 与 sdist 中的目录 JSON 和 checksum。
@@ -258,6 +258,6 @@ uvx twine check dist/*
 
 ## 实施边界
 
-本次只增加 Alibaba Token Plan Provider、官方模型能力目录、通用输出模态 streaming 表达、nullable token limits、Alibaba OpenAI 私有字段和 reasoning continuation。
+本次只增加 Alibaba Token Plan Provider、官方模型能力目录、通用输出模态 streaming 表达、nullable token limits、Alibaba OpenAI 私有字段，以及 OpenAI Chat Completions 响应驱动的 reasoning continuation。
 
 本次不增加图像、视频、TTS、ASR、Realtime 或 OpenAI Responses Adapter，不增加多模态 Message，不增加 Adapter registry、自动协议选择、能力路由、远程目录同步、Runtime 配置、容量系统或 Provider client 生命周期。新增契约按 born-as-new 方式实现，同时保持已有 OpenAI、Anthropic、DeepSeek、fallback、managed Runtime 和非模型功能的行为。
