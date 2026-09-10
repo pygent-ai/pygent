@@ -268,12 +268,12 @@ async def test_third_party_adapter_without_validator_fails_closed_before_io() ->
 
 
 @pytest.mark.asyncio
-async def test_fallback_routes_receive_only_their_own_provider_options() -> None:
+async def test_fallback_models_receive_only_their_own_provider_options() -> None:
     primary = _OutcomeClient(httpx.ConnectError("offline"))
     fallback = _OutcomeClient(
         freeze_json_object({"choices": [{"message": {"content": "fallback"}}]})
     )
-    routes = (
+    models = (
         model_entry(
             "primary",
             "openai",
@@ -293,7 +293,7 @@ async def test_fallback_routes_receive_only_their_own_provider_options() -> None
         capabilities={"openai": transport_mode(streaming=False)},
     )
     response = await invoker.execute(
-        model_group=model_group("fallback", routes, ("primary", "fallback")),
+        model_group=model_group("fallback", models, ("primary", "fallback")),
         retry_policy=RetryPolicy(max_attempts_per_route=1),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),

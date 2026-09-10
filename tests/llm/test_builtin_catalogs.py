@@ -101,4 +101,3 @@ def test_catalog_from_mapping_is_strict_and_immutable() -> None:
         ProviderCatalog.from_mapping(
             {"schema_version": 1, "providers": {}, "unknown": True}
         )
-
