@@ -91,7 +91,7 @@ def test_provider_options_change_definition_and_effect_identity_but_empty_does_n
     )
     assert (
         compile_execution_plan(empty_layer).modules[0].config_ref
-        == "sha256:beba9350d16b0a36aeaa031cabebad5bd899bd760d2e41058740a16011a6c073"
+        == "sha256:0a8f35c101079ea63a1e1b27de4889d8e2ab19c14bc30771625adc316cf22098"
     )
     assert (
         compile_execution_plan(empty_layer).modules[0].config_ref
