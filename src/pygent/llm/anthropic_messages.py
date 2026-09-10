@@ -309,20 +309,282 @@ class AnthropicMessagesAdapter:
 class _AnthropicStreamDecoder:
     def __init__(self, request: ModelProviderRequest) -> None:
         self._request = request
+        self._started = False
+        self._completed = False
+        self._blocks: dict[int, dict[str, object]] = {}
+        self._layout: list[dict[str, object]] = []
+        self._text_offset = 0
+        self._tool_count = 0
+        self._request_id: str | None = None
+        self._input_tokens = 0
+        self._stop_reason: str | None = None
 
     def feed(self, payload: FrozenJsonObject) -> tuple[ModelProviderStreamPart, ...]:
-        raise ModelProviderError(
-            ModelErrorKind.INVALID_RESPONSE,
-            "Anthropic streaming decoder is not implemented",
-            reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
-        )
+        try:
+            event = payload.to_dict()
+            kind = event.get("type")
+            if kind == "ping":
+                return ()
+            if kind == "error":
+                raise _stream_provider_error(event.get("error"))
+            if kind == "message_start":
+                return self._message_start(event)
+            if kind == "content_block_start":
+                return self._block_start(event)
+            if kind == "content_block_delta":
+                return self._block_delta(event)
+            if kind == "content_block_stop":
+                return self._block_stop(event)
+            if kind == "message_delta":
+                return self._message_delta(event)
+            if kind == "message_stop":
+                return self._message_stop()
+            if isinstance(kind, str):
+                return ()
+            raise TypeError
+        except ModelProviderError:
+            raise
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_RESPONSE,
+                "provider SSE event has an invalid shape",
+                reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
+            ) from exc
 
     def finish(self) -> tuple[ModelProviderStreamPart, ...]:
-        raise ModelProviderError(
-            ModelErrorKind.INVALID_RESPONSE,
-            "model stream ended before a completion marker",
-            reason_code=ModelFailureReason.STREAM_INCOMPLETE,
+        if not self._completed:
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_RESPONSE,
+                "model stream ended before a completion marker",
+                reason_code=ModelFailureReason.STREAM_INCOMPLETE,
+            )
+        return ()
+
+    def _message_start(
+        self, event: Mapping[str, object]
+    ) -> tuple[ModelProviderStreamPart, ...]:
+        if self._started or self._completed:
+            raise TypeError
+        message = event.get("message")
+        if not isinstance(message, Mapping):
+            raise TypeError
+        request_id = message.get("id")
+        if not isinstance(request_id, str) or not request_id:
+            raise TypeError
+        usage = _anthropic_usage(message.get("usage"))
+        raw_input = usage.get("input_tokens", 0)
+        self._input_tokens = cast(int, raw_input)
+        self._request_id = request_id
+        self._started = True
+        return ()
+
+    def _block_start(
+        self, event: Mapping[str, object]
+    ) -> tuple[ModelProviderStreamPart, ...]:
+        if not self._started or self._completed:
+            raise TypeError
+        index = _event_index(event)
+        if index in self._blocks:
+            raise TypeError
+        raw = event.get("content_block")
+        if not isinstance(raw, Mapping):
+            raise TypeError
+        kind = raw.get("type")
+        state: dict[str, object] = {"type": kind, "open": True}
+        parts: list[ModelProviderStreamPart] = []
+        if kind == "text":
+            text = raw.get("text", "")
+            if not isinstance(text, str):
+                raise TypeError
+            state["text"] = text
+            if text:
+                parts.append(ModelProviderStreamPart("text", {"text": text}))
+        elif kind == "thinking":
+            thinking = raw.get("thinking", "")
+            if not isinstance(thinking, str):
+                raise TypeError
+            state.update({"thinking": thinking, "signature": ""})
+            if thinking:
+                parts.append(
+                    ModelProviderStreamPart("reasoning", {"text": thinking})
+                )
+        elif kind == "redacted_thinking":
+            data = raw.get("data")
+            if not isinstance(data, str) or not data:
+                raise TypeError
+            state["data"] = data
+        elif kind == "tool_use":
+            call_id, name, tool_input = raw.get("id"), raw.get("name"), raw.get("input", {})
+            if (
+                not isinstance(call_id, str)
+                or not call_id
+                or not isinstance(name, str)
+                or not name
+                or not isinstance(tool_input, Mapping)
+            ):
+                raise TypeError
+            initial = "" if not tool_input else json.dumps(tool_input, ensure_ascii=False, separators=(",", ":"))
+            state.update({"id": call_id, "name": name, "json": initial})
+            parts.append(
+                ModelProviderStreamPart(
+                    "tool_call",
+                    {
+                        "index": self._tool_count,
+                        "call_id_delta": call_id,
+                        "name_delta": name,
+                        "arguments_delta": initial,
+                    },
+                )
+            )
+            state["tool_index"] = self._tool_count
+            self._tool_count += 1
+        else:
+            raise TypeError
+        self._blocks[index] = state
+        return tuple(parts)
+
+    def _block_delta(
+        self, event: Mapping[str, object]
+    ) -> tuple[ModelProviderStreamPart, ...]:
+        index = _event_index(event)
+        state = self._blocks.get(index)
+        if state is None or state.get("open") is not True:
+            raise TypeError
+        delta = event.get("delta")
+        if not isinstance(delta, Mapping):
+            raise TypeError
+        delta_kind = delta.get("type")
+        block_kind = state["type"]
+        if block_kind == "text" and delta_kind == "text_delta":
+            text = delta.get("text")
+            if not isinstance(text, str):
+                raise TypeError
+            state["text"] = cast(str, state["text"]) + text
+            return (ModelProviderStreamPart("text", {"text": text}),) if text else ()
+        if block_kind == "thinking" and delta_kind == "thinking_delta":
+            thinking = delta.get("thinking")
+            if not isinstance(thinking, str):
+                raise TypeError
+            state["thinking"] = cast(str, state["thinking"]) + thinking
+            return (
+                ModelProviderStreamPart("reasoning", {"text": thinking}),
+            ) if thinking else ()
+        if block_kind == "thinking" and delta_kind == "signature_delta":
+            signature = delta.get("signature")
+            if not isinstance(signature, str):
+                raise TypeError
+            state["signature"] = cast(str, state["signature"]) + signature
+            return ()
+        if block_kind == "tool_use" and delta_kind == "input_json_delta":
+            partial = delta.get("partial_json")
+            if not isinstance(partial, str):
+                raise TypeError
+            state["json"] = cast(str, state["json"]) + partial
+            return (
+                ModelProviderStreamPart(
+                    "tool_call",
+                    {
+                        "index": state["tool_index"],
+                        "call_id_delta": "",
+                        "name_delta": "",
+                        "arguments_delta": partial,
+                    },
+                ),
+            ) if partial else ()
+        raise TypeError
+
+    def _block_stop(
+        self, event: Mapping[str, object]
+    ) -> tuple[ModelProviderStreamPart, ...]:
+        index = _event_index(event)
+        state = self._blocks.get(index)
+        if state is None or state.get("open") is not True:
+            raise TypeError
+        kind = state["type"]
+        if kind == "text":
+            text = cast(str, state["text"])
+            if not text:
+                raise TypeError
+            self._layout.append(
+                {"type": "text", "start": self._text_offset, "end": self._text_offset + len(text)}
+            )
+            self._text_offset += len(text)
+        elif kind == "thinking":
+            signature = state["signature"]
+            if not isinstance(signature, str) or not signature:
+                raise TypeError
+            self._layout.append(
+                {"type": "thinking", "thinking": state["thinking"], "signature": signature}
+            )
+        elif kind == "redacted_thinking":
+            self._layout.append({"type": "redacted_thinking", "data": state["data"]})
+        elif kind == "tool_use":
+            raw_json = cast(str, state["json"]) or "{}"
+            tool_input = json.loads(raw_json)
+            if not isinstance(tool_input, Mapping):
+                raise TypeError
+            self._layout.append({"type": "tool_use", "index": state["tool_index"]})
+        else:  # pragma: no cover - block-start invariant
+            raise TypeError
+        state["open"] = False
+        return ()
+
+    def _message_delta(
+        self, event: Mapping[str, object]
+    ) -> tuple[ModelProviderStreamPart, ...]:
+        if not self._started or self._completed or any(
+            state.get("open") is True for state in self._blocks.values()
+        ):
+            raise TypeError
+        delta = event.get("delta")
+        if not isinstance(delta, Mapping):
+            raise TypeError
+        stop_reason = delta.get("stop_reason")
+        try:
+            _finish_reason(stop_reason)
+        except ModelProviderError as exc:
+            if exc.reason_code is ModelFailureReason.CONTEXT_LENGTH_EXCEEDED:
+                raise
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_RESPONSE,
+                "provider SSE event has an invalid stop reason",
+                reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
+            ) from None
+        self._stop_reason = cast(str, stop_reason)
+        usage = event.get("usage")
+        if not isinstance(usage, Mapping):
+            raise TypeError
+        combined = dict(usage)
+        combined.setdefault("input_tokens", self._input_tokens)
+        return (ModelProviderStreamPart("usage", _anthropic_usage(combined)),)
+
+    def _message_stop(self) -> tuple[ModelProviderStreamPart, ...]:
+        if (
+            not self._started
+            or self._completed
+            or self._stop_reason is None
+            or any(state.get("open") is True for state in self._blocks.values())
+        ):
+            raise TypeError
+        finish = ModelProviderStreamPart(
+            "finish",
+            {
+                "finish_reason": _finish_reason(self._stop_reason),
+                "provider_request_id": self._request_id,
+            },
         )
+        self._completed = True
+        if not any(block["type"] != "text" for block in self._layout):
+            return (finish,)
+        continuation = ModelProviderStreamPart(
+            "continuation",
+            {
+                "provider": self._request.model.provider,
+                "protocol": _PROTOCOL,
+                "data": {"version": 1, "blocks": self._layout},
+            },
+        )
+        return continuation, finish
 
 
 def _validate_provider_options(value: object) -> None:
@@ -399,16 +661,22 @@ def _encode_message(message: Message, model: ModelSpec) -> dict[str, object]:
     if message.content:
         blocks.append({"type": "text", "text": message.content})
     if isinstance(message, AIMessage):
+        continuation_matches = (
+            message.continuation is not None
+            and message.continuation.provider == model.provider
+            and message.continuation.protocol == model.protocol
+        )
         blocks = _assistant_blocks(message, model, blocks)
-        for call in message.tool_calls:
-            blocks.append(
-                {
-                    "type": "tool_use",
-                    "id": call.call_id,
-                    "name": call.name,
-                    "input": _thaw(call.arguments),
-                }
-            )
+        if not continuation_matches:
+            for call in message.tool_calls:
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": call.call_id,
+                        "name": call.name,
+                        "input": _thaw(call.arguments),
+                    }
+                )
     return {"role": message.role, "content": blocks or [{"type": "text", "text": ""}]}
 
 
@@ -487,6 +755,41 @@ def _tool_result_value(result: ToolResult) -> dict[str, object]:
         "content": content or "",
         "is_error": result.status != "succeeded",
     }
+
+
+def _event_index(event: Mapping[str, object]) -> int:
+    index = event.get("index")
+    if type(index) is not int or cast(int, index) < 0:
+        raise TypeError
+    return cast(int, index)
+
+
+def _stream_provider_error(value: object) -> ModelProviderError:
+    if not isinstance(value, Mapping):
+        raise TypeError
+    error_type = value.get("type")
+    if not isinstance(error_type, str):
+        raise TypeError
+    if error_type in {"overloaded_error", "api_error"}:
+        kind = ModelErrorKind.UNAVAILABLE
+        reason = ModelFailureReason.PROVIDER_UNAVAILABLE
+    elif error_type == "rate_limit_error":
+        kind = ModelErrorKind.RATE_LIMIT
+        reason = ModelFailureReason.RATE_LIMITED
+    elif error_type in {"authentication_error", "permission_error"}:
+        kind = ModelErrorKind.AUTHENTICATION
+        reason = (
+            ModelFailureReason.AUTHENTICATION_FAILED
+            if error_type == "authentication_error"
+            else ModelFailureReason.PERMISSION_DENIED
+        )
+    elif error_type == "invalid_request_error":
+        kind = ModelErrorKind.INVALID_REQUEST
+        reason = ModelFailureReason.INVALID_PARAMETER
+    else:
+        kind = ModelErrorKind.UNKNOWN
+        reason = ModelFailureReason.UNKNOWN_PROVIDER_FAILURE
+    return ModelProviderError(kind, "provider stream failed", reason_code=reason)
 
 
 def _tool_value(tool: ToolDefinition) -> dict[str, object]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import httpx
@@ -20,11 +21,14 @@ from pygent.core import freeze_json_object
 from pygent.llm import (
     AnthropicMessagesAdapter,
     AnthropicMessagesClient,
+    DefaultModelInvoker,
     ModelEntry,
     ModelErrorKind,
     ModelFailureReason,
+    ModelGroup,
     ModelProviderError,
     ModelProviderRequest,
+    RetryPolicy,
 )
 from tests.support.model_specs import model_entry
 
@@ -239,3 +243,172 @@ def test_anthropic_http_error_mapping_is_closed() -> None:
         )
     )
     assert error is ModelErrorKind.UNAVAILABLE
+
+
+def test_anthropic_stream_decoder_reduces_indexed_blocks_and_continuation() -> None:
+    decoder = AnthropicMessagesAdapter().create_stream_decoder(request())
+    payloads = [
+        {"type": "message_start", "message": {"id": "msg-1", "usage": {"input_tokens": 10}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "reasoning"}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "answer"}},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {}}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": '{"id":1}'}},
+        {"type": "content_block_stop", "index": 2},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 4}},
+        {"type": "message_stop"},
+    ]
+
+    parts = [
+        part
+        for payload in payloads
+        for part in decoder.feed(freeze_json_object(payload))
+    ]
+
+    assert decoder.finish() == ()
+    assert [part.kind for part in parts] == [
+        "reasoning",
+        "text",
+        "tool_call",
+        "tool_call",
+        "usage",
+        "continuation",
+        "finish",
+    ]
+    continuation = parts[-2].data
+    assert continuation["provider"] == "anthropic"
+    assert continuation["data"]["blocks"] == (
+        freeze_json_object({"type": "thinking", "thinking": "reasoning", "signature": "sig"}),
+        freeze_json_object({"type": "text", "start": 0, "end": 6}),
+        freeze_json_object({"type": "tool_use", "index": 0}),
+    )
+    assert parts[-1].data["finish_reason"] == "tool_calls"
+    assert parts[-1].data["provider_request_id"] == "msg-1"
+
+
+def test_anthropic_stream_rejects_missing_signature_and_premature_eof() -> None:
+    decoder = AnthropicMessagesAdapter().create_stream_decoder(request())
+    decoder.feed(
+        freeze_json_object(
+            {"type": "message_start", "message": {"id": "msg-1", "usage": {}}}
+        )
+    )
+    decoder.feed(
+        freeze_json_object(
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": "reasoning"},
+            }
+        )
+    )
+
+    with pytest.raises(ModelProviderError) as missing_signature:
+        decoder.feed(
+            freeze_json_object({"type": "content_block_stop", "index": 0})
+        )
+    assert missing_signature.value.reason_code is ModelFailureReason.STREAM_EVENT_INVALID
+
+    incomplete = AnthropicMessagesAdapter().create_stream_decoder(request())
+    with pytest.raises(ModelProviderError) as eof:
+        incomplete.finish()
+    assert eof.value.reason_code is ModelFailureReason.STREAM_INCOMPLETE
+
+
+def test_anthropic_matching_continuation_rebuilds_exact_assistant_layout() -> None:
+    adapter = AnthropicMessagesAdapter()
+    response = adapter.parse_response(
+        request(),
+        freeze_json_object(
+            {
+                "id": "msg-1",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "reasoning", "signature": "sig"},
+                    {"type": "text", "text": "answer"},
+                    {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"id": 1}},
+                ],
+                "stop_reason": "tool_use",
+                "usage": {},
+            }
+        ),
+    )
+
+    payload = adapter.build_request(request(message=response.message)).to_dict()
+
+    assert payload["messages"][0]["content"] == [
+        {"type": "thinking", "thinking": "reasoning", "signature": "sig"},
+        {"type": "text", "text": "answer"},
+        {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"id": 1}},
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "x"}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "image"}},
+        {"type": "message_delta", "delta": {"stop_reason": "pause_turn"}, "usage": {}},
+    ],
+)
+def test_anthropic_stream_rejects_unknown_or_out_of_order_semantics(
+    payload: dict[str, object],
+) -> None:
+    decoder = AnthropicMessagesAdapter().create_stream_decoder(request())
+    with pytest.raises(ModelProviderError) as raised:
+        decoder.feed(freeze_json_object(payload))
+    assert raised.value.reason_code is ModelFailureReason.STREAM_EVENT_INVALID
+
+
+@pytest.mark.asyncio
+async def test_anthropic_http_stream_reaches_common_invoker_reducer() -> None:
+    events = [
+        {"type": "message_start", "message": {"id": "msg-1", "usage": {"input_tokens": 2}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "reason"}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "answer"}},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+        {"type": "message_stop"},
+    ]
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    entry = anthropic_entry()
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AnthropicMessagesClient(base_url="https://api.anthropic.com", client=http)
+    invoker = DefaultModelInvoker(
+        adapters={entry.spec.protocol: AnthropicMessagesAdapter()},
+        clients={entry.name: client},
+    )
+    execution = invoker.execute(
+        model_group=ModelGroup("assistant", (entry,)),
+        retry_policy=RetryPolicy(),
+        generation=GenerationConfig(max_output_tokens=64),
+        message=UserMessage(content="question"),
+        context=Context(),
+    )
+
+    result = await execution.result()
+    async with execution.subscribe() as subscription:
+        public_events = [event async for event in subscription]
+
+    assert result.message.content == "answer"
+    assert result.message.continuation is not None
+    assert result.usage["total_tokens"] == 3
+    assert all("continuation" not in event.kind for event in public_events)
+    await invoker.aclose()
+    await http.aclose()
