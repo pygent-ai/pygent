@@ -61,6 +61,22 @@ def _request(
     )
 
 
+def _stream_feed(adapter, request, payload):
+    return adapter.create_stream_decoder(request).feed(payload)
+
+
+def test_openai_stream_decoder_rejects_premature_eof() -> None:
+    decoder = OpenAICompatibleAdapter().create_stream_decoder(_request())
+
+    decoder.feed(
+        freeze_json_object({"choices": [{"delta": {"content": "partial"}}]})
+    )
+
+    with pytest.raises(ModelProviderError) as raised:
+        decoder.finish()
+    assert raised.value.reason_code is ModelFailureReason.STREAM_INCOMPLETE
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize(
@@ -128,7 +144,7 @@ async def test_stream_usage_defaults_preserve_options(monkeypatch, native, optio
         assert bodies[0]["stream_options"] == expected
     assert payload.to_dict() == original
     assert streamed[-1]["done"] is True
-    usage = adapter.parse_stream_events(request, streamed[-2])
+    usage = _stream_feed(adapter, request, streamed[-2])
     assert usage[0].kind == "usage"
 
 
@@ -429,8 +445,8 @@ def test_provider_raw_diagnostics_are_not_projected_through_usage() -> None:
             }
         ),
     )
-    stream_parts = adapter.parse_stream_events(
-        request,
+    stream_parts = _stream_feed(
+        adapter, request,
         freeze_json_object(
             {
                 "usage": {
@@ -496,8 +512,8 @@ async def test_provider_http_errors_expose_only_closed_sanitized_diagnostics() -
 
 
 def test_stream_accepts_openai_usage_only_chunk_with_empty_choices() -> None:
-    parts = OpenAICompatibleAdapter().parse_stream_events(
-        _request(),
+    parts = _stream_feed(
+        OpenAICompatibleAdapter(), _request(),
         freeze_json_object(
             {
                 "choices": [],
@@ -522,11 +538,11 @@ def test_stream_accepts_openai_usage_only_chunk_with_empty_choices() -> None:
 def test_stream_ignores_empty_auxiliary_chunks_and_accepts_null_delta_finish():
     adapter = OpenAICompatibleAdapter()
 
-    assert adapter.parse_stream_events(
-        _request(), freeze_json_object({"choices": [], "vendor": "keepalive"})
+    assert _stream_feed(
+        adapter, _request(), freeze_json_object({"choices": [], "vendor": "keepalive"})
     ) == ()
-    parts = adapter.parse_stream_events(
-        _request(),
+    parts = _stream_feed(
+        adapter, _request(),
         freeze_json_object(
             {"choices": [{"delta": None, "finish_reason": "stop"}]}
         ),
@@ -536,8 +552,8 @@ def test_stream_ignores_empty_auxiliary_chunks_and_accepts_null_delta_finish():
 
 
 def test_stream_normalizes_content_parts_and_compatible_tool_deltas():
-    parts = OpenAICompatibleAdapter().parse_stream_events(
-        _request(),
+    parts = _stream_feed(
+        OpenAICompatibleAdapter(), _request(),
         freeze_json_object(
             {
                 "choices": [
@@ -573,8 +589,8 @@ def test_stream_normalizes_content_parts_and_compatible_tool_deltas():
 
 
 def test_stream_accepts_compatible_function_call_delta():
-    parts = OpenAICompatibleAdapter().parse_stream_events(
-        _request(),
+    parts = _stream_feed(
+        OpenAICompatibleAdapter(), _request(),
         freeze_json_object(
             {
                 "choices": [

@@ -195,7 +195,7 @@ class _NoValidatorAdapter:
     def parse_response(self, request: object, payload: object) -> object:
         raise AssertionError("provider I/O must not occur")
 
-    def parse_stream_events(self, request: object, payload: object) -> tuple[()]:
+    def create_stream_decoder(self, request: object) -> object:
         raise AssertionError("provider I/O must not occur")
 
     def normalize_error(self, error: BaseException) -> ModelErrorKind:

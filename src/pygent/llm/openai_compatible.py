@@ -30,6 +30,7 @@ from pygent.tool import ToolCall, ToolDefinition, ToolResult
 from ._adapter_contracts import (
     ModelProviderRequest,
     ModelProviderResponse,
+    ModelProviderStreamKind,
     ModelProviderStreamPart,
     _canonical_usage,
     _normalized_finish_reason,
@@ -797,7 +798,12 @@ class OpenAICompatibleAdapter:
             finish_reason=finish_reason,
         )
 
-    def parse_stream_events(
+    def create_stream_decoder(
+        self, request: ModelProviderRequest
+    ) -> _OpenAIStreamDecoder:
+        return _OpenAIStreamDecoder(self, request)
+
+    def _decode_stream_payload(
         self, request: ModelProviderRequest, payload: FrozenJsonObject
     ) -> tuple[ModelProviderStreamPart, ...]:
         body = payload.to_dict()
@@ -930,6 +936,32 @@ class OpenAICompatibleAdapter:
 
     def normalize_error(self, error: BaseException) -> ModelErrorKind:
         return _normalize_openai_error(error)
+
+
+class _OpenAIStreamDecoder:
+    def __init__(
+        self, adapter: OpenAICompatibleAdapter, request: ModelProviderRequest
+    ) -> None:
+        self._adapter = adapter
+        self._request = request
+        self._completed = False
+
+    def feed(
+        self, payload: FrozenJsonObject
+    ) -> tuple[ModelProviderStreamPart, ...]:
+        parts = self._adapter._decode_stream_payload(self._request, payload)
+        if any(part.kind == ModelProviderStreamKind.FINISH for part in parts):
+            self._completed = True
+        return parts
+
+    def finish(self) -> tuple[ModelProviderStreamPart, ...]:
+        if not self._completed:
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_RESPONSE,
+                "model stream ended before a completion marker",
+                reason_code=ModelFailureReason.STREAM_INCOMPLETE,
+            )
+        return ()
 
 
 def openai_compatible_adapters() -> dict[str, OpenAICompatibleAdapter]:

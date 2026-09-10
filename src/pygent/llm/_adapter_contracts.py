@@ -73,6 +73,7 @@ class ModelProviderStreamKind(str, Enum):
     TOOL_CALL = "tool_call"
     USAGE = "usage"
     FINISH = "finish"
+    CONTINUATION = "continuation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,8 +152,24 @@ class ModelProviderStreamPart:
         except ValueError as exc:
             raise ValueError(f"unsupported provider stream part: {self.kind}") from exc
         object.__setattr__(self, "kind", kind.value)
-        if not isinstance(self.data, FrozenJsonObject):
-            object.__setattr__(self, "data", freeze_json_object(self.data))
+        data = (
+            self.data
+            if isinstance(self.data, FrozenJsonObject)
+            else freeze_json_object(self.data)
+        )
+        if kind is ModelProviderStreamKind.CONTINUATION:
+            if set(data) != {"provider", "protocol", "data"}:
+                raise ValueError(
+                    "continuation stream-part fields must be exactly provider, "
+                    "protocol, and data"
+                )
+            for name in ("provider", "protocol"):
+                value = data[name]
+                if not isinstance(value, str) or not value:
+                    raise ValueError(f"continuation {name} must be a non-empty string")
+            if not isinstance(data["data"], FrozenJsonObject):
+                raise ValueError("continuation data must be a JSON object")
+        object.__setattr__(self, "data", data)
 
 
 class ModelProviderClient(Protocol):
@@ -169,6 +186,16 @@ class ModelProviderClient(Protocol):
     async def aclose(self) -> None: ...
 
 
+class ModelProviderStreamDecoder(Protocol):
+    """Per-call stateful decoder for one provider stream."""
+
+    def feed(
+        self, payload: FrozenJsonObject
+    ) -> tuple[ModelProviderStreamPart, ...]: ...
+
+    def finish(self) -> tuple[ModelProviderStreamPart, ...]: ...
+
+
 class ModelProviderAdapter(Protocol):
     """Provider wire conversion and error normalization boundary."""
 
@@ -180,9 +207,9 @@ class ModelProviderAdapter(Protocol):
         self, request: ModelProviderRequest, payload: FrozenJsonObject
     ) -> ModelProviderResponse: ...
 
-    def parse_stream_events(
-        self, request: ModelProviderRequest, payload: FrozenJsonObject
-    ) -> tuple[ModelProviderStreamPart, ...]: ...
+    def create_stream_decoder(
+        self, request: ModelProviderRequest
+    ) -> ModelProviderStreamDecoder: ...
 
     def normalize_error(self, error: BaseException) -> ModelErrorKind: ...
 

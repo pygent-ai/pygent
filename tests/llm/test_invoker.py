@@ -10,17 +10,22 @@ import httpx
 import pytest
 
 from pygent import (
+    AIMessage,
     Context,
+    ModelContinuation,
     UserMessage,
 )
 from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import (
+    DefaultModelInvoker,
     ExponentialBackoff,
     GenerationConfig,
     ModelCallError,
     ModelErrorKind,
     ModelFailureReason,
     ModelProviderError,
+    ModelProviderResponse,
+    ModelProviderStreamPart,
     OpenAICompatibleAdapter,
     RetryPolicy,
 )
@@ -146,6 +151,161 @@ def group():
         ),
         order=("primary", "fallback"),
     )
+
+
+def test_continuation_stream_part_has_one_strict_private_shape() -> None:
+    with pytest.raises(ValueError, match="fields must be exactly"):
+        ModelProviderStreamPart(
+            "continuation",
+            {
+                "provider": "deepseek",
+                "protocol": "openai_chat_completions",
+                "data": {},
+                "provider_private": True,
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_response_continuation_uses_common_reducer() -> None:
+    continuation = ModelContinuation(
+        provider="deepseek",
+        protocol="openai_chat_completions",
+        data={"reasoning_content": "opaque"},
+    )
+
+    class ContinuationAdapter:
+        protocol = "openai_chat_completions"
+
+        def build_request(self, request):
+            return freeze_json_object({})
+
+        def parse_response(self, request, payload):
+            return ModelProviderResponse(
+                message=AIMessage(content="answer", continuation=continuation),
+                finish_reason="stop",
+            )
+
+        def create_stream_decoder(self, request):
+            raise AssertionError("non-streaming request")
+
+        def normalize_error(self, error):
+            return ModelErrorKind.UNKNOWN
+
+    entry = model_entry(
+        "primary",
+        "deepseek",
+        "deepseek-chat",
+        streaming=False,
+    )
+    invoker = DefaultModelInvoker(
+        adapters={entry.spec.protocol: ContinuationAdapter()},
+        clients={"primary": FakeClient([freeze_json_object({})])},
+    )
+    execution = invoker.execute(
+        model_group=make_model_group("assistant", (entry,), ("primary",)),
+        retry_policy=RetryPolicy(),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    )
+
+    result = await execution.result()
+
+    assert result.message.continuation == continuation
+    await invoker.aclose()
+
+
+@pytest.mark.asyncio
+async def test_each_retry_gets_a_new_decoder_and_reset_discards_continuation() -> None:
+    decoders = []
+
+    class Decoder:
+        def feed(self, payload):
+            kind = payload["kind"]
+            if kind == "continuation":
+                return (
+                    ModelProviderStreamPart(
+                        "continuation",
+                        {
+                            "provider": "deepseek",
+                            "protocol": "openai_chat_completions",
+                            "data": {"reasoning_content": "failed-attempt"},
+                        },
+                    ),
+                )
+            if kind == "text":
+                return (ModelProviderStreamPart("text", {"text": "answer"}),)
+            return (ModelProviderStreamPart("finish", {"finish_reason": "stop"}),)
+
+        def finish(self):
+            return ()
+
+    class Adapter:
+        protocol = "openai_chat_completions"
+
+        def build_request(self, request):
+            return freeze_json_object({})
+
+        def parse_response(self, request, payload):
+            raise AssertionError("streaming request")
+
+        def create_stream_decoder(self, request):
+            decoder = Decoder()
+            decoders.append(decoder)
+            return decoder
+
+        def normalize_error(self, error):
+            return (
+                ModelErrorKind.UNAVAILABLE
+                if isinstance(error, httpx.ConnectError)
+                else ModelErrorKind.UNKNOWN
+            )
+
+    class RetryClient:
+        def __init__(self):
+            self.calls = 0
+
+        async def invoke(self, model, payload):
+            raise AssertionError("streaming request")
+
+        async def stream(self, model, payload):
+            self.calls += 1
+            if self.calls == 1:
+                yield freeze_json_object({"kind": "continuation"})
+                raise httpx.ConnectError("retry")
+            yield freeze_json_object({"kind": "text"})
+            yield freeze_json_object({"kind": "done"})
+
+        async def aclose(self):
+            return None
+
+    entry = model_entry("primary", "deepseek", "deepseek-chat")
+    invoker = DefaultModelInvoker(
+        adapters={entry.spec.protocol: Adapter()},
+        clients={"primary": RetryClient()},
+    )
+    execution = invoker.execute(
+        model_group=make_model_group("assistant", (entry,), ("primary",)),
+        retry_policy=RetryPolicy(
+            2,
+            (ModelErrorKind.UNAVAILABLE,),
+            ExponentialBackoff(0, 0),
+        ),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    )
+
+    result = await execution.result()
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+
+    assert len(decoders) == 2
+    assert result.message.content == "answer"
+    assert result.message.continuation is None
+    assert all("continuation" not in event.kind for event in events)
+    await invoker.aclose()
 
 
 @pytest.mark.asyncio

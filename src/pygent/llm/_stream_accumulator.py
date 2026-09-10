@@ -9,7 +9,12 @@ from typing import cast
 
 import jsonschema  # type: ignore[import-untyped]
 
-from pygent.core import AIMessage, FrozenJsonObject, freeze_json_object
+from pygent.core import (
+    AIMessage,
+    FrozenJsonObject,
+    ModelContinuation,
+    freeze_json_object,
+)
 from pygent.tool import ToolCall, ToolDefinition
 
 from ._adapter_contracts import (
@@ -53,6 +58,7 @@ class ModelStreamAccumulator:
     selected_attempt: int | None = None
     finish_reason: str = "other"
     provider_request_id: str | None = None
+    continuation: ModelContinuation | None = None
 
     async def consume(
         self, part: ModelProviderStreamPart, event_sink: EventSink | None
@@ -69,6 +75,7 @@ class ModelStreamAccumulator:
             self.selected_attempt = None
             self.finish_reason = "other"
             self.provider_request_id = None
+            self.continuation = None
             if public_output:
                 await _emit(
                     event_sink,
@@ -86,7 +93,16 @@ class ModelStreamAccumulator:
         if isinstance(attempt_value, int) and not isinstance(attempt_value, bool):
             self.selected_attempt = attempt_value
 
-        if part.kind == ModelProviderStreamKind.REASONING:
+        if part.kind == ModelProviderStreamKind.CONTINUATION:
+            continuation_data = data.get("data")
+            if not isinstance(continuation_data, FrozenJsonObject):
+                raise TypeError("model continuation data must be a JSON object")
+            self.continuation = ModelContinuation(
+                provider=cast(str, data.get("provider")),
+                protocol=cast(str, data.get("protocol")),
+                data=continuation_data,
+            )
+        elif part.kind == ModelProviderStreamKind.REASONING:
             await _emit(event_sink, ModelEventKind.REASONING_DELTA, data)
         elif part.kind == ModelProviderStreamKind.TEXT:
             value = data.get("text", "")
@@ -186,6 +202,7 @@ class ModelStreamAccumulator:
                 content=content,
                 tool_calls=tuple(tool_calls),
                 metadata={"model_key": self.selected_route},
+                continuation=self.continuation,
             ),
             usage=self.usage,
             provider_request_id=self.provider_request_id,

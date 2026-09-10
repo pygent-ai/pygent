@@ -342,9 +342,12 @@ class DefaultModelInvoker:
                             _raise_for_unsuccessful_finish(
                                 cast(FrozenJsonObject, part.data).get("finish_reason")
                             )
-                        part_payload = cast(FrozenJsonObject, part.data).to_dict()
-                        part_payload.update({"model_key": model_key, "attempt": number})
-                        part = ModelProviderStreamPart(part.kind, part_payload)
+                        if part.kind != ModelProviderStreamKind.CONTINUATION:
+                            part_payload = cast(FrozenJsonObject, part.data).to_dict()
+                            part_payload.update(
+                                {"model_key": model_key, "attempt": number}
+                            )
+                            part = ModelProviderStreamPart(part.kind, part_payload)
                         if part.kind == ModelProviderStreamKind.USAGE:
                             raw_usage = cast(FrozenJsonObject, part.data).to_dict()
                             raw_usage.pop("model_key", None)
@@ -474,6 +477,7 @@ class DefaultModelInvoker:
         cancel_event: asyncio.Event | None,
     ) -> AsyncIterator[ModelProviderStreamPart]:
         if model.capabilities.streaming.text:
+            decoder = adapter.create_stream_decoder(request)
             owner = self._open_stream_owner(client, model, payload)
             try:
                 while True:
@@ -487,8 +491,8 @@ class DefaultModelInvoker:
                             cancel_event=cancel_event,
                         )
                     except StopAsyncIteration:
-                        return
-                    for part in adapter.parse_stream_events(request, raw):
+                        break
+                    for part in decoder.feed(raw):
                         yield part
             finally:
                 if not owner.done and not self._is_quarantined(client, owner.task):
@@ -496,6 +500,8 @@ class DefaultModelInvoker:
                     cleaned = await _await_cancellation_cleanup(owner.task)
                     if not cleaned:
                         self._quarantine(client, owner.task)
+            for part in decoder.finish():
+                yield part
         else:
             raw = await _await_budget(
                 client.invoke(model, payload),
@@ -507,6 +513,16 @@ class DefaultModelInvoker:
             if response.usage:
                 yield ModelProviderStreamPart("usage", response.usage)
             _raise_for_unsuccessful_finish(response.finish_reason)
+            if response.message.continuation is not None:
+                continuation = response.message.continuation
+                yield ModelProviderStreamPart(
+                    "continuation",
+                    {
+                        "provider": continuation.provider,
+                        "protocol": continuation.protocol,
+                        "data": continuation.data,
+                    },
+                )
             if response.message.content:
                 yield ModelProviderStreamPart(
                     "text", {"text": response.message.content}
