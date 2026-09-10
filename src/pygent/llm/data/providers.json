@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "providers": {
+    "deepseek": {
+      "display_name": "DeepSeek",
+      "protocols": ["openai_compatible"],
+      "default_protocol": "openai_compatible",
+      "base_url": "https://api.deepseek.com",
+      "authentication": "bearer",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "provider_options_schema": {
+        "type": "object",
+        "properties": {
+          "thinking": {
+            "type": "object",
+            "properties": {
+              "type": {"type": "string", "enum": ["enabled", "disabled"]}
+            },
+            "required": ["type"],
+            "additionalProperties": false
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "enum": ["low", "high", "max"]
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

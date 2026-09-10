@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "presets": {
+    "text": {
+      "modalities": {"input": ["text"], "output": ["text"]},
+      "streaming": {"text": true},
+      "tools": {"call": false, "choice": [], "parallel": false},
+      "structured_output": {"json_object": false, "json_schema": false},
+      "reasoning": {"supported": false, "controllable": false}
+    },
+    "text_structured": {
+      "modalities": {"input": ["text"], "output": ["text"]},
+      "streaming": {"text": true},
+      "tools": {"call": false, "choice": [], "parallel": false},
+      "structured_output": {"json_object": true, "json_schema": true},
+      "reasoning": {"supported": false, "controllable": false}
+    },
+    "text_tools": {
+      "modalities": {"input": ["text"], "output": ["text"]},
+      "streaming": {"text": true},
+      "tools": {
+        "call": true,
+        "choice": ["none", "auto", "required", "named"],
+        "parallel": true
+      },
+      "structured_output": {"json_object": false, "json_schema": false},
+      "reasoning": {"supported": false, "controllable": false}
+    },
+    "text_tools_structured_reasoning": {
+      "modalities": {"input": ["text"], "output": ["text"]},
+      "streaming": {"text": true},
+      "tools": {
+        "call": true,
+        "choice": ["none", "auto", "required", "named"],
+        "parallel": true
+      },
+      "structured_output": {"json_object": true, "json_schema": true},
+      "reasoning": {"supported": true, "controllable": true}
+    }
+  }
+}

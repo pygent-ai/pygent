@@ -14,6 +14,13 @@ from ._adapter_contracts import (
 )
 from ._model_execution import ModelExecution
 from .catalog import ModelCatalog, ModelInfo
+from .catalogs import (
+    CapabilityPreset,
+    CapabilityPresetCatalog,
+    ModelCapabilityCatalog,
+    ProviderCatalog,
+    ProviderPreset,
+)
 from .configuration import (
     CredentialRef,
     ModelCapabilities,
@@ -64,6 +71,8 @@ from .types import (
 )
 
 __all__ = [
+    "CapabilityPreset",
+    "CapabilityPresetCatalog",
     "CredentialRef",
     "DefaultModelInvoker",
     "EventSink",
@@ -77,6 +86,7 @@ __all__ = [
     "ModelCallPolicy",
     "ModelCapabilities",
     "ModelCatalog",
+    "ModelCapabilityCatalog",
     "ModelConfig",
     "ModelConnection",
     "ModelDeploymentConflictError",
@@ -119,6 +129,8 @@ __all__ = [
     "ModelToolCapabilities",
     "OpenAICompatibleAdapter",
     "OpenAICompatibleClient",
+    "ProviderCatalog",
+    "ProviderPreset",
     "RetryPolicy",
     "openai_compatible_adapters",
 ]

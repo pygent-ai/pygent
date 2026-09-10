@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "protocol": "openai_compatible",
+      "capabilities": {
+        "modalities": {"input": ["text"], "output": ["text"]},
+        "streaming": {"text": true},
+        "tools": {
+          "call": true,
+          "choice": ["none", "auto", "required", "named"],
+          "parallel": true
+        },
+        "structured_output": {"json_object": true, "json_schema": false},
+        "reasoning": {"supported": true, "controllable": true},
+        "limits": {"context_tokens": 1000000, "max_output_tokens": 384000}
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "protocol": "openai_compatible",
+      "capabilities": {
+        "modalities": {"input": ["text"], "output": ["text"]},
+        "streaming": {"text": true},
+        "tools": {
+          "call": true,
+          "choice": ["none", "auto", "required", "named"],
+          "parallel": true
+        },
+        "structured_output": {"json_object": true, "json_schema": false},
+        "reasoning": {"supported": true, "controllable": true},
+        "limits": {"context_tokens": 1000000, "max_output_tokens": 384000}
+      }
+    }
+  ]
+}
