@@ -81,7 +81,7 @@ Snapshot 中的模型组只包含：
 
 Worker 从相同 snapshot 重建同一 `ModelGroup`，并按 `ModelSpec.protocol` 选择 Adapter、按 `ModelEntry.name` 绑定 client。含非空 Provider options 的调用要求 Worker 声明 `model.provider-options.v1`。
 
-历史 `AIMessage` 携带的 Provider continuation 作为 Message 值随 Worker 和 durable effect 传输。只有 profile 中实际进入且 Provider、protocol、model ID 全部匹配的模型可以回传该状态；fallback 到不同模型时 Adapter 必须忽略它。
+历史 `AIMessage` 携带的 Provider continuation 作为 Message 值随 Worker 和 durable effect 传输。只有 profile 中实际进入且 Provider 与 protocol 同时匹配的模型可以回传该状态；不匹配时 Adapter 必须忽略它。
 
 Resolver 租约、resident invoker ownership、关闭、取消和 coordinator domain 校验保持既有行为。Runtime 不根据 capabilities 修改 profile 或 fallback。
 

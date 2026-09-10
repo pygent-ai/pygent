@@ -49,7 +49,7 @@ Binding 与 Runtime 支持三种 Child 放置语义：
 
 动态模型 admission 含非空 `ModelSpec.provider_options` 时，远程部署的 required capabilities 必须包含 `model.provider-options.v1`。新 Worker 会声明并无损校验该能力；旧 Worker 在 placement/admission 前因 capability mismatch 被拒绝，不能省略选项后继续执行。
 
-历史 `AIMessage` 的不透明 Provider continuation 使用标准 Message codec 经过本地、HTTP Worker 与 durable effect 边界。Runtime 只保存和传递该值；是否回传由模型 Adapter 按 Provider、protocol 和 model ID 匹配决定。
+历史 `AIMessage` 的不透明 Provider continuation 使用标准 Message codec 经过本地、HTTP Worker 与 durable effect 边界。Runtime 只保存和传递该值；是否回传由模型 Adapter 按 Provider 与 protocol 匹配决定。
 
 ### 受约束的动态 Agent 解析
 

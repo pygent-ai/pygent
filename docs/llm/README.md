@@ -43,7 +43,7 @@ Provider 是开放字符串。Provider preset 只提供 UI/配置默认值；Ada
 
 Provider 私有生成语义放在 `ModelSpec.provider_options`。连接、secret、认证头、代理、TLS、retry、deadline、stream 开关和框架保留请求字段不能放入其中。第三方 Adapter 只有实现 `ModelProviderSpecValidator` 才能接受非空选项。
 
-Anthropic Messages 请求必须由 `GenerationConfig.max_output_tokens` 提供正整数，没有框架默认值。需要工具循环回传的 Provider 私有 thinking/reasoning 状态保存在 `AIMessage.continuation`；该值只交给相同 Provider、protocol 和模型的后续请求，不进入公开事件、请求摘要或 `repr`。
+Anthropic Messages 请求必须由 `GenerationConfig.max_output_tokens` 提供正整数，没有框架默认值。需要工具循环回传的 Provider 私有 thinking/reasoning 状态保存在 `AIMessage.continuation`；该值只交给 Provider 与 protocol 同时匹配的后续请求，不进入公开事件、请求摘要或 `repr`。
 
 ## Layer 与执行
 

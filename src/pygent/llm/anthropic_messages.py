@@ -881,11 +881,14 @@ def _anthropic_usage(value: object) -> FrozenJsonObject:
             if type(count) is not int or count < 0:
                 raise TypeError
             result[target] = count
-    cached = sum(
-        cast(int, value.get(name, 0))
-        for name in ("cache_creation_input_tokens", "cache_read_input_tokens")
-        if type(value.get(name, 0)) is int
-    )
+    cached = 0
+    for name in ("cache_creation_input_tokens", "cache_read_input_tokens"):
+        if name not in value:
+            continue
+        count = value[name]
+        if type(count) is not int or count < 0:
+            raise TypeError
+        cached += count
     if cached:
         result["cached_input_tokens"] = cached
     if "input_tokens" in result and "output_tokens" in result:

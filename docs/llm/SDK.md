@@ -229,7 +229,7 @@ provider_options={
 
 ## Provider continuation
 
-DeepSeek OpenAI Chat Completions 的 `reasoning_content`，以及 Anthropic Messages 的 thinking/signature block，会规范化为 `AIMessage.continuation`。ReAct 工具循环会把它原样回传给同一 Provider、protocol 和 model ID；不匹配时忽略。Continuation 会随 Message 经过 Worker、effect 与 SQLite 持久化，但不会出现在 `repr`、公开模型事件或 prepared-request snapshot 中。应用通常不需要读取或修改它。
+DeepSeek OpenAI Chat Completions 的 `reasoning_content`，以及 Anthropic Messages 的 thinking/signature block，会规范化为 `AIMessage.continuation`。ReAct 工具循环会把它原样回传给 Provider 与 protocol 同时匹配的后续请求；不匹配时忽略。Continuation 会随 Message 经过 Worker、effect 与 SQLite 持久化，但不会出现在 `repr`、公开模型事件或 prepared-request snapshot 中。应用通常不需要读取或修改它。
 
 ## 能力警告与事件
 

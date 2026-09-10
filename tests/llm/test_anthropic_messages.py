@@ -102,6 +102,38 @@ def test_anthropic_request_projects_system_tools_choice_and_schema() -> None:
     }
 
 
+def test_anthropic_request_projects_valid_provider_options() -> None:
+    payload = AnthropicMessagesAdapter().build_request(
+        request(
+            entry=anthropic_entry(
+                options={
+                    "thinking": {
+                        "type": "enabled",
+                        "budget_tokens": 1024,
+                        "display": "summarized",
+                    },
+                    "output_config": {"effort": "high"},
+                    "service_tier": "standard_only",
+                    "stop_sequences": ["END"],
+                }
+            ),
+            generation=GenerationConfig(
+                max_output_tokens=4096,
+                temperature=1,
+            ),
+        )
+    ).to_dict()
+
+    assert payload["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": 1024,
+        "display": "summarized",
+    }
+    assert payload["output_config"] == {"effort": "high"}
+    assert payload["service_tier"] == "standard_only"
+    assert payload["stop_sequences"] == ["END"]
+
+
 def test_anthropic_request_projects_assistant_and_tool_results() -> None:
     call = ToolCall(call_id="call-1", name="lookup", arguments={"id": 1})
     context = Context(
@@ -172,6 +204,32 @@ def test_anthropic_non_stream_response_decodes_blocks_usage_and_continuation() -
             ],
         },
     )
+
+
+@pytest.mark.parametrize("invalid", [True, -1, "1"])
+def test_anthropic_response_rejects_invalid_cache_usage_counters(
+    invalid: object,
+) -> None:
+    with pytest.raises(ModelProviderError) as raised:
+        AnthropicMessagesAdapter().parse_response(
+            request(),
+            freeze_json_object(
+                {
+                    "id": "msg-1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "answer"}],
+                    "stop_reason": "end_turn",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 4,
+                        "cache_read_input_tokens": invalid,
+                    },
+                }
+            ),
+        )
+
+    assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
 
 
 @pytest.mark.asyncio
