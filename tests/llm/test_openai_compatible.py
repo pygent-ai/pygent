@@ -7,7 +7,10 @@ import httpx
 import pytest
 
 from pygent import (
+    AIMessage,
     Context,
+    ModelContinuation,
+    ToolCall,
     ToolDefinition,
     ToolMessage,
     ToolResult,
@@ -76,6 +79,158 @@ def test_openai_stream_decoder_rejects_premature_eof() -> None:
     with pytest.raises(ModelProviderError) as raised:
         decoder.finish()
     assert raised.value.reason_code is ModelFailureReason.STREAM_INCOMPLETE
+
+
+def test_deepseek_non_stream_response_preserves_reasoning_continuation() -> None:
+    entry = model_entry("main", "deepseek", "deepseek-reasoner")
+    request = provider_request(
+        entry=entry,
+        message=UserMessage(content="question"),
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+
+    response = OpenAICompatibleAdapter().parse_response(
+        request,
+        freeze_json_object(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "answer",
+                            "reasoning_content": "reasoning",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert response.message.continuation == ModelContinuation(
+        provider="deepseek",
+        protocol="openai_chat_completions",
+        data={"version": 1, "reasoning_content": "reasoning"},
+    )
+
+
+def test_openai_provider_does_not_fabricate_deepseek_continuation() -> None:
+    response = OpenAICompatibleAdapter().parse_response(
+        _request(),
+        freeze_json_object(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "answer",
+                            "reasoning_content": "provider-private",
+                        }
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert response.message.continuation is None
+
+
+def test_deepseek_matching_continuation_is_returned_on_tool_loop() -> None:
+    entry = model_entry("main", "deepseek", "deepseek-reasoner")
+    message = AIMessage(
+        tool_calls=(ToolCall(call_id="call-1", name="lookup", arguments={}),),
+        continuation=ModelContinuation(
+            provider="deepseek",
+            protocol="openai_chat_completions",
+            data={"version": 1, "reasoning_content": "reasoning"},
+        ),
+    )
+    request = provider_request(
+        entry=entry,
+        message=message,
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+
+    payload = OpenAICompatibleAdapter().build_request(request).to_dict()
+
+    assert payload["messages"][0]["reasoning_content"] == "reasoning"
+
+
+def test_deepseek_matching_malformed_continuation_fails_closed() -> None:
+    entry = model_entry("main", "deepseek", "deepseek-reasoner")
+    request = provider_request(
+        entry=entry,
+        message=AIMessage(
+            continuation=ModelContinuation(
+                provider="deepseek",
+                protocol="openai_chat_completions",
+                data={"version": 2, "reasoning_content": "reasoning"},
+            )
+        ),
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+
+    with pytest.raises(ModelProviderError) as raised:
+        OpenAICompatibleAdapter().build_request(request)
+
+    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
+
+
+def test_deepseek_continuation_version_rejects_boolean() -> None:
+    entry = model_entry("main", "deepseek", "deepseek-reasoner")
+    request = provider_request(
+        entry=entry,
+        message=AIMessage(
+            continuation=ModelContinuation(
+                provider="deepseek",
+                protocol="openai_chat_completions",
+                data={"version": True, "reasoning_content": "reasoning"},
+            )
+        ),
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+
+    with pytest.raises(ModelProviderError):
+        OpenAICompatibleAdapter().build_request(request)
+
+
+def test_deepseek_stream_emits_one_continuation_before_finish() -> None:
+    entry = model_entry("main", "deepseek", "deepseek-reasoner")
+    request = provider_request(
+        entry=entry,
+        message=UserMessage(content="question"),
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+    decoder = OpenAICompatibleAdapter().create_stream_decoder(request)
+
+    first = decoder.feed(
+        freeze_json_object(
+            {"choices": [{"delta": {"reasoning_content": "rea"}}]}
+        )
+    )
+    final = decoder.feed(
+        freeze_json_object(
+            {
+                "choices": [
+                    {
+                        "delta": {"reasoning_content": "soning"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+    )
+
+    assert [part.kind for part in (*first, *final)] == [
+        "reasoning",
+        "reasoning",
+        "continuation",
+        "finish",
+    ]
+    assert final[-2].data["data"]["reasoning_content"] == "reasoning"
 
 
 @pytest.mark.asyncio

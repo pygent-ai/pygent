@@ -309,6 +309,52 @@ async def test_each_retry_gets_a_new_decoder_and_reset_discards_continuation() -
 
 
 @pytest.mark.asyncio
+async def test_deepseek_stream_reasoning_becomes_result_continuation() -> None:
+    entry = model_entry("primary", "deepseek", "deepseek-reasoner")
+    client = FakeClient(
+        [
+            freeze_json_object(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "reasoning_content": "reasoning",
+                                "content": "answer",
+                            }
+                        }
+                    ]
+                }
+            ),
+            freeze_json_object({"done": True}),
+        ]
+    )
+    invoker = DefaultModelInvoker(
+        adapters={entry.spec.protocol: OpenAICompatibleAdapter()},
+        clients={"primary": client},
+    )
+    execution = invoker.execute(
+        model_group=make_model_group("assistant", (entry,), ("primary",)),
+        retry_policy=RetryPolicy(),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    )
+
+    result = await execution.result()
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+
+    assert result.message.continuation == ModelContinuation(
+        provider="deepseek",
+        protocol="openai_chat_completions",
+        data={"version": 1, "reasoning_content": "reasoning"},
+    )
+    assert [event.kind for event in events].count("model.reasoning.delta") == 1
+    assert all("continuation" not in event.kind for event in events)
+    await invoker.aclose()
+
+
+@pytest.mark.asyncio
 async def test_retry_then_fallback_and_usage_events():
     primary = FakeClient([httpx.ConnectError("offline"), httpx.ConnectError("offline")])
     fallback = FakeClient([completion(usage={"total_tokens": 7})])

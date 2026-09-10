@@ -18,6 +18,7 @@ from pygent.core import (
     AIMessage,
     FrozenJsonObject,
     Message,
+    ModelContinuation,
     ToolMessage,
     freeze_json_object,
     thaw_json,
@@ -375,8 +376,10 @@ class OpenAICompatibleAdapter:
                 {"role": "system", "content": request.context.system_prompt}
             )
         for item in request.context.messages:
-            messages.extend(_encode_messages(item, wire_names))
-        messages.extend(_encode_messages(request.message, wire_names))
+            messages.extend(_encode_messages(item, wire_names, model=request.model))
+        messages.extend(
+            _encode_messages(request.message, wire_names, model=request.model)
+        )
         body: dict[str, object] = {
             "model": request.model.model_id,
             "messages": messages,
@@ -447,10 +450,18 @@ class OpenAICompatibleAdapter:
                 else _normalized_finish_reason(raw_finish_reason)
             )
             raw_message = choice.get("message")
+            reasoning_content: object = None
             if isinstance(raw_message, str):
                 content = raw_message
                 raw_tool_calls: object = []
             elif isinstance(raw_message, dict):
+                reasoning_content = raw_message.get("reasoning_content")
+                if (
+                    request.model.provider == "deepseek"
+                    and "reasoning_content" in raw_message
+                    and not isinstance(reasoning_content, str)
+                ):
+                    raise TypeError
                 content_value = raw_message.get("content")
                 if content_value is None and isinstance(
                     raw_message.get("refusal"), str
@@ -507,10 +518,20 @@ class OpenAICompatibleAdapter:
                 ) from exc
 
         usage = _canonical_usage(body.get("usage"))
+        continuation = None
+        if request.model.provider == "deepseek" and isinstance(
+            reasoning_content, str
+        ):
+            continuation = ModelContinuation(
+                provider="deepseek",
+                protocol=self.protocol,
+                data={"version": 1, "reasoning_content": reasoning_content},
+            )
         message = AIMessage(
             content=content,
             tool_calls=tool_calls,
             metadata={"model_key": request.model_key},
+            continuation=continuation,
         )
         return ModelProviderResponse(
             message=message,
@@ -666,11 +687,44 @@ class _OpenAIStreamDecoder:
         self._adapter = adapter
         self._request = request
         self._completed = False
+        self._reasoning_parts: list[str] = []
+        self._continuation_emitted = False
 
     def feed(
         self, payload: FrozenJsonObject
     ) -> tuple[ModelProviderStreamPart, ...]:
         parts = self._adapter._decode_stream_payload(self._request, payload)
+        if self._request.model.provider == "deepseek":
+            for part in parts:
+                if part.kind == ModelProviderStreamKind.REASONING:
+                    text = cast(FrozenJsonObject, part.data).get("text")
+                    if isinstance(text, str) and text:
+                        self._reasoning_parts.append(text)
+            if (
+                self._reasoning_parts
+                and not self._continuation_emitted
+                and any(
+                    part.kind == ModelProviderStreamKind.FINISH for part in parts
+                )
+            ):
+                continuation = ModelProviderStreamPart(
+                    "continuation",
+                    {
+                        "provider": "deepseek",
+                        "protocol": self._adapter.protocol,
+                        "data": {
+                            "version": 1,
+                            "reasoning_content": "".join(self._reasoning_parts),
+                        },
+                    },
+                )
+                finish_index = next(
+                    index
+                    for index, part in enumerate(parts)
+                    if part.kind == ModelProviderStreamKind.FINISH
+                )
+                parts = (*parts[:finish_index], continuation, *parts[finish_index:])
+                self._continuation_emitted = True
         if any(part.kind == ModelProviderStreamKind.FINISH for part in parts):
             self._completed = True
         return parts
@@ -796,7 +850,10 @@ def _normalize_openai_error(error: BaseException) -> ModelErrorKind:
 
 
 def _encode_messages(
-    message: Message, wire_names: Mapping[str, str] | None = None
+    message: Message,
+    wire_names: Mapping[str, str] | None = None,
+    *,
+    model: ModelSpec | None = None,
 ) -> list[dict[str, object]]:
     if isinstance(message, ToolMessage) and message.results:
         encoded_results: list[dict[str, object]] = [
@@ -813,6 +870,26 @@ def _encode_messages(
             encoded_results[-1]["content"] = f"{prior}\n{message.content}"
         return encoded_results
     encoded: dict[str, object] = {"role": message.role, "content": message.content}
+    if isinstance(message, AIMessage) and model is not None:
+        continuation = message.continuation
+        if (
+            continuation is not None
+            and continuation.provider == model.provider
+            and continuation.protocol == model.protocol
+            and model.provider == "deepseek"
+        ):
+            data = cast(FrozenJsonObject, continuation.data)
+            if (
+                set(data) != {"version", "reasoning_content"}
+                or type(data["version"]) is not int
+                or data["version"] != 1
+                or not isinstance(data["reasoning_content"], str)
+            ):
+                raise ModelProviderError(
+                    ModelErrorKind.INVALID_REQUEST,
+                    "DeepSeek continuation has an invalid shape",
+                )
+            encoded["reasoning_content"] = data["reasoning_content"]
     if isinstance(message, AIMessage) and message.tool_calls:
         encoded["tool_calls"] = [
             {
