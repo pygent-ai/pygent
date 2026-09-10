@@ -68,6 +68,19 @@ _OPENAI_RESERVED_PROVIDER_FIELDS = frozenset(
     }
 )
 _TOKEN_LIMIT_PROVIDER_FIELDS = frozenset({"max_tokens", "max_completion_tokens"})
+_ALIYUN_TOKEN_PLAN_PROVIDER_FIELDS = frozenset(
+    {
+        "enable_thinking",
+        "preserve_thinking",
+        "reasoning_effort",
+        "thinking",
+        "thinking_budget",
+        "tool_stream",
+    }
+)
+_ALIYUN_REASONING_EFFORTS = frozenset(
+    {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+)
 _JSON_FENCE = re.compile(
     r"\A\s*```(?:json)?\s*(.*?)\s*```\s*\Z",
     flags=re.IGNORECASE | re.DOTALL,
@@ -144,6 +157,39 @@ def _validate_no_forbidden_option_keys(value: object) -> None:
             pending.extend(current)
 
 
+def _validate_aliyun_token_plan_options(options: FrozenJsonObject) -> None:
+    unknown = set(options) - _ALIYUN_TOKEN_PLAN_PROVIDER_FIELDS
+    if unknown:
+        raise ValueError(
+            "unknown Alibaba Token Plan provider options: "
+            + ", ".join(sorted(unknown))
+        )
+    for key in ("enable_thinking", "preserve_thinking", "tool_stream"):
+        if key in options and not isinstance(options[key], bool):
+            raise TypeError(f"provider option {key!r} must be a bool")
+    if (
+        "reasoning_effort" in options
+        and options["reasoning_effort"] not in _ALIYUN_REASONING_EFFORTS
+    ):
+        raise ValueError("provider option 'reasoning_effort' is not supported")
+    if "thinking" in options:
+        thinking = options["thinking"]
+        if not isinstance(thinking, FrozenJsonObject):
+            raise TypeError("provider option 'thinking' must be an object")
+        if set(thinking) != {"type"}:
+            raise ValueError("provider option 'thinking' accepts only the 'type' field")
+        if thinking["type"] not in ("adaptive", "disabled"):
+            raise ValueError(
+                "provider option 'thinking.type' must be 'adaptive' or 'disabled'"
+            )
+    if "thinking_budget" in options:
+        budget = options["thinking_budget"]
+        if not isinstance(budget, int) or isinstance(budget, bool) or budget < 0:
+            raise ValueError(
+                "provider option 'thinking_budget' must be a non-negative integer"
+            )
+
+
 def _validate_openai_provider_options(model: ModelSpec) -> None:
     options = cast(FrozenJsonObject, model.provider_options)
     conflicts = set(options) & _OPENAI_RESERVED_PROVIDER_FIELDS
@@ -163,6 +209,9 @@ def _validate_openai_provider_options(model: ModelSpec) -> None:
         value = options[key]
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"provider option {key!r} must be a positive integer")
+    if model.provider == "aliyun_token_plan":
+        _validate_aliyun_token_plan_options(options)
+        return
     if model.provider != "deepseek" or "thinking" not in options:
         return
     thinking = options["thinking"]

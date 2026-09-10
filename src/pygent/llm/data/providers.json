@@ -158,7 +158,24 @@
           "api_key_env": "ALIYUN_TOKEN_PLAN_OPENAI_API_KEY",
           "provider_options_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+              "enable_thinking": {"type": "boolean"},
+              "preserve_thinking": {"type": "boolean"},
+              "reasoning_effort": {
+                "type": "string",
+                "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+              },
+              "thinking": {
+                "type": "object",
+                "properties": {
+                  "type": {"type": "string", "enum": ["adaptive", "disabled"]}
+                },
+                "required": ["type"],
+                "additionalProperties": false
+              },
+              "thinking_budget": {"type": "integer", "minimum": 0},
+              "tool_stream": {"type": "boolean"}
+            },
             "additionalProperties": false
           }
         },

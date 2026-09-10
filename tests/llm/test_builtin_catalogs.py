@@ -119,6 +119,18 @@ def test_builtin_token_plan_provider_has_two_executable_protocol_presets() -> No
     assert preset.protocols["openai_chat_completions"].api_key_env == (
         "ALIYUN_TOKEN_PLAN_OPENAI_API_KEY"
     )
+    openai_schema = preset.protocols[
+        "openai_chat_completions"
+    ].provider_options_schema
+    assert set(openai_schema["properties"]) == {
+        "enable_thinking",
+        "preserve_thinking",
+        "reasoning_effort",
+        "thinking",
+        "thinking_budget",
+        "tool_stream",
+    }
+    assert openai_schema["additionalProperties"] is False
     assert (
         preset.protocols["anthropic_messages"].base_url
         == "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic"

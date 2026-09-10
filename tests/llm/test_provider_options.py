@@ -185,6 +185,70 @@ def test_deepseek_thinking_schema_is_strict(thinking: object) -> None:
     assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
 
 
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"enable_thinking": True},
+        {"preserve_thinking": True},
+        {"reasoning_effort": "none"},
+        {"reasoning_effort": "minimal"},
+        {"reasoning_effort": "low"},
+        {"reasoning_effort": "medium"},
+        {"reasoning_effort": "high"},
+        {"reasoning_effort": "xhigh"},
+        {"reasoning_effort": "max"},
+        {"thinking": {"type": "adaptive"}},
+        {"thinking": {"type": "disabled"}},
+        {"thinking_budget": 0},
+        {"tool_stream": True},
+    ],
+)
+def test_aliyun_token_plan_options_are_projected(
+    options: dict[str, object],
+) -> None:
+    entry = model_entry(
+        "main",
+        "aliyun_token_plan",
+        "qwen3.8-max",
+        provider_options=options,
+    )
+
+    payload = OpenAICompatibleAdapter().build_request(_request(entry))
+
+    for key, value in options.items():
+        assert payload[key] == freeze_json_object({"value": value})["value"]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"enable_thinking": "yes"},
+        {"preserve_thinking": 1},
+        {"reasoning_effort": "extreme"},
+        {"thinking": {"type": "enabled"}},
+        {"thinking": {"type": "adaptive", "extra": True}},
+        {"thinking_budget": -1},
+        {"thinking_budget": True},
+        {"tool_stream": "true"},
+        {"unknown_aliyun_option": True},
+    ],
+)
+def test_aliyun_token_plan_options_fail_closed(
+    options: dict[str, object],
+) -> None:
+    entry = model_entry(
+        "main",
+        "aliyun_token_plan",
+        "qwen3.8-max",
+        provider_options=options,
+    )
+
+    with pytest.raises(ModelProviderError) as raised:
+        OpenAICompatibleAdapter().build_request(_request(entry))
+
+    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
+
+
 class _NoValidatorAdapter:
     protocol = "openai_chat_completions"
 
