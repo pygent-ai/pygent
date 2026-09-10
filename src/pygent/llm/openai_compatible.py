@@ -7,8 +7,6 @@ import hashlib
 import json
 import math
 import re
-import urllib.parse
-import urllib.request
 from collections.abc import AsyncIterator, Mapping
 from functools import lru_cache
 from typing import Self, cast
@@ -16,7 +14,6 @@ from typing import Self, cast
 import httpx
 import jsonschema  # type: ignore[import-untyped]
 
-from pygent import _native
 from pygent.core import (
     AIMessage,
     FrozenJsonObject,
@@ -35,6 +32,7 @@ from ._adapter_contracts import (
     _canonical_usage,
     _normalized_finish_reason,
 )
+from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
 from .catalog import ModelCatalog, ModelInfo
 from .configuration import ModelSpec
 from .types import (
@@ -44,10 +42,6 @@ from .types import (
 )
 
 _OPENAI_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_DEFAULT_HTTP1_POOL_SHARDS = 8
-_DEFAULT_MAX_CONNECTIONS_PER_SHARD = 7
-_DEFAULT_MAX_KEEPALIVE_CONNECTIONS_PER_SHARD = 7
-_SSE_DRAIN_GRACE_SECONDS = 0.05
 _MAX_PROVIDER_ERROR_BYTES = 64 * 1024
 _PROVIDER_ERROR_REASONS = {
     "authentication_error": ModelFailureReason.AUTHENTICATION_FAILED,
@@ -181,79 +175,6 @@ def _validate_openai_provider_options(model: ModelSpec) -> None:
         )
 
 
-class _ShardAdmission:
-    """Bound work before it enters one httpcore connection pool."""
-
-    __slots__ = (
-        "_active",
-        "_closed",
-        "_drained",
-        "_pending",
-        "_semaphore",
-    )
-
-    def __init__(self, limit: int) -> None:
-        self._semaphore = asyncio.Semaphore(limit)
-        self._pending = 0
-        self._active = 0
-        self._closed = False
-        self._drained = asyncio.Event()
-        self._drained.set()
-
-    async def acquire(self) -> None:
-        if self._closed:
-            raise RuntimeError("model provider client is closed")
-        self._pending += 1
-        self._drained.clear()
-        try:
-            await self._semaphore.acquire()
-        except BaseException:
-            self._pending -= 1
-            self._set_drained_if_idle()
-            raise
-        self._pending -= 1
-        if self._closed:
-            self._semaphore.release()
-            self._set_drained_if_idle()
-            raise RuntimeError("model provider client is closed")
-        self._active += 1
-
-    def release(self) -> None:
-        if self._active <= 0:  # pragma: no cover - private ownership invariant
-            raise RuntimeError("HTTP shard admission permit is not held")
-        self._active -= 1
-        self._semaphore.release()
-        self._set_drained_if_idle()
-
-    def begin_close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        for _ in range(self._pending):
-            self._semaphore.release()
-        self._set_drained_if_idle()
-
-    async def wait_closed(self) -> None:
-        await self._drained.wait()
-
-    def _set_drained_if_idle(self) -> None:
-        if self._pending == 0 and self._active == 0:
-            self._drained.set()
-
-
-def _response_body_is_received(response: httpx.Response) -> bool:
-    """Return whether a declared response body is already in httpx's buffers."""
-
-    raw_length = response.headers.get("content-length")
-    if raw_length is None:
-        return False
-    try:
-        content_length = int(raw_length)
-    except ValueError:
-        return False
-    return content_length >= 0 and response.num_bytes_downloaded >= content_length
-
-
 class OpenAICompatibleClient:
     """Small HTTP/SSE client for OpenAI, GLM, Qwen, and compatible endpoints."""
 
@@ -278,28 +199,13 @@ class OpenAICompatibleClient:
         api_root = base_url.rstrip("/")
         self._endpoint = f"{api_root}/chat/completions"
         self._models_endpoint = f"{api_root}/models"
-        self._request_headers = request_headers
-        self._owns_client = client is None
-        self._clients: tuple[httpx.AsyncClient, ...]
-        self._admissions: tuple[_ShardAdmission, ...] | None
-        self._native_client: _native.NativeHttpClient | None
-        if client is not None:
-            self._clients = (client,)
-            self._admissions = None
-            self._native_client = None
-        else:
-            trust_env = _trust_environment_for_url(api_root)
-            self._native_client = _native.NativeHttpClient(
-                request_headers,
-                trust_env,
-                _DEFAULT_HTTP1_POOL_SHARDS * _DEFAULT_MAX_CONNECTIONS_PER_SHARD,
-                True if verify_ssl is None else verify_ssl,
-            )
-            self._clients = ()
-            self._admissions = None
-        self._next_client_index = 0
+        self._transport = _JsonSSETransport(
+            headers=request_headers,
+            client=client,
+            verify_ssl=verify_ssl,
+            trust_env_url=api_root,
+        )
         self._models: ModelCatalog = _OpenAICompatibleModelCatalog(self)
-        self._closed = False
 
     @property
     def models(self) -> ModelCatalog:
@@ -310,63 +216,18 @@ class OpenAICompatibleClient:
     async def invoke(
         self, model: ModelSpec, payload: FrozenJsonObject
     ) -> FrozenJsonObject:
-        native_client = self._native_client
-        if native_client is not None:
-            self._ensure_open()
-            try:
-                status, raw_body = await native_client.request_json(
-                    "POST",
-                    self._endpoint,
-                    _wire_json(payload.to_dict()),
-                    None,
-                )
-            except asyncio.CancelledError:
-                raise
-            except RuntimeError as exc:
-                raise httpx.TransportError(str(exc)) from exc
-            _raise_for_native_status(status, "POST", self._endpoint, raw_body=raw_body)
-            try:
-                body = json.loads(raw_body)
-            except (TypeError, ValueError) as exc:
-                raise ModelProviderError(
-                    ModelErrorKind.INVALID_RESPONSE,
-                    "provider returned invalid JSON",
-                    reason_code=ModelFailureReason.PROVIDER_PAYLOAD_INVALID,
-                ) from exc
-            if not isinstance(body, Mapping):
-                raise ModelProviderError(
-                    ModelErrorKind.INVALID_RESPONSE,
-                    "provider response must be an object",
-                    reason_code=ModelFailureReason.PROVIDER_PAYLOAD_INVALID,
-                )
-            return freeze_json_object(cast(Mapping[str, object], body))
-        client, admission = await self._acquire_http_client()
         try:
-            response = await client.post(
-                self._endpoint,
-                json=payload.to_dict(),
-                headers=self._request_headers or None,
+            return await self._transport.request_json(
+                "POST", self._endpoint, payload.to_dict()
             )
-            if not response.is_success:
-                raise _provider_status_error(response.status_code, response.content)
-            try:
-                body = response.json()
-            except (TypeError, ValueError) as exc:
-                raise ModelProviderError(
-                    ModelErrorKind.INVALID_RESPONSE,
-                    "provider returned invalid JSON",
-                    reason_code=ModelFailureReason.PROVIDER_PAYLOAD_INVALID,
-                ) from exc
-            if not isinstance(body, Mapping):
-                raise ModelProviderError(
-                    ModelErrorKind.INVALID_RESPONSE,
-                    "provider response must be an object",
-                    reason_code=ModelFailureReason.PROVIDER_PAYLOAD_INVALID,
-                )
-            return freeze_json_object(cast(Mapping[str, object], body))
-        finally:
-            if admission is not None:
-                admission.release()
+        except _HTTPResponseError as exc:
+            raise _provider_status_error(exc.status, exc.body) from None
+        except (TypeError, ValueError) as exc:
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_RESPONSE,
+                "provider returned invalid JSON",
+                reason_code=ModelFailureReason.PROVIDER_PAYLOAD_INVALID,
+            ) from exc
 
     async def stream(
         self, model: ModelSpec, payload: FrozenJsonObject
@@ -379,184 +240,50 @@ class OpenAICompatibleClient:
         elif isinstance(options, dict):
             options.setdefault("include_usage", True)
             body["stream_options"] = options
-        native_client = self._native_client
-        if native_client is not None:
-            self._ensure_open()
-            native_stream = native_client.stream_sse(self._endpoint, _wire_json(body))
-            completed = False
-            try:
-                async for kind, value in native_stream:
-                    if kind == "status":
-                        _raise_for_native_status(
-                            cast(int, value), "POST", self._endpoint
-                        )
-                    if kind == "error":
-                        raise httpx.TransportError(cast(str, value))
-                    if kind != "data":  # pragma: no cover - native invariant
-                        raise RuntimeError("native SSE transport returned invalid item")
-                    data = cast(str, value).strip()
-                    if data == "[DONE]":
-                        completed = True
-                        yield freeze_json_object({"done": True})
-                        return
-                    try:
-                        item = json.loads(data)
-                    except json.JSONDecodeError as exc:
-                        raise ModelProviderError(
-                            ModelErrorKind.INVALID_RESPONSE,
-                            "provider returned an invalid SSE event",
-                            reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
-                        ) from exc
-                    if not isinstance(item, Mapping):
-                        raise ModelProviderError(
-                            ModelErrorKind.INVALID_RESPONSE,
-                            "provider SSE event must be an object",
-                            reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
-                        )
-                    yield freeze_json_object(cast(Mapping[str, object], item))
-            finally:
-                if not completed:
-                    native_stream.close()
-                    await asyncio.shield(native_stream.wait_closed())
-            return
-        client, admission = await self._acquire_http_client()
         try:
-            async with client.stream(
-                "POST",
-                self._endpoint,
-                json=body,
-                headers={**self._request_headers, "Accept": "text/event-stream"},
-            ) as response:
-                if not response.is_success:
-                    raw_error = await _read_bounded_error_body(response)
-                    raise _provider_status_error(response.status_code, raw_error)
-                lines = response.aiter_lines()
-                async for line in lines:
-                    line = line.strip()
-                    if not line or line.startswith(":") or not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        yield freeze_json_object({"done": True})
-                        if _response_body_is_received(response):
-                            async for _ in lines:
-                                pass
-                        else:
-                            try:
-                                async with asyncio.timeout(_SSE_DRAIN_GRACE_SECONDS):
-                                    async for _ in lines:
-                                        pass
-                            except (TimeoutError, httpx.TransportError):
-                                pass
-                        return
-                    try:
-                        item = json.loads(data)
-                    except json.JSONDecodeError as exc:
-                        raise ModelProviderError(
-                            ModelErrorKind.INVALID_RESPONSE,
-                            "provider returned an invalid SSE event",
-                            reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
-                        ) from exc
-                    if not isinstance(item, Mapping):
-                        raise ModelProviderError(
-                            ModelErrorKind.INVALID_RESPONSE,
-                            "provider SSE event must be an object",
-                            reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
-                        )
-                    yield freeze_json_object(cast(Mapping[str, object], item))
-        finally:
-            if admission is not None:
-                admission.release()
+            async for frame in self._transport.stream_sse(self._endpoint, body):
+                data = frame.data.strip()
+                if data == "[DONE]":
+                    yield freeze_json_object({"done": True})
+                    return
+                try:
+                    item = json.loads(data)
+                except json.JSONDecodeError as exc:
+                    raise ModelProviderError(
+                        ModelErrorKind.INVALID_RESPONSE,
+                        "provider returned an invalid SSE event",
+                        reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
+                    ) from exc
+                if not isinstance(item, Mapping):
+                    raise ModelProviderError(
+                        ModelErrorKind.INVALID_RESPONSE,
+                        "provider SSE event must be an object",
+                        reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
+                    )
+                yield freeze_json_object(cast(Mapping[str, object], item))
+        except _HTTPResponseError as exc:
+            raise _provider_status_error(exc.status, exc.body) from None
 
     async def aclose(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        native_client = self._native_client
-        if native_client is not None:
-            await native_client.close()
-            return
-        admissions = self._admissions
-        if admissions is not None:
-            for admission in admissions:
-                admission.begin_close()
-        if self._owns_client:
-            await asyncio.gather(*(client.aclose() for client in self._clients))
-        if admissions is not None:
-            await asyncio.gather(*(item.wait_closed() for item in admissions))
+        await self._transport.aclose()
 
     async def __aenter__(self) -> Self:
-        self._ensure_open()
+        self._transport._ensure_open()
         return self
 
     async def __aexit__(self, *_: object) -> None:
         await self.aclose()
 
-    def _ensure_open(self) -> None:
-        if self._closed:
-            raise RuntimeError("model provider client is closed")
-
-    async def _acquire_http_client(
-        self,
-    ) -> tuple[httpx.AsyncClient, _ShardAdmission | None]:
-        self._ensure_open()
-        client, admission = self._next_http_slot()
-        if admission is not None:
-            await admission.acquire()
-        return client, admission
-
-    def _next_http_slot(
-        self,
-    ) -> tuple[httpx.AsyncClient, _ShardAdmission | None]:
-        index = self._next_client_index
-        self._next_client_index = (self._next_client_index + 1) % len(self._clients)
-        admission = None if self._admissions is None else self._admissions[index]
-        return self._clients[index], admission
-
     async def _list_models_payload(self, *, timeout: float | None) -> FrozenJsonObject:
-        self._ensure_open()
-        native_client = self._native_client
-        if native_client is not None:
-            try:
-                status, raw_body = await native_client.request_json(
-                    "GET", self._models_endpoint, None, timeout
-                )
-            except asyncio.CancelledError:
-                raise
-            except RuntimeError as exc:
-                raise httpx.TransportError(str(exc)) from exc
-            _raise_for_native_status(
-                status, "GET", self._models_endpoint, raw_body=raw_body
-            )
-            try:
-                body = json.loads(raw_body)
-            except (TypeError, ValueError) as exc:
-                raise ModelProviderError(
-                    ModelErrorKind.INVALID_RESPONSE,
-                    "model catalog returned invalid JSON",
-                ) from exc
-            if not isinstance(body, Mapping):
-                raise ModelProviderError(
-                    ModelErrorKind.INVALID_RESPONSE,
-                    "model catalog response must be an object",
-                )
-            return freeze_json_object(cast(Mapping[str, object], body))
+        self._transport._ensure_open()
         try:
-            client, admission = await self._acquire_http_client()
-            try:
-                response = await client.get(
-                    self._models_endpoint,
-                    headers=self._request_headers or None,
-                    timeout=timeout,
-                )
-                if not response.is_success:
-                    raise _provider_status_error(response.status_code, response.content)
-                body = response.json()
-            finally:
-                if admission is not None:
-                    admission.release()
+            return await self._transport.request_json(
+                "GET", self._models_endpoint, None, timeout=timeout
+            )
         except asyncio.CancelledError:
             raise
+        except _HTTPResponseError as exc:
+            raise _provider_status_error(exc.status, exc.body) from None
         except (TypeError, ValueError) as exc:
             raise ModelProviderError(
                 ModelErrorKind.INVALID_RESPONSE,
@@ -567,12 +294,6 @@ class OpenAICompatibleClient:
         except Exception as exc:  # noqa: BLE001 - provider transport boundary
             kind = _normalize_openai_error(exc)
             raise ModelProviderError(kind, "model catalog request failed") from None
-        if not isinstance(body, Mapping):
-            raise ModelProviderError(
-                ModelErrorKind.INVALID_RESPONSE,
-                "model catalog response must be an object",
-            )
-        return freeze_json_object(cast(Mapping[str, object], body))
 
 
 class _OpenAICompatibleModelCatalog:
@@ -982,48 +703,8 @@ def _validate_catalog_timeout(timeout: float | None) -> None:
         raise ValueError("timeout must be finite and positive, or None")
 
 
-def _trust_environment_for_url(url: str) -> bool:
-    """Honor the operating system's proxy-bypass decision for one API root."""
-
-    hostname = urllib.parse.urlsplit(url).hostname
-    if hostname is None:
-        return True
-    try:
-        return not urllib.request.proxy_bypass(hostname)
-    except OSError:
-        return True
-
-
 def _wire_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-
-def _raise_for_native_status(
-    status: int,
-    method: str,
-    url: str,
-    *,
-    raw_body: str | bytes | None = None,
-) -> None:
-    if 200 <= status < 300:
-        return
-    del method, url
-    raise _provider_status_error(status, raw_body)
-
-
-async def _read_bounded_error_body(response: httpx.Response) -> bytes:
-    try:
-        return response.content[:_MAX_PROVIDER_ERROR_BYTES]
-    except httpx.ResponseNotRead:
-        body = bytearray()
-        async for chunk in response.aiter_bytes():
-            remaining = _MAX_PROVIDER_ERROR_BYTES - len(body)
-            if remaining <= 0:
-                break
-            body.extend(chunk[:remaining])
-            if len(chunk) > remaining:
-                break
-        return bytes(body)
 
 
 def _provider_status_error(

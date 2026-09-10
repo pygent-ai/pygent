@@ -25,6 +25,7 @@ from pygent.llm import (
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
 )
+from pygent.llm import _json_sse_transport as json_sse_transport_module
 from pygent.llm import openai_compatible as openai_compatible_module
 from tests.support.model_specs import model_entry
 
@@ -119,7 +120,11 @@ async def test_stream_usage_defaults_preserve_options(monkeypatch, native, optio
             headers={"content-type": "text/event-stream"},
         )
 
-    monkeypatch.setattr(openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient)
+    monkeypatch.setattr(
+        json_sse_transport_module._native,
+        "NativeHttpClient",
+        RecordingNativeClient,
+    )
     route = model_entry("main", "openai", "gpt-test", provider_options=options)
     request = provider_request(
         entry=route, message=UserMessage(content="hello"), context=Context(),
@@ -994,12 +999,12 @@ async def test_owned_client_honors_system_proxy_bypass(
             return None
 
     monkeypatch.setattr(
-        "pygent.llm.openai_compatible.urllib.request.proxy_bypass",
+        "pygent.llm._json_sse_transport.urllib.request.proxy_bypass",
         lambda _: bypass,
     )
 
     monkeypatch.setattr(
-        openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient
+        json_sse_transport_module._native, "NativeHttpClient", RecordingNativeClient
     )
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
 
@@ -1024,12 +1029,12 @@ async def test_owned_client_keeps_environment_when_proxy_bypass_fails(
         raise OSError("proxy bypass lookup failed")
 
     monkeypatch.setattr(
-        "pygent.llm.openai_compatible.urllib.request.proxy_bypass",
+        "pygent.llm._json_sse_transport.urllib.request.proxy_bypass",
         fail_bypass,
     )
 
     monkeypatch.setattr(
-        openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient
+        json_sse_transport_module._native, "NativeHttpClient", RecordingNativeClient
     )
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
 
@@ -1040,9 +1045,9 @@ async def test_owned_client_keeps_environment_when_proxy_bypass_fails(
 @pytest.mark.asyncio
 async def test_owned_client_close_is_idempotent_and_blocks_reuse():
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
-    assert client._clients == ()
-    assert client._native_client is not None
-    assert client._native_client._limits() == (56, 32)
+    assert client._transport._client is None
+    assert client._transport._native_client is not None
+    assert client._transport._native_client._limits() == (56, 32)
     await client.aclose()
     await client.aclose()
     with pytest.raises(RuntimeError, match="closed"):
@@ -1056,8 +1061,8 @@ async def test_owned_client_close_is_idempotent_and_blocks_reuse():
 async def test_owned_native_transport_bounds_connections_before_http():
     client = OpenAICompatibleClient(base_url="https://models.example/v1")
     try:
-        assert client._native_client is not None
-        assert client._native_client._limits() == (56, 32)
+        assert client._transport._native_client is not None
+        assert client._transport._native_client._limits() == (56, 32)
     finally:
         await client.aclose()
 
@@ -1084,7 +1089,7 @@ async def test_owned_transport_uses_native_strict_tls_client(monkeypatch):
             return None
 
     monkeypatch.setattr(
-        openai_compatible_module._native, "NativeHttpClient", RecordingNativeClient
+        json_sse_transport_module._native, "NativeHttpClient", RecordingNativeClient
     )
     strict = OpenAICompatibleClient(
         base_url="https://models.example/v1",
@@ -1155,9 +1160,8 @@ async def test_injected_http_client_is_not_sharded_or_closed():
         base_url="https://models.example/v1", client=http_client
     )
 
-    assert client._clients == (http_client,)
-    assert client._next_http_slot() == (http_client, None)
-    assert client._next_http_slot() == (http_client, None)
+    assert client._transport._client is http_client
+    assert client._transport._native_client is None
     await client.aclose()
     assert not http_client.is_closed
     await http_client.aclose()
