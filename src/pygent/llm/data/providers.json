@@ -3,8 +3,8 @@
   "providers": {
     "deepseek": {
       "display_name": "DeepSeek",
-      "protocols": ["openai_compatible"],
-      "default_protocol": "openai_compatible",
+      "protocols": ["openai_chat_completions"],
+      "default_protocol": "openai_chat_completions",
       "base_url": "https://api.deepseek.com",
       "authentication": "bearer",
       "api_key_env": "DEEPSEEK_API_KEY",

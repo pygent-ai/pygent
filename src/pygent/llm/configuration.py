@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from pygent.core import FrozenJsonObject, JsonObjectInput, freeze_json_object
 
+from .protocols import BuiltinModelProtocol
 from .types import ModelGroupResolution
 
 _CAPABILITY_FIELDS = frozenset(
@@ -279,8 +280,12 @@ class ModelSpec:
     capabilities: ModelCapabilities = field(kw_only=True)
 
     def __post_init__(self) -> None:
-        for name in ("provider", "model_id", "protocol"):
+        for name in ("provider", "model_id"):
             _non_empty(getattr(self, name), name)
+        protocol = _non_empty(self.protocol, "protocol")
+        if isinstance(self.protocol, BuiltinModelProtocol):
+            protocol = self.protocol.value
+        object.__setattr__(self, "protocol", protocol)
         if not isinstance(self.capabilities, ModelCapabilities):
             raise TypeError("capabilities must be ModelCapabilities")
         if not isinstance(self.provider_options, Mapping):

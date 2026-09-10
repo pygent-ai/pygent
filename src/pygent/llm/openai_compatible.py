@@ -634,7 +634,7 @@ class _OpenAICompatibleModelCatalog:
 class OpenAICompatibleAdapter:
     """OpenAI chat-completions codec shared by compatible providers."""
 
-    protocol = "openai_compatible"
+    protocol = "openai_chat_completions"
 
     def validate_model(self, model: ModelSpec) -> None:
         """Validate portable provider options without performing provider I/O."""
@@ -935,7 +935,7 @@ class OpenAICompatibleAdapter:
 def openai_compatible_adapters() -> dict[str, OpenAICompatibleAdapter]:
     """Return the built-in protocol codec."""
 
-    return {"openai_compatible": OpenAICompatibleAdapter()}
+    return {"openai_chat_completions": OpenAICompatibleAdapter()}
 
 
 def _validate_catalog_timeout(timeout: float | None) -> None:

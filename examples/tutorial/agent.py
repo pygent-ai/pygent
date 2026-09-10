@@ -91,7 +91,7 @@ def fixed_model_group(model_name: str = "offline-tutorial") -> ModelGroup:
                 ModelSpec(
                     provider="openai",
                     model_id=model_name,
-                    protocol="openai_compatible",
+                    protocol="openai_chat_completions",
                     capabilities=CapabilityPresetCatalog.builtin()
                     .presets["text_tools"]
                     .materialize(context_tokens=128_000, max_output_tokens=8_192),

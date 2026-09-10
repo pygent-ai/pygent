@@ -10,6 +10,7 @@ import pytest
 import pygent
 from pygent import (
     AIMessage,
+    BuiltinModelProtocol,
     CapabilityPreset,
     CapabilityPresetCatalog,
     Context,
@@ -61,6 +62,7 @@ from pygent.runtime.plan import CodeArtifactSpec, ExecutionPlan, ModuleSpec
 EXPECTED_TOP_LEVEL_API = {
     "AIMessage",
     "Agent",
+    "BuiltinModelProtocol",
     "CapabilityPreset",
     "CapabilityPresetCatalog",
     "Context",
@@ -118,6 +120,7 @@ def test_minimal_example_surface_is_exported():
         symbol is not None
         for symbol in (
             AIMessage,
+            BuiltinModelProtocol,
             Binding,
             BoundModule,
             CapabilityPreset,

@@ -4,7 +4,7 @@
     {
       "provider": "deepseek",
       "model_id": "deepseek-v4-flash",
-      "protocol": "openai_compatible",
+      "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {"input": ["text"], "output": ["text"]},
         "streaming": {"text": true},
@@ -21,7 +21,7 @@
     {
       "provider": "deepseek",
       "model_id": "deepseek-v4-pro",
-      "protocol": "openai_compatible",
+      "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {"input": ["text"], "output": ["text"]},
         "streaming": {"text": true},

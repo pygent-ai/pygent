@@ -136,7 +136,7 @@ async def test_large_snapshot_reaches_provider_io() -> None:
     content = "x" * (2 * 1024 * 1024)
     client = RecordingClient()
     invoker = DefaultModelInvoker(
-        adapters={"openai_compatible": OpenAICompatibleAdapter()},
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
         clients={"primary": client},
     )
     execution = invoker.execute(

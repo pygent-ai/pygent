@@ -15,8 +15,8 @@ def test_builtin_provider_catalog_contains_only_deepseek_official() -> None:
     assert tuple(catalog.providers) == ("deepseek",)
     preset = catalog.providers["deepseek"]
     assert preset.display_name == "DeepSeek"
-    assert preset.protocols == ("openai_compatible",)
-    assert preset.default_protocol == "openai_compatible"
+    assert preset.protocols == ("openai_chat_completions",)
+    assert preset.default_protocol == "openai_chat_completions"
     assert preset.base_url == "https://api.deepseek.com"
     assert preset.authentication == "bearer"
     assert preset.api_key_env == "DEEPSEEK_API_KEY"
@@ -28,11 +28,11 @@ def test_builtin_model_capabilities_use_provider_model_protocol_key() -> None:
     catalog = ModelCapabilityCatalog.builtin()
 
     assert set(catalog.models) == {
-        ("deepseek", "deepseek-v4-flash", "openai_compatible"),
-        ("deepseek", "deepseek-v4-pro", "openai_compatible"),
+        ("deepseek", "deepseek-v4-flash", "openai_chat_completions"),
+        ("deepseek", "deepseek-v4-pro", "openai_chat_completions"),
     }
     capabilities = catalog.models[
-        ("deepseek", "deepseek-v4-flash", "openai_compatible")
+        ("deepseek", "deepseek-v4-flash", "openai_chat_completions")
     ]
     assert capabilities.modalities.input == ("text",)
     assert capabilities.streaming.text
@@ -80,8 +80,8 @@ def test_catalog_from_mapping_is_strict_and_immutable() -> None:
             "providers": {
                 "custom": {
                     "display_name": "Custom",
-                    "protocols": ["openai_compatible"],
-                    "default_protocol": "openai_compatible",
+                    "protocols": ["openai_chat_completions"],
+                    "default_protocol": "openai_chat_completions",
                     "base_url": "https://models.example.com/v1",
                     "authentication": "none",
                     "api_key_env": None,

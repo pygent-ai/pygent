@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import pytest
 
 from pygent.llm import (
+    BuiltinModelProtocol,
     CredentialRef,
     ModelCapabilities,
     ModelConfig,
@@ -44,7 +45,7 @@ def _mapping() -> dict[str, object]:
             "deepseek_primary": {
                 "provider": "deepseek",
                 "model_id": "deepseek-v4-flash",
-                "protocol": "openai_compatible",
+                "protocol": "openai_chat_completions",
                 "connection": {
                     "base_url": "https://api.deepseek.com",
                     "credential": {"env": "DEEPSEEK_API_KEY"},
@@ -58,6 +59,22 @@ def _mapping() -> dict[str, object]:
     }
 
 
+def test_builtin_protocols_are_precise_and_model_spec_stores_plain_string() -> None:
+    assert (
+        BuiltinModelProtocol.OPENAI_CHAT_COMPLETIONS.value
+        == "openai_chat_completions"
+    )
+    assert BuiltinModelProtocol.ANTHROPIC_MESSAGES.value == "anthropic_messages"
+    spec = ModelSpec(
+        provider="deepseek",
+        model_id="deepseek-v4-pro",
+        protocol=BuiltinModelProtocol.OPENAI_CHAT_COMPLETIONS,
+        capabilities=ModelCapabilities.from_mapping(_capabilities()),
+    )
+    assert spec.protocol == "openai_chat_completions"
+    assert type(spec.protocol) is str
+
+
 def test_model_config_parses_named_semantics_and_connection_projection() -> None:
     raw = _mapping()
     config = ModelConfig.from_mapping(raw)
@@ -68,7 +85,7 @@ def test_model_config_parses_named_semantics_and_connection_projection() -> None
     assert entry.spec == ModelSpec(
         provider="deepseek",
         model_id="deepseek-v4-flash",
-        protocol="openai_compatible",
+        protocol="openai_chat_completions",
         provider_options={"thinking": {"type": "disabled"}},
         capabilities=ModelCapabilities.from_mapping(_capabilities()),
     )

@@ -99,7 +99,7 @@ def test_openai_compatible_projects_deepseek_and_generic_options() -> None:
     )
     payload = OpenAICompatibleAdapter().build_request(_request(custom))
     assert payload["vendor_feature"] == freeze_json_object({"mode": "fast"})
-    assert set(openai_compatible_adapters()) == {"openai_compatible"}
+    assert set(openai_compatible_adapters()) == {"openai_chat_completions"}
 
 
 @pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
@@ -186,7 +186,7 @@ def test_deepseek_thinking_schema_is_strict(thinking: object) -> None:
 
 
 class _NoValidatorAdapter:
-    protocol = "openai_compatible"
+    protocol = "openai_chat_completions"
 
     def build_request(self, request: object) -> FrozenJsonObject:
         del request
@@ -248,7 +248,7 @@ async def test_third_party_adapter_without_validator_fails_closed_before_io() ->
         "main", "custom", "model", provider_options={"vendor_feature": True}
     )
     invoker = configured_invoker(
-        adapters={"openai_compatible": _NoValidatorAdapter()},
+        adapters={"openai_chat_completions": _NoValidatorAdapter()},
         clients={"main": client},
     )
     with pytest.raises(ModelGroupConfigurationError):

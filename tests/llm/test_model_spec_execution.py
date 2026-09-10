@@ -80,7 +80,7 @@ def _entry(
         ModelSpec(
             provider="custom",
             model_id=model_id,
-            protocol="openai_compatible",
+            protocol="openai_chat_completions",
             capabilities=capabilities,
         ),
     )
@@ -119,7 +119,7 @@ async def test_invoker_dispatches_by_protocol_and_falls_back_in_model_order() ->
         (_entry("primary", "first"), _entry("fallback", "second")),
     )
     invoker = DefaultModelInvoker(
-        adapters={"openai_compatible": OpenAICompatibleAdapter()},
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
         clients={"primary": primary, "fallback": fallback},
     )
 
@@ -160,7 +160,7 @@ async def test_capability_warning_is_once_per_reached_model_not_retry() -> None:
         ),
     )
     invoker = DefaultModelInvoker(
-        adapters={"openai_compatible": OpenAICompatibleAdapter()},
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
         clients={"primary": primary, "fallback": fallback},
     )
     tool = ToolDefinition(
@@ -210,7 +210,7 @@ async def test_capability_warning_is_once_per_reached_model_not_retry() -> None:
 async def test_matching_capabilities_emit_no_warning() -> None:
     client = FakeClient([_completion()])
     invoker = DefaultModelInvoker(
-        adapters={"openai_compatible": OpenAICompatibleAdapter()},
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
         clients={"primary": client},
     )
     execution = invoker.execute(

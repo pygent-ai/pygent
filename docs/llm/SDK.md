@@ -23,7 +23,7 @@ models:
   deepseek_primary:
     provider: deepseek
     model_id: deepseek-v4-flash
-    protocol: openai_compatible
+    protocol: openai_chat_completions
     connection:
       base_url: https://api.deepseek.com
       credential:
@@ -70,7 +70,7 @@ client = OpenAICompatibleClient(
     verify_ssl=connection.verify_ssl,
 )
 invoker = DefaultModelInvoker(
-    adapters={"openai_compatible": OpenAICompatibleAdapter()},
+    adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
     clients={entry.name: client},
 )
 
@@ -149,7 +149,7 @@ from pygent import ModelCapabilityCatalog, ProviderCatalog
 
 providers = ProviderCatalog.builtin()
 capabilities = ModelCapabilityCatalog.builtin().models[
-    ("deepseek", "deepseek-v4-flash", "openai_compatible")
+    ("deepseek", "deepseek-v4-flash", "openai_chat_completions")
 ]
 ```
 
@@ -176,7 +176,7 @@ entry = ModelEntry(
     ModelSpec(
         provider="deepseek",
         model_id="deepseek-v4-flash",
-        protocol="openai_compatible",
+        protocol="openai_chat_completions",
         provider_options={"thinking": {"type": "disabled"}},
         capabilities=capabilities,
     ),

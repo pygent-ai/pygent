@@ -63,7 +63,7 @@ Snapshot 中的模型组只包含：
       "spec": {
         "provider": "deepseek",
         "model_id": "deepseek-v4-flash",
-        "protocol": "openai_compatible",
+        "protocol": "openai_chat_completions",
         "provider_options": {},
         "capabilities": {}
       }

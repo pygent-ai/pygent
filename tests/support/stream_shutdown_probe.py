@@ -64,7 +64,7 @@ async def main() -> None:
     invoker_module._CANCELLATION_CLEANUP_GRACE_SECONDS = 0.01
     client = NestedCancellationResistantClient()
     invoker = DefaultModelInvoker(
-        adapters={"openai_compatible": OpenAICompatibleAdapter()},
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
         clients={"primary": client},
     )
     execution = invoker.execute(
@@ -76,7 +76,7 @@ async def main() -> None:
                     ModelSpec(
                         provider="openai",
                         model_id="probe",
-                        protocol="openai_compatible",
+                        protocol="openai_chat_completions",
                         capabilities=CapabilityPresetCatalog.builtin()
                         .presets["text"]
                         .materialize(

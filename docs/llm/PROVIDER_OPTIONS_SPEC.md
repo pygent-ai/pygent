@@ -8,7 +8,7 @@
 ModelSpec(
     provider="deepseek",
     model_id="deepseek-v4-flash",
-    protocol="openai_compatible",
+    protocol="openai_chat_completions",
     provider_options={"thinking": {"type": "disabled"}},
     capabilities=capabilities,
 )
@@ -45,7 +45,7 @@ class ModelProviderSpecValidator(Protocol):
     def validate_model(self, model: ModelSpec) -> None: ...
 ```
 
-Invoker 和动态 profile 发布在 Provider I/O 前调用该校验。非空选项配合未实现 validator 的第三方 Adapter 时 fail closed。DeepSeek 私有 schema 由 OpenAI-compatible Adapter 根据 `ModelSpec.provider == "deepseek"` 校验，而 Adapter 本身仍按 `protocol == "openai_compatible"` 分派。
+Invoker 和动态 profile 发布在 Provider I/O 前调用该校验。非空选项配合未实现 validator 的第三方 Adapter 时 fail closed。DeepSeek 私有 schema 由 OpenAI-compatible Adapter 根据 `ModelSpec.provider == "deepseek"` 校验，而 Adapter 本身仍按 `protocol == "openai_chat_completions"` 分派。
 
 ## 投影与安全
 

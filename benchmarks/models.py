@@ -488,7 +488,7 @@ def build_resources(
         limits=capabilities.limits,
     )
     invoker = DefaultModelInvoker(
-        adapters={"openai_compatible": OpenAICompatibleAdapter()},
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
         clients=cast(Mapping[str, ModelProviderClient], {MODEL_KEY: client}),
     )
     definition, tools, registry, tool_durations = _tool_resources(settings)
@@ -500,7 +500,7 @@ def build_resources(
                 ModelSpec(
                     "openai",
                     model_name,
-                    "openai_compatible",
+                    "openai_chat_completions",
                     capabilities=capabilities,
                 ),
             ),

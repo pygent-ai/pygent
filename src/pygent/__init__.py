@@ -30,6 +30,7 @@ from .core import (
     thaw_json,
 )
 from .llm import (
+    BuiltinModelProtocol,
     CapabilityPreset,
     CapabilityPresetCatalog,
     CredentialRef,
@@ -69,6 +70,7 @@ from .tool import (
 __all__ = [
     "AIMessage",
     "Agent",
+    "BuiltinModelProtocol",
     "CapabilityPreset",
     "CapabilityPresetCatalog",
     "Context",

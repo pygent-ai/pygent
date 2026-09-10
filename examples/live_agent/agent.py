@@ -286,13 +286,13 @@ def build_live_agent(
                 ModelEntry(
                     INVALID_MODEL_KEY,
                     ModelSpec(
-                        "openai", model_name, "openai_compatible", capabilities=capabilities
+                        "openai", model_name, "openai_chat_completions", capabilities=capabilities
                     ),
                 ),
                 ModelEntry(
                     VALID_MODEL_KEY,
                     ModelSpec(
-                        "openai", model_name, "openai_compatible", capabilities=capabilities
+                        "openai", model_name, "openai_chat_completions", capabilities=capabilities
                     ),
                 ),
             ),
@@ -345,7 +345,7 @@ def build_live_resources(
         transport=transport,
     )
     invoker = DefaultModelInvoker(
-        adapters={"openai_compatible": OpenAICompatibleAdapter()},
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
         clients=cast(
             Mapping[str, ModelProviderClient],
             {INVALID_MODEL_KEY: primary, VALID_MODEL_KEY: fallback},

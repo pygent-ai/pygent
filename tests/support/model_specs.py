@@ -37,7 +37,7 @@ def model_entry(
         ModelSpec(
             provider=provider,
             model_id=model_id,
-            protocol="openai_compatible",
+            protocol="openai_chat_completions",
             provider_options={} if provider_options is _UNSET else provider_options,  # type: ignore[arg-type]
             capabilities=capabilities,
         ),
@@ -71,9 +71,9 @@ class _ConfiguredInvoker:
         clients: dict[str, object],
         capabilities: dict[str, TransportMode],
     ) -> None:
-        adapter = adapters.get("openai_compatible") or next(iter(adapters.values()))
+        adapter = adapters.get("openai_chat_completions") or next(iter(adapters.values()))
         self._invoker = DefaultModelInvoker(
-            adapters={"openai_compatible": adapter},  # type: ignore[dict-item]
+            adapters={"openai_chat_completions": adapter},  # type: ignore[dict-item]
             clients=clients,  # type: ignore[arg-type]
         )
         self._clients = clients

@@ -181,7 +181,7 @@ def build_live_invoker(config: LiveModelConfig) -> ModelInvoker:
         verify_ssl=config.verify_ssl,
     )
     return DefaultModelInvoker(
-        adapters={"openai_compatible": OpenAICompatibleAdapter()},
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
         clients={"primary": client},
     )
 

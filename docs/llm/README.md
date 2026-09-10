@@ -34,7 +34,7 @@ Provider 是开放字符串。Provider preset 只提供 UI/配置默认值；Ada
 
 第一版内置目录只包含 DeepSeek 官方：
 
-- protocol：`openai_compatible`；
+- protocol：`openai_chat_completions`；
 - base URL：`https://api.deepseek.com`；
 - credential 环境变量：`DEEPSEEK_API_KEY`；
 - 模型：`deepseek-v4-flash`、`deepseek-v4-pro`。

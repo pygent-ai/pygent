@@ -21,7 +21,7 @@ def _model(name: str, provider: str, model_id: str) -> ModelEntry:
         ModelSpec(
             provider=provider,
             model_id=model_id,
-            protocol="openai_compatible",
+            protocol="openai_chat_completions",
             capabilities=CapabilityPresetCatalog.builtin()
             .presets["text_tools_structured_reasoning"]
             .materialize(context_tokens=128_000, max_output_tokens=8_192),

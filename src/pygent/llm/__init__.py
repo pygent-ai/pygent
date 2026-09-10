@@ -42,6 +42,7 @@ from .openai_compatible import (
     OpenAICompatibleClient,
     openai_compatible_adapters,
 )
+from .protocols import BuiltinModelProtocol
 from .types import (
     ExponentialBackoff,
     GenerationConfig,
@@ -67,6 +68,7 @@ from .types import (
 )
 
 __all__ = [
+    "BuiltinModelProtocol",
     "CapabilityPreset",
     "CapabilityPresetCatalog",
     "CredentialRef",
