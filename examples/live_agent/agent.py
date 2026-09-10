@@ -279,7 +279,7 @@ def build_live_agent(
         reasoning=capabilities.reasoning,
         limits=capabilities.limits,
     )
-    model = ModelCallLayer(
+    model_layer = ModelCallLayer(
         model_group=ModelGroup(
             name=MODEL_GROUP,
             models=(
@@ -315,7 +315,7 @@ def build_live_agent(
         invoker=model_invoker,
     )
     react = ReActLayer(
-        model=model,
+        model=model_layer,
         tools=tools,
         max_steps=3,
         max_model_calls=3,

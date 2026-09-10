@@ -32,16 +32,18 @@ Capabilities 不用于自动选模型。调用与声明不一致时，框架发�
 
 Provider 是开放字符串。Provider preset 只提供 UI/配置默认值；Adapter 按 `protocol` 注册；client 按 `ModelEntry.name` 绑定。多个 Provider 可以共享同一个 protocol Adapter。
 
-第一版内置目录只包含 DeepSeek 官方：
+内置协议使用 `BuiltinModelProtocol` 表达当前由 Pygent 实现的 wire contract：
 
-- protocol：`openai_chat_completions`；
-- base URL：`https://api.deepseek.com`；
-- credential 环境变量：`DEEPSEEK_API_KEY`；
-- 模型：`deepseek-v4-flash`、`deepseek-v4-pro`。
+- `OPENAI_CHAT_COMPLETIONS`：`openai_chat_completions`；
+- `ANTHROPIC_MESSAGES`：`anthropic_messages`。
 
-Anthropic-compatible 仅是目录 schema 可扩展的 protocol 字符串；第一版不提供 preset 或 Adapter。
+`ModelSpec.protocol` 仍保存开放字符串，第三方 Adapter 可以定义自己的 protocol。内置 Provider 目录按 protocol 提供连接默认值：DeepSeek 官方同时提供 OpenAI Chat Completions 与 Anthropic Messages endpoint，Anthropic 官方提供 Messages endpoint。目录只提供 base URL、credential 环境变量名和表单 schema，不提供或读取真实 API key。
+
+内置能力目录按 `(provider, model_id, protocol)` 区分同一模型的不同服务与协议。DeepSeek 收录 `deepseek-v4-flash`、`deepseek-v4-pro` 的两种协议条目；Anthropic 收录 `claude-fable-5-1`、`claude-opus-5`、`claude-sonnet-5` 和 `claude-haiku-4-5-20251001`。
 
 Provider 私有生成语义放在 `ModelSpec.provider_options`。连接、secret、认证头、代理、TLS、retry、deadline、stream 开关和框架保留请求字段不能放入其中。第三方 Adapter 只有实现 `ModelProviderSpecValidator` 才能接受非空选项。
+
+Anthropic Messages 请求必须由 `GenerationConfig.max_output_tokens` 提供正整数，没有框架默认值。需要工具循环回传的 Provider 私有 thinking/reasoning 状态保存在 `AIMessage.continuation`；该值只交给相同 Provider、protocol 和模型的后续请求，不进入公开事件、请求摘要或 `repr`。
 
 ## Layer 与执行
 

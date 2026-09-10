@@ -26,6 +26,8 @@ Layer 固定配置或 admission snapshot 最终都向 invoker 传递 concrete `M
 
 Adapter 查找键是 `ModelSpec.protocol`，client 查找键是 `ModelEntry.name`。公开事件、attempt、请求快照和资源映射使用同一个 `model_key`。
 
+Provider stream decoder 每个实际 attempt 独立创建。它可以在完成前产生不公开的 continuation 部件；accumulator 只把完整 continuation 放入最终 `AIMessage`，reset 时清除暂存状态，retry 和 fallback 不复用 decoder。
+
 ## 持久化与兼容边界
 
 SQLite profile JSON、admission JSON、effect request、Execution 定义摘要和 Worker 传输都保存完整新模型投影。Decoder 对字段集合做精确校验，因此旧 snapshot 会被拒绝，不做兼容转换或双写。

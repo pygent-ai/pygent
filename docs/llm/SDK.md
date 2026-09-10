@@ -7,13 +7,16 @@
 Pygent 接收普通 Mapping，不绑定 YAML。YAML、JSON、数据库或 UI 表单由应用转换成 Mapping 后使用同一个入口：
 
 ```python
-from pygent import ModelConfig
+from pygent import BuiltinModelProtocol, ModelConfig
 
 config = ModelConfig.from_mapping(user_config)
 
 primary = config.models["deepseek_primary"]
 assistant = config.model_groups["assistant"]
 connection = config.connections["deepseek_primary"]
+
+assert BuiltinModelProtocol.OPENAI_CHAT_COMPLETIONS == "openai_chat_completions"
+assert BuiltinModelProtocol.ANTHROPIC_MESSAGES == "anthropic_messages"
 ```
 
 完整配置形状：
@@ -83,6 +86,34 @@ model_layer = ModelCallLayer(
 ```
 
 单模型会规范化成名称为 `entry.name` 的单条目模型组。调用方在结束时关闭 invoker；配置对象不持有 client。
+
+## Direct：Anthropic Messages
+
+Anthropic Messages 使用独立的 client 和 Adapter。该协议要求每次请求显式设置正整数 `max_output_tokens`：
+
+```python
+from pygent.llm import AnthropicMessagesAdapter, AnthropicMessagesClient
+
+entry = config.models["anthropic_primary"]
+connection = config.connections[entry.name]
+client = AnthropicMessagesClient(
+    base_url=connection.base_url,
+    api_key=connection.credential.resolve(),
+    verify_ssl=connection.verify_ssl,
+)
+invoker = DefaultModelInvoker(
+    adapters={"anthropic_messages": AnthropicMessagesAdapter()},
+    clients={entry.name: client},
+)
+model_layer = ModelCallLayer(
+    model=entry,
+    retry_policy=RetryPolicy(),
+    generation=GenerationConfig(max_output_tokens=256),
+    invoker=invoker,
+)
+```
+
+DeepSeek 官方也可以使用同一 Adapter。用户在配置时把该模型条目的 `protocol` 设为 `anthropic_messages`，并采用 DeepSeek Provider preset 中该协议的 `https://api.deepseek.com/anthropic` 连接；使用 OpenAI Chat Completions 时则选择 `openai_chat_completions` 和 `https://api.deepseek.com`。Pygent 不自动探测或切换协议。
 
 ## Direct：多模型 fallback
 
@@ -184,6 +215,21 @@ entry = ModelEntry(
 ```
 
 `provider_options` 是冻结的模型语义。DeepSeek 校验依据 `ModelSpec.provider`，实际 Adapter 分派依据 `ModelSpec.protocol`。
+
+Anthropic Messages 的私有选项为 `thinking`、`output_config`、`service_tier` 和 `stop_sequences`，字段和值由 Adapter 严格校验。例如：
+
+```python
+provider_options={
+    "thinking": {"type": "enabled", "budget_tokens": 2048},
+    "output_config": {"effort": "high"},
+}
+```
+
+`thinking.type=enabled` 时 budget 必须小于本次 `max_output_tokens`；启用 thinking 时显式 temperature 只能为 `1`。
+
+## Provider continuation
+
+DeepSeek OpenAI Chat Completions 的 `reasoning_content`，以及 Anthropic Messages 的 thinking/signature block，会规范化为 `AIMessage.continuation`。ReAct 工具循环会把它原样回传给同一 Provider、protocol 和 model ID；不匹配时忽略。Continuation 会随 Message 经过 Worker、effect 与 SQLite 持久化，但不会出现在 `repr`、公开模型事件或 prepared-request snapshot 中。应用通常不需要读取或修改它。
 
 ## 能力警告与事件
 

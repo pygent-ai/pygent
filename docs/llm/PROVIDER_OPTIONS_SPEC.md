@@ -63,3 +63,9 @@ Provider options 进入以下确定性投影：
 ## OpenAI-compatible 投影
 
 Adapter 先生成框架拥有的请求字段，再合并通过校验的 Provider options。冲突字段、非法 token limit、非 JSON 数值和嵌套 secret 名称在发送前拒绝。每个 fallback 模型只使用自己的 `ModelSpec.provider_options`。
+
+## Anthropic Messages 投影
+
+`AnthropicMessagesAdapter` 只接受 `thinking`、`output_config`、`service_tier` 和 `stop_sequences`。`thinking` 支持 `disabled`、带显式 token budget 的 `enabled`，以及 `adaptive`；`output_config` 只接受 `effort`。未知字段、非法组合和越界值在 Provider I/O 前拒绝。
+
+Anthropic Messages 的 `GenerationConfig.max_output_tokens` 是必填正整数。它是 Provider-neutral 生成参数，不放入 `provider_options`。结构化输出由 Pygent 的 response schema 投影到 `output_config.format`，用户不能通过 Provider options 覆盖该保留字段。

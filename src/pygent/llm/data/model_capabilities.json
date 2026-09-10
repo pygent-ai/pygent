@@ -34,6 +34,108 @@
         "reasoning": {"supported": true, "controllable": true},
         "limits": {"context_tokens": 1000000, "max_output_tokens": 384000}
       }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {"input": ["text"], "output": ["text"]},
+        "streaming": {"text": true},
+        "tools": {
+          "call": true,
+          "choice": ["none", "auto", "required", "named"],
+          "parallel": true
+        },
+        "structured_output": {"json_object": true, "json_schema": false},
+        "reasoning": {"supported": true, "controllable": true},
+        "limits": {"context_tokens": 1000000, "max_output_tokens": 384000}
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {"input": ["text"], "output": ["text"]},
+        "streaming": {"text": true},
+        "tools": {
+          "call": true,
+          "choice": ["none", "auto", "required", "named"],
+          "parallel": true
+        },
+        "structured_output": {"json_object": true, "json_schema": false},
+        "reasoning": {"supported": true, "controllable": true},
+        "limits": {"context_tokens": 1000000, "max_output_tokens": 384000}
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-fable-5-1",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "streaming": {"text": true},
+        "tools": {
+          "call": true,
+          "choice": ["none", "auto", "required", "named"],
+          "parallel": true
+        },
+        "structured_output": {"json_object": true, "json_schema": true},
+        "reasoning": {"supported": true, "controllable": true},
+        "limits": {"context_tokens": 1000000, "max_output_tokens": 128000}
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-opus-5",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "streaming": {"text": true},
+        "tools": {
+          "call": true,
+          "choice": ["none", "auto", "required", "named"],
+          "parallel": true
+        },
+        "structured_output": {"json_object": true, "json_schema": true},
+        "reasoning": {"supported": true, "controllable": true},
+        "limits": {"context_tokens": 1000000, "max_output_tokens": 128000}
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-sonnet-5",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "streaming": {"text": true},
+        "tools": {
+          "call": true,
+          "choice": ["none", "auto", "required", "named"],
+          "parallel": true
+        },
+        "structured_output": {"json_object": true, "json_schema": true},
+        "reasoning": {"supported": true, "controllable": true},
+        "limits": {"context_tokens": 1000000, "max_output_tokens": 128000}
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-haiku-4-5-20251001",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "streaming": {"text": true},
+        "tools": {
+          "call": true,
+          "choice": ["none", "auto", "required", "named"],
+          "parallel": true
+        },
+        "structured_output": {"json_object": true, "json_schema": true},
+        "reasoning": {"supported": true, "controllable": true},
+        "limits": {"context_tokens": 200000, "max_output_tokens": 64000}
+      }
     }
   ]
 }

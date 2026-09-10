@@ -25,6 +25,12 @@ def test_builtin_provider_catalog_projects_protocol_specific_connections() -> No
     anthropic_wire = deepseek.protocols["anthropic_messages"]
     assert anthropic_wire.base_url == "https://api.deepseek.com/anthropic"
     assert anthropic_wire.api_key_env == "DEEPSEEK_API_KEY"
+    assert set(anthropic_wire.provider_options_schema["properties"]) == {
+        "thinking",
+        "output_config",
+        "service_tier",
+        "stop_sequences",
+    }
     anthropic = catalog.providers["anthropic"]
     assert anthropic.default_protocol == "anthropic_messages"
     assert (
@@ -32,6 +38,10 @@ def test_builtin_provider_catalog_projects_protocol_specific_connections() -> No
         == "https://api.anthropic.com"
     )
     assert anthropic.protocols["anthropic_messages"].api_key_env == "ANTHROPIC_API_KEY"
+    assert (
+        anthropic.protocols["anthropic_messages"].provider_options_schema
+        == anthropic_wire.provider_options_schema
+    )
 
 
 def test_builtin_model_capabilities_use_provider_model_protocol_key() -> None:
@@ -40,6 +50,12 @@ def test_builtin_model_capabilities_use_provider_model_protocol_key() -> None:
     assert set(catalog.models) == {
         ("deepseek", "deepseek-v4-flash", "openai_chat_completions"),
         ("deepseek", "deepseek-v4-pro", "openai_chat_completions"),
+        ("deepseek", "deepseek-v4-flash", "anthropic_messages"),
+        ("deepseek", "deepseek-v4-pro", "anthropic_messages"),
+        ("anthropic", "claude-fable-5-1", "anthropic_messages"),
+        ("anthropic", "claude-opus-5", "anthropic_messages"),
+        ("anthropic", "claude-sonnet-5", "anthropic_messages"),
+        ("anthropic", "claude-haiku-4-5-20251001", "anthropic_messages"),
     }
     capabilities = catalog.models[
         ("deepseek", "deepseek-v4-flash", "openai_chat_completions")
@@ -52,6 +68,46 @@ def test_builtin_model_capabilities_use_provider_model_protocol_key() -> None:
     assert capabilities.reasoning.controllable
     assert capabilities.limits.context_tokens == 1_000_000
     assert capabilities.limits.max_output_tokens == 384_000
+
+
+@pytest.mark.parametrize(
+    "model_id, context_tokens, max_output_tokens",
+    [
+        ("claude-fable-5-1", 1_000_000, 128_000),
+        ("claude-opus-5", 1_000_000, 128_000),
+        ("claude-sonnet-5", 1_000_000, 128_000),
+        ("claude-haiku-4-5-20251001", 200_000, 64_000),
+    ],
+)
+def test_builtin_anthropic_capabilities_are_complete(
+    model_id: str, context_tokens: int, max_output_tokens: int
+) -> None:
+    capabilities = ModelCapabilityCatalog.builtin().models[
+        ("anthropic", model_id, "anthropic_messages")
+    ]
+
+    assert capabilities.modalities.input == ("text", "image")
+    assert capabilities.modalities.output == ("text",)
+    assert capabilities.streaming.text
+    assert capabilities.tools.call
+    assert capabilities.tools.choice == ("none", "auto", "required", "named")
+    assert capabilities.tools.parallel
+    assert capabilities.structured_output.json_object
+    assert capabilities.structured_output.json_schema
+    assert capabilities.reasoning.supported
+    assert capabilities.reasoning.controllable
+    assert capabilities.limits.context_tokens == context_tokens
+    assert capabilities.limits.max_output_tokens == max_output_tokens
+
+
+@pytest.mark.parametrize("model_id", ["deepseek-v4-flash", "deepseek-v4-pro"])
+def test_builtin_deepseek_capabilities_are_identical_across_protocols(
+    model_id: str,
+) -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    assert catalog.models[
+        ("deepseek", model_id, "anthropic_messages")
+    ] == catalog.models[("deepseek", model_id, "openai_chat_completions")]
 
 
 @pytest.mark.parametrize(

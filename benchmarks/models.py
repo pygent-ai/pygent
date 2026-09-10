@@ -521,7 +521,7 @@ def build_resources(
         ),
         attempt_idle_timeout_seconds=settings.attempt_idle_timeout_seconds,
     )
-    model = ModelCallLayer(
+    model_layer = ModelCallLayer(
         model_group=model_group,
         retry_policy=retry,
         generation=GenerationConfig(
@@ -553,7 +553,7 @@ def build_resources(
         )
     )
     return ModelResources(
-        model,
+        model_layer,
         agent,
         definition,
         registry,

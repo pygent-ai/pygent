@@ -36,7 +36,51 @@
           "api_key_env": "DEEPSEEK_API_KEY",
           "provider_options_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+              "thinking": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {"type": {"const": "disabled"}},
+                    "required": ["type"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {"const": "enabled"},
+                      "budget_tokens": {"type": "integer", "minimum": 1024},
+                      "display": {"type": "string", "enum": ["summarized", "omitted"]}
+                    },
+                    "required": ["type", "budget_tokens"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {"const": "adaptive"},
+                      "display": {"type": "string", "enum": ["summarized", "omitted"]}
+                    },
+                    "required": ["type"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "output_config": {
+                "type": "object",
+                "properties": {
+                  "effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]}
+                },
+                "required": ["effort"],
+                "additionalProperties": false
+              },
+              "service_tier": {"type": "string", "enum": ["auto", "standard_only"]},
+              "stop_sequences": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "minLength": 1}
+              }
+            },
             "additionalProperties": false
           }
         }
@@ -53,7 +97,51 @@
           "api_key_env": "ANTHROPIC_API_KEY",
           "provider_options_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+              "thinking": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {"type": {"const": "disabled"}},
+                    "required": ["type"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {"const": "enabled"},
+                      "budget_tokens": {"type": "integer", "minimum": 1024},
+                      "display": {"type": "string", "enum": ["summarized", "omitted"]}
+                    },
+                    "required": ["type", "budget_tokens"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {"const": "adaptive"},
+                      "display": {"type": "string", "enum": ["summarized", "omitted"]}
+                    },
+                    "required": ["type"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "output_config": {
+                "type": "object",
+                "properties": {
+                  "effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]}
+                },
+                "required": ["effort"],
+                "additionalProperties": false
+              },
+              "service_tier": {"type": "string", "enum": ["auto", "standard_only"]},
+              "stop_sequences": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "minLength": 1}
+              }
+            },
             "additionalProperties": false
           }
         }

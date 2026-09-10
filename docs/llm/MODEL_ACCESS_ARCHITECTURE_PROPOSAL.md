@@ -32,17 +32,17 @@ Pygent 面向三类相互独立的参与者：
 
 第一版 credential 只使用一种对象形式，其中二选一：`credential: {env: DEEPSEEK_API_KEY}` 引用环境变量，`credential: {none: true}` 表示无需认证。解析后的 credential 属于部署资源投影，不进入 `ModelSpec`，Pygent 不把环境变量中的真实值写回配置、定义、事件或持久化数据。
 
-Provider 使用开放的稳定字符串标识，不使用封闭枚举。Pygent 维护一份内置 Provider preset 列表，每个 preset 提供显示名称、默认 protocol、官方 base URL、鉴权类型、建议的 API Key 环境变量名称和 Provider 私有选项 schema。用户选择内置 Provider 时，UI 把这些值填入配置；未收录的 Provider 仍可使用自定义标识，并由用户填写 protocol、base URL 和鉴权配置。真实 API Key 不由 Pygent 提供，也不直接保存在模型配置中，配置只保存 credential 引用。
+Provider 使用开放的稳定字符串标识，不使用封闭枚举。Pygent 维护一份内置 Provider preset 列表，每个 Provider 的 preset 按 protocol 提供官方 base URL、鉴权类型、建议的 API Key 环境变量名称和 Provider 私有选项 schema。用户选择 Provider 与 protocol 后，UI 把该组值填入配置；未收录的 Provider 仍可使用自定义标识，并由用户填写 protocol、base URL 和鉴权配置。真实 API Key 不由 Pygent 提供，也不直接保存在模型配置中，配置只保存 credential 引用。
 
 Provider preset、模型能力目录和协议 Adapter 相互独立：
 
-- Provider preset 按 Provider 标识提供连接默认值和配置表单信息；
+- Provider preset 按 Provider 与 protocol 提供连接默认值和配置表单信息；
 - 模型能力目录按 `(provider, model_id, protocol)` 提供完整 capabilities；
 - 协议 Adapter 按 `protocol` 提供实际请求、响应和错误归一实现。
 
 多个 Provider 可以使用同一个 protocol 和 Adapter。模型组、retry 和 fallback 不解释 Provider 协议；`ModelInvoker` 选中 `ModelSpec` 后，由对应 protocol 的 Adapter 完成实际调用。
 
-第一版只提供 DeepSeek 官方 Provider preset，并只开放其 OpenAI-compatible protocol。Provider preset 和配置 schema 允许同一 Provider 在后续增加其他 protocol；DeepSeek 的 Anthropic-compatible 接口在第一版只保留扩展位置，不作为可选择的 protocol，也不提供对应 Adapter。
+内置协议枚举提供 `openai_chat_completions` 与 `anthropic_messages` 两个精确 wire contract，但 `ModelSpec.protocol` 继续接受开放字符串。内置 Provider preset 包含 DeepSeek 官方的两种协议入口，以及 Anthropic 官方 Messages 入口。同一个 DeepSeek 模型可以由用户显式选择任一协议，Pygent 不自动探测或切换。
 
 Provider preset 和模型能力目录使用两级发布：
 

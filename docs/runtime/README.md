@@ -49,6 +49,8 @@ Binding 与 Runtime 支持三种 Child 放置语义：
 
 动态模型 admission 含非空 `ModelSpec.provider_options` 时，远程部署的 required capabilities 必须包含 `model.provider-options.v1`。新 Worker 会声明并无损校验该能力；旧 Worker 在 placement/admission 前因 capability mismatch 被拒绝，不能省略选项后继续执行。
 
+历史 `AIMessage` 的不透明 Provider continuation 使用标准 Message codec 经过本地、HTTP Worker 与 durable effect 边界。Runtime 只保存和传递该值；是否回传由模型 Adapter 按 Provider、protocol 和 model ID 匹配决定。
+
 ### 受约束的动态 Agent 解析
 
 Pygent 不支持绕过 Binding 和 ExecutionPlan 的开放式动态 Agent Registry：`forward()` 不能根据任意字符串发现并调用一个未在当前计划中声明的 Agent，也不能让 Registry 在运行时引入新的逻辑 Child。逻辑依赖、稳定 `binding_ref`、输入输出 schema、授权边界、容量归属和必需 Runtime capability 必须在 bind/compile 阶段确定，并进入 ExecutionPlan 的身份或兼容性检查。

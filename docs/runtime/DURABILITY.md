@@ -116,6 +116,7 @@ Runtime 默认只能提供 at-least-once 执行语义。只有底层 Provider、
 - Model 调用可能在响应丢失后重复产生费用和非确定性输出；Runtime 应记录 model key、attempt、请求关联身份和已提交结果。
 - 延迟模型组还必须把 admission 时选择的具体部署 manifest 与不可变资源 revision 作为恢复事实保存；已提交 effect 可以脱离 live invoker 重放，尚未提交的模型工作只能重新取得原 revision，不能改用当前最新部署。完整契约见 [延迟与动态模型组规范](../llm/DYNAMIC_MODEL_GROUP_SPEC.md)。
 - `ModelSpec.provider_options` 始终进入 profile snapshot、admission manifest 与 effect request 的完整模型 schema；空配置编码为 `{}`，JSON key 顺序不改变身份。恢复只按当前完整模型 schema 解码，digest 不符或原 adapter 已不支持时拒绝。已提交 effect 仍可直接重放，未提交工作必须使用原 pin，不能删除选项后降级执行。
+- `AIMessage.continuation` 作为不透明模型值参与 Message codec 和 effect 结果持久化。恢复必须保留其精确 Provider、protocol 与递归规范化 JSON 数据；事件、请求摘要、错误和 `repr` 不得暴露其内容。Runtime 不解释或跨模型转换 continuation。
 - Tool 调用必须声明幂等、可查询、可补偿或不可安全重试；不可安全重试的调用在状态不明时必须进入人工或业务决策状态。
 - `emit()` 事件必须携带稳定事件身份。新 attempt 重放相同逻辑事件时，事件系统必须能够去重或明确标记为新 attempt。
 - 流式 token 在故障边界前可能已被客户端观察但尚未成为最终结果；重连协议必须说明是否重放、截断或从持久游标继续。

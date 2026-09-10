@@ -114,7 +114,7 @@ def build_agent(
 ) -> TutorialAgent:
     """Assemble the same bounded ReAct graph for direct or managed execution."""
 
-    model = ModelCallLayer(
+    model_layer = ModelCallLayer(
         model_group=model_group,
         policy=(
             ModelCallPolicy(
@@ -141,7 +141,7 @@ def build_agent(
     )
     return TutorialAgent(
         ReActLayer(
-            model=model,
+            model=model_layer,
             tools=tools,
             max_steps=3,
             max_model_calls=3,
