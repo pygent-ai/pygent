@@ -878,6 +878,7 @@ async def test_gemini_schema_reasoning_and_image_probes_use_native_fields() -> N
     ).status == "passed"
     assert client.requests[0]["generationConfig"]["responseJsonSchema"]
     assert client.requests[1]["generationConfig"]["thinkingConfig"]["includeThoughts"] is True
+    assert client.requests[1]["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 1024
     image_part = client.requests[2]["contents"][-1]["parts"][1]["inlineData"]
     assert image_part["mimeType"] == "image/png"
     assert base64.b64decode(image_part["data"]).endswith(b"IEND\xaeB`\x82")

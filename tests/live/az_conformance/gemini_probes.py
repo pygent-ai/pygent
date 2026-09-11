@@ -326,7 +326,10 @@ async def gemini_reasoning_probe(
     request = _request(
         route,
         provider_options={
-            "thinking_config": {"include_thoughts": True, "thinking_budget": 64}
+            "thinking_config": {
+                "include_thoughts": True,
+                "thinking_budget": 1024,
+            }
         },
     )
     try:
