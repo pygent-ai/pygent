@@ -728,7 +728,19 @@ async def test_audio_output_feeds_transcription_dependency() -> None:
     client = RawScriptedClient(
         [
             httpx.Response(200, content=wave),
-            httpx.Response(200, json={"text": "probe audio"}),
+            httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "probe audio",
+                            }
+                        }
+                    ]
+                },
+            ),
         ]
     )
     assert (
@@ -742,7 +754,10 @@ async def test_audio_output_feeds_transcription_dependency() -> None:
             _raw_context(client, Scenario.AUDIO_INPUT), _route()
         )
     ).status == "passed"
-    assert client.requests[1][1] == "/audio/transcriptions"
+    assert client.requests[1][1] == "/chat/completions"
+    content = client.requests[1][2]["json"]["messages"][0]["content"]
+    assert content[1]["type"] == "input_audio"
+    assert content[1]["input_audio"]["format"] == "wav"
 
 
 @pytest.mark.asyncio

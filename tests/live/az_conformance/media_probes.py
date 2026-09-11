@@ -243,15 +243,44 @@ async def audio_input_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
     try:
         response = await client.request(
             "POST",
-            "/audio/transcriptions",
-            data={"model": route.route_id},
-            files={"file": ("probe.wav", client.audio_fixture, "audio/wav")},
+            "/chat/completions",
+            json={
+                "model": route.route_id,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Transcribe the attached audio.",
+                            },
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": base64.b64encode(
+                                        client.audio_fixture
+                                    ).decode("ascii"),
+                                    "format": "wav",
+                                },
+                            },
+                        ],
+                    }
+                ],
+                "max_tokens": 1024,
+            },
         )
         error = _http_error(response)
         if error is not None:
             return _result(context, route, error_kind=error)
-        text = _json(response).get("text")
-        if not isinstance(text, str) or not text.strip():
+        choices = _json(response).get("choices")
+        if (
+            not isinstance(choices, list)
+            or not choices
+            or not isinstance(choices[0], Mapping)
+            or not isinstance(choices[0].get("message"), Mapping)
+            or not isinstance(choices[0]["message"].get("content"), str)
+            or not choices[0]["message"]["content"].strip()
+        ):
             raise ValueError("transcription text is empty")
     except (httpx.HTTPError, OSError, TypeError, ValueError, AttributeError):
         return _result(context, route, error_kind=ErrorKind.INVALID_RESPONSE)
