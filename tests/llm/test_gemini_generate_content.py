@@ -126,7 +126,13 @@ def test_gemini_parse_preserves_thought_signature_and_function_call() -> None:
                                     "thoughtSignature": "sig",
                                 },
                                 {"text": "answer"},
-                                {"functionCall": {"name": "lookup", "args": {"id": 1}}},
+                                {
+                                    "functionCall": {
+                                        "name": "lookup",
+                                        "args": {"id": 1},
+                                    },
+                                    "thoughtSignature": "tool-sig",
+                                },
                             ],
                         },
                         "finishReason": "STOP",
@@ -153,7 +159,12 @@ def test_gemini_parse_preserves_thought_signature_and_function_call() -> None:
         data={
             "version": 1,
             "parts": [
-                {"text": "reason", "thought": True, "thoughtSignature": "sig"}
+                {"text": "reason", "thought": True, "thoughtSignature": "sig"},
+                {"text": "answer"},
+                {
+                    "functionCall": {"name": "lookup", "args": {"id": 1}},
+                    "thoughtSignature": "tool-sig",
+                },
             ],
         },
     )
@@ -195,7 +206,10 @@ def test_gemini_continuation_is_replayed_with_visible_assistant_text() -> None:
         protocol="gemini_generate_content",
         data={
             "version": 1,
-            "parts": [{"thought": True, "thoughtSignature": "sig", "text": "reason"}],
+            "parts": [
+                {"thought": True, "thoughtSignature": "sig", "text": "reason"},
+                {"text": "answer"},
+            ],
         },
     )
     payload = GeminiGenerateContentAdapter().build_request(
@@ -209,6 +223,110 @@ def test_gemini_continuation_is_replayed_with_visible_assistant_text() -> None:
         {"thought": True, "thoughtSignature": "sig", "text": "reason"},
         {"text": "answer"},
     ]
+
+
+def test_gemini_signed_function_call_is_replayed_exactly_once() -> None:
+    continuation = ModelContinuation(
+        provider="google",
+        protocol="gemini_generate_content",
+        data={
+            "version": 1,
+            "parts": [
+                {
+                    "functionCall": {"name": "lookup", "args": {"id": 1}},
+                    "thoughtSignature": "tool-sig",
+                }
+            ],
+        },
+    )
+    message = AIMessage(
+        content="",
+        tool_calls=(
+            ToolCall(
+                call_id="gemini-call-0",
+                name="lookup",
+                arguments={"id": 1},
+            ),
+        ),
+        continuation=continuation,
+    )
+
+    payload = GeminiGenerateContentAdapter().build_request(
+        _request(context=Context(messages=(message,)))
+    ).to_dict()
+
+    assert payload["contents"][0]["parts"] == [
+        {
+            "functionCall": {"name": "lookup", "args": {"id": 1}},
+            "thoughtSignature": "tool-sig",
+        }
+    ]
+
+
+def test_gemini_signed_continuation_must_match_assistant_message() -> None:
+    continuation = ModelContinuation(
+        provider="google",
+        protocol="gemini_generate_content",
+        data={
+            "version": 1,
+            "parts": [
+                {
+                    "functionCall": {"name": "lookup", "args": {"id": 1}},
+                    "thoughtSignature": "tool-sig",
+                }
+            ],
+        },
+    )
+    message = AIMessage(
+        content="",
+        tool_calls=(
+            ToolCall(
+                call_id="gemini-call-0",
+                name="lookup",
+                arguments={"id": 2},
+            ),
+        ),
+        continuation=continuation,
+    )
+
+    with pytest.raises(ModelProviderError) as raised:
+        GeminiGenerateContentAdapter().build_request(
+            _request(context=Context(messages=(message,)))
+        )
+
+    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
+
+
+def test_gemini_stream_preserves_signed_function_call_part() -> None:
+    decoder = GeminiGenerateContentAdapter().create_stream_decoder(_request())
+
+    parts = decoder.feed(
+        freeze_json_object(
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [
+                                {
+                                    "functionCall": {
+                                        "name": "lookup",
+                                        "args": {"id": 1},
+                                    },
+                                    "thoughtSignature": "tool-sig",
+                                }
+                            ],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ]
+            }
+        )
+    )
+
+    assert [part.kind for part in parts] == ["tool_call", "continuation", "finish"]
+    continuation = parts[1].data["data"]
+    assert continuation["parts"][0]["thoughtSignature"] == "tool-sig"
 
 
 def test_gemini_stream_decodes_thinking_text_usage_and_finish() -> None:

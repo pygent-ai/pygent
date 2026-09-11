@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Self, cast
 from urllib.parse import quote
 
@@ -272,6 +272,7 @@ class _GeminiStreamDecoder:
         self._request = request
         self._completed = False
         self._continuation_parts: list[dict[str, object]] = []
+        self._has_thought_signature = False
         self._tool_index = 0
 
     def feed(self, payload: FrozenJsonObject) -> tuple[ModelProviderStreamPart, ...]:
@@ -290,14 +291,16 @@ class _GeminiStreamDecoder:
             for raw in raw_parts:
                 if not isinstance(raw, Mapping):
                     raise TypeError
+                self._continuation_parts.append(dict(raw))
+                self._has_thought_signature = self._has_thought_signature or isinstance(
+                    raw.get("thoughtSignature"), str
+                )
                 if raw.get("thought") is True:
                     text = raw.get("text")
                     if not isinstance(text, str):
                         raise TypeError
                     if text:
                         parts.append(ModelProviderStreamPart("reasoning", {"text": text}))
-                    if isinstance(raw.get("thoughtSignature"), str):
-                        self._continuation_parts.append(dict(raw))
                 elif "text" in raw:
                     text = raw["text"]
                     if not isinstance(text, str):
@@ -331,7 +334,7 @@ class _GeminiStreamDecoder:
             if usage:
                 parts.append(ModelProviderStreamPart("usage", usage))
             if finish is not None:
-                if self._continuation_parts:
+                if self._has_thought_signature:
                     parts.append(
                         ModelProviderStreamPart(
                             "continuation",
@@ -385,7 +388,13 @@ def _content(message: Message, model: ModelSpec) -> dict[str, object]:
             continuation.provider == model.provider
             and continuation.protocol == model.protocol
         ):
-            parts.extend(_continuation_parts(continuation))
+            parts = _continuation_parts(continuation)
+            replay_text, replay_calls, _ = _decode_parts(parts)
+            if replay_text != message.content or replay_calls != message.tool_calls:
+                raise ValueError(
+                    "Gemini continuation does not match the assistant message"
+                )
+            return {"role": role, "parts": parts}
     if message.content:
         parts.append({"text": message.content})
     if isinstance(message, AIMessage):
@@ -409,12 +418,12 @@ def _continuation_parts(continuation: ModelContinuation) -> list[dict[str, objec
     if not isinstance(raw_parts, tuple):
         raise TypeError("Gemini continuation parts must be an array")
     parts = [part.to_dict() for part in raw_parts if isinstance(part, FrozenJsonObject)]
-    if len(parts) != len(raw_parts) or any(
-        part.get("thought") is not True
-        or not isinstance(part.get("thoughtSignature"), str)
+    if len(parts) != len(raw_parts) or not any(
+        isinstance(part.get("thoughtSignature"), str)
+        and bool(part["thoughtSignature"])
         for part in parts
     ):
-        raise ValueError("Gemini continuation contains an invalid thought part")
+        raise ValueError("Gemini continuation must preserve signed response parts")
     return parts
 
 
@@ -462,20 +471,23 @@ def _candidate(body: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _decode_parts(
-    parts: list[object],
+    parts: Sequence[object],
 ) -> tuple[str, tuple[ToolCall, ...], list[dict[str, object]]]:
     text: list[str] = []
     calls: list[ToolCall] = []
-    continuation: list[dict[str, object]] = []
+    originals: list[dict[str, object]] = []
+    has_thought_signature = False
     for raw in parts:
         if not isinstance(raw, Mapping):
             raise TypeError
+        originals.append(dict(raw))
+        has_thought_signature = has_thought_signature or isinstance(
+            raw.get("thoughtSignature"), str
+        )
         if raw.get("thought") is True:
             thought = raw.get("text")
             if not isinstance(thought, str):
                 raise TypeError
-            if isinstance(raw.get("thoughtSignature"), str):
-                continuation.append(dict(raw))
         elif "text" in raw:
             value = raw["text"]
             if not isinstance(value, str):
@@ -495,6 +507,7 @@ def _decode_parts(
                     arguments=arguments,
                 )
             )
+    continuation = originals if has_thought_signature else []
     return "".join(text), tuple(calls), continuation
 
 
