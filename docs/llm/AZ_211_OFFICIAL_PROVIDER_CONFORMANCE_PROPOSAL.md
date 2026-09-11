@@ -78,7 +78,7 @@ route ID。冻结规则为：
 
 ```text
 count: 211
-sha256: 0052cd3543beb555439a8e0c32bb415f8df34a8992f358ed23f971ba4f79c949
+sha256: 7398801a0d480abc1b45d64d87e9c8eac508404f53dffc37d202c222f264330e
 ```
 
 服务端声明的 endpoint 组合为：

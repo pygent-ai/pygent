@@ -104,7 +104,7 @@ def test_frozen_route_id_snapshot_is_exact() -> None:
     assert ids == sorted(ids)
     assert len(ids) == len(set(ids)) == 211
     assert sha256(payload).hexdigest() == (
-        "0052cd3543beb555439a8e0c32bb415f8df34a8992f358ed23f971ba4f79c949"
+        "7398801a0d480abc1b45d64d87e9c8eac508404f53dffc37d202c222f264330e"
     )
 ```
 
@@ -646,7 +646,7 @@ Expected CLI summary:
 
 ```text
 routes=211 classified=211 unclassified=0 missing_sources=0 missing_probes=0
-snapshot_sha256=0052cd3543beb555439a8e0c32bb415f8df34a8992f358ed23f971ba4f79c949
+snapshot_sha256=7398801a0d480abc1b45d64d87e9c8eac508404f53dffc37d202c222f264330e
 ```
 
 ### Task 9: Add official Provider presets and model capabilities
@@ -822,7 +822,7 @@ git commit -m "test(llm): expose AZ conformance CLI"
 - [ ] **Step 1: Record source revision and verify inventory**
 
 ```powershell
-$azResultDir = 'C:\Users\Administrator\.codex\artifacts\pygent-az-211-0052cd35'
+$azResultDir = 'C:\Users\Administrator\.codex\artifacts\pygent-az-211-7398801a'
 New-Item -ItemType Directory -Path $azResultDir -Force | Out-Null
 git status --short
 git rev-parse HEAD
@@ -836,7 +836,7 @@ Expected: clean tree and exact 211/count/digest match before any paid request.
 Use the same explicit output directory and source revision for every command:
 
 ```powershell
-$azResultDir = 'C:\Users\Administrator\.codex\artifacts\pygent-az-211-0052cd35'
+$azResultDir = 'C:\Users\Administrator\.codex\artifacts\pygent-az-211-7398801a'
 uv run --with websockets python -m tests.live.az_conformance.cli run --manifest tests/live/az_conformance/manifest.json --output-dir $azResultDir --scenario text
 uv run --with websockets python -m tests.live.az_conformance.cli run --manifest tests/live/az_conformance/manifest.json --output-dir $azResultDir --scenario text_stream
 uv run --with websockets python -m tests.live.az_conformance.cli run --manifest tests/live/az_conformance/manifest.json --output-dir $azResultDir --scenario tools
@@ -872,7 +872,7 @@ remove a required scenario, or loosen response validation to turn a live failure
 - [ ] **Step 5: Produce the exact report**
 
 ```powershell
-$azResultDir = 'C:\Users\Administrator\.codex\artifacts\pygent-az-211-0052cd35'
+$azResultDir = 'C:\Users\Administrator\.codex\artifacts\pygent-az-211-7398801a'
 uv run --with websockets python -m tests.live.az_conformance.cli report --manifest tests/live/az_conformance/manifest.json --output-dir $azResultDir
 ```
 
