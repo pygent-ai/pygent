@@ -11,20 +11,17 @@ from typing import Protocol, cast
 
 import httpx
 
+from tests.live.az_conformance.media_fixtures import (
+    MP4_BASE64,
+    PNG_BASE64,
+    PNG_BYTES,
+)
 from tests.live.az_conformance.results import ErrorKind, ProbeResult
 from tests.live.az_conformance.runner import ProbeContext
 from tests.live.az_conformance.schemas import AzRoute
 
 _MAX_MEDIA_BYTES = 20 * 1024 * 1024
-_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1Pe"
-    "AAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC"
-)
-_VIDEO_FRAME = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2"
-    "AAAAFUlEQVR4nGNgYPhPIhrVMKph2GoAAJLb/wFh5Z4R"
-    "AAAAAElFTkSuQmCC"
-)
+_PNG = PNG_BYTES
 
 
 class RawProbeClient(Protocol):
@@ -441,8 +438,18 @@ async def realtime_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
 async def video_input_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
     client = _client(context)
     frame = (
-        f"data:image/png;base64,{base64.b64encode(_VIDEO_FRAME).decode('ascii')}"
+        f"data:image/png;base64,{PNG_BASE64}"
     )
+    if route.canonical_provider == "minimax":
+        video_part: dict[str, object] = {
+            "type": "video_url",
+            "video_url": {
+                "url": f"data:video/mp4;base64,{MP4_BASE64}",
+                "detail": "low",
+            },
+        }
+    else:
+        video_part = {"type": "video", "video": [frame] * 4}
     try:
         response = await client.request(
             "POST",
@@ -453,7 +460,7 @@ async def video_input_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
                     {
                         "role": "user",
                         "content": [
-                            {"type": "video", "video": [frame] * 4},
+                            video_part,
                             {
                                 "type": "text",
                                 "text": "Describe the change between these frames.",

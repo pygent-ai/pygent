@@ -61,7 +61,6 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_schema",
             "reasoning"
           ]
         },
@@ -71,9 +70,6 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -93,7 +89,6 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_schema",
             "reasoning"
           ]
         },
@@ -103,9 +98,6 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -125,7 +117,6 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_schema",
             "reasoning"
           ]
         },
@@ -135,9 +126,6 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -157,7 +145,6 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_schema",
             "reasoning"
           ]
         },
@@ -167,9 +154,6 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -189,7 +173,6 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_schema",
             "reasoning"
           ]
         },
@@ -199,9 +182,6 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -221,7 +201,6 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_schema",
             "reasoning"
           ]
         },
@@ -231,9 +210,6 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -247,26 +223,14 @@
       "canonical_model_id": "MiniMax-M3",
       "protocols": [
         {
-          "protocol": "anthropic_messages",
-          "required_scenarios": [
-            "text",
-            "text_stream",
-            "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
-          ]
-        },
-        {
           "protocol": "openai_chat_completions",
           "required_scenarios": [
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -279,26 +243,14 @@
       "canonical_model_id": "MiniMax-M3",
       "protocols": [
         {
-          "protocol": "anthropic_messages",
-          "required_scenarios": [
-            "text",
-            "text_stream",
-            "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
-          ]
-        },
-        {
           "protocol": "openai_chat_completions",
           "required_scenarios": [
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],

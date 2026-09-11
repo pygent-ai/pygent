@@ -29,6 +29,7 @@ from tests.live.az_conformance.gemini_probes import (
     gemini_text_probe,
     gemini_tool_probe,
 )
+from tests.live.az_conformance.media_fixtures import PNG_BASE64
 from tests.live.az_conformance.media_probes import (
     audio_input_probe,
     audio_output_probe,
@@ -64,10 +65,7 @@ from tests.live.az_conformance.schemas import (
 )
 from tests.live.az_conformance.search_probes import search_probe
 
-_PNG = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1Pe"
-    "AAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC"
-)
+_PNG = PNG_BASE64
 
 
 class ScriptedClient:
@@ -1028,6 +1026,48 @@ async def test_video_input_uses_openai_compatible_image_sequence() -> None:
     )
     assert body["modalities"] == ["text"]
     assert body["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_minimax_video_input_uses_an_mp4_data_url() -> None:
+    event = {"choices": [{"delta": {"content": "Static blue video."}}]}
+    client = RawScriptedClient(
+        [
+            httpx.Response(
+                200,
+                content=(
+                    b"data: "
+                    + json.dumps(event).encode("utf-8")
+                    + b"\n\ndata: [DONE]\n\n"
+                ),
+            )
+        ]
+    )
+    route = route_from_mapping(
+        {
+            "route_id": "MiniMax-M3",
+            "kind": "official_model",
+            "canonical_provider": "minimax",
+            "canonical_model_id": "MiniMax-M3",
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["video_input"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+
+    result = await video_input_probe(
+        _raw_context(client, Scenario.VIDEO_INPUT), route
+    )
+
+    assert result.status == "passed"
+    video = client.requests[0][2]["json"]["messages"][0]["content"][0]
+    assert video["type"] == "video_url"
+    assert video["video_url"]["url"].startswith("data:video/mp4;base64,")
+    assert video["video_url"]["detail"] == "low"
 
 
 @pytest.mark.asyncio

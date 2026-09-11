@@ -517,13 +517,43 @@ def test_builtin_anthropic_capabilities_are_complete(
 
 
 @pytest.mark.parametrize("model_id", ["deepseek-v4-flash", "deepseek-v4-pro"])
-def test_builtin_deepseek_capabilities_are_identical_across_protocols(
+def test_builtin_deepseek_structured_output_is_protocol_specific(
     model_id: str,
 ) -> None:
     catalog = ModelCapabilityCatalog.builtin()
-    assert catalog.models[
-        ("deepseek", model_id, "anthropic_messages")
-    ] == catalog.models[("deepseek", model_id, "openai_chat_completions")]
+    anthropic = catalog.models[("deepseek", model_id, "anthropic_messages")]
+    openai = catalog.models[("deepseek", model_id, "openai_chat_completions")]
+
+    assert not anthropic.structured_output.json_object
+    assert not anthropic.structured_output.json_schema
+    assert openai.structured_output.json_object
+    assert not openai.structured_output.json_schema
+
+
+def test_builtin_minimax_capabilities_follow_official_protocol_boundaries() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    m2_anthropic = catalog.models[
+        ("minimax", "MiniMax-M2.7", "anthropic_messages")
+    ]
+    m2_openai = catalog.models[
+        ("minimax", "MiniMax-M2.7", "openai_chat_completions")
+    ]
+    m3 = catalog.models[("minimax", "MiniMax-M3", "openai_chat_completions")]
+
+    assert m2_anthropic.tools.call and m2_openai.tools.call
+    assert m2_anthropic.tools.choice == ("none", "auto", "required", "named")
+    assert m2_openai.tools.choice == ()
+    assert not m2_anthropic.tools.parallel
+    assert not m2_openai.structured_output.json_object
+    assert not m2_openai.structured_output.json_schema
+    assert m2_openai.reasoning.supported
+    assert not m2_openai.reasoning.controllable
+    assert m2_openai.limits.context_tokens == 204_800
+
+    assert ("minimax", "MiniMax-M3", "anthropic_messages") not in catalog.models
+    assert m3.modalities.input == ("text", "image", "video")
+    assert m3.reasoning.supported and m3.reasoning.controllable
+    assert m3.limits.context_tokens == 1_000_000
 
 
 def test_builtin_alibaba_omni_capabilities_follow_official_model_boundaries() -> None:

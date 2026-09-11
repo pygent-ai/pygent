@@ -27,14 +27,12 @@ from pygent.llm import (
     ModelProviderRequest,
     ModelSpec,
 )
+from tests.live.az_conformance.media_fixtures import PNG_BASE64
 from tests.live.az_conformance.results import ErrorKind, ProbeResult
 from tests.live.az_conformance.runner import ProbeContext
 from tests.live.az_conformance.schemas import AzRoute
 
-_PNG = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1Pe"
-    "AAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC"
-)
+_PNG = PNG_BASE64
 _SCHEMA = {
     "type": "object",
     "properties": {"answer": {"type": "string"}},
@@ -257,6 +255,7 @@ async def gemini_tool_choice_probe(
 ) -> ProbeResult:
     request = _request(
         route,
+        message=UserMessage(content="Use lookup with value probe."),
         tools=(_TOOL,),
         generation=GenerationConfig(max_output_tokens=1024, tool_choice="lookup"),
     )

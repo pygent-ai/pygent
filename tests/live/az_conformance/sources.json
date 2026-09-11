@@ -796,84 +796,77 @@
       "provider": "minimax",
       "model_id": "MiniMax-M2.1",
       "protocol": "anthropic_messages",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
+      "url": "https://platform.minimax.io/docs/api-reference/text-anthropic-api",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "minimax",
       "model_id": "MiniMax-M2.1",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
+      "url": "https://platform.minimax.io/docs/api-reference/text-openai-api",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "minimax",
       "model_id": "MiniMax-M2.5-highspeed",
       "protocol": "anthropic_messages",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
+      "url": "https://platform.minimax.io/docs/api-reference/text-anthropic-api",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "minimax",
       "model_id": "MiniMax-M2.5-highspeed",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
+      "url": "https://platform.minimax.io/docs/api-reference/text-openai-api",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "minimax",
       "model_id": "MiniMax-M2.5",
       "protocol": "anthropic_messages",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
+      "url": "https://platform.minimax.io/docs/api-reference/text-anthropic-api",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "minimax",
       "model_id": "MiniMax-M2.5",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
+      "url": "https://platform.minimax.io/docs/api-reference/text-openai-api",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "minimax",
       "model_id": "MiniMax-M2.7-highspeed",
       "protocol": "anthropic_messages",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
+      "url": "https://platform.minimax.io/docs/api-reference/text-anthropic-api",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "minimax",
       "model_id": "MiniMax-M2.7-highspeed",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
+      "url": "https://platform.minimax.io/docs/api-reference/text-openai-api",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "minimax",
       "model_id": "MiniMax-M2.7",
       "protocol": "anthropic_messages",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
+      "url": "https://platform.minimax.io/docs/api-reference/text-anthropic-api",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "minimax",
       "model_id": "MiniMax-M2.7",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
-      "checked_at": "2026-09-11"
-    },
-    {
-      "provider": "minimax",
-      "model_id": "MiniMax-M3",
-      "protocol": "anthropic_messages",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
+      "url": "https://platform.minimax.io/docs/api-reference/text-openai-api",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "minimax",
       "model_id": "MiniMax-M3",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.minimax.io/docs/guides/models-intro",
+      "url": "https://platform.minimax.io/docs/api-reference/text-openai-api",
       "checked_at": "2026-09-11"
     },
     {

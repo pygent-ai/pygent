@@ -239,7 +239,7 @@ def test_source_index_is_strict_https_and_unique() -> None:
 
 def test_builtin_source_index_is_populated() -> None:
     index = load_sources()
-    assert len(index.sources) == 215
+    assert len(index.sources) == 214
 
 
 def test_builtin_manifest_classifies_the_exact_frozen_inventory() -> None:
@@ -265,7 +265,7 @@ def test_builtin_manifest_preserves_advertised_protocol_counts() -> None:
         for requirements in route.protocols
     ]
     assert protocol_names.count("openai_chat_completions") == 209
-    assert protocol_names.count("anthropic_messages") == 46
+    assert protocol_names.count("anthropic_messages") == 44
     assert protocol_names.count("gemini_generate_content") == 28
     assert protocol_names.count("serpapi_search") == 7
 

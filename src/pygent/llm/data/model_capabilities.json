@@ -3930,7 +3930,7 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
+          "json_object": false,
           "json_schema": false
         },
         "reasoning": {
@@ -4014,7 +4014,7 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
+          "json_object": false,
           "json_schema": false
         },
         "reasoning": {
@@ -4140,7 +4140,7 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
+          "json_object": false,
           "json_schema": false
         },
         "reasoning": {
@@ -4829,18 +4829,18 @@
             "required",
             "named"
           ],
-          "parallel": true
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 204800,
           "max_output_tokens": null
         }
       }
@@ -4865,24 +4865,19 @@
         },
         "tools": {
           "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 204800,
           "max_output_tokens": null
         }
       }
@@ -4913,18 +4908,18 @@
             "required",
             "named"
           ],
-          "parallel": true
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 204800,
           "max_output_tokens": null
         }
       }
@@ -4949,24 +4944,19 @@
         },
         "tools": {
           "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 204800,
           "max_output_tokens": null
         }
       }
@@ -4997,18 +4987,18 @@
             "required",
             "named"
           ],
-          "parallel": true
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 204800,
           "max_output_tokens": null
         }
       }
@@ -5033,24 +5023,19 @@
         },
         "tools": {
           "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 204800,
           "max_output_tokens": null
         }
       }
@@ -5081,18 +5066,18 @@
             "required",
             "named"
           ],
-          "parallel": true
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 204800,
           "max_output_tokens": null
         }
       }
@@ -5117,24 +5102,19 @@
         },
         "tools": {
           "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 204800,
           "max_output_tokens": null
         }
       }
@@ -5165,18 +5145,18 @@
             "required",
             "named"
           ],
-          "parallel": true
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 204800,
           "max_output_tokens": null
         }
       }
@@ -5201,66 +5181,19 @@
         },
         "tools": {
           "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "minimax",
-      "model_id": "MiniMax-M3",
-      "protocol": "anthropic_messages",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
+          "context_tokens": 204800,
           "max_output_tokens": null
         }
       }
@@ -5272,7 +5205,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -5285,24 +5220,19 @@
         },
         "tools": {
           "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
           "controllable": true
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 1000000,
           "max_output_tokens": null
         }
       }
