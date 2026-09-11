@@ -518,7 +518,10 @@ class _AnthropicStreamDecoder:
                 not signature and self._request.model.provider == "anthropic"
             ):
                 raise TypeError
-            thinking_block = {"type": "thinking", "thinking": state["thinking"]}
+            thinking_block: dict[str, object] = {
+                "type": "thinking",
+                "thinking": state["thinking"],
+            }
             if signature:
                 thinking_block["signature"] = signature
             self._layout.append(thinking_block)
@@ -869,7 +872,10 @@ def _decode_blocks(
                 signature is not None and not isinstance(signature, str)
             ) or (not signature and not allow_unsigned_thinking):
                 raise TypeError
-            thinking_block = {"type": "thinking", "thinking": thinking}
+            thinking_block: dict[str, object] = {
+                "type": "thinking",
+                "thinking": thinking,
+            }
             if signature:
                 thinking_block["signature"] = signature
             layout.append(thinking_block)
