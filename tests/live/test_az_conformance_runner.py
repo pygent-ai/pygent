@@ -149,6 +149,25 @@ async def test_runner_reuses_only_exact_passed_checkpoint(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_runner_injects_the_client_for_the_exact_protocol(tmp_path: Path) -> None:
+    manifest = _manifest([("a", ["p1"], ["text"])])
+    client = object()
+
+    async def probe(context, route):
+        assert context.client is client
+        return _result(context, route.route_id, Scenario.TEXT)
+
+    runner = ConformanceRunner(
+        manifest,
+        ProbeRegistry({("p1", Scenario.TEXT): probe}),
+        ResultLedger(tmp_path / "results.jsonl"),
+        _REVISION,
+        clients={"p1": client},
+    )
+    assert (await runner.run(_matching(manifest))).complete
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_kind",
     [

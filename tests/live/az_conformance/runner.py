@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TypeAlias
 
@@ -25,6 +25,7 @@ class ProbeContext:
     protocol: str
     scenario: Scenario
     attempt: int
+    client: object | None = field(default=None, repr=False, compare=False)
 
 
 Probe: TypeAlias = Callable[[ProbeContext, AzRoute], Awaitable[ProbeResult]]
@@ -166,6 +167,7 @@ class ConformanceRunner:
         *,
         text_concurrency: int = 4,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clients: Mapping[str, object] | None = None,
     ) -> None:
         if text_concurrency < 1:
             raise ValueError("text_concurrency must be at least 1")
@@ -178,6 +180,7 @@ class ConformanceRunner:
         self._text_semaphore = asyncio.Semaphore(text_concurrency)
         self._media_semaphore = asyncio.Semaphore(1)
         self._sleep = sleep
+        self._clients = MappingProxyType(dict(clients or {}))
 
     async def run(
         self,
@@ -234,6 +237,7 @@ class ConformanceRunner:
                 protocol=case.protocol,
                 scenario=case.scenario,
                 attempt=attempt,
+                client=self._clients.get(case.protocol),
             )
             async with semaphore:
                 result = await probe(context, case.route)
