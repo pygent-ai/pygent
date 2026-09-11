@@ -4,12 +4,14 @@ import json
 from dataclasses import FrozenInstanceError
 from hashlib import sha256
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
 from tests.live.az_conformance.schemas import (
     RouteKind,
     Scenario,
+    load_manifest,
     load_sources,
     manifest_from_mapping,
     route_from_mapping,
@@ -197,6 +199,64 @@ def test_source_index_is_strict_https_and_unique() -> None:
         source_index_from_mapping(insecure)
 
 
-def test_builtin_source_index_starts_empty() -> None:
+def test_builtin_source_index_is_populated() -> None:
     index = load_sources()
-    assert dict(index.sources) == {}
+    assert len(index.sources) == 215
+
+
+def test_builtin_manifest_classifies_the_exact_frozen_inventory() -> None:
+    manifest = load_manifest()
+    frozen_ids = tuple(_ROUTE_IDS.read_text(encoding="utf-8").splitlines())
+
+    assert tuple(route.route_id for route in manifest.routes) == frozen_ids
+    assert len(manifest.routes) == 211
+    assert all(route.protocols for route in manifest.routes)
+    assert all(route.required_scenarios for route in manifest.routes)
+
+
+def test_builtin_manifest_preserves_advertised_protocol_counts() -> None:
+    manifest = load_manifest()
+
+    assert sum("openai_chat_completions" in route.protocols for route in manifest.routes) == 211
+    assert sum("anthropic_messages" in route.protocols for route in manifest.routes) == 46
+    assert sum("gemini_generate_content" in route.protocols for route in manifest.routes) == 28
+    assert sum("serpapi_search" in route.protocols for route in manifest.routes) == 7
+
+
+def test_every_official_catalog_triple_and_alias_target_has_a_source() -> None:
+    manifest = load_manifest()
+    source_keys = set(load_sources().sources)
+    sourced_identities = {(provider, model_id) for provider, model_id, _ in source_keys}
+
+    for route in manifest.routes:
+        if route.catalog_eligible:
+            assert route.canonical_provider is not None
+            assert route.canonical_model_id is not None
+            for protocol in route.protocols:
+                assert (
+                    route.canonical_provider,
+                    route.canonical_model_id,
+                    protocol,
+                ) in source_keys
+        elif route.kind is RouteKind.GATEWAY_ALIAS:
+            assert (route.canonical_provider, route.canonical_model_id) in sourced_identities
+
+
+def test_builtin_sources_only_use_reviewed_primary_domains() -> None:
+    allowed_hosts = {
+        "api-docs.deepseek.com",
+        "ai.google.dev",
+        "developers.openai.com",
+        "docs.anthropic.com",
+        "docs.bigmodel.cn",
+        "docs.x.ai",
+        "help.aliyun.com",
+        "ir.kuaishou.com",
+        "platform.minimax.io",
+        "platform.moonshot.cn",
+        "www.volcengine.com",
+    }
+
+    assert {
+        urlsplit(source.url).hostname for source in load_sources().sources.values()
+    } <= allowed_hosts
