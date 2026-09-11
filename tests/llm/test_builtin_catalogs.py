@@ -7,6 +7,7 @@ from pygent.llm import (
     ModelCapabilityCatalog,
     ProviderCatalog,
 )
+from tests.live.az_conformance.schemas import RouteKind, load_manifest
 
 ALIYUN_TEXT_MODELS = {
     "qwen3.8-max",
@@ -30,6 +31,19 @@ ALIYUN_SPECIALIZED_MODELS = {
     "qwen-audio-3.0-tts-plus",
     "qwen-audio-3.0-realtime-plus",
     "qwen-audio-3.0-asr-flash",
+}
+
+OFFICIAL_ROUTE_PROTOCOLS = {
+    "openai": {"openai_chat_completions"},
+    "anthropic": {"anthropic_messages"},
+    "google": {"gemini_generate_content"},
+    "alibaba_cloud": {"openai_chat_completions"},
+    "deepseek": {"openai_chat_completions", "anthropic_messages"},
+    "zhipu": {"openai_chat_completions"},
+    "moonshot": {"openai_chat_completions", "anthropic_messages"},
+    "minimax": {"openai_chat_completions", "anthropic_messages"},
+    "volcengine": {"openai_chat_completions"},
+    "xai": {"openai_chat_completions"},
 }
 
 
@@ -71,7 +85,19 @@ def _complete_capability_mapping(
 def test_builtin_provider_catalog_projects_protocol_specific_connections() -> None:
     catalog = ProviderCatalog.builtin()
 
-    assert tuple(catalog.providers) == ("deepseek", "anthropic", "aliyun_token_plan")
+    assert tuple(catalog.providers) == (
+        "deepseek",
+        "anthropic",
+        "openai",
+        "google",
+        "alibaba_cloud",
+        "zhipu",
+        "moonshot",
+        "minimax",
+        "volcengine",
+        "xai",
+        "aliyun_token_plan",
+    )
     deepseek = catalog.providers["deepseek"]
     assert deepseek.display_name == "DeepSeek"
     assert deepseek.default_protocol == "openai_chat_completions"
@@ -100,6 +126,78 @@ def test_builtin_provider_catalog_projects_protocol_specific_connections() -> No
     assert (
         anthropic.protocols["anthropic_messages"].provider_options_schema
         == anthropic_wire.provider_options_schema
+    )
+
+
+def test_builtin_provider_catalog_has_official_multi_provider_connections() -> None:
+    catalog = ProviderCatalog.builtin()
+
+    expected = {
+        "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY"),
+        "google": (
+            "https://generativelanguage.googleapis.com/v1beta",
+            "GEMINI_API_KEY",
+        ),
+        "alibaba_cloud": (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "DASHSCOPE_API_KEY",
+        ),
+        "zhipu": ("https://open.bigmodel.cn/api/paas/v4", "ZHIPU_API_KEY"),
+        "moonshot": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
+        "minimax": ("https://api.minimax.io/v1", "MINIMAX_API_KEY"),
+        "volcengine": (
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "ARK_API_KEY",
+        ),
+        "xai": ("https://api.x.ai/v1", "XAI_API_KEY"),
+    }
+    for provider, (base_url, api_key_env) in expected.items():
+        preset = catalog.providers[provider]
+        protocol = preset.protocols[preset.default_protocol]
+        assert protocol.base_url == base_url
+        assert protocol.api_key_env == api_key_env
+
+    assert catalog.providers["openai"].protocols["openai_responses"].base_url == (
+        "https://api.openai.com/v1"
+    )
+    assert catalog.providers["moonshot"].protocols["anthropic_messages"].base_url == (
+        "https://api.moonshot.cn/anthropic"
+    )
+    assert catalog.providers["minimax"].protocols["anthropic_messages"].base_url == (
+        "https://api.minimax.io/anthropic"
+    )
+
+
+def test_builtin_catalog_projects_every_official_manifest_model() -> None:
+    manifest = load_manifest()
+    expected = {
+        (route.canonical_provider, route.canonical_model_id, protocol)
+        for route in manifest.routes
+        if route.catalog_eligible
+        and route.canonical_provider in OFFICIAL_ROUTE_PROTOCOLS
+        for protocol in route.protocols
+        if protocol in OFFICIAL_ROUTE_PROTOCOLS[route.canonical_provider]
+    }
+    actual = {
+        key
+        for key in ModelCapabilityCatalog.builtin().models
+        if key[0] in OFFICIAL_ROUTE_PROTOCOLS
+        and key[2] in OFFICIAL_ROUTE_PROTOCOLS[key[0]]
+    }
+
+    assert actual == expected
+
+
+def test_az_gateway_aliases_never_enter_builtin_catalog() -> None:
+    manifest = load_manifest()
+    forbidden = {
+        route.route_id
+        for route in manifest.routes
+        if route.kind is not RouteKind.OFFICIAL_MODEL
+    }
+
+    assert forbidden.isdisjoint(
+        model_id for _, model_id, _ in ModelCapabilityCatalog.builtin().models
     )
 
 
@@ -345,7 +443,7 @@ def test_builtin_model_capabilities_use_provider_model_protocol_key() -> None:
         ("deepseek", "deepseek-v4-pro", "openai_chat_completions"),
         ("deepseek", "deepseek-v4-flash", "anthropic_messages"),
         ("deepseek", "deepseek-v4-pro", "anthropic_messages"),
-        ("anthropic", "claude-fable-5-1", "anthropic_messages"),
+        ("anthropic", "claude-fable-5", "anthropic_messages"),
         ("anthropic", "claude-opus-5", "anthropic_messages"),
         ("anthropic", "claude-sonnet-5", "anthropic_messages"),
         ("anthropic", "claude-haiku-4-5-20251001", "anthropic_messages"),
@@ -370,7 +468,7 @@ def test_builtin_model_capabilities_use_provider_model_protocol_key() -> None:
         ("aliyun_token_plan", model_id, protocol)
         for model_id, protocol in specialized_protocols.items()
     )
-    assert set(catalog.models) == expected
+    assert expected <= set(catalog.models)
     capabilities = catalog.models[
         ("deepseek", "deepseek-v4-flash", "openai_chat_completions")
     ]
@@ -387,7 +485,7 @@ def test_builtin_model_capabilities_use_provider_model_protocol_key() -> None:
 @pytest.mark.parametrize(
     "model_id, context_tokens, max_output_tokens",
     [
-        ("claude-fable-5-1", 1_000_000, 128_000),
+        ("claude-fable-5", 1_000_000, 128_000),
         ("claude-opus-5", 1_000_000, 128_000),
         ("claude-sonnet-5", 1_000_000, 128_000),
         ("claude-haiku-4-5-20251001", 200_000, 64_000),

@@ -147,6 +147,482 @@
         }
       }
     },
+    "openai": {
+      "display_name": "OpenAI",
+      "default_protocol": "openai_responses",
+      "protocols": {
+        "openai_chat_completions": {
+          "protocol": "openai_chat_completions",
+          "base_url": "https://api.openai.com/v1",
+          "authentication": "bearer",
+          "api_key_env": "OPENAI_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_completion_tokens": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "openai_responses": {
+          "protocol": "openai_responses",
+          "base_url": "https://api.openai.com/v1",
+          "authentication": "bearer",
+          "api_key_env": "OPENAI_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "reasoning": {
+                "type": "object",
+                "properties": {
+                  "effort": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "minimal",
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh"
+                    ]
+                  },
+                  "summary": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "concise",
+                      "detailed"
+                    ]
+                  }
+                },
+                "required": [
+                  "effort"
+                ],
+                "additionalProperties": false
+              },
+              "store": {
+                "type": "boolean"
+              },
+              "include": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "parallel_tool_calls": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "google": {
+      "display_name": "Google Gemini",
+      "default_protocol": "gemini_generate_content",
+      "protocols": {
+        "gemini_generate_content": {
+          "protocol": "gemini_generate_content",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta",
+          "authentication": "bearer",
+          "api_key_env": "GEMINI_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "thinking_config": {
+                "type": "object",
+                "properties": {
+                  "include_thoughts": {
+                    "type": "boolean"
+                  },
+                  "thinking_budget": {
+                    "type": "integer",
+                    "minimum": -1
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "alibaba_cloud": {
+      "display_name": "Alibaba Cloud Model Studio",
+      "default_protocol": "openai_chat_completions",
+      "protocols": {
+        "openai_chat_completions": {
+          "protocol": "openai_chat_completions",
+          "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "authentication": "bearer",
+          "api_key_env": "DASHSCOPE_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_completion_tokens": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "zhipu": {
+      "display_name": "Zhipu AI",
+      "default_protocol": "openai_chat_completions",
+      "protocols": {
+        "openai_chat_completions": {
+          "protocol": "openai_chat_completions",
+          "base_url": "https://open.bigmodel.cn/api/paas/v4",
+          "authentication": "bearer",
+          "api_key_env": "ZHIPU_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_completion_tokens": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "moonshot": {
+      "display_name": "Moonshot AI",
+      "default_protocol": "openai_chat_completions",
+      "protocols": {
+        "openai_chat_completions": {
+          "protocol": "openai_chat_completions",
+          "base_url": "https://api.moonshot.cn/v1",
+          "authentication": "bearer",
+          "api_key_env": "MOONSHOT_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_completion_tokens": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "anthropic_messages": {
+          "protocol": "anthropic_messages",
+          "base_url": "https://api.moonshot.cn/anthropic",
+          "authentication": "bearer",
+          "api_key_env": "MOONSHOT_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "thinking": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "const": "disabled"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "const": "enabled"
+                      },
+                      "budget_tokens": {
+                        "type": "integer",
+                        "minimum": 1024
+                      },
+                      "display": {
+                        "type": "string",
+                        "enum": [
+                          "summarized",
+                          "omitted"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "budget_tokens"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "const": "adaptive"
+                      },
+                      "display": {
+                        "type": "string",
+                        "enum": [
+                          "summarized",
+                          "omitted"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "output_config": {
+                "type": "object",
+                "properties": {
+                  "effort": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max"
+                    ]
+                  }
+                },
+                "required": [
+                  "effort"
+                ],
+                "additionalProperties": false
+              },
+              "service_tier": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "standard_only"
+                ]
+              },
+              "stop_sequences": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "minimax": {
+      "display_name": "MiniMax",
+      "default_protocol": "openai_chat_completions",
+      "protocols": {
+        "openai_chat_completions": {
+          "protocol": "openai_chat_completions",
+          "base_url": "https://api.minimax.io/v1",
+          "authentication": "bearer",
+          "api_key_env": "MINIMAX_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_completion_tokens": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "anthropic_messages": {
+          "protocol": "anthropic_messages",
+          "base_url": "https://api.minimax.io/anthropic",
+          "authentication": "bearer",
+          "api_key_env": "MINIMAX_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "thinking": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "const": "disabled"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "const": "enabled"
+                      },
+                      "budget_tokens": {
+                        "type": "integer",
+                        "minimum": 1024
+                      },
+                      "display": {
+                        "type": "string",
+                        "enum": [
+                          "summarized",
+                          "omitted"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "budget_tokens"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "const": "adaptive"
+                      },
+                      "display": {
+                        "type": "string",
+                        "enum": [
+                          "summarized",
+                          "omitted"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "output_config": {
+                "type": "object",
+                "properties": {
+                  "effort": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max"
+                    ]
+                  }
+                },
+                "required": [
+                  "effort"
+                ],
+                "additionalProperties": false
+              },
+              "service_tier": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "standard_only"
+                ]
+              },
+              "stop_sequences": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "volcengine": {
+      "display_name": "Volcengine Ark",
+      "default_protocol": "openai_chat_completions",
+      "protocols": {
+        "openai_chat_completions": {
+          "protocol": "openai_chat_completions",
+          "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+          "authentication": "bearer",
+          "api_key_env": "ARK_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_completion_tokens": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "xai": {
+      "display_name": "xAI",
+      "default_protocol": "openai_chat_completions",
+      "protocols": {
+        "openai_chat_completions": {
+          "protocol": "openai_chat_completions",
+          "base_url": "https://api.x.ai/v1",
+          "authentication": "bearer",
+          "api_key_env": "XAI_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_completion_tokens": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
     "aliyun_token_plan": {
       "display_name": "Alibaba Cloud Token Plan",
       "default_protocol": "openai_chat_completions",

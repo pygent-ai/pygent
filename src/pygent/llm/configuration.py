@@ -31,7 +31,8 @@ _MODEL_FIELDS = frozenset(
 _CONNECTION_FIELDS = frozenset({"base_url", "credential", "verify_ssl", "proxy"})
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TOOL_CHOICES = frozenset({"none", "auto", "required", "named"})
-_MODEL_MODALITIES = frozenset({"text", "image", "audio", "video"})
+_MODEL_INPUT_MODALITIES = frozenset({"text", "image", "audio", "video"})
+_MODEL_OUTPUT_MODALITIES = _MODEL_INPUT_MODALITIES | {"embedding"}
 
 
 def _object(value: object, label: str) -> Mapping[str, object]:
@@ -84,9 +85,11 @@ def _optional_positive_int(value: object, label: str) -> int | None:
     return _positive_int(value, label)
 
 
-def _modalities(value: object, label: str) -> tuple[str, ...]:
+def _modalities(
+    value: object, label: str, allowed: frozenset[str] | set[str]
+) -> tuple[str, ...]:
     items = _string_tuple(value, label)
-    unknown = set(items) - _MODEL_MODALITIES
+    unknown = set(items) - allowed
     if unknown:
         raise ValueError(
             f"unsupported {label} values: " + ", ".join(sorted(unknown))
@@ -100,15 +103,27 @@ class ModelModalities:
     output: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "input", _modalities(self.input, "modalities.input"))
-        object.__setattr__(self, "output", _modalities(self.output, "modalities.output"))
+        object.__setattr__(
+            self,
+            "input",
+            _modalities(self.input, "modalities.input", _MODEL_INPUT_MODALITIES),
+        )
+        object.__setattr__(
+            self,
+            "output",
+            _modalities(self.output, "modalities.output", _MODEL_OUTPUT_MODALITIES),
+        )
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelModalities:
         _exact_fields(value, frozenset({"input", "output"}), "modalities")
         return cls(
-            input=_modalities(value["input"], "modalities.input"),
-            output=_modalities(value["output"], "modalities.output"),
+            input=_modalities(
+                value["input"], "modalities.input", _MODEL_INPUT_MODALITIES
+            ),
+            output=_modalities(
+                value["output"], "modalities.output", _MODEL_OUTPUT_MODALITIES
+            ),
         )
 
 
@@ -117,14 +132,22 @@ class ModelStreamingCapabilities:
     output: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "output", _modalities(self.output, "streaming.output"))
+        object.__setattr__(
+            self,
+            "output",
+            _modalities(self.output, "streaming.output", _MODEL_OUTPUT_MODALITIES),
+        )
 
     @classmethod
     def from_mapping(
         cls, value: Mapping[str, object]
     ) -> ModelStreamingCapabilities:
         _exact_fields(value, frozenset({"output"}), "streaming")
-        return cls(output=_modalities(value["output"], "streaming.output"))
+        return cls(
+            output=_modalities(
+                value["output"], "streaming.output", _MODEL_OUTPUT_MODALITIES
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)

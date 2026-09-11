@@ -246,7 +246,7 @@ def test_streaming_output_and_nullable_limits_round_trip() -> None:
 @pytest.mark.parametrize("field", ["input", "output"])
 def test_modalities_reject_unknown_values(field: str) -> None:
     modalities = {"input": ["text"], "output": ["text"]}
-    modalities[field] = ["text", "embedding"]
+    modalities[field] = ["text", "files"]
 
     with pytest.raises(ValueError, match="unsupported modalities"):
         ModelCapabilities.from_mapping(
@@ -254,6 +254,21 @@ def test_modalities_reject_unknown_values(field: str) -> None:
                 modalities=modalities,
                 streaming={"output": ["text"]},
             )
+        )
+
+
+def test_embedding_is_an_output_modality_only() -> None:
+    capabilities = ModelCapabilities.from_mapping(
+        _capabilities(
+            modalities={"input": ["text"], "output": ["embedding"]},
+            streaming={"output": []},
+        )
+    )
+
+    assert capabilities.modalities.output == ("embedding",)
+    with pytest.raises(ValueError, match="unsupported modalities.input"):
+        ModelCapabilities.from_mapping(
+            _capabilities(modalities={"input": ["embedding"], "output": ["text"]})
         )
 
 
