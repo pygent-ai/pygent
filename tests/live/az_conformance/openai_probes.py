@@ -85,6 +85,8 @@ def _request(
     tools: tuple[ToolDefinition, ...] = (),
     provider_options: dict[str, object] | None = None,
 ) -> ModelProviderRequest:
+    if provider_options is None and route.canonical_provider == "deepseek":
+        provider_options = {"thinking": {"type": "disabled"}}
     return ModelProviderRequest(
         model_key=route.route_id,
         model=_spec(route, provider_options=provider_options),
@@ -442,7 +444,12 @@ async def openai_reasoning_probe(
     provider_options: dict[str, object] = (
         {} if fixed_alibaba_reasoning else {"reasoning_effort": "low"}
     )
-    if route.canonical_provider == "moonshot":
+    if route.canonical_provider == "deepseek":
+        provider_options = {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "low",
+        }
+    elif route.canonical_provider == "moonshot":
         if route.canonical_model_id in {"kimi-k2.7-code", "kimi-k2-thinking"}:
             provider_options = {}
         elif route.canonical_model_id in {"kimi-k2.5", "kimi-k2.6"}:

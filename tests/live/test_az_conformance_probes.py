@@ -176,6 +176,32 @@ async def test_openai_text_probe_uses_route_only_on_wire() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deepseek_probes_isolate_thinking_from_other_capabilities() -> None:
+    route = _route(
+        provider="deepseek",
+        model_id="deepseek-v4-flash",
+        route_id="deepseek-v4-flash",
+    )
+    text_client = ScriptedClient(responses=[_openai_response("answer")])
+    reasoning_client = ScriptedClient(
+        responses=[_openai_response("answer", reasoning_content="reasoning")]
+    )
+
+    assert (
+        await openai_text_probe(_context(text_client, Scenario.TEXT), route)
+    ).status == "passed"
+    assert (
+        await openai_reasoning_probe(
+            _context(reasoning_client, Scenario.REASONING), route
+        )
+    ).status == "passed"
+
+    assert text_client.requests[0]["thinking"] == {"type": "disabled"}
+    assert reasoning_client.requests[0]["thinking"] == {"type": "enabled"}
+    assert reasoning_client.requests[0]["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
 async def test_openai_stream_probe_requires_content_and_termination() -> None:
     client = ScriptedClient(
         stream=[
