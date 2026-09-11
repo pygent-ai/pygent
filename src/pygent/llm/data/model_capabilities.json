@@ -3317,7 +3317,8 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "output": [
             "text"
@@ -3359,7 +3360,8 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "output": [
             "text"
@@ -3401,7 +3403,8 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "output": [
             "text"
@@ -3486,7 +3489,8 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "output": [
             "text"

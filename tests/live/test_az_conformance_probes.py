@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from collections.abc import AsyncIterator
 
+import httpx
 import pytest
 
 from pygent.core import FrozenJsonObject, freeze_json_object
@@ -25,6 +26,15 @@ from tests.live.az_conformance.gemini_probes import (
     gemini_text_probe,
     gemini_tool_probe,
 )
+from tests.live.az_conformance.media_probes import (
+    audio_input_probe,
+    audio_output_probe,
+    embedding_probe,
+    image_edit_probe,
+    image_output_probe,
+    realtime_probe,
+    video_output_probe,
+)
 from tests.live.az_conformance.openai_probes import (
     openai_image_input_probe,
     openai_json_object_probe,
@@ -41,8 +51,19 @@ from tests.live.az_conformance.openai_probes import (
     openai_tool_choice_probe,
     openai_tool_probe,
 )
+from tests.live.az_conformance.probe_registry import builtin_probe_registry
 from tests.live.az_conformance.runner import ProbeContext
-from tests.live.az_conformance.schemas import Scenario, route_from_mapping
+from tests.live.az_conformance.schemas import (
+    Scenario,
+    load_manifest,
+    route_from_mapping,
+)
+from tests.live.az_conformance.search_probes import serpapi_search_probe
+
+_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1Pe"
+    "AAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC"
+)
 
 
 class ScriptedClient:
@@ -587,3 +608,264 @@ async def test_responses_schema_reasoning_and_image_probes_use_native_items() ->
     assert base64.b64decode(image["image_url"].partition(",")[2]).endswith(
         b"IEND\xaeB`\x82"
     )
+
+
+class RawScriptedClient:
+    def __init__(self, responses: list[httpx.Response]) -> None:
+        self.responses = list(responses)
+        self.requests: list[tuple[str, str, dict[str, object]]] = []
+        self.audio_fixture: bytes | None = None
+        self.websocket_event: object = {"type": "response.done"}
+
+    async def request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+        self.requests.append((method, path, kwargs))
+        return self.responses.pop(0)
+
+    async def websocket_exchange(
+        self, path: str, event: dict[str, object]
+    ) -> object:
+        self.requests.append(("WS", path, {"event": event}))
+        return self.websocket_event
+
+
+def _raw_context(client: RawScriptedClient, scenario: Scenario) -> ProbeContext:
+    return ProbeContext(
+        snapshot_sha256="7" * 64,
+        source_revision="abc1234",
+        protocol="openai_chat_completions",
+        scenario=scenario,
+        attempt=1,
+        client=client,
+    )
+
+
+@pytest.mark.asyncio
+async def test_embedding_probe_validates_finite_stable_vectors() -> None:
+    client = RawScriptedClient(
+        [
+            httpx.Response(200, json={"data": [{"embedding": [0.1, 0.2]}]}),
+            httpx.Response(200, json={"data": [{"embedding": [0.3, 0.4]}]}),
+        ]
+    )
+
+    result = await embedding_probe(
+        _raw_context(client, Scenario.EMBEDDING), _route()
+    )
+
+    assert result.status == "passed"
+    assert [request[1] for request in client.requests] == ["/embeddings"] * 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "responses",
+    [
+        [
+            httpx.Response(200, json={"data": [{"embedding": [0.1]}]}),
+            httpx.Response(200, json={"data": [{"embedding": [0.1, 0.2]}]}),
+        ],
+        [
+            httpx.Response(200, content=b'{"data":[{"embedding":[NaN]}]}'),
+        ],
+    ],
+)
+async def test_embedding_probe_rejects_invalid_or_unstable_vectors(
+    responses: list[httpx.Response],
+) -> None:
+    result = await embedding_probe(
+        _raw_context(RawScriptedClient(responses), Scenario.EMBEDDING), _route()
+    )
+
+    assert result.status == "failed"
+    assert result.error_kind.value == "invalid_response"
+
+
+@pytest.mark.asyncio
+async def test_image_generation_and_edit_validate_png_and_multipart() -> None:
+    png = base64.b64decode(_PNG)
+    output_client = RawScriptedClient(
+        [httpx.Response(200, json={"data": [{"b64_json": _PNG}]})]
+    )
+    assert (
+        await image_output_probe(
+            _raw_context(output_client, Scenario.IMAGE_OUTPUT), _route()
+        )
+    ).status == "passed"
+
+    edit_client = RawScriptedClient(
+        [httpx.Response(200, json={"data": [{"b64_json": _PNG}]})]
+    )
+    assert (
+        await image_edit_probe(
+            _raw_context(edit_client, Scenario.IMAGE_EDIT), _route()
+        )
+    ).status == "passed"
+    assert edit_client.requests[0][1] == "/images/edits"
+    assert edit_client.requests[0][2]["files"]["image"][1] == png
+
+
+@pytest.mark.asyncio
+async def test_image_generation_downloads_and_validates_url_result() -> None:
+    client = RawScriptedClient(
+        [
+            httpx.Response(200, json={"data": [{"url": "https://media.test/a.png"}]}),
+            httpx.Response(200, content=base64.b64decode(_PNG)),
+        ]
+    )
+
+    result = await image_output_probe(
+        _raw_context(client, Scenario.IMAGE_OUTPUT), _route()
+    )
+
+    assert result.status == "passed"
+    assert client.requests[1][:2] == ("GET", "https://media.test/a.png")
+
+
+@pytest.mark.asyncio
+async def test_audio_output_feeds_transcription_dependency() -> None:
+    wave = b"RIFF" + b"\x00" * 40 + b"WAVE"
+    client = RawScriptedClient(
+        [
+            httpx.Response(200, content=wave),
+            httpx.Response(200, json={"text": "probe audio"}),
+        ]
+    )
+    assert (
+        await audio_output_probe(
+            _raw_context(client, Scenario.AUDIO_OUTPUT), _route()
+        )
+    ).status == "passed"
+    assert client.audio_fixture == wave
+    assert (
+        await audio_input_probe(
+            _raw_context(client, Scenario.AUDIO_INPUT), _route()
+        )
+    ).status == "passed"
+    assert client.requests[1][1] == "/audio/transcriptions"
+
+
+@pytest.mark.asyncio
+async def test_audio_input_reports_missing_generated_dependency() -> None:
+    client = RawScriptedClient([])
+    result = await audio_input_probe(
+        _raw_context(client, Scenario.AUDIO_INPUT), _route()
+    )
+
+    assert result.status == "failed"
+    assert result.error_kind.value == "dependency_failed"
+
+
+@pytest.mark.asyncio
+async def test_realtime_probe_exchanges_one_legal_event() -> None:
+    client = RawScriptedClient([])
+    result = await realtime_probe(
+        _raw_context(client, Scenario.REALTIME), _route()
+    )
+
+    assert result.status == "passed"
+    assert client.requests[0][0] == "WS"
+
+
+@pytest.mark.asyncio
+async def test_video_probe_polls_until_success_and_validates_media() -> None:
+    video = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 16
+    client = RawScriptedClient(
+        [
+            httpx.Response(200, json={"id": "video-1", "status": "queued"}),
+            httpx.Response(200, json={"id": "video-1", "status": "processing"}),
+            httpx.Response(
+                200,
+                json={
+                    "id": "video-1",
+                    "status": "completed",
+                    "b64_json": base64.b64encode(video).decode(),
+                },
+            ),
+        ]
+    )
+
+    result = await video_output_probe(
+        _raw_context(client, Scenario.VIDEO_OUTPUT), _route()
+    )
+
+    assert result.status == "passed"
+    assert [item[1] for item in client.requests] == [
+        "/videos",
+        "/videos/video-1",
+        "/videos/video-1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_video_probe_reports_failed_task_and_bounded_timeout() -> None:
+    failed = RawScriptedClient(
+        [httpx.Response(200, json={"id": "video-1", "status": "failed"})]
+    )
+    failed_result = await video_output_probe(
+        _raw_context(failed, Scenario.VIDEO_OUTPUT), _route()
+    )
+    assert failed_result.error_kind.value == "capability_mismatch"
+
+    processing = {"id": "video-1", "status": "processing"}
+    timed_out = RawScriptedClient(
+        [httpx.Response(200, json=processing) for _ in range(21)]
+    )
+    timeout_result = await video_output_probe(
+        _raw_context(timed_out, Scenario.VIDEO_OUTPUT), _route()
+    )
+    assert timeout_result.error_kind.value == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_serpapi_probe_requires_at_least_one_result() -> None:
+    client = RawScriptedClient(
+        [httpx.Response(200, json={"organic_results": [{"title": "result"}]})]
+    )
+    route = route_from_mapping(
+        {
+            "route_id": "serpapi-google",
+            "kind": "external_service",
+            "canonical_provider": None,
+            "canonical_model_id": None,
+            "protocols": ["serpapi_search"],
+            "required_scenarios": ["search"],
+            "catalog_eligible": False,
+        }
+    )
+    context = ProbeContext(
+        snapshot_sha256="7" * 64,
+        source_revision="abc1234",
+        protocol="serpapi_search",
+        scenario=Scenario.SEARCH,
+        attempt=1,
+        client=client,
+    )
+
+    assert (await serpapi_search_probe(context, route)).status == "passed"
+
+    empty_client = RawScriptedClient(
+        [httpx.Response(200, json={"organic_results": []})]
+    )
+    empty_context = ProbeContext(
+        snapshot_sha256="7" * 64,
+        source_revision="abc1234",
+        protocol="serpapi_search",
+        scenario=Scenario.SEARCH,
+        attempt=1,
+        client=empty_client,
+    )
+    empty = await serpapi_search_probe(empty_context, route)
+    assert empty.status == "failed"
+    assert empty.error_kind.value == "invalid_response"
+
+
+def test_builtin_probe_registry_covers_every_manifest_protocol_scenario() -> None:
+    manifest = load_manifest()
+    expected = {
+        (protocol, scenario)
+        for route in manifest.routes
+        for protocol in route.protocols
+        for scenario in route.required_scenarios
+    }
+
+    assert set(builtin_probe_registry().probes) == expected
