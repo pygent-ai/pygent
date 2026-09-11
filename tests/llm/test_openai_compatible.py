@@ -138,6 +138,27 @@ def test_openai_response_without_reasoning_content_has_no_continuation() -> None
     assert response.message.continuation is None
 
 
+def test_openai_response_accepts_null_reasoning_content() -> None:
+    response = OpenAICompatibleAdapter().parse_response(
+        _request(),
+        freeze_json_object(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "answer",
+                            "reasoning_content": None,
+                        }
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert response.message.content == "answer"
+    assert response.message.continuation is None
+
+
 def test_openai_reasoning_content_rejects_non_string_when_present() -> None:
     entry = model_entry("main", "custom_gateway", "reasoning-model")
     request = provider_request(

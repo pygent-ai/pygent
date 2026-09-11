@@ -505,9 +505,8 @@ class OpenAICompatibleAdapter:
                 raw_tool_calls: object = []
             elif isinstance(raw_message, dict):
                 reasoning_content = raw_message.get("reasoning_content")
-                if (
-                    "reasoning_content" in raw_message
-                    and not isinstance(reasoning_content, str)
+                if reasoning_content is not None and not isinstance(
+                    reasoning_content, str
                 ):
                     raise TypeError
                 content_value = raw_message.get("content")
