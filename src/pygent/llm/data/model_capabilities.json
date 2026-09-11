@@ -7752,13 +7752,8 @@
         },
         "tools": {
           "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
           "json_object": true,
@@ -7794,13 +7789,8 @@
         },
         "tools": {
           "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
           "json_object": true,

@@ -225,6 +225,8 @@ class ConformanceRunner:
         self, audio_input_cases: list[ProbeCase]
     ) -> None:
         for protocol in sorted({case.protocol for case in audio_input_cases}):
+            if protocol == "openai_realtime":
+                continue
             client = self._clients.get(protocol)
             if client is None or getattr(client, "audio_fixture", None):
                 continue

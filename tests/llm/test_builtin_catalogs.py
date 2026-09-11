@@ -372,6 +372,16 @@ def test_builtin_first_gpt_4o_snapshot_predates_json_schema_output() -> None:
         assert not capabilities.structured_output.json_schema
 
 
+def test_builtin_gpt_oss_does_not_claim_runtime_specific_tool_controls() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+
+    for protocol in ("openai_chat_completions", "openai_responses"):
+        capabilities = catalog.models[("openai", "gpt-oss-120b", protocol)]
+        assert capabilities.tools.call
+        assert capabilities.tools.choice == ()
+        assert not capabilities.tools.parallel
+
+
 def test_builtin_token_plan_provider_has_two_executable_protocol_presets() -> None:
     preset = ProviderCatalog.builtin().providers["aliyun_token_plan"]
 

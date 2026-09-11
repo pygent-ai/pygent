@@ -429,6 +429,40 @@ async def test_selected_audio_input_rebuilds_an_in_memory_fixture(
 
 
 @pytest.mark.asyncio
+async def test_realtime_audio_input_does_not_generate_an_external_fixture(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        [
+            ("listener", ["openai_realtime"], ["audio_input"]),
+            ("speaker", ["openai_realtime"], ["audio_output"]),
+        ]
+    )
+    events: list[str] = []
+
+    async def probe(context, route):
+        events.append(f"{route.route_id}:{context.scenario.value}")
+        return _result(context, route.route_id, context.scenario)
+
+    runner = ConformanceRunner(
+        manifest,
+        ProbeRegistry(
+            {
+                ("openai_realtime", Scenario.AUDIO_OUTPUT): probe,
+                ("openai_realtime", Scenario.AUDIO_INPUT): probe,
+            }
+        ),
+        ResultLedger(tmp_path / "results.jsonl"),
+        _REVISION,
+        clients={"openai_realtime": object()},
+    )
+
+    await runner.run(_matching(manifest), scenario=Scenario.AUDIO_INPUT)
+
+    assert events == ["listener:audio_input"]
+
+
+@pytest.mark.asyncio
 async def test_runner_propagates_cancellation(tmp_path: Path) -> None:
     manifest = _manifest([("a", ["p1"], ["text"])])
 
