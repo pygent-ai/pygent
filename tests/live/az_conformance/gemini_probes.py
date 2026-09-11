@@ -207,11 +207,12 @@ async def gemini_stream_probe(context: ProbeContext, route: AzRoute) -> ProbeRes
 
 async def gemini_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
     adapter = GeminiGenerateContentAdapter()
+    initial_message = UserMessage(
+        content="Use lookup with value probe. After receiving the result, reply with exactly DONE."
+    )
     first_request = _request(
         route,
-        message=UserMessage(
-            content="Use lookup with value probe. After receiving the result, reply with exactly DONE."
-        ),
+        message=initial_message,
         tools=(_TOOL,),
     )
     try:
@@ -236,7 +237,7 @@ async def gemini_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
                     ),
                 )
             ),
-            context=Context(messages=(first.message,)),
+            context=Context(messages=(initial_message, first.message)),
             tools=(_TOOL,),
         )
         second_raw = await _client(context).invoke(
