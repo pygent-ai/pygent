@@ -210,7 +210,11 @@ async def openai_stream_probe(context: ProbeContext, route: AzRoute) -> ProbeRes
 
 async def openai_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
     adapter = OpenAICompatibleAdapter()
-    first_request = _request(route, tools=(_TOOL,))
+    first_request = _request(
+        route,
+        message=UserMessage(content="Use lookup with value probe, then wait."),
+        tools=(_TOOL,),
+    )
     try:
         first_raw = await _client(context).invoke(
             first_request.model, _wire_payload(adapter, first_request, route)
@@ -276,7 +280,15 @@ async def openai_json_object_probe(
 
     try:
         response = await _non_stream(
-            context, route, _request(route), mutate=add_json_object
+            context,
+            route,
+            _request(
+                route,
+                message=UserMessage(
+                    content="Return only a JSON object with string field answer."
+                ),
+            ),
+            mutate=add_json_object,
         )
         value = json.loads(response.message.content)
         if not isinstance(value, dict):
@@ -301,8 +313,9 @@ async def openai_json_schema_probe(
     )
     try:
         response = await _non_stream(context, route, request)
-        if not response.message.content:
-            raise ValueError("JSON schema response is empty")
+        value = json.loads(response.message.content)
+        if not isinstance(value, dict) or not isinstance(value.get("answer"), str):
+            raise TypeError("JSON schema response does not match the probe schema")
         return _passed(context, route)
     except asyncio.CancelledError:
         raise
@@ -456,7 +469,11 @@ async def openai_responses_tool_probe(
     context: ProbeContext, route: AzRoute
 ) -> ProbeResult:
     adapter = OpenAIResponsesAdapter()
-    first_request = _responses_request(route, tools=(_TOOL,))
+    first_request = _responses_request(
+        route,
+        message=UserMessage(content="Use lookup with value probe, then wait."),
+        tools=(_TOOL,),
+    )
     try:
         first_raw = await _client(context).invoke(
             first_request.model,
@@ -522,7 +539,15 @@ async def openai_responses_json_object_probe(
 
     try:
         response = await _responses_non_stream(
-            context, route, _responses_request(route), mutate=json_mode
+            context,
+            route,
+            _responses_request(
+                route,
+                message=UserMessage(
+                    content="Return only a JSON object with string field answer."
+                ),
+            ),
+            mutate=json_mode,
         )
         if not isinstance(json.loads(response.message.content), dict):
             raise TypeError("JSON response is not an object")

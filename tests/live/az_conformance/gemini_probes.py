@@ -207,7 +207,11 @@ async def gemini_stream_probe(context: ProbeContext, route: AzRoute) -> ProbeRes
 
 async def gemini_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
     adapter = GeminiGenerateContentAdapter()
-    first_request = _request(route, tools=(_TOOL,))
+    first_request = _request(
+        route,
+        message=UserMessage(content="Use lookup with value probe, then wait."),
+        tools=(_TOOL,),
+    )
     try:
         first_raw = await _client(context).invoke(
             _wire_model(first_request, route), adapter.build_request(first_request)
@@ -274,7 +278,15 @@ async def gemini_json_object_probe(
 
     try:
         response = await _non_stream(
-            context, route, _request(route), mutate=json_mode
+            context,
+            route,
+            _request(
+                route,
+                message=UserMessage(
+                    content="Return only a JSON object with string field answer."
+                ),
+            ),
+            mutate=json_mode,
         )
         if not isinstance(json.loads(response.message.content), dict):
             raise TypeError("JSON response is not an object")

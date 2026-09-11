@@ -214,7 +214,11 @@ async def anthropic_tool_probe(
     context: ProbeContext, route: AzRoute
 ) -> ProbeResult:
     adapter = AnthropicMessagesAdapter()
-    first_request = _request(route, tools=(_TOOL,))
+    first_request = _request(
+        route,
+        message=UserMessage(content="Use lookup with value probe, then wait."),
+        tools=(_TOOL,),
+    )
     try:
         first_raw = await _client(context).invoke(
             first_request.model, _wire_payload(adapter, first_request, route)
@@ -304,8 +308,9 @@ async def anthropic_json_schema_probe(
     )
     try:
         response = await _non_stream(context, route, request)
-        if not response.message.content:
-            raise ValueError("JSON schema response is empty")
+        value = json.loads(response.message.content)
+        if not isinstance(value, dict) or not isinstance(value.get("answer"), str):
+            raise TypeError("JSON schema response does not match the probe schema")
         return _passed(context, route)
     except asyncio.CancelledError:
         raise
