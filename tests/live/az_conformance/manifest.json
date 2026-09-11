@@ -3539,28 +3539,22 @@
     },
     {
       "route_id": "kimi-k2-250711",
-      "kind": "official_model",
+      "kind": "gateway_alias",
       "canonical_provider": "moonshot",
       "canonical_model_id": "kimi-k2-250711",
       "protocols": [
         {
           "protocol": "openai_chat_completions",
           "required_scenarios": [
-            "text",
-            "text_stream",
-            "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
-            "reasoning"
+            "text"
           ]
         }
       ],
-      "catalog_eligible": true
+      "catalog_eligible": false
     },
     {
       "route_id": "kimi-k2-thinking",
-      "kind": "official_model",
+      "kind": "gateway_alias",
       "canonical_provider": "moonshot",
       "canonical_model_id": "kimi-k2-thinking",
       "protocols": [
@@ -3570,7 +3564,6 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_schema",
             "reasoning"
           ]
@@ -3581,18 +3574,16 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
       ],
-      "catalog_eligible": true
+      "catalog_eligible": false
     },
     {
       "route_id": "kimi-k2.5",
-      "kind": "official_model",
+      "kind": "gateway_alias",
       "canonical_provider": "moonshot",
       "canonical_model_id": "kimi-k2.5",
       "protocols": [
@@ -3602,7 +3593,6 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_schema",
             "reasoning"
           ]
@@ -3613,14 +3603,12 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
       ],
-      "catalog_eligible": true
+      "catalog_eligible": false
     },
     {
       "route_id": "kimi-k2.6",
@@ -3636,7 +3624,8 @@
             "tools",
             "tool_choice",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         },
         {
@@ -3648,7 +3637,9 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -3666,9 +3657,9 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         },
         {
@@ -3677,10 +3668,11 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -3693,6 +3685,18 @@
       "canonical_model_id": "kimi-k3",
       "protocols": [
         {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
           "protocol": "openai_chat_completions",
           "required_scenarios": [
             "text",
@@ -3701,7 +3705,9 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],

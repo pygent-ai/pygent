@@ -578,6 +578,47 @@ def test_builtin_zhipu_capabilities_follow_official_protocol_boundaries() -> Non
     assert not vision.structured_output.json_object
 
 
+def test_builtin_moonshot_capabilities_follow_current_official_boundaries() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    k3_openai = catalog.models[
+        ("moonshot", "kimi-k3", "openai_chat_completions")
+    ]
+    k3_anthropic = catalog.models[("moonshot", "kimi-k3", "anthropic_messages")]
+    k27_openai = catalog.models[
+        ("moonshot", "kimi-k2.7-code", "openai_chat_completions")
+    ]
+    k26_openai = catalog.models[
+        ("moonshot", "kimi-k2.6", "openai_chat_completions")
+    ]
+
+    assert k3_openai.modalities.input == ("text", "image", "video")
+    assert k3_anthropic.modalities.input == ("text", "image")
+    assert k3_openai.tools.choice == ("none", "auto", "required")
+    assert k3_anthropic.tools.choice == ("none", "auto", "required")
+    assert k3_openai.structured_output.json_schema
+    assert k3_anthropic.structured_output.json_schema
+    assert k3_openai.reasoning.supported and k3_openai.reasoning.controllable
+    assert k3_anthropic.reasoning.supported and k3_anthropic.reasoning.controllable
+    assert k3_openai.limits.context_tokens == 1_000_000
+
+    assert k27_openai.modalities.input == ("text", "image", "video")
+    assert k27_openai.tools.choice == ("none", "auto")
+    assert k27_openai.reasoning.supported
+    assert not k27_openai.reasoning.controllable
+    assert k27_openai.limits.context_tokens == 262_144
+
+    assert k26_openai.modalities.input == ("text", "image", "video")
+    assert k26_openai.tools.choice == ("none", "auto", "named")
+    assert k26_openai.reasoning.supported and k26_openai.reasoning.controllable
+    assert k26_openai.limits.context_tokens == 262_144
+
+    for retired in ("kimi-k2-250711", "kimi-k2-thinking", "kimi-k2.5"):
+        assert not any(
+            provider == "moonshot" and model_id == retired
+            for provider, model_id, _ in catalog.models
+        )
+
+
 def test_builtin_alibaba_omni_capabilities_follow_official_model_boundaries() -> None:
     catalog = ModelCapabilityCatalog.builtin()
     turbo = catalog.models[

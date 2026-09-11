@@ -266,16 +266,20 @@ async def openai_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
 async def openai_tool_choice_probe(
     context: ProbeContext, route: AzRoute
 ) -> ProbeResult:
-    provider_options = (
-        {"enable_thinking": False}
-        if route.canonical_provider == "alibaba_cloud"
-        else None
-    )
+    tool_choice = "lookup"
+    provider_options = None
+    if route.canonical_provider == "alibaba_cloud":
+        provider_options = {"enable_thinking": False}
+    elif route.canonical_provider == "moonshot":
+        if route.canonical_model_id == "kimi-k3":
+            tool_choice = "required"
+        elif route.canonical_model_id == "kimi-k2.6":
+            provider_options = {"thinking": {"type": "disabled"}}
     request = _request(
         route,
         message=UserMessage(content="Use lookup with value probe."),
         tools=(_TOOL,),
-        generation=GenerationConfig(max_output_tokens=1024, tool_choice="lookup"),
+        generation=GenerationConfig(max_output_tokens=1024, tool_choice=tool_choice),
         provider_options=provider_options,
     )
     try:
@@ -347,7 +351,14 @@ async def openai_reasoning_probe(
         route.canonical_provider == "alibaba_cloud"
         and route.canonical_model_id in _ALIBABA_FIXED_REASONING_MODELS
     )
-    provider_options = {} if fixed_alibaba_reasoning else {"reasoning_effort": "low"}
+    provider_options: dict[str, object] = (
+        {} if fixed_alibaba_reasoning else {"reasoning_effort": "low"}
+    )
+    if route.canonical_provider == "moonshot":
+        if route.canonical_model_id in {"kimi-k2.7-code", "kimi-k2-thinking"}:
+            provider_options = {}
+        elif route.canonical_model_id in {"kimi-k2.5", "kimi-k2.6"}:
+            provider_options = {"thinking": {"type": "enabled"}}
     request = _request(route, provider_options=provider_options)
     try:
         if route.canonical_model_id == "qvq-max":

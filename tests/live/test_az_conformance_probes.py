@@ -99,13 +99,19 @@ class ScriptedClient:
         return None
 
 
-def _route(protocol: str = "openai_chat_completions"):
+def _route(
+    protocol: str = "openai_chat_completions",
+    *,
+    provider: str = "openai",
+    model_id: str = "gpt-5.4",
+    route_id: str = "gpt-5.4-urg",
+):
     return route_from_mapping(
         {
-            "route_id": "gpt-5.4-urg",
+            "route_id": route_id,
             "kind": "gateway_alias",
-            "canonical_provider": "openai",
-            "canonical_model_id": "gpt-5.4",
+            "canonical_provider": provider,
+            "canonical_model_id": model_id,
             "protocols": [
                 {"protocol": protocol, "required_scenarios": ["text"]}
             ],
@@ -288,6 +294,137 @@ async def test_alibaba_named_tool_choice_probe_disables_thinking() -> None:
 
     assert result.status == "passed"
     assert client.requests[0]["enable_thinking"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "protocol",
+    ["openai_chat_completions", "anthropic_messages"],
+)
+async def test_kimi_k3_tool_choice_probe_uses_required(protocol: str) -> None:
+    client = ScriptedClient(
+        responses=[
+            _openai_response(
+                "",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            )
+            if protocol == "openai_chat_completions"
+            else {
+                "id": "message-1",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call-1",
+                        "name": "lookup",
+                        "input": {},
+                    }
+                ],
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+        ]
+    )
+    route = _route(
+        protocol,
+        provider="moonshot",
+        model_id="kimi-k3",
+        route_id="kimi-k3",
+    )
+
+    if protocol == "openai_chat_completions":
+        result = await openai_tool_choice_probe(
+            _context(client, Scenario.TOOL_CHOICE), route
+        )
+        assert client.requests[0]["tool_choice"] == "required"
+    else:
+        result = await anthropic_tool_choice_probe(
+            _context(client, Scenario.TOOL_CHOICE, protocol), route
+        )
+        assert client.requests[0]["tool_choice"] == {"type": "any"}
+
+    assert result.status == "passed"
+
+
+@pytest.mark.asyncio
+async def test_kimi_k26_named_tool_probe_disables_thinking() -> None:
+    client = ScriptedClient(
+        responses=[
+            _openai_response(
+                "",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            )
+        ]
+    )
+    route = _route(
+        provider="moonshot", model_id="kimi-k2.6", route_id="kimi-k2.6"
+    )
+
+    result = await openai_tool_choice_probe(
+        _context(client, Scenario.TOOL_CHOICE), route
+    )
+
+    assert result.status == "passed"
+    assert client.requests[0]["thinking"] == {"type": "disabled"}
+
+
+@pytest.mark.asyncio
+async def test_kimi_reasoning_probes_use_model_specific_controls() -> None:
+    openai_client = ScriptedClient(
+        responses=[_openai_response("answer", reasoning_content="reasoning")]
+    )
+    k26 = _route(
+        provider="moonshot", model_id="kimi-k2.6", route_id="kimi-k2.6"
+    )
+    assert (
+        await openai_reasoning_probe(
+            _context(openai_client, Scenario.REASONING), k26
+        )
+    ).status == "passed"
+    assert openai_client.requests[0]["thinking"] == {"type": "enabled"}
+
+    anthropic_client = ScriptedClient(
+        responses=[
+            {
+                "id": "message-1",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "reasoning", "signature": "sig"},
+                    {"type": "text", "text": "answer"},
+                ],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+        ]
+    )
+    k3 = _route(
+        "anthropic_messages",
+        provider="moonshot",
+        model_id="kimi-k3",
+        route_id="kimi-k3",
+    )
+    assert (
+        await anthropic_reasoning_probe(
+            _context(anthropic_client, Scenario.REASONING, "anthropic_messages"),
+            k3,
+        )
+    ).status == "passed"
+    assert anthropic_client.requests[0]["output_config"] == {"effort": "low"}
+    assert "thinking" not in anthropic_client.requests[0]
 
 
 @pytest.mark.asyncio

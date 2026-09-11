@@ -873,70 +873,70 @@
       "provider": "moonshot",
       "model_id": "kimi-k2-250711",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+      "url": "https://platform.kimi.com/docs/models",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "moonshot",
       "model_id": "kimi-k2-thinking",
       "protocol": "anthropic_messages",
-      "url": "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+      "url": "https://platform.kimi.com/docs/models",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "moonshot",
       "model_id": "kimi-k2-thinking",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+      "url": "https://platform.kimi.com/docs/models",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "moonshot",
       "model_id": "kimi-k2.5",
       "protocol": "anthropic_messages",
-      "url": "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+      "url": "https://platform.kimi.com/docs/models",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "moonshot",
       "model_id": "kimi-k2.5",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+      "url": "https://platform.kimi.com/docs/models",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "moonshot",
       "model_id": "kimi-k2.6",
       "protocol": "anthropic_messages",
-      "url": "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+      "url": "https://platform.kimi.com/docs/guide/kimi-k2-6-quickstart",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "moonshot",
       "model_id": "kimi-k2.6",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+      "url": "https://platform.kimi.com/docs/guide/kimi-k2-6-quickstart",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "moonshot",
       "model_id": "kimi-k2.7-code",
       "protocol": "anthropic_messages",
-      "url": "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+      "url": "https://platform.kimi.com/docs/guide/kimi-k2-7-code-quickstart",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "moonshot",
       "model_id": "kimi-k2.7-code",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+      "url": "https://platform.kimi.com/docs/guide/kimi-k2-7-code-quickstart",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "moonshot",
       "model_id": "kimi-k3",
       "protocol": "openai_chat_completions",
-      "url": "https://platform.moonshot.cn/docs/guide/start-using-kimi-api",
+      "url": "https://platform.kimi.com/docs/guide/kimi-k3-quickstart",
       "checked_at": "2026-09-11"
     },
     {
@@ -1497,6 +1497,13 @@
       "model_id": "glm-5v-turbo",
       "protocol": "openai_chat_completions",
       "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "checked_at": "2026-09-11"
+    },
+    {
+      "provider": "moonshot",
+      "model_id": "kimi-k3",
+      "protocol": "anthropic_messages",
+      "url": "https://platform.kimi.com/docs/api/messages",
       "checked_at": "2026-09-11"
     }
   ]

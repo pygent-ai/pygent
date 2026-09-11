@@ -240,7 +240,7 @@ def test_source_index_is_strict_https_and_unique() -> None:
 
 def test_builtin_source_index_is_populated() -> None:
     index = load_sources()
-    assert len(index.sources) == 214
+    assert len(index.sources) == 215
 
 
 def test_builtin_manifest_classifies_the_exact_frozen_inventory() -> None:
@@ -266,7 +266,7 @@ def test_builtin_manifest_preserves_advertised_protocol_counts() -> None:
         for requirements in route.protocols
     ]
     assert protocol_names.count("openai_chat_completions") == 209
-    assert protocol_names.count("anthropic_messages") == 44
+    assert protocol_names.count("anthropic_messages") == 45
     assert protocol_names.count("gemini_generate_content") == 28
     assert protocol_names.count("serpapi_search") == 7
 
@@ -380,6 +380,55 @@ def test_builtin_manifest_covers_catalogued_alibaba_request_capabilities() -> No
         )
 
 
+def test_builtin_manifest_classifies_retired_moonshot_names_as_gateway_aliases() -> None:
+    routes = {route.route_id: route for route in load_manifest().routes}
+
+    for model_id in ("kimi-k2-250711", "kimi-k2-thinking", "kimi-k2.5"):
+        assert routes[model_id].kind is RouteKind.GATEWAY_ALIAS
+        assert not routes[model_id].catalog_eligible
+
+    assert routes["kimi-k2-250711"].protocols[0].required_scenarios == (
+        Scenario.TEXT,
+    )
+    for model_id in ("kimi-k2-thinking", "kimi-k2.5"):
+        protocols = {
+            requirements.protocol: set(requirements.required_scenarios)
+            for requirements in routes[model_id].protocols
+        }
+        assert protocols["anthropic_messages"] == {
+            Scenario.TEXT,
+            Scenario.TEXT_STREAM,
+            Scenario.TOOLS,
+            Scenario.JSON_SCHEMA,
+            Scenario.REASONING,
+        }
+        assert protocols["openai_chat_completions"] == {
+            Scenario.TEXT,
+            Scenario.TEXT_STREAM,
+            Scenario.TOOLS,
+            Scenario.JSON_OBJECT,
+            Scenario.REASONING,
+        }
+
+
+def test_builtin_manifest_exercises_current_moonshot_multimodal_protocols() -> None:
+    routes = {route.route_id: route for route in load_manifest().routes}
+    k3 = {requirements.protocol: requirements for requirements in routes["kimi-k3"].protocols}
+
+    assert set(k3) == {"openai_chat_completions", "anthropic_messages"}
+    assert Scenario.IMAGE_INPUT in k3["openai_chat_completions"].required_scenarios
+    assert Scenario.VIDEO_INPUT in k3["openai_chat_completions"].required_scenarios
+    assert Scenario.IMAGE_INPUT in k3["anthropic_messages"].required_scenarios
+    for model_id in ("kimi-k2.6", "kimi-k2.7-code"):
+        protocols = {
+            requirements.protocol: requirements
+            for requirements in routes[model_id].protocols
+        }
+        assert Scenario.VIDEO_INPUT in protocols[
+            "openai_chat_completions"
+        ].required_scenarios
+
+
 def test_every_official_catalog_triple_and_alias_target_has_a_source() -> None:
     manifest = load_manifest()
     source_keys = set(load_sources().sources)
@@ -410,6 +459,7 @@ def test_builtin_sources_only_use_reviewed_primary_domains() -> None:
         "help.aliyun.com",
         "ir.kuaishou.com",
         "platform.minimax.io",
+        "platform.kimi.com",
         "platform.moonshot.cn",
         "www.volcengine.com",
     }

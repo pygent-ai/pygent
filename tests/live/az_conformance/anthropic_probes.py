@@ -258,11 +258,18 @@ async def anthropic_tool_probe(
 async def anthropic_tool_choice_probe(
     context: ProbeContext, route: AzRoute
 ) -> ProbeResult:
+    tool_choice = "required" if route.canonical_model_id == "kimi-k3" else "lookup"
+    provider_options = (
+        {"thinking": {"type": "disabled"}}
+        if route.canonical_model_id == "kimi-k2.6"
+        else None
+    )
     request = _request(
         route,
         message=UserMessage(content="Use lookup with value probe."),
         tools=(_TOOL,),
-        generation=GenerationConfig(max_output_tokens=1024, tool_choice="lookup"),
+        generation=GenerationConfig(max_output_tokens=1024, tool_choice=tool_choice),
+        provider_options=provider_options,
     )
     try:
         response = await _non_stream(context, route, request)
@@ -301,10 +308,18 @@ async def anthropic_json_schema_probe(
 async def anthropic_reasoning_probe(
     context: ProbeContext, route: AzRoute
 ) -> ProbeResult:
+    provider_options: dict[str, object] = {
+        "thinking": {"type": "enabled", "budget_tokens": 1024}
+    }
+    if route.canonical_provider == "moonshot":
+        if route.canonical_model_id == "kimi-k3":
+            provider_options = {"output_config": {"effort": "low"}}
+        elif route.canonical_model_id in {"kimi-k2.7-code", "kimi-k2-thinking"}:
+            provider_options = {}
     request = _request(
         route,
         generation=GenerationConfig(max_output_tokens=2048),
-        provider_options={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+        provider_options=provider_options,
     )
     try:
         response = await _non_stream(context, route, request)
