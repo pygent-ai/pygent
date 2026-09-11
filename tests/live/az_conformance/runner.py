@@ -200,6 +200,7 @@ class ConformanceRunner:
         first_phase = [case for case in queue if case.scenario is not Scenario.AUDIO_INPUT]
         second_phase = [case for case in queue if case.scenario is Scenario.AUDIO_INPUT]
         await self._run_phase(first_phase, probes)
+        await self._prepare_audio_fixtures(second_phase)
         await self._run_phase(second_phase, probes)
         return build_report(
             manifest=self.manifest,
@@ -215,7 +216,32 @@ class ConformanceRunner:
                 *(self._run_case(case, probes[case.short_key]) for case in cases)
             )
 
-    async def _run_case(self, case: ProbeCase, probe: Probe) -> None:
+    async def _prepare_audio_fixtures(
+        self, audio_input_cases: list[ProbeCase]
+    ) -> None:
+        for protocol in sorted({case.protocol for case in audio_input_cases}):
+            client = self._clients.get(protocol)
+            if client is None or getattr(client, "audio_fixture", None):
+                continue
+            candidates = (
+                case
+                for case in build_probe_queue(
+                    self.manifest, scenario=Scenario.AUDIO_OUTPUT
+                )
+                if case.protocol == protocol
+            )
+            for candidate in candidates:
+                await self._run_case(
+                    candidate,
+                    self.registry.require(candidate.protocol, candidate.scenario),
+                    force=True,
+                )
+                if getattr(client, "audio_fixture", None):
+                    break
+
+    async def _run_case(
+        self, case: ProbeCase, probe: Probe, *, force: bool = False
+    ) -> None:
         result_key = (
             self.manifest.snapshot.sha256,
             self.source_revision,
@@ -223,7 +249,7 @@ class ConformanceRunner:
             case.protocol,
             case.scenario,
         )
-        if self.ledger.reusable_pass(result_key) is not None:
+        if not force and self.ledger.reusable_pass(result_key) is not None:
             return
         semaphore = (
             self._media_semaphore

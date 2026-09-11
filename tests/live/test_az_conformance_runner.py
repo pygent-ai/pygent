@@ -307,6 +307,60 @@ async def test_audio_output_completes_before_audio_input(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_selected_audio_input_rebuilds_an_in_memory_fixture(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        [
+            ("speaker", ["p1"], ["audio_output"]),
+            ("transcriber", ["p1"], ["audio_input"]),
+        ]
+    )
+    events: list[str] = []
+
+    class AudioClient:
+        audio_fixture: bytes | None = None
+
+    client = AudioClient()
+
+    async def output_probe(context, route):
+        events.append(f"{route.route_id}:{context.scenario.value}")
+        client.audio_fixture = b"audio"
+        return _result(context, route.route_id, context.scenario)
+
+    async def input_probe(context, route):
+        events.append(f"{route.route_id}:{context.scenario.value}")
+        assert client.audio_fixture == b"audio"
+        return _result(context, route.route_id, context.scenario)
+
+    ledger = ResultLedger(tmp_path / "results.jsonl")
+    output_context = ProbeContext(
+        snapshot_sha256=manifest.snapshot.sha256,
+        source_revision=_REVISION,
+        protocol="p1",
+        scenario=Scenario.AUDIO_OUTPUT,
+        attempt=1,
+    )
+    ledger.record(_result(output_context, "speaker", Scenario.AUDIO_OUTPUT))
+    runner = ConformanceRunner(
+        manifest,
+        ProbeRegistry(
+            {
+                ("p1", Scenario.AUDIO_OUTPUT): output_probe,
+                ("p1", Scenario.AUDIO_INPUT): input_probe,
+            }
+        ),
+        ledger,
+        _REVISION,
+        clients={"p1": client},
+    )
+
+    await runner.run(_matching(manifest), scenario=Scenario.AUDIO_INPUT)
+
+    assert events == ["speaker:audio_output", "transcriber:audio_input"]
+
+
+@pytest.mark.asyncio
 async def test_runner_propagates_cancellation(tmp_path: Path) -> None:
     manifest = _manifest([("a", ["p1"], ["text"])])
 
