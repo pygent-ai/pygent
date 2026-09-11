@@ -80,7 +80,7 @@ def _request(
         model=_spec(route, provider_options=provider_options),
         message=message or UserMessage(content="Reply with a short answer."),
         context=context or Context(),
-        generation=generation or GenerationConfig(max_output_tokens=32),
+        generation=generation or GenerationConfig(max_output_tokens=256),
         tools=tools,
     )
 
@@ -255,7 +255,7 @@ async def openai_tool_choice_probe(
     request = _request(
         route,
         tools=(_TOOL,),
-        generation=GenerationConfig(max_output_tokens=32, tool_choice="lookup"),
+        generation=GenerationConfig(max_output_tokens=256, tool_choice="lookup"),
     )
     try:
         response = await _non_stream(context, route, request)
@@ -294,7 +294,7 @@ async def openai_json_schema_probe(
     request = _request(
         route,
         generation=GenerationConfig(
-            max_output_tokens=32,
+            max_output_tokens=256,
             response_schema=_SCHEMA,
             response_schema_name="probe_response",
         ),
@@ -380,7 +380,7 @@ def _responses_request(
         model=_responses_spec(route, provider_options=provider_options),
         message=message or UserMessage(content="Reply with a short answer."),
         context=context or Context(),
-        generation=generation or GenerationConfig(max_output_tokens=32),
+        generation=generation or GenerationConfig(max_output_tokens=256),
         tools=tools,
     )
 
@@ -501,7 +501,7 @@ async def openai_responses_tool_choice_probe(
     request = _responses_request(
         route,
         tools=(_TOOL,),
-        generation=GenerationConfig(max_output_tokens=32, tool_choice="lookup"),
+        generation=GenerationConfig(max_output_tokens=256, tool_choice="lookup"),
     )
     try:
         response = await _responses_non_stream(context, route, request)
@@ -539,7 +539,7 @@ async def openai_responses_json_schema_probe(
     request = _responses_request(
         route,
         generation=GenerationConfig(
-            max_output_tokens=32,
+            max_output_tokens=256,
             response_schema=_SCHEMA,
             response_schema_name="probe_response",
         ),

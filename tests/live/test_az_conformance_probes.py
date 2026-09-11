@@ -162,6 +162,7 @@ async def test_openai_text_probe_uses_route_only_on_wire() -> None:
     assert result.status == "passed"
     assert result.canonical_model_id == "gpt-5.4"
     assert client.requests[0]["model"] == "gpt-5.4-urg"
+    assert client.requests[0]["max_tokens"] == 256
     assert "answer" not in str(result.to_public_mapping())
 
 
