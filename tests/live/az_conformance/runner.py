@@ -166,11 +166,14 @@ class ConformanceRunner:
         source_revision: str,
         *,
         text_concurrency: int = 4,
+        attempt_timeout_seconds: float = 150.0,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clients: Mapping[str, object] | None = None,
     ) -> None:
         if text_concurrency < 1:
             raise ValueError("text_concurrency must be at least 1")
+        if attempt_timeout_seconds <= 0:
+            raise ValueError("attempt_timeout_seconds must be greater than zero")
         if not source_revision.strip():
             raise ValueError("source_revision must not be empty")
         self.manifest = manifest
@@ -179,6 +182,7 @@ class ConformanceRunner:
         self.source_revision = source_revision
         self._text_semaphore = asyncio.Semaphore(text_concurrency)
         self._media_semaphore = asyncio.Semaphore(1)
+        self._attempt_timeout_seconds = attempt_timeout_seconds
         self._sleep = sleep
         self._clients = MappingProxyType(dict(clients or {}))
 
@@ -266,7 +270,24 @@ class ConformanceRunner:
                 client=self._clients.get(case.protocol),
             )
             async with semaphore:
-                result = await probe(context, case.route)
+                try:
+                    result = await asyncio.wait_for(
+                        probe(context, case.route),
+                        timeout=self._attempt_timeout_seconds,
+                    )
+                except TimeoutError:
+                    result = ProbeResult(
+                        snapshot_sha256=context.snapshot_sha256,
+                        source_revision=context.source_revision,
+                        route_id=case.route.route_id,
+                        canonical_provider=case.route.canonical_provider,
+                        canonical_model_id=case.route.canonical_model_id,
+                        protocol=context.protocol,
+                        scenario=context.scenario,
+                        status="failed",
+                        attempts=context.attempt,
+                        error_kind=ErrorKind.TIMEOUT,
+                    )
             self._validate_result(case, result, attempt)
             self.ledger.record(result)
             if result.status == "passed" or result.error_kind not in _RETRYABLE:

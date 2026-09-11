@@ -242,6 +242,37 @@ async def test_runner_does_not_retry_permanent_failure(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_enforces_a_wall_clock_timeout_per_attempt(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest([("a", ["p1"], ["text"])])
+    calls = 0
+
+    async def probe(context, route):
+        nonlocal calls
+        calls += 1
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    runner = ConformanceRunner(
+        manifest,
+        ProbeRegistry({("p1", Scenario.TEXT): probe}),
+        ResultLedger(tmp_path / "results.jsonl"),
+        _REVISION,
+        attempt_timeout_seconds=0.001,
+        sleep=lambda _: asyncio.sleep(0),
+    )
+
+    report = await runner.run(_matching(manifest))
+
+    assert not report.complete
+    assert calls == 3
+    result = runner.ledger.results[-1]
+    assert result.error_kind is ErrorKind.TIMEOUT
+    assert result.attempts == 3
+
+
+@pytest.mark.asyncio
 async def test_media_is_serialized_and_text_concurrency_is_bounded(
     tmp_path: Path,
 ) -> None:
