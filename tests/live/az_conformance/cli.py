@@ -263,6 +263,11 @@ def _clients(connection: LiveConnection) -> Mapping[str, LiveProbeClient]:
         api_key=connection.api_key,
         delegate=None,
     )
+    dashscope = LiveProbeClient(
+        base_url=root,
+        api_key=connection.api_key,
+        delegate=None,
+    )
     return MappingProxyType(
         {
             "openai_chat_completions": openai,
@@ -273,6 +278,7 @@ def _clients(connection: LiveConnection) -> Mapping[str, LiveProbeClient]:
             "anthropic_messages": anthropic,
             "gemini_generate_content": gemini,
             "serpapi_search": search,
+            "dashscope_multimodal_generation": dashscope,
         }
     )
 

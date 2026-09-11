@@ -85,7 +85,7 @@
     {
       "provider": "alibaba_cloud",
       "model_id": "qwen-image-3.0",
-      "protocol": "openai_chat_completions",
+      "protocol": "dashscope_multimodal_generation",
       "capabilities": {
         "modalities": {
           "input": [
@@ -121,7 +121,7 @@
     {
       "provider": "alibaba_cloud",
       "model_id": "qwen-image-edit",
-      "protocol": "openai_chat_completions",
+      "protocol": "dashscope_multimodal_generation",
       "capabilities": {
         "modalities": {
           "input": [

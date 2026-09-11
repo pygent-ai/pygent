@@ -3825,7 +3825,7 @@
       "canonical_model_id": "qwen-image-3.0",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "dashscope_multimodal_generation",
           "required_scenarios": [
             "image_input",
             "image_output",
@@ -3842,7 +3842,7 @@
       "canonical_model_id": "qwen-image-edit",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "dashscope_multimodal_generation",
           "required_scenarios": [
             "image_input",
             "image_output",

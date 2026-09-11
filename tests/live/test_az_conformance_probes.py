@@ -33,6 +33,8 @@ from tests.live.az_conformance.media_fixtures import PNG_BASE64
 from tests.live.az_conformance.media_probes import (
     audio_input_probe,
     audio_output_probe,
+    dashscope_image_edit_probe,
+    dashscope_image_output_probe,
     embedding_probe,
     image_edit_probe,
     image_output_probe,
@@ -1185,6 +1187,120 @@ async def test_image_generation_downloads_and_validates_url_result() -> None:
 
     assert result.status == "passed"
     assert client.requests[1][:2] == ("GET", "https://media.test/a.png")
+
+
+@pytest.mark.asyncio
+async def test_dashscope_image_generation_and_edit_use_native_contract() -> None:
+    png = base64.b64decode(_PNG)
+    response = {
+        "output": {
+            "choices": [
+                {
+                    "message": {
+                        "content": [{"image": "https://media.test/qwen.png"}]
+                    }
+                }
+            ]
+        }
+    }
+    route = route_from_mapping(
+        {
+            "route_id": "qwen-image-3.0",
+            "kind": "official_model",
+            "canonical_provider": "alibaba_cloud",
+            "canonical_model_id": "qwen-image-3.0",
+            "protocols": [
+                {
+                    "protocol": "dashscope_multimodal_generation",
+                    "required_scenarios": ["image_output", "image_edit"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+    output_client = RawScriptedClient(
+        [httpx.Response(200, json=response), httpx.Response(200, content=png)]
+    )
+    edit_client = RawScriptedClient(
+        [httpx.Response(200, json=response), httpx.Response(200, content=png)]
+    )
+    output_context = ProbeContext(
+        snapshot_sha256="7" * 64,
+        source_revision="abc1234",
+        protocol="dashscope_multimodal_generation",
+        scenario=Scenario.IMAGE_OUTPUT,
+        attempt=1,
+        client=output_client,
+    )
+    edit_context = ProbeContext(
+        snapshot_sha256="7" * 64,
+        source_revision="abc1234",
+        protocol="dashscope_multimodal_generation",
+        scenario=Scenario.IMAGE_EDIT,
+        attempt=1,
+        client=edit_client,
+    )
+
+    assert (await dashscope_image_output_probe(output_context, route)).status == "passed"
+    assert (await dashscope_image_edit_probe(edit_context, route)).status == "passed"
+    assert output_client.requests[0][1] == (
+        "/api/v1/services/aigc/multimodal-generation/generation"
+    )
+    output_content = output_client.requests[0][2]["json"]["input"]["messages"][0][
+        "content"
+    ]
+    assert output_content == [{"text": "A single blue square."}]
+    edit_content = edit_client.requests[0][2]["json"]["input"]["messages"][0][
+        "content"
+    ]
+    assert edit_content[0]["image"].startswith("data:image/png;base64,")
+    assert edit_content[1] == {"text": "Keep the square blue."}
+
+
+@pytest.mark.asyncio
+async def test_dashscope_edit_only_model_uses_image_for_output_probe() -> None:
+    png = base64.b64decode(_PNG)
+    response = {
+        "output": {
+            "choices": [
+                {
+                    "message": {
+                        "content": [{"image": "https://media.test/edit.png"}]
+                    }
+                }
+            ]
+        }
+    }
+    route = route_from_mapping(
+        {
+            "route_id": "qwen-image-edit",
+            "kind": "official_model",
+            "canonical_provider": "alibaba_cloud",
+            "canonical_model_id": "qwen-image-edit",
+            "protocols": [
+                {
+                    "protocol": "dashscope_multimodal_generation",
+                    "required_scenarios": ["image_output"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+    client = RawScriptedClient(
+        [httpx.Response(200, json=response), httpx.Response(200, content=png)]
+    )
+    context = ProbeContext(
+        snapshot_sha256="7" * 64,
+        source_revision="abc1234",
+        protocol="dashscope_multimodal_generation",
+        scenario=Scenario.IMAGE_OUTPUT,
+        attempt=1,
+        client=client,
+    )
+
+    assert (await dashscope_image_output_probe(context, route)).status == "passed"
+    content = client.requests[0][2]["json"]["input"]["messages"][0]["content"]
+    assert content[0]["image"].startswith("data:image/png;base64,")
 
 
 @pytest.mark.asyncio

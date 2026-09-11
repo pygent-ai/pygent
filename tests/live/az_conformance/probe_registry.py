@@ -25,6 +25,8 @@ from tests.live.az_conformance.gemini_probes import (
 from tests.live.az_conformance.media_probes import (
     audio_input_probe,
     audio_output_probe,
+    dashscope_image_edit_probe,
+    dashscope_image_output_probe,
     embedding_probe,
     image_edit_probe,
     image_output_probe,
@@ -95,6 +97,18 @@ def builtin_probe_registry() -> ProbeRegistry:
             ("gemini_generate_content", Scenario.IMAGE_EDIT): gemini_image_edit_probe,
             ("gemini_generate_content", Scenario.AUDIO_OUTPUT): gemini_audio_output_probe,
             ("serpapi_search", Scenario.SEARCH): search_probe,
+            (
+                "dashscope_multimodal_generation",
+                Scenario.IMAGE_INPUT,
+            ): dashscope_image_edit_probe,
+            (
+                "dashscope_multimodal_generation",
+                Scenario.IMAGE_OUTPUT,
+            ): dashscope_image_output_probe,
+            (
+                "dashscope_multimodal_generation",
+                Scenario.IMAGE_EDIT,
+            ): dashscope_image_edit_probe,
         }
     )
 

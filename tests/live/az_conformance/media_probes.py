@@ -337,6 +337,80 @@ async def image_edit_probe(context: ProbeContext, route: AzRoute) -> ProbeResult
     return _result(context, route)
 
 
+def _dashscope_image_url(response: httpx.Response) -> str:
+    output = _json(response).get("output")
+    if not isinstance(output, Mapping):
+        raise TypeError("DashScope image response has no output")
+    choices = output.get("choices")
+    if (
+        not isinstance(choices, list)
+        or not choices
+        or not isinstance(choices[0], Mapping)
+    ):
+        raise ValueError("DashScope image response has no choices")
+    message = choices[0].get("message")
+    if not isinstance(message, Mapping):
+        raise TypeError("DashScope image response has no message")
+    content = message.get("content")
+    if (
+        not isinstance(content, list)
+        or not content
+        or not isinstance(content[0], Mapping)
+    ):
+        raise ValueError("DashScope image response has no content")
+    url = content[0].get("image")
+    if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+        raise ValueError("DashScope image response has no image URL")
+    return url
+
+
+async def _dashscope_image_probe(
+    context: ProbeContext, route: AzRoute, *, editing: bool
+) -> ProbeResult:
+    client = _client(context)
+    content: list[dict[str, object]] = []
+    if editing:
+        content.append({"image": f"data:image/png;base64,{PNG_BASE64}"})
+    content.append(
+        {"text": "Keep the square blue." if editing else "A single blue square."}
+    )
+    try:
+        response = await client.request(
+            "POST",
+            "/api/v1/services/aigc/multimodal-generation/generation",
+            json={
+                "model": route.route_id,
+                "input": {"messages": [{"role": "user", "content": content}]},
+                "parameters": {"size": "1024*1024"},
+            },
+        )
+        error = _http_error(response)
+        if error is not None:
+            return _result(context, route, error_kind=error)
+        media_response = await client.request("GET", _dashscope_image_url(response))
+        media_error = _http_error(media_response)
+        if media_error is not None:
+            return _result(context, route, error_kind=media_error)
+        if not _is_png(_bounded(media_response.content)):
+            raise ValueError("DashScope image is not a valid PNG")
+    except (httpx.HTTPError, OSError, TypeError, ValueError, AttributeError):
+        return _result(context, route, error_kind=ErrorKind.INVALID_RESPONSE)
+    return _result(context, route)
+
+
+async def dashscope_image_output_probe(
+    context: ProbeContext, route: AzRoute
+) -> ProbeResult:
+    editing = (route.canonical_model_id or "").startswith("qwen-image-edit")
+    return await _dashscope_image_probe(context, route, editing=editing)
+
+
+async def dashscope_image_edit_probe(
+    context: ProbeContext, route: AzRoute
+) -> ProbeResult:
+    return await _dashscope_image_probe(context, route, editing=True)
+
+
 async def audio_output_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
     if context.protocol == "openai_realtime":
         return await realtime_probe(context, route)
@@ -690,6 +764,8 @@ __all__ = [
     "RawProbeClient",
     "audio_input_probe",
     "audio_output_probe",
+    "dashscope_image_edit_probe",
+    "dashscope_image_output_probe",
     "embedding_probe",
     "image_edit_probe",
     "image_output_probe",

@@ -18,16 +18,16 @@
     {
       "provider": "alibaba_cloud",
       "model_id": "qwen-image-3.0",
-      "protocol": "openai_chat_completions",
-      "url": "https://help.aliyun.com/en/model-studio/models",
-      "checked_at": "2026-09-11"
+      "protocol": "dashscope_multimodal_generation",
+      "url": "https://help.aliyun.com/en/model-studio/qwen-image-generation-and-editing-api-reference",
+      "checked_at": "2026-09-12"
     },
     {
       "provider": "alibaba_cloud",
       "model_id": "qwen-image-edit",
-      "protocol": "openai_chat_completions",
-      "url": "https://help.aliyun.com/en/model-studio/models",
-      "checked_at": "2026-09-11"
+      "protocol": "dashscope_multimodal_generation",
+      "url": "https://help.aliyun.com/en/model-studio/qwen-image-edit-api",
+      "checked_at": "2026-09-12"
     },
     {
       "provider": "alibaba_cloud",

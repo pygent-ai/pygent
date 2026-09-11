@@ -265,7 +265,7 @@ def test_builtin_manifest_preserves_advertised_protocol_counts() -> None:
         for route in manifest.routes
         for requirements in route.protocols
     ]
-    assert protocol_names.count("openai_chat_completions") == 200
+    assert protocol_names.count("openai_chat_completions") == 198
     assert protocol_names.count("openai_audio_speech") == 1
     assert protocol_names.count("openai_embeddings") == 3
     assert protocol_names.count("openai_images") == 3
@@ -273,6 +273,16 @@ def test_builtin_manifest_preserves_advertised_protocol_counts() -> None:
     assert protocol_names.count("anthropic_messages") == 45
     assert protocol_names.count("gemini_generate_content") == 28
     assert protocol_names.count("serpapi_search") == 7
+    assert protocol_names.count("dashscope_multimodal_generation") == 2
+
+
+def test_qwen_image_routes_use_the_official_dashscope_protocol() -> None:
+    routes = {route.route_id: route for route in load_manifest().routes}
+
+    for model_id in ("qwen-image-3.0", "qwen-image-edit"):
+        assert [item.protocol for item in routes[model_id].protocols] == [
+            "dashscope_multimodal_generation"
+        ]
 
 
 def test_builtin_manifest_scopes_capability_probes_to_their_wire_protocol() -> None:
@@ -334,24 +344,21 @@ def test_builtin_manifest_probes_only_catalogued_alibaba_structured_output() -> 
     }
 
     for route in routes.values():
-        capabilities = catalog.models[
-            (
-                "alibaba_cloud",
-                route.canonical_model_id,
-                "openai_chat_completions",
+        for requirements in route.protocols:
+            capabilities = catalog.models[
+                (
+                    "alibaba_cloud",
+                    route.canonical_model_id,
+                    requirements.protocol,
+                )
+            ]
+            scenarios = requirements.required_scenarios
+            assert (Scenario.JSON_OBJECT in scenarios) is (
+                capabilities.structured_output.json_object
             )
-        ]
-        scenarios = next(
-            requirements.required_scenarios
-            for requirements in route.protocols
-            if requirements.protocol == "openai_chat_completions"
-        )
-        assert (Scenario.JSON_OBJECT in scenarios) is (
-            capabilities.structured_output.json_object
-        )
-        assert (Scenario.JSON_SCHEMA in scenarios) is (
-            capabilities.structured_output.json_schema
-        )
+            assert (Scenario.JSON_SCHEMA in scenarios) is (
+                capabilities.structured_output.json_schema
+            )
 
 
 def test_builtin_manifest_covers_catalogued_alibaba_request_capabilities() -> None:
@@ -359,29 +366,28 @@ def test_builtin_manifest_covers_catalogued_alibaba_request_capabilities() -> No
     for route in load_manifest().routes:
         if route.canonical_provider != "alibaba_cloud":
             continue
-        capabilities = catalog.models[
-            (
-                "alibaba_cloud",
-                route.canonical_model_id,
-                "openai_chat_completions",
+        for requirements in route.protocols:
+            capabilities = catalog.models[
+                (
+                    "alibaba_cloud",
+                    route.canonical_model_id,
+                    requirements.protocol,
+                )
+            ]
+            scenarios = requirements.required_scenarios
+            assert (Scenario.TOOLS in scenarios) is capabilities.tools.call
+            assert (Scenario.TOOL_CHOICE in scenarios) is (
+                "named" in capabilities.tools.choice
             )
-        ]
-        scenarios = next(
-            requirements.required_scenarios
-            for requirements in route.protocols
-            if requirements.protocol == "openai_chat_completions"
-        )
-        assert (Scenario.TOOLS in scenarios) is capabilities.tools.call
-        assert (Scenario.TOOL_CHOICE in scenarios) is (
-            "named" in capabilities.tools.choice
-        )
-        assert (Scenario.REASONING in scenarios) is capabilities.reasoning.supported
-        assert (Scenario.IMAGE_INPUT in scenarios) is (
-            "image" in capabilities.modalities.input
-        )
-        assert (Scenario.VIDEO_INPUT in scenarios) is (
-            "video" in capabilities.modalities.input
-        )
+            assert (Scenario.REASONING in scenarios) is (
+                capabilities.reasoning.supported
+            )
+            assert (Scenario.IMAGE_INPUT in scenarios) is (
+                "image" in capabilities.modalities.input
+            )
+            assert (Scenario.VIDEO_INPUT in scenarios) is (
+                "video" in capabilities.modalities.input
+            )
 
 
 def test_builtin_manifest_classifies_retired_moonshot_names_as_gateway_aliases() -> None:
