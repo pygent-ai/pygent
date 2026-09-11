@@ -1304,6 +1304,38 @@ async def test_dashscope_edit_only_model_uses_image_for_output_probe() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dashscope_missing_gateway_endpoint_is_protocol_mismatch() -> None:
+    route = route_from_mapping(
+        {
+            "route_id": "qwen-image-3.0",
+            "kind": "official_model",
+            "canonical_provider": "alibaba_cloud",
+            "canonical_model_id": "qwen-image-3.0",
+            "protocols": [
+                {
+                    "protocol": "dashscope_multimodal_generation",
+                    "required_scenarios": ["image_output"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+    context = ProbeContext(
+        snapshot_sha256="7" * 64,
+        source_revision="abc1234",
+        protocol="dashscope_multimodal_generation",
+        scenario=Scenario.IMAGE_OUTPUT,
+        attempt=1,
+        client=RawScriptedClient([httpx.Response(404, json={"error": {}})]),
+    )
+
+    result = await dashscope_image_output_probe(context, route)
+
+    assert result.status == "failed"
+    assert result.error_kind.value == "protocol_mismatch"
+
+
+@pytest.mark.asyncio
 async def test_audio_output_feeds_transcription_dependency() -> None:
     wave = b"RIFF" + b"\x00" * 40 + b"WAVE"
     client = RawScriptedClient(

@@ -384,6 +384,10 @@ async def _dashscope_image_probe(
                 "parameters": {"size": "1024*1024"},
             },
         )
+        if response.status_code == 404:
+            return _result(
+                context, route, error_kind=ErrorKind.PROTOCOL_MISMATCH
+            )
         error = _http_error(response)
         if error is not None:
             return _result(context, route, error_kind=error)
