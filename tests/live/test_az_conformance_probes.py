@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 import httpx
 import pytest
@@ -449,6 +449,19 @@ async def test_openai_reasoning_and_image_probes_validate_protocol_evidence() ->
     data_uri = parts[1]["image_url"]["url"]
     assert data_uri.startswith("data:image/png;base64,")
     assert base64.b64decode(data_uri.partition(",")[2]).endswith(b"IEND\xaeB`\x82")
+
+
+@pytest.mark.asyncio
+async def test_official_openai_reasoning_probe_accepts_normal_text_response() -> None:
+    client = ScriptedClient(responses=[_openai_response("answer")])
+    route = _route(provider="openai", model_id="gpt-5.4", route_id="gpt-5.4")
+
+    result = await openai_reasoning_probe(
+        _context(client, Scenario.REASONING), route
+    )
+
+    assert result.status == "passed"
+    assert client.requests[0]["reasoning_effort"] == "low"
 
 
 @pytest.mark.asyncio
@@ -903,17 +916,32 @@ class RawScriptedClient:
         self.responses = list(responses)
         self.requests: list[tuple[str, str, dict[str, object]]] = []
         self.audio_fixture: bytes | None = None
-        self.websocket_event: object = {"type": "response.done"}
+        self.websocket_events: tuple[object, ...] = (
+            {"type": "response.output_text.delta", "delta": "probe"},
+            {"type": "response.done"},
+        )
 
     async def request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
         self.requests.append((method, path, kwargs))
         return self.responses.pop(0)
 
     async def websocket_exchange(
-        self, path: str, event: dict[str, object]
-    ) -> object:
-        self.requests.append(("WS", path, {"event": event}))
-        return self.websocket_event
+        self,
+        path: str,
+        events: Sequence[dict[str, object]],
+        terminal_event_types: frozenset[str],
+    ) -> tuple[object, ...]:
+        self.requests.append(
+            (
+                "WS",
+                path,
+                {
+                    "events": list(events),
+                    "terminal_event_types": terminal_event_types,
+                },
+            )
+        )
+        return self.websocket_events
 
 
 def _raw_context(client: RawScriptedClient, scenario: Scenario) -> ProbeContext:
@@ -1232,7 +1260,7 @@ async def test_audio_captioner_receives_audio_without_a_text_part() -> None:
 
 
 @pytest.mark.asyncio
-async def test_realtime_probe_exchanges_one_legal_event() -> None:
+async def test_realtime_probe_exchanges_a_complete_text_turn() -> None:
     client = RawScriptedClient([])
     result = await realtime_probe(
         _raw_context(client, Scenario.REALTIME), _route()
@@ -1240,6 +1268,57 @@ async def test_realtime_probe_exchanges_one_legal_event() -> None:
 
     assert result.status == "passed"
     assert client.requests[0][0] == "WS"
+    assert [
+        event["type"] for event in client.requests[0][2]["events"]
+    ] == ["session.update", "conversation.item.create", "response.create"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scenario", "evidence_type"),
+    [
+        (Scenario.IMAGE_INPUT, "response.output_text.delta"),
+        (Scenario.AUDIO_INPUT, "response.output_text.delta"),
+        (Scenario.AUDIO_OUTPUT, "response.output_audio.delta"),
+        (Scenario.TOOLS, "response.function_call_arguments.done"),
+        (Scenario.TOOL_CHOICE, "response.function_call_arguments.done"),
+        (Scenario.REASONING, "response.output_text.delta"),
+    ],
+)
+async def test_realtime_probe_uses_scenario_specific_native_events(
+    scenario: Scenario, evidence_type: str
+) -> None:
+    client = RawScriptedClient([])
+    client.websocket_events = (
+        {"type": evidence_type, "delta": "probe"},
+        {"type": "response.done"},
+    )
+    context = ProbeContext(
+        snapshot_sha256="7" * 64,
+        source_revision="abc1234",
+        protocol="openai_realtime",
+        scenario=scenario,
+        attempt=1,
+        client=client,
+    )
+
+    result = await realtime_probe(context, _route())
+
+    assert result.status == "passed"
+    events = client.requests[0][2]["events"]
+    session = events[0]["session"]
+    if scenario is Scenario.AUDIO_INPUT:
+        assert events[1]["type"] == "input_audio_buffer.append"
+        audio = base64.b64decode(events[1]["audio"])
+        assert audio
+        assert any(audio)
+        assert events[2]["type"] == "input_audio_buffer.commit"
+    if scenario is Scenario.AUDIO_OUTPUT:
+        assert session["output_modalities"] == ["audio"]
+    if scenario in {Scenario.TOOLS, Scenario.TOOL_CHOICE}:
+        assert session["tools"][0]["name"] == "lookup"
+    if scenario is Scenario.REASONING:
+        assert session["reasoning"] == {"effort": "low"}
 
 
 @pytest.mark.asyncio

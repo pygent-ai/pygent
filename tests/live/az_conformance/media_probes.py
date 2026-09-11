@@ -6,7 +6,7 @@ import io
 import json
 import math
 import wave
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Protocol, cast
 
 import httpx
@@ -32,8 +32,11 @@ class RawProbeClient(Protocol):
     ) -> httpx.Response: ...
 
     async def websocket_exchange(
-        self, path: str, event: dict[str, object]
-    ) -> object: ...
+        self,
+        path: str,
+        events: Sequence[dict[str, object]],
+        terminal_event_types: frozenset[str],
+    ) -> tuple[object, ...]: ...
 
 
 def _client(context: ProbeContext) -> RawProbeClient:
@@ -136,6 +139,17 @@ def _is_audio(value: bytes) -> bool:
     return (
         value.startswith((b"ID3", b"OggS", b"fLaC"))
         or (value.startswith(b"RIFF") and b"WAVE" in value[:64])
+    )
+
+
+def _pcm16_tone(*, duration_seconds: float = 0.5) -> bytes:
+    sample_rate = 24_000
+    frequency = 440.0
+    amplitude = 8_000
+    return b"".join(
+        int(amplitude * math.sin(2 * math.pi * frequency * index / sample_rate))
+        .to_bytes(2, "little", signed=True)
+        for index in range(int(sample_rate * duration_seconds))
     )
 
 
@@ -281,6 +295,8 @@ async def image_edit_probe(context: ProbeContext, route: AzRoute) -> ProbeResult
 
 
 async def audio_output_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
+    if context.protocol == "openai_realtime":
+        return await realtime_probe(context, route)
     client = _client(context)
     try:
         model_id = (route.canonical_model_id or "").lower()
@@ -358,6 +374,8 @@ async def audio_output_probe(context: ProbeContext, route: AzRoute) -> ProbeResu
 
 
 async def audio_input_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
+    if context.protocol == "openai_realtime":
+        return await realtime_probe(context, route)
     client = _client(context)
     if not client.audio_fixture:
         return _result(context, route, error_kind=ErrorKind.DEPENDENCY_FAILED)
@@ -417,19 +435,95 @@ async def audio_input_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
 
 async def realtime_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
     client = _client(context)
-    try:
-        event = await client.websocket_exchange(
-            f"/realtime?model={route.route_id}",
+    scenario = context.scenario
+    output_modality = "audio" if scenario.value == "audio_output" else "text"
+    session: dict[str, object] = {
+        "type": "realtime",
+        "output_modalities": [output_modality],
+        "instructions": "Be concise and complete the requested probe.",
+    }
+    prompt = "Reply with the word probe."
+    if scenario.value in {"tools", "tool_choice"}:
+        session["tools"] = [
             {
-                "type": "response.create",
-                "response": {"modalities": ["text"], "instructions": "Say probe."},
-            },
+                "type": "function",
+                "name": "lookup",
+                "description": "Return the supplied probe value.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+        session["tool_choice"] = (
+            {"type": "function", "name": "lookup"}
+            if scenario.value == "tool_choice"
+            else "required"
         )
-        if not isinstance(event, Mapping):
-            raise TypeError("realtime event must be an object")
-        event_type = event.get("type")
-        if not isinstance(event_type, str) or not event_type:
-            raise ValueError("realtime event type is missing")
+        prompt = "Call lookup with value probe."
+    if scenario.value == "reasoning":
+        session["reasoning"] = {"effort": "low"}
+
+    events: list[dict[str, object]] = [
+        {"type": "session.update", "session": session}
+    ]
+    if scenario.value == "audio_input":
+        events.extend(
+            [
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(_pcm16_tone()).decode("ascii"),
+                },
+                {"type": "input_audio_buffer.commit"},
+            ]
+        )
+    else:
+        content: list[dict[str, object]] = [
+            {"type": "input_text", "text": prompt}
+        ]
+        if scenario.value == "image_input":
+            content.insert(
+                0,
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/png;base64,{PNG_BASE64}",
+                },
+            )
+        events.append(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "message", "role": "user", "content": content},
+            }
+        )
+    events.append({"type": "response.create"})
+    try:
+        received = await client.websocket_exchange(
+            f"/realtime?model={route.route_id}",
+            events,
+            frozenset({"response.done", "error"}),
+        )
+        event_types = []
+        for event in received:
+            if not isinstance(event, Mapping):
+                raise TypeError("realtime event must be an object")
+            event_type = event.get("type")
+            if not isinstance(event_type, str) or not event_type:
+                raise ValueError("realtime event type is missing")
+            event_types.append(event_type)
+        if "error" in event_types:
+            return _result(context, route, error_kind=ErrorKind.INVALID_REQUEST)
+        if "response.done" not in event_types:
+            raise ValueError("realtime response did not complete")
+        if scenario.value == "audio_output":
+            if not any("audio.delta" in item for item in event_types):
+                raise ValueError("realtime response has no audio evidence")
+        elif scenario.value in {"tools", "tool_choice"}:
+            if not any("function_call" in item for item in event_types):
+                raise ValueError("realtime response has no function-call evidence")
+        elif not any("text.delta" in item for item in event_types):
+            raise ValueError("realtime response has no text evidence")
     except (httpx.HTTPError, OSError, TypeError, ValueError, AttributeError):
         return _result(context, route, error_kind=ErrorKind.PROTOCOL_MISMATCH)
     return _result(context, route)

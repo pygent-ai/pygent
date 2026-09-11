@@ -34,7 +34,13 @@ ALIYUN_SPECIALIZED_MODELS = {
 }
 
 OFFICIAL_ROUTE_PROTOCOLS = {
-    "openai": {"openai_chat_completions"},
+    "openai": {
+        "openai_chat_completions",
+        "openai_audio_speech",
+        "openai_embeddings",
+        "openai_images",
+        "openai_realtime",
+    },
     "anthropic": {"anthropic_messages"},
     "google": {"gemini_generate_content"},
     "alibaba_cloud": {"openai_chat_completions"},
@@ -206,6 +212,164 @@ def test_az_gateway_aliases_never_enter_builtin_catalog() -> None:
     assert forbidden.isdisjoint(
         model_id for _, model_id, _ in ModelCapabilityCatalog.builtin().models
     )
+
+
+def test_builtin_openai_gpt5_and_reasoning_models_match_official_modalities() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    model_ids = {
+        "gpt-5",
+        "gpt-5-chat-latest",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-5.1",
+        "gpt-5.2",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.5",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-6-astra",
+        "o3",
+        "o4-mini",
+    }
+
+    for model_id in model_ids:
+        for protocol in ("openai_chat_completions", "openai_responses"):
+            capabilities = catalog.models[("openai", model_id, protocol)]
+            assert "image" in capabilities.modalities.input
+
+    for protocol in ("openai_chat_completions", "openai_responses"):
+        chat = catalog.models[("openai", "gpt-5-chat-latest", protocol)]
+        assert not chat.reasoning.supported
+        assert chat.limits.context_tokens == 128_000
+        assert chat.limits.max_output_tokens == 16_384
+
+
+def test_builtin_openai_specialized_models_use_their_actual_wire_protocols() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+
+    assert {
+        protocol
+        for provider, model_id, protocol in catalog.models
+        if provider == "openai" and model_id.startswith("gpt-image-")
+    } == {"openai_images"}
+    assert {
+        protocol
+        for provider, model_id, protocol in catalog.models
+        if provider == "openai" and model_id.startswith("gpt-realtime")
+    } == {"openai_realtime"}
+    assert {
+        protocol
+        for provider, model_id, protocol in catalog.models
+        if provider == "openai" and model_id.startswith("text-embedding-")
+    } == {"openai_embeddings"}
+    assert {
+        protocol
+        for provider, model_id, protocol in catalog.models
+        if provider == "openai" and model_id == "gpt-4o-mini-tts"
+    } == {"openai_audio_speech"}
+    assert (
+        "openai",
+        "gpt-audio",
+        "openai_responses",
+    ) not in catalog.models
+
+
+def test_builtin_openai_audio_and_realtime_capabilities_match_official_models() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+
+    for model_id in ("gpt-audio", "gpt-audio-1.5"):
+        audio = catalog.models[
+            ("openai", model_id, "openai_chat_completions")
+        ]
+        assert audio.modalities.input == ("text", "audio")
+        assert audio.modalities.output == ("text", "audio")
+        assert audio.tools.call
+        assert not audio.structured_output.json_object
+        assert not audio.structured_output.json_schema
+        assert not audio.reasoning.supported
+        assert audio.limits.context_tokens == 128_000
+        assert audio.limits.max_output_tokens == 16_384
+
+    realtime = catalog.models[("openai", "gpt-realtime", "openai_realtime")]
+    realtime2 = catalog.models[("openai", "gpt-realtime-2", "openai_realtime")]
+    for capabilities in (realtime, realtime2):
+        assert capabilities.modalities.input == ("text", "image", "audio")
+        assert capabilities.modalities.output == ("text", "audio")
+        assert capabilities.streaming.output == ("text", "audio")
+        assert capabilities.tools.call
+        assert not capabilities.structured_output.json_object
+        assert not capabilities.structured_output.json_schema
+    assert not realtime.reasoning.supported
+    assert not realtime.tools.parallel
+    assert realtime.limits.context_tokens == 32_000
+    assert realtime.limits.max_output_tokens == 4_096
+    assert realtime2.reasoning.supported
+    assert realtime2.reasoning.controllable
+    assert realtime2.tools.parallel
+    assert realtime2.limits.context_tokens == 128_000
+    assert realtime2.limits.max_output_tokens == 32_000
+    assert (
+        "openai",
+        "gpt-audio-1.5",
+        "openai_responses",
+    ) not in catalog.models
+
+
+def test_builtin_chatgpt_4o_matches_its_restricted_official_feature_set() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+
+    for protocol in ("openai_chat_completions", "openai_responses"):
+        capabilities = catalog.models[("openai", "chatgpt-4o-latest", protocol)]
+        assert capabilities.modalities.input == ("text", "image")
+        assert not capabilities.tools.call
+        assert not capabilities.structured_output.json_object
+        assert not capabilities.structured_output.json_schema
+        assert capabilities.limits.context_tokens == 128_000
+        assert capabilities.limits.max_output_tokens == 16_384
+
+
+@pytest.mark.parametrize(
+    ("model_id", "context_tokens", "max_output_tokens"),
+    [
+        ("gpt-4.1", 1_047_576, 32_768),
+        ("gpt-4.1-2025-04-14", 1_047_576, 32_768),
+        ("gpt-4.1-mini", 1_047_576, 32_768),
+        ("gpt-4o", 128_000, 16_384),
+        ("gpt-4o-2024-05-13", 128_000, 16_384),
+        ("gpt-4o-2024-08-06", 128_000, 16_384),
+        ("gpt-4o-2024-11-20", 128_000, 16_384),
+        ("gpt-4o-mini", 128_000, 16_384),
+        ("gpt-4o-mini-2024-07-18", 128_000, 16_384),
+        ("gpt-oss-120b", 131_072, 131_072),
+    ],
+)
+@pytest.mark.parametrize("protocol", ["openai_chat_completions", "openai_responses"])
+def test_builtin_openai_legacy_model_limits_match_official_models(
+    model_id: str,
+    context_tokens: int,
+    max_output_tokens: int,
+    protocol: str,
+) -> None:
+    capabilities = ModelCapabilityCatalog.builtin().models[
+        ("openai", model_id, protocol)
+    ]
+
+    assert capabilities.limits.context_tokens == context_tokens
+    assert capabilities.limits.max_output_tokens == max_output_tokens
+
+
+def test_builtin_first_gpt_4o_snapshot_predates_json_schema_output() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+
+    for protocol in ("openai_chat_completions", "openai_responses"):
+        capabilities = catalog.models[
+            ("openai", "gpt-4o-2024-05-13", protocol)
+        ]
+        assert capabilities.structured_output.json_object
+        assert not capabilities.structured_output.json_schema
 
 
 def test_builtin_token_plan_provider_has_two_executable_protocol_presets() -> None:

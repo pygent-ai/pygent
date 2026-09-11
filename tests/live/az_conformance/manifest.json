@@ -267,10 +267,6 @@
           "required_scenarios": [
             "text",
             "text_stream",
-            "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
             "image_input"
           ]
         }
@@ -852,7 +848,8 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema"
+            "json_schema",
+            "image_input"
           ]
         }
       ],
@@ -2833,7 +2830,6 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
             "image_input"
           ]
         }
@@ -2931,7 +2927,7 @@
       "canonical_model_id": "gpt-4o-mini-tts",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "openai_audio_speech",
           "required_scenarios": [
             "audio_output"
           ]
@@ -2954,7 +2950,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -2975,7 +2972,7 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "image_input"
           ]
         }
       ],
@@ -2996,7 +2993,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3017,7 +3015,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3038,7 +3037,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3059,7 +3059,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3080,7 +3081,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3101,7 +3103,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3122,7 +3125,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3143,7 +3147,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3164,7 +3169,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3185,7 +3191,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3206,7 +3213,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3227,7 +3235,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3248,7 +3257,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3269,7 +3279,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3290,7 +3301,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3311,7 +3323,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3332,7 +3345,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3349,6 +3363,8 @@
           "required_scenarios": [
             "text",
             "text_stream",
+            "tools",
+            "tool_choice",
             "audio_input",
             "audio_output"
           ]
@@ -3367,6 +3383,8 @@
           "required_scenarios": [
             "text",
             "text_stream",
+            "tools",
+            "tool_choice",
             "audio_input",
             "audio_output"
           ]
@@ -3381,7 +3399,7 @@
       "canonical_model_id": "gpt-image-2",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "openai_images",
           "required_scenarios": [
             "image_output",
             "image_edit"
@@ -3397,7 +3415,7 @@
       "canonical_model_id": "gpt-image-2",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "openai_images",
           "required_scenarios": [
             "image_output",
             "image_edit"
@@ -3413,7 +3431,7 @@
       "canonical_model_id": "gpt-image-2.5-flare",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "openai_images",
           "required_scenarios": [
             "image_output",
             "image_edit"
@@ -3450,9 +3468,12 @@
       "canonical_model_id": "gpt-realtime",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "openai_realtime",
           "required_scenarios": [
             "realtime",
+            "tools",
+            "tool_choice",
+            "image_input",
             "audio_input",
             "audio_output"
           ]
@@ -3467,9 +3488,13 @@
       "canonical_model_id": "gpt-realtime-2",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "openai_realtime",
           "required_scenarios": [
             "realtime",
+            "tools",
+            "tool_choice",
+            "reasoning",
+            "image_input",
             "audio_input",
             "audio_output"
           ]
@@ -3728,7 +3753,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -3749,7 +3775,8 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -4929,7 +4956,7 @@
       "canonical_model_id": "text-embedding-3-large",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "openai_embeddings",
           "required_scenarios": [
             "embedding"
           ]
@@ -4944,7 +4971,7 @@
       "canonical_model_id": "text-embedding-3-small",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "openai_embeddings",
           "required_scenarios": [
             "embedding"
           ]
@@ -4959,7 +4986,7 @@
       "canonical_model_id": "text-embedding-ada-002",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "openai_embeddings",
           "required_scenarios": [
             "embedding"
           ]

@@ -265,7 +265,11 @@ def test_builtin_manifest_preserves_advertised_protocol_counts() -> None:
         for route in manifest.routes
         for requirements in route.protocols
     ]
-    assert protocol_names.count("openai_chat_completions") == 209
+    assert protocol_names.count("openai_chat_completions") == 200
+    assert protocol_names.count("openai_audio_speech") == 1
+    assert protocol_names.count("openai_embeddings") == 3
+    assert protocol_names.count("openai_images") == 3
+    assert protocol_names.count("openai_realtime") == 2
     assert protocol_names.count("anthropic_messages") == 45
     assert protocol_names.count("gemini_generate_content") == 28
     assert protocol_names.count("serpapi_search") == 7
@@ -446,6 +450,59 @@ def test_every_official_catalog_triple_and_alias_target_has_a_source() -> None:
                 ) in source_keys
         elif route.kind is RouteKind.GATEWAY_ALIAS:
             assert (route.canonical_provider, route.canonical_model_id) in sourced_identities
+
+
+def test_openai_manifest_scenarios_match_catalogued_request_capabilities() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+
+    for route in load_manifest().routes:
+        if not route.catalog_eligible or route.canonical_provider != "openai":
+            continue
+        assert route.canonical_model_id is not None
+        for requirements in route.protocols:
+            capabilities = catalog.models[
+                ("openai", route.canonical_model_id, requirements.protocol)
+            ]
+            scenarios = set(requirements.required_scenarios)
+
+            assert bool(
+                scenarios & {Scenario.TEXT_STREAM, Scenario.REALTIME}
+            ) == (
+                "text" in capabilities.streaming.output
+            )
+            assert (Scenario.TOOLS in scenarios) == capabilities.tools.call
+            assert (Scenario.TOOL_CHOICE in scenarios) == bool(
+                capabilities.tools.choice
+            )
+            assert (Scenario.JSON_OBJECT in scenarios) == (
+                capabilities.structured_output.json_object
+            )
+            assert (Scenario.JSON_SCHEMA in scenarios) == (
+                capabilities.structured_output.json_schema
+            )
+            assert (Scenario.REASONING in scenarios) == (
+                capabilities.reasoning.supported
+            )
+            assert bool(
+                scenarios & {Scenario.IMAGE_INPUT, Scenario.IMAGE_EDIT}
+            ) == (
+                "image" in capabilities.modalities.input
+            )
+            assert (Scenario.AUDIO_INPUT in scenarios) == (
+                "audio" in capabilities.modalities.input
+            )
+            assert (Scenario.VIDEO_INPUT in scenarios) == (
+                "video" in capabilities.modalities.input
+            )
+            assert (Scenario.IMAGE_OUTPUT in scenarios) == (
+                "image" in capabilities.modalities.output
+            )
+            assert (Scenario.AUDIO_OUTPUT in scenarios) == (
+                "audio" in capabilities.modalities.output
+            )
+            assert (Scenario.EMBEDDING in scenarios) == (
+                "embedding" in capabilities.modalities.output
+            )
 
 
 def test_builtin_sources_only_use_reviewed_primary_domains() -> None:

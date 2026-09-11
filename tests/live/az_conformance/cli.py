@@ -105,8 +105,11 @@ class LiveProbeClient:
         return await self._http.request(method, url, **kwargs)
 
     async def websocket_exchange(
-        self, path: str, event: dict[str, object]
-    ) -> object:
+        self,
+        path: str,
+        events: Sequence[dict[str, object]],
+        terminal_event_types: frozenset[str],
+    ) -> tuple[object, ...]:
         try:
             import websockets
         except ImportError as exc:
@@ -121,8 +124,20 @@ class LiveProbeClient:
             "OpenAI-Beta": "realtime=v1",
         }
         async with websockets.connect(url, additional_headers=headers) as socket:
-            await socket.send(json.dumps(event, separators=(",", ":")))
-            return json.loads(await socket.recv())
+            for event in events:
+                await socket.send(json.dumps(event, separators=(",", ":")))
+            received: list[object] = []
+            async for raw in socket:
+                item = json.loads(raw)
+                received.append(item)
+                if (
+                    isinstance(item, Mapping)
+                    and item.get("type") in terminal_event_types
+                ):
+                    return tuple(received)
+                if len(received) >= 256:
+                    raise ValueError("realtime session exceeded the event limit")
+            raise ValueError("realtime session closed before a terminal event")
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -251,6 +266,10 @@ def _clients(connection: LiveConnection) -> Mapping[str, LiveProbeClient]:
     return MappingProxyType(
         {
             "openai_chat_completions": openai,
+            "openai_audio_speech": openai,
+            "openai_embeddings": openai,
+            "openai_images": openai,
+            "openai_realtime": openai,
             "anthropic_messages": anthropic,
             "gemini_generate_content": gemini,
             "serpapi_search": search,

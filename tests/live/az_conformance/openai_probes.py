@@ -376,6 +376,10 @@ async def openai_reasoning_probe(
                 raise ValueError("reasoning stream has no protocol evidence")
             return _passed(context, route)
         response = await _non_stream(context, route, request)
+        if route.canonical_provider == "openai":
+            if not response.message.content.strip():
+                raise ValueError("reasoning response has no text output")
+            return _passed(context, route)
         continuation = response.message.continuation
         if continuation is None or not continuation.data.get("reasoning_content"):
             raise ValueError("reasoning response has no protocol evidence")

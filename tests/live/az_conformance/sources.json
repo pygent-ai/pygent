@@ -943,259 +943,259 @@
       "provider": "openai",
       "model_id": "chatgpt-4o-latest",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/chatgpt-4o-latest",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-4.1-2025-04-14",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4.1",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-4.1-mini",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-4.1",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4.1",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-4o-2024-05-13",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4o",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-4o-2024-08-06",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4o",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-4o-2024-11-20",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4o",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-4o-mini-2024-07-18",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4o-mini",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-4o-mini-tts",
-      "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "protocol": "openai_audio_speech",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4o-mini-tts",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-4o-mini",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4o-mini",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-4o",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-4o",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5-chat-latest",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5-chat-latest",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5-mini",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5-mini",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5-nano",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5-nano",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5.1",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.1",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5.2",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.2",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5.4-mini",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5.4-nano",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.4-nano",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5.4",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.4",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5.5",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.5",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5.6-luna",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5.6-sol",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5.6-terra",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-5",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-6-astra",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-audio-1.5",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-audio-1.5",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-audio",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-audio",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-image-2.5-flare",
-      "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "protocol": "openai_images",
+      "url": "https://developers.openai.com/api/docs/models/gpt-image-2.5-flare",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-image-2",
-      "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "protocol": "openai_images",
+      "url": "https://developers.openai.com/api/docs/models/gpt-image-2",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-oss-120b",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/gpt-oss-120b",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-realtime-2",
-      "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "protocol": "openai_realtime",
+      "url": "https://developers.openai.com/api/docs/models/gpt-realtime-2",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "gpt-realtime",
-      "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "protocol": "openai_realtime",
+      "url": "https://developers.openai.com/api/docs/models/gpt-realtime",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "o3",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/o3",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "o4-mini",
       "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "url": "https://developers.openai.com/api/docs/models/o4-mini",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "text-embedding-3-large",
-      "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "protocol": "openai_embeddings",
+      "url": "https://developers.openai.com/api/docs/models/text-embedding-3-large",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "text-embedding-3-small",
-      "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "protocol": "openai_embeddings",
+      "url": "https://developers.openai.com/api/docs/models/text-embedding-3-small",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "openai",
       "model_id": "text-embedding-ada-002",
-      "protocol": "openai_chat_completions",
-      "url": "https://developers.openai.com/api/docs/models/all",
+      "protocol": "openai_embeddings",
+      "url": "https://developers.openai.com/api/docs/models/text-embedding-ada-002",
       "checked_at": "2026-09-11"
     },
     {
