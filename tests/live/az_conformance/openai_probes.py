@@ -294,7 +294,9 @@ async def openai_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
     adapter = OpenAICompatibleAdapter()
     first_request = _request(
         route,
-        message=UserMessage(content="Use lookup with value probe, then wait."),
+        message=UserMessage(
+            content="Use lookup with value probe. After receiving the result, reply with exactly DONE."
+        ),
         tools=(_TOOL,),
     )
     try:
@@ -627,7 +629,9 @@ async def openai_responses_tool_probe(
     adapter = OpenAIResponsesAdapter()
     first_request = _responses_request(
         route,
-        message=UserMessage(content="Use lookup with value probe, then wait."),
+        message=UserMessage(
+            content="Use lookup with value probe. After receiving the result, reply with exactly DONE."
+        ),
         tools=(_TOOL,),
     )
     try:

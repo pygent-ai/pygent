@@ -214,6 +214,7 @@ async def test_openai_tool_probe_executes_tool_result_continuation() -> None:
     assert result.status == "passed"
     assert len(client.requests) == 2
     assert client.requests[0]["tools"]
+    assert "reply with exactly DONE" in str(client.requests[0])
     assert client.requests[1]["messages"][-1]["role"] == "tool"
 
 
@@ -645,6 +646,7 @@ async def test_anthropic_stream_and_tool_round_trip_use_messages_contract() -> N
             _context(tool_client, Scenario.TOOLS, "anthropic_messages"), route
         )
     ).status == "passed"
+    assert "reply with exactly DONE" in str(tool_client.requests[0])
     assert tool_client.requests[1]["messages"][-1]["content"][0]["type"] == "tool_result"
 
 
@@ -768,6 +770,7 @@ async def test_gemini_tool_probe_executes_native_function_response() -> None:
         _context(client, Scenario.TOOLS, "gemini_generate_content"), route
     )
     assert result.status == "passed"
+    assert "reply with exactly DONE" in str(client.requests[0])
     response = client.requests[1]["contents"][-1]["parts"][0]["functionResponse"]
     assert response["name"] == "lookup"
 
@@ -921,6 +924,7 @@ async def test_responses_text_stream_and_tool_probes_use_responses_contract() ->
             _context(tool_client, Scenario.TOOLS, "openai_responses"), route
         )
     ).status == "passed"
+    assert "reply with exactly DONE" in str(tool_client.requests[0])
     assert tool_client.requests[1]["input"][-1]["type"] == "function_call_output"
 
 

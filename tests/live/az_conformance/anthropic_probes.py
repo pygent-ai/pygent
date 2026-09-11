@@ -214,7 +214,9 @@ async def anthropic_tool_probe(
     adapter = AnthropicMessagesAdapter()
     first_request = _request(
         route,
-        message=UserMessage(content="Use lookup with value probe, then wait."),
+        message=UserMessage(
+            content="Use lookup with value probe. After receiving the result, reply with exactly DONE."
+        ),
         tools=(_TOOL,),
     )
     try:

@@ -209,7 +209,9 @@ async def gemini_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
     adapter = GeminiGenerateContentAdapter()
     first_request = _request(
         route,
-        message=UserMessage(content="Use lookup with value probe, then wait."),
+        message=UserMessage(
+            content="Use lookup with value probe. After receiving the result, reply with exactly DONE."
+        ),
         tools=(_TOOL,),
     )
     try:
