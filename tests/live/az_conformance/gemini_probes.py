@@ -80,7 +80,7 @@ def _request(
         model=_spec(route, provider_options=provider_options),
         message=message or UserMessage(content="Reply with a short answer."),
         context=context or Context(),
-        generation=generation or GenerationConfig(max_output_tokens=256),
+        generation=generation or GenerationConfig(max_output_tokens=1024),
         tools=tools,
     )
 
@@ -252,7 +252,7 @@ async def gemini_tool_choice_probe(
     request = _request(
         route,
         tools=(_TOOL,),
-        generation=GenerationConfig(max_output_tokens=256, tool_choice="lookup"),
+        generation=GenerationConfig(max_output_tokens=1024, tool_choice="lookup"),
     )
     try:
         response = await _non_stream(context, route, request)
@@ -290,7 +290,7 @@ async def gemini_json_schema_probe(
 ) -> ProbeResult:
     request = _request(
         route,
-        generation=GenerationConfig(max_output_tokens=256, response_schema=_SCHEMA),
+        generation=GenerationConfig(max_output_tokens=1024, response_schema=_SCHEMA),
     )
     try:
         response = await _non_stream(context, route, request)

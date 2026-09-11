@@ -79,7 +79,7 @@ def _request(
         model=_spec(route, provider_options=provider_options),
         message=message or UserMessage(content="Reply with a short answer."),
         context=context or Context(),
-        generation=generation or GenerationConfig(max_output_tokens=256),
+        generation=generation or GenerationConfig(max_output_tokens=1024),
         tools=tools,
     )
 
@@ -259,7 +259,7 @@ async def anthropic_tool_choice_probe(
     request = _request(
         route,
         tools=(_TOOL,),
-        generation=GenerationConfig(max_output_tokens=256, tool_choice="lookup"),
+        generation=GenerationConfig(max_output_tokens=1024, tool_choice="lookup"),
     )
     try:
         response = await _non_stream(context, route, request)
@@ -297,7 +297,7 @@ async def anthropic_json_schema_probe(
     request = _request(
         route,
         generation=GenerationConfig(
-            max_output_tokens=256,
+            max_output_tokens=1024,
             response_schema=_SCHEMA,
             response_schema_name="probe_response",
         ),
