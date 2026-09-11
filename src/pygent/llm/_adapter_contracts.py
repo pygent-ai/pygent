@@ -251,12 +251,15 @@ def _canonical_usage(value: object) -> dict[str, int]:
         return {}
     prompt_details = value.get("prompt_tokens_details")
     completion_details = value.get("completion_tokens_details")
+    output_details = value.get("output_tokens_details")
     cached = value.get("cached_input_tokens", value.get("cached_tokens"))
     reasoning = value.get("reasoning_tokens")
     if isinstance(prompt_details, Mapping):
         cached = prompt_details.get("cached_tokens", cached)
     if isinstance(completion_details, Mapping):
         reasoning = completion_details.get("reasoning_tokens", reasoning)
+    if isinstance(output_details, Mapping):
+        reasoning = output_details.get("reasoning_tokens", reasoning)
     candidates = {
         "input_tokens": value.get("input_tokens", value.get("prompt_tokens")),
         "output_tokens": value.get("output_tokens", value.get("completion_tokens")),

@@ -17,11 +17,25 @@ from tests.live.az_conformance.anthropic_probes import (
     anthropic_tool_choice_probe,
     anthropic_tool_probe,
 )
+from tests.live.az_conformance.gemini_probes import (
+    gemini_image_input_probe,
+    gemini_json_schema_probe,
+    gemini_reasoning_probe,
+    gemini_stream_probe,
+    gemini_text_probe,
+    gemini_tool_probe,
+)
 from tests.live.az_conformance.openai_probes import (
     openai_image_input_probe,
     openai_json_object_probe,
     openai_json_schema_probe,
     openai_reasoning_probe,
+    openai_responses_image_input_probe,
+    openai_responses_json_schema_probe,
+    openai_responses_reasoning_probe,
+    openai_responses_stream_probe,
+    openai_responses_text_probe,
+    openai_responses_tool_probe,
     openai_stream_probe,
     openai_text_probe,
     openai_tool_choice_probe,
@@ -41,17 +55,20 @@ class ScriptedClient:
         self.responses = list(responses or [])
         self.stream_items = list(stream or [])
         self.requests: list[dict[str, object]] = []
+        self.models: list[ModelSpec] = []
 
     async def invoke(
         self, model: ModelSpec, payload: FrozenJsonObject
     ) -> FrozenJsonObject:
         self.requests.append(payload.to_dict())
+        self.models.append(model)
         return freeze_json_object(self.responses.pop(0))
 
     async def stream(
         self, model: ModelSpec, payload: FrozenJsonObject
     ) -> AsyncIterator[FrozenJsonObject]:
         self.requests.append(payload.to_dict())
+        self.models.append(model)
         for item in self.stream_items:
             yield freeze_json_object(item)
 
@@ -355,5 +372,218 @@ async def test_anthropic_reasoning_and_image_probes_use_native_blocks() -> None:
     assert blocks[1]["type"] == "image"
     assert blocks[1]["source"]["type"] == "base64"
     assert base64.b64decode(blocks[1]["source"]["data"]).endswith(
+        b"IEND\xaeB`\x82"
+    )
+
+
+def _gemini_response(
+    parts: list[dict[str, object]], finish_reason: str = "STOP"
+) -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": parts},
+                "finishReason": finish_reason,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 1,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 2,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_gemini_text_and_stream_probes_use_route_only_for_transport() -> None:
+    route = _route("gemini_generate_content")
+    text_client = ScriptedClient(responses=[_gemini_response([{"text": "answer"}])])
+    text = await gemini_text_probe(
+        _context(text_client, Scenario.TEXT, "gemini_generate_content"), route
+    )
+    assert text.status == "passed"
+    assert text_client.models[0].model_id == route.route_id
+    assert text.canonical_model_id == route.canonical_model_id
+
+    stream_client = ScriptedClient(
+        stream=[
+            {"candidates": [{"content": {"role": "model", "parts": [{"text": "ok"}]}}]},
+            _gemini_response([], "STOP"),
+        ]
+    )
+    stream = await gemini_stream_probe(
+        _context(stream_client, Scenario.TEXT_STREAM, "gemini_generate_content"),
+        route,
+    )
+    assert stream.status == "passed"
+
+
+@pytest.mark.asyncio
+async def test_gemini_tool_probe_executes_native_function_response() -> None:
+    route = _route("gemini_generate_content")
+    client = ScriptedClient(
+        responses=[
+            _gemini_response([{"functionCall": {"name": "lookup", "args": {"value": "probe"}}}]),
+            _gemini_response([{"text": "continued"}]),
+        ]
+    )
+    result = await gemini_tool_probe(
+        _context(client, Scenario.TOOLS, "gemini_generate_content"), route
+    )
+    assert result.status == "passed"
+    response = client.requests[1]["contents"][-1]["parts"][0]["functionResponse"]
+    assert response["name"] == "lookup"
+
+
+@pytest.mark.asyncio
+async def test_gemini_schema_reasoning_and_image_probes_use_native_fields() -> None:
+    route = _route("gemini_generate_content")
+    client = ScriptedClient(
+        responses=[
+            _gemini_response([{"text": '{"answer":"ok"}'}]),
+            _gemini_response(
+                [
+                    {"text": "reason", "thought": True, "thoughtSignature": "sig"},
+                    {"text": "answer"},
+                ]
+            ),
+            _gemini_response([{"text": "blue square"}]),
+        ]
+    )
+    assert (
+        await gemini_json_schema_probe(
+            _context(client, Scenario.JSON_SCHEMA, "gemini_generate_content"), route
+        )
+    ).status == "passed"
+    assert (
+        await gemini_reasoning_probe(
+            _context(client, Scenario.REASONING, "gemini_generate_content"), route
+        )
+    ).status == "passed"
+    assert (
+        await gemini_image_input_probe(
+            _context(client, Scenario.IMAGE_INPUT, "gemini_generate_content"), route
+        )
+    ).status == "passed"
+    assert client.requests[0]["generationConfig"]["responseJsonSchema"]
+    assert client.requests[1]["generationConfig"]["thinkingConfig"]["includeThoughts"] is True
+    image_part = client.requests[2]["contents"][-1]["parts"][1]["inlineData"]
+    assert image_part["mimeType"] == "image/png"
+    assert base64.b64decode(image_part["data"]).endswith(b"IEND\xaeB`\x82")
+
+
+def _responses_response(output: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "id": "resp-1",
+        "status": "completed",
+        "output": output,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+
+def _responses_text(text: str) -> dict[str, object]:
+    return _responses_response(
+        [
+            {
+                "id": "msg-1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_text_stream_and_tool_probes_use_responses_contract() -> None:
+    route = _route("openai_responses")
+    text_client = ScriptedClient(responses=[_responses_text("answer")])
+    assert (
+        await openai_responses_text_probe(
+            _context(text_client, Scenario.TEXT, "openai_responses"), route
+        )
+    ).status == "passed"
+    assert text_client.requests[0]["model"] == route.route_id
+    assert "input" in text_client.requests[0]
+
+    stream_client = ScriptedClient(
+        stream=[
+            {"type": "response.output_text.delta", "delta": "ok"},
+            {
+                "type": "response.completed",
+                "response": _responses_response([]),
+            },
+        ]
+    )
+    assert (
+        await openai_responses_stream_probe(
+            _context(stream_client, Scenario.TEXT_STREAM, "openai_responses"),
+            route,
+        )
+    ).status == "passed"
+
+    tool_client = ScriptedClient(
+        responses=[
+            _responses_response(
+                [
+                    {
+                        "id": "fc-1",
+                        "type": "function_call",
+                        "call_id": "call-1",
+                        "name": "lookup",
+                        "arguments": '{"value":"probe"}',
+                    }
+                ]
+            ),
+            _responses_text("continued"),
+        ]
+    )
+    assert (
+        await openai_responses_tool_probe(
+            _context(tool_client, Scenario.TOOLS, "openai_responses"), route
+        )
+    ).status == "passed"
+    assert tool_client.requests[1]["input"][-1]["type"] == "function_call_output"
+
+
+@pytest.mark.asyncio
+async def test_responses_schema_reasoning_and_image_probes_use_native_items() -> None:
+    route = _route("openai_responses")
+    client = ScriptedClient(
+        responses=[
+            _responses_text('{"answer":"ok"}'),
+            _responses_response(
+                [
+                    {
+                        "id": "rs-1",
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": "reason"}],
+                    },
+                    *_responses_text("answer")["output"],
+                ]
+            ),
+            _responses_text("blue square"),
+        ]
+    )
+    assert (
+        await openai_responses_json_schema_probe(
+            _context(client, Scenario.JSON_SCHEMA, "openai_responses"), route
+        )
+    ).status == "passed"
+    assert (
+        await openai_responses_reasoning_probe(
+            _context(client, Scenario.REASONING, "openai_responses"), route
+        )
+    ).status == "passed"
+    assert (
+        await openai_responses_image_input_probe(
+            _context(client, Scenario.IMAGE_INPUT, "openai_responses"), route
+        )
+    ).status == "passed"
+    assert client.requests[0]["text"]["format"]["type"] == "json_schema"
+    assert client.requests[1]["reasoning"]["summary"] == "auto"
+    image = client.requests[2]["input"][-1]["content"][1]
+    assert image["type"] == "input_image"
+    assert base64.b64decode(image["image_url"].partition(",")[2]).endswith(
         b"IEND\xaeB`\x82"
     )

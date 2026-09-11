@@ -42,12 +42,22 @@ from .configuration import (
     ModelStructuredOutputCapabilities,
     ModelToolCapabilities,
 )
+from .gemini_generate_content import (
+    GeminiGenerateContentAdapter,
+    GeminiGenerateContentClient,
+    gemini_generate_content_adapters,
+)
 from .invoker import DefaultModelInvoker
 from .layer import ModelCallLayer
 from .openai_compatible import (
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
     openai_compatible_adapters,
+)
+from .openai_responses import (
+    OpenAIResponsesAdapter,
+    OpenAIResponsesClient,
+    openai_responses_adapters,
 )
 from .protocols import BuiltinModelProtocol
 from .types import (
@@ -84,6 +94,8 @@ __all__ = [
     "DefaultModelInvoker",
     "EventSink",
     "ExponentialBackoff",
+    "GeminiGenerateContentAdapter",
+    "GeminiGenerateContentClient",
     "GenerationConfig",
     "ModelAttempt",
     "ModelCallError",
@@ -133,10 +145,14 @@ __all__ = [
     "ModelToolCapabilities",
     "OpenAICompatibleAdapter",
     "OpenAICompatibleClient",
+    "OpenAIResponsesAdapter",
+    "OpenAIResponsesClient",
     "ProviderCatalog",
     "ProviderPreset",
     "ProviderProtocolPreset",
     "RetryPolicy",
     "anthropic_messages_adapters",
+    "gemini_generate_content_adapters",
     "openai_compatible_adapters",
+    "openai_responses_adapters",
 ]
