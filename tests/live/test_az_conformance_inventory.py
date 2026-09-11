@@ -12,6 +12,7 @@ from tests.live.az_conformance.inventory import (
     compare_inventory,
     inventory_digest,
     require_matching_inventory,
+    require_snapshot_coverage,
 )
 from tests.live.az_conformance.schemas import manifest_from_mapping
 
@@ -69,6 +70,7 @@ async def test_inventory_mismatch_reports_sorted_drift() -> None:
     assert result.added == ("new-route",)
     assert result.removed == ()
     assert result.matches is False
+    assert result.covers_snapshot is True
 
 
 @pytest.mark.asyncio
@@ -118,6 +120,15 @@ def test_inventory_drift_stops_before_probe_dispatch() -> None:
         dispatch()
 
     assert dispatched == []
+
+
+def test_snapshot_coverage_allows_additions_but_rejects_removals() -> None:
+    addition = InventoryDiff(1, 2, "a", "b", ("new",), ())
+    require_snapshot_coverage(addition)
+
+    removal = InventoryDiff(2, 1, "a", "b", (), ("required",))
+    with pytest.raises(InventoryDriftError, match="inventory drift"):
+        require_snapshot_coverage(removal)
 
 
 @pytest.mark.asyncio

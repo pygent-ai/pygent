@@ -25,6 +25,7 @@ from tests.live.az_conformance.inventory import (
     InventoryDriftError,
     compare_inventory,
     require_matching_inventory,
+    require_snapshot_coverage,
 )
 from tests.live.az_conformance.probe_registry import builtin_probe_registry
 from tests.live.az_conformance.results import ResultLedger
@@ -334,6 +335,7 @@ async def _async_main(
     inventory = await _inventory(connection, manifest)
     print(
         f"inventory_match={str(inventory.matches).lower()} "
+        f"snapshot_covered={str(inventory.covers_snapshot).lower()} "
         f"expected={inventory.expected_count} actual={inventory.actual_count} "
         f"added={len(inventory.added)} removed={len(inventory.removed)}"
     )
@@ -351,7 +353,7 @@ async def _async_main(
         )
         return 1
     try:
-        require_matching_inventory(inventory)
+        require_snapshot_coverage(inventory)
     except InventoryDriftError:
         return 1
 

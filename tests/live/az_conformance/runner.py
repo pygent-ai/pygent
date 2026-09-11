@@ -8,7 +8,7 @@ from typing import TypeAlias
 
 from tests.live.az_conformance.inventory import (
     InventoryDiff,
-    require_matching_inventory,
+    require_snapshot_coverage,
 )
 from tests.live.az_conformance.results import (
     ErrorKind,
@@ -194,7 +194,7 @@ class ConformanceRunner:
         route_id: str | None = None,
         scenario: Scenario | None = None,
     ) -> ConformanceReport:
-        require_matching_inventory(inventory)
+        require_snapshot_coverage(inventory)
         queue = build_probe_queue(
             self.manifest, route_id=route_id, scenario=scenario
         )

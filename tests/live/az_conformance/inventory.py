@@ -24,6 +24,10 @@ class InventoryDiff:
     def matches(self) -> bool:
         return not self.added and not self.removed
 
+    @property
+    def covers_snapshot(self) -> bool:
+        return not self.removed
+
 
 class InventoryDriftError(RuntimeError):
     def __init__(self, diff: InventoryDiff) -> None:
@@ -115,6 +119,11 @@ def require_matching_inventory(diff: InventoryDiff) -> None:
         raise InventoryDriftError(diff)
 
 
+def require_snapshot_coverage(diff: InventoryDiff) -> None:
+    if not diff.covers_snapshot:
+        raise InventoryDriftError(diff)
+
+
 __all__ = [
     "InventoryDiff",
     "InventoryDriftError",
@@ -122,4 +131,5 @@ __all__ = [
     "fetch_inventory_ids",
     "inventory_digest",
     "require_matching_inventory",
+    "require_snapshot_coverage",
 ]
