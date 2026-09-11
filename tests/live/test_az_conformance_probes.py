@@ -58,7 +58,7 @@ from tests.live.az_conformance.schemas import (
     load_manifest,
     route_from_mapping,
 )
-from tests.live.az_conformance.search_probes import serpapi_search_probe
+from tests.live.az_conformance.search_probes import search_probe
 
 _PNG = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1Pe"
@@ -842,7 +842,12 @@ async def test_serpapi_probe_requires_at_least_one_result() -> None:
         client=client,
     )
 
-    assert (await serpapi_search_probe(context, route)).status == "passed"
+    assert (await search_probe(context, route)).status == "passed"
+    assert client.requests[0][0:2] == ("POST", "/alpha/search")
+    assert client.requests[0][2]["json"] == {
+        "model": "serpapi-google",
+        "query": "Pygent agent framework",
+    }
 
     empty_client = RawScriptedClient(
         [httpx.Response(200, json={"organic_results": []})]
@@ -855,9 +860,48 @@ async def test_serpapi_probe_requires_at_least_one_result() -> None:
         attempt=1,
         client=empty_client,
     )
-    empty = await serpapi_search_probe(empty_context, route)
+    empty = await search_probe(empty_context, route)
     assert empty.status == "failed"
     assert empty.error_kind.value == "invalid_response"
+
+
+@pytest.mark.asyncio
+async def test_openai_search_probe_uses_the_advertised_chat_endpoint() -> None:
+    client = RawScriptedClient(
+        [
+            httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {"message": {"role": "assistant", "content": "result"}}
+                    ]
+                },
+            )
+        ]
+    )
+    route = route_from_mapping(
+        {
+            "route_id": "serpapi-google",
+            "kind": "external_service",
+            "canonical_provider": None,
+            "canonical_model_id": None,
+            "protocols": ["openai_chat_completions"],
+            "required_scenarios": ["search"],
+            "catalog_eligible": False,
+        }
+    )
+    context = ProbeContext(
+        snapshot_sha256="7" * 64,
+        source_revision="abc1234",
+        protocol="openai_chat_completions",
+        scenario=Scenario.SEARCH,
+        attempt=1,
+        client=client,
+    )
+
+    assert (await search_probe(context, route)).status == "passed"
+    assert client.requests[0][0:2] == ("POST", "/chat/completions")
+    assert client.requests[0][2]["json"]["model"] == "serpapi-google"
 
 
 def test_builtin_probe_registry_covers_every_manifest_protocol_scenario() -> None:

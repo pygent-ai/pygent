@@ -41,7 +41,7 @@ from tests.live.az_conformance.openai_probes import (
 )
 from tests.live.az_conformance.runner import ProbeRegistry
 from tests.live.az_conformance.schemas import Scenario
-from tests.live.az_conformance.search_probes import serpapi_search_probe
+from tests.live.az_conformance.search_probes import search_probe
 
 
 def builtin_probe_registry() -> ProbeRegistry:
@@ -62,7 +62,7 @@ def builtin_probe_registry() -> ProbeRegistry:
             ("openai_chat_completions", Scenario.AUDIO_INPUT): audio_input_probe,
             ("openai_chat_completions", Scenario.REALTIME): realtime_probe,
             ("openai_chat_completions", Scenario.EMBEDDING): embedding_probe,
-            ("openai_chat_completions", Scenario.SEARCH): serpapi_search_probe,
+            ("openai_chat_completions", Scenario.SEARCH): search_probe,
             ("anthropic_messages", Scenario.TEXT): anthropic_text_probe,
             ("anthropic_messages", Scenario.TEXT_STREAM): anthropic_stream_probe,
             ("anthropic_messages", Scenario.TOOLS): anthropic_tool_probe,
@@ -82,7 +82,7 @@ def builtin_probe_registry() -> ProbeRegistry:
             ("gemini_generate_content", Scenario.IMAGE_OUTPUT): image_output_probe,
             ("gemini_generate_content", Scenario.IMAGE_EDIT): image_edit_probe,
             ("gemini_generate_content", Scenario.AUDIO_OUTPUT): audio_output_probe,
-            ("serpapi_search", Scenario.SEARCH): serpapi_search_probe,
+            ("serpapi_search", Scenario.SEARCH): search_probe,
         }
     )
 

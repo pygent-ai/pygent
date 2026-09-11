@@ -31,18 +31,37 @@ def _result(
     )
 
 
-async def serpapi_search_probe(
-    context: ProbeContext, route: AzRoute
-) -> ProbeResult:
+async def search_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
     if context.client is None:
         raise ValueError("probe client is not configured")
     client = cast(RawProbeClient, context.client)
     try:
-        response = await client.request(
-            "POST",
-            "/search",
-            json={"model": route.route_id, "q": "Pygent agent framework"},
-        )
+        if context.protocol == "openai_chat_completions":
+            response = await client.request(
+                "POST",
+                "/chat/completions",
+                json={
+                    "model": route.route_id,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                "Search for Pygent agent framework and return one result."
+                            ),
+                        }
+                    ],
+                    "max_tokens": 1024,
+                },
+            )
+        else:
+            response = await client.request(
+                "POST",
+                "/alpha/search",
+                json={
+                    "model": route.route_id,
+                    "query": "Pygent agent framework",
+                },
+            )
         if response.status_code == 401:
             return _result(context, route, error_kind=ErrorKind.AUTHENTICATION)
         if response.status_code == 403:
@@ -56,6 +75,18 @@ async def serpapi_search_probe(
         payload = response.json()
         if not isinstance(payload, Mapping):
             raise TypeError("search response must be an object")
+        if context.protocol == "openai_chat_completions":
+            choices = payload.get("choices")
+            if (
+                not isinstance(choices, list)
+                or not choices
+                or not isinstance(choices[0], Mapping)
+                or not isinstance(choices[0].get("message"), Mapping)
+                or not isinstance(choices[0]["message"].get("content"), str)
+                or not choices[0]["message"]["content"].strip()
+            ):
+                raise ValueError("search chat response has no text result")
+            return _result(context, route)
         results = payload.get("organic_results", payload.get("results"))
         if (
             not isinstance(results, list)
@@ -68,4 +99,4 @@ async def serpapi_search_probe(
     return _result(context, route)
 
 
-__all__ = ["serpapi_search_probe"]
+__all__ = ["search_probe"]
