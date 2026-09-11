@@ -152,7 +152,11 @@ def _connection_from_environment(
 
 
 def _api_root(base_url: str) -> str:
-    return base_url if base_url.endswith("/v1") else base_url + "/v1"
+    return _gateway_root(base_url) + "/v1"
+
+
+def _gateway_root(base_url: str) -> str:
+    return base_url.removesuffix("/v1")
 
 
 def _source_revision() -> str:
@@ -212,7 +216,7 @@ async def _inventory(
 
 
 def _clients(connection: LiveConnection) -> Mapping[str, LiveProbeClient]:
-    root = connection.base_url
+    root = _gateway_root(connection.base_url)
     api_root = _api_root(root)
     openai = LiveProbeClient(
         base_url=api_root,

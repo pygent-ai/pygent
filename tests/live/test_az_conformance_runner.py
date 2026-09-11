@@ -375,6 +375,14 @@ def test_cli_connection_is_strict_and_hides_credentials() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "base_url", ["https://gateway.example", "https://gateway.example/v1"]
+)
+def test_cli_normalizes_gateway_root_before_protocol_paths(base_url: str) -> None:
+    assert cli._gateway_root(base_url) == "https://gateway.example"
+    assert cli._api_root(base_url) == "https://gateway.example/v1"
+
+
 def test_cli_inventory_drift_stops_before_client_construction(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
