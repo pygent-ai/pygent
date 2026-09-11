@@ -47,6 +47,18 @@ _TOOL = ToolDefinition(
         "additionalProperties": False,
     },
 )
+_ALIBABA_FIXED_REASONING_MODELS = frozenset(
+    {
+        "qvq-max",
+        "qwen3-235b-a22b-thinking-2507",
+        "qwen3-next-80b-a3b-thinking",
+        "qwen3-vl-235b-a22b-thinking",
+        "qwen3-vl-30b-a3b-thinking",
+        "qwen3-vl-32b-thinking",
+        "qwen3-vl-8b-thinking",
+        "qwq-plus",
+    }
+)
 
 
 def _spec(
@@ -254,11 +266,17 @@ async def openai_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
 async def openai_tool_choice_probe(
     context: ProbeContext, route: AzRoute
 ) -> ProbeResult:
+    provider_options = (
+        {"enable_thinking": False}
+        if route.canonical_provider == "alibaba_cloud"
+        else None
+    )
     request = _request(
         route,
         message=UserMessage(content="Use lookup with value probe."),
         tools=(_TOOL,),
         generation=GenerationConfig(max_output_tokens=1024, tool_choice="lookup"),
+        provider_options=provider_options,
     )
     try:
         response = await _non_stream(context, route, request)
@@ -325,8 +343,27 @@ async def openai_json_schema_probe(
 async def openai_reasoning_probe(
     context: ProbeContext, route: AzRoute
 ) -> ProbeResult:
-    request = _request(route, provider_options={"reasoning_effort": "low"})
+    fixed_alibaba_reasoning = (
+        route.canonical_provider == "alibaba_cloud"
+        and route.canonical_model_id in _ALIBABA_FIXED_REASONING_MODELS
+    )
+    provider_options = {} if fixed_alibaba_reasoning else {"reasoning_effort": "low"}
+    request = _request(route, provider_options=provider_options)
     try:
+        if route.canonical_model_id == "qvq-max":
+            adapter = OpenAICompatibleAdapter()
+            decoder = adapter.create_stream_decoder(request)
+            saw_reasoning = False
+            stream: AsyncIterator[FrozenJsonObject] = _client(context).stream(
+                request.model, _wire_payload(adapter, request, route)
+            )
+            async for item in stream:
+                for part in decoder.feed(item):
+                    saw_reasoning = saw_reasoning or part.kind == "continuation"
+            decoder.finish()
+            if not saw_reasoning:
+                raise ValueError("reasoning stream has no protocol evidence")
+            return _passed(context, route)
         response = await _non_stream(context, route, request)
         continuation = response.message.continuation
         if continuation is None or not continuation.data.get("reasoning_content"):
@@ -352,6 +389,25 @@ async def openai_image_input_probe(
         ]
 
     try:
+        if route.canonical_model_id == "qvq-max":
+            request = _request(route)
+            adapter = OpenAICompatibleAdapter()
+            payload = _wire_payload(adapter, request, route).to_dict()
+            add_image(payload)
+            decoder = adapter.create_stream_decoder(request)
+            saw_text = False
+            saw_finish = False
+            stream: AsyncIterator[FrozenJsonObject] = _client(context).stream(
+                request.model, freeze_json_object(payload)
+            )
+            async for item in stream:
+                for part in decoder.feed(item):
+                    saw_text = saw_text or part.kind == "text"
+                    saw_finish = saw_finish or part.kind == "finish"
+            decoder.finish()
+            if not saw_text or not saw_finish:
+                raise ValueError("vision stream lacks text or completion evidence")
+            return _passed(context, route)
         response = await _non_stream(
             context, route, _request(route), mutate=add_image
         )

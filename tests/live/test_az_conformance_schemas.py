@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from pygent.llm import ModelCapabilityCatalog
 from tests.live.az_conformance.schemas import (
     RouteKind,
     Scenario,
@@ -318,6 +319,65 @@ def test_builtin_manifest_does_not_probe_unsupported_zhipu_controls() -> None:
                 assert Scenario.JSON_OBJECT not in requirements.required_scenarios
             if requirements.protocol == "openai_chat_completions":
                 assert Scenario.TOOL_CHOICE not in requirements.required_scenarios
+
+
+def test_builtin_manifest_probes_only_catalogued_alibaba_structured_output() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    routes = {
+        route.route_id: route
+        for route in load_manifest().routes
+        if route.canonical_provider == "alibaba_cloud"
+    }
+
+    for route in routes.values():
+        capabilities = catalog.models[
+            (
+                "alibaba_cloud",
+                route.canonical_model_id,
+                "openai_chat_completions",
+            )
+        ]
+        scenarios = next(
+            requirements.required_scenarios
+            for requirements in route.protocols
+            if requirements.protocol == "openai_chat_completions"
+        )
+        assert (Scenario.JSON_OBJECT in scenarios) is (
+            capabilities.structured_output.json_object
+        )
+        assert (Scenario.JSON_SCHEMA in scenarios) is (
+            capabilities.structured_output.json_schema
+        )
+
+
+def test_builtin_manifest_covers_catalogued_alibaba_request_capabilities() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    for route in load_manifest().routes:
+        if route.canonical_provider != "alibaba_cloud":
+            continue
+        capabilities = catalog.models[
+            (
+                "alibaba_cloud",
+                route.canonical_model_id,
+                "openai_chat_completions",
+            )
+        ]
+        scenarios = next(
+            requirements.required_scenarios
+            for requirements in route.protocols
+            if requirements.protocol == "openai_chat_completions"
+        )
+        assert (Scenario.TOOLS in scenarios) is capabilities.tools.call
+        assert (Scenario.TOOL_CHOICE in scenarios) is (
+            "named" in capabilities.tools.choice
+        )
+        assert (Scenario.REASONING in scenarios) is capabilities.reasoning.supported
+        assert (Scenario.IMAGE_INPUT in scenarios) is (
+            "image" in capabilities.modalities.input
+        )
+        assert (Scenario.VIDEO_INPUT in scenarios) is (
+            "video" in capabilities.modalities.input
+        )
 
 
 def test_every_official_catalog_triple_and_alias_target_has_a_source() -> None:

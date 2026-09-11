@@ -8,7 +8,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -20,22 +22,17 @@
           ]
         },
         "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "call": false,
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -73,7 +70,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": false,
@@ -187,7 +184,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": false,
@@ -271,7 +268,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": false,
@@ -291,7 +288,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -303,18 +301,13 @@
           ]
         },
         "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "call": false,
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": false,
@@ -345,13 +338,18 @@
           ]
         },
         "tools": {
-          "call": false,
-          "choice": [],
-          "parallel": false
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": false,
@@ -382,13 +380,18 @@
           ]
         },
         "tools": {
-          "call": false,
-          "choice": [],
-          "parallel": false
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": false,
@@ -429,8 +432,8 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": false,
@@ -471,8 +474,8 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": false,
@@ -492,7 +495,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -509,8 +513,8 @@
           "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": false,
@@ -552,7 +556,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -594,7 +598,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -636,11 +640,11 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -677,12 +681,12 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -720,7 +724,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -762,11 +766,11 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -804,7 +808,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -846,7 +850,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -888,11 +892,11 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -930,11 +934,11 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -972,7 +976,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -1013,12 +1017,12 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -1055,12 +1059,12 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -1148,7 +1152,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1171,11 +1176,11 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -1191,7 +1196,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1213,12 +1219,12 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -1234,7 +1240,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1257,11 +1264,11 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -1277,7 +1284,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1299,12 +1307,12 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -1320,7 +1328,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1343,11 +1352,11 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -1363,7 +1372,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1385,12 +1395,12 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -1406,7 +1416,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1429,11 +1440,11 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -1449,7 +1460,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1471,12 +1483,12 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -1492,7 +1504,8 @@
         "modalities": {
           "input": [
             "text",
-            "image"
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1515,7 +1528,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -1534,7 +1547,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1557,7 +1572,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -1576,7 +1591,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1599,7 +1616,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -1618,7 +1635,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1641,7 +1660,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -1660,7 +1679,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1683,7 +1704,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -1796,7 +1817,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1819,7 +1842,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -1838,7 +1861,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1861,7 +1886,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -1922,7 +1947,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1964,7 +1991,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -1987,7 +2016,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -2006,7 +2035,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -2048,7 +2079,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -2112,12 +2145,12 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,

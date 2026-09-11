@@ -621,6 +621,150 @@ def test_builtin_alibaba_omni_capabilities_follow_official_model_boundaries() ->
     assert captioner.limits.max_output_tokens == 32_768
 
 
+def test_builtin_alibaba_structured_output_follows_official_model_boundaries() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    records = {
+        model_id: capabilities
+        for (provider, model_id, protocol), capabilities in catalog.models.items()
+        if provider == "alibaba_cloud"
+        and protocol == "openai_chat_completions"
+    }
+
+    assert {
+        model_id
+        for model_id, capabilities in records.items()
+        if capabilities.structured_output.json_schema
+    } == {
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.8-flash",
+        "qwen3.8-max",
+    }
+    assert {
+        model_id
+        for model_id, capabilities in records.items()
+        if capabilities.structured_output.json_object
+    } == {
+        "qwen-coder-turbo",
+        "qwen-max",
+        "qwen-plus",
+        "qwen-vl-max",
+        "qwen2.5-32b-instruct",
+        "qwen2.5-72b-instruct",
+        "qwen3-14b",
+        "qwen3-235b-a22b",
+        "qwen3-235b-a22b-instruct-2507",
+        "qwen3-30b-a3b",
+        "qwen3-30b-a3b-instruct-2507",
+        "qwen3-32b",
+        "qwen3-8b",
+        "qwen3-coder-30b-a3b-instruct",
+        "qwen3-coder-480b-a35b-instruct",
+        "qwen3-max",
+        "qwen3-vl-235b-a22b-instruct",
+        "qwen3-vl-30b-a3b-instruct",
+        "qwen3-vl-32b-instruct",
+        "qwen3-vl-8b-instruct",
+        "qwen3-vl-plus",
+        "qwen3.5-122b-a10b",
+        "qwen3.5-27b",
+        "qwen3.5-35b-a3b",
+        "qwen3.5-397b-a17b",
+        "qwen3.5-omni-plus",
+        "qwen3.5-plus",
+        "qwen3.6-plus",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.8-27b",
+        "qwen3.8-flash",
+        "qwen3.8-max",
+    }
+
+
+def test_builtin_alibaba_visual_inputs_follow_official_model_boundaries() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    records = {
+        model_id: capabilities
+        for (provider, model_id, protocol), capabilities in catalog.models.items()
+        if provider == "alibaba_cloud"
+        and protocol == "openai_chat_completions"
+    }
+    expected_video = {
+        "qvq-max",
+        "qwen-omni-turbo",
+        "qwen-vl-max",
+        "qwen2.5-vl-32b-instruct",
+        "qwen3-vl-235b-a22b-instruct",
+        "qwen3-vl-235b-a22b-thinking",
+        "qwen3-vl-30b-a3b-instruct",
+        "qwen3-vl-30b-a3b-thinking",
+        "qwen3-vl-32b-instruct",
+        "qwen3-vl-32b-thinking",
+        "qwen3-vl-8b-instruct",
+        "qwen3-vl-8b-thinking",
+        "qwen3-vl-plus",
+        "qwen3.5-122b-a10b",
+        "qwen3.5-27b",
+        "qwen3.5-35b-a3b",
+        "qwen3.5-397b-a17b",
+        "qwen3.5-omni-flash",
+        "qwen3.5-omni-plus",
+        "qwen3.5-plus",
+        "qwen3.6-plus",
+        "qwen3.7-plus",
+        "qwen3.8-27b",
+        "qwen3.8-flash",
+        "qwen3.8-max",
+    }
+
+    assert {
+        model_id
+        for model_id, capabilities in records.items()
+        if "video" in capabilities.modalities.input
+    } == expected_video
+    assert all(
+        "image" in records[model_id].modalities.input for model_id in expected_video
+    )
+
+
+def test_builtin_alibaba_fixed_reasoning_models_are_not_controllable() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    fixed_reasoning = {
+        "qvq-max",
+        "qwen3-235b-a22b-thinking-2507",
+        "qwen3-next-80b-a3b-thinking",
+        "qwen3-vl-235b-a22b-thinking",
+        "qwen3-vl-30b-a3b-thinking",
+        "qwen3-vl-32b-thinking",
+        "qwen3-vl-8b-thinking",
+        "qwq-plus",
+    }
+    non_reasoning_instruct = {
+        "qwen3-235b-a22b-instruct-2507",
+        "qwen3-30b-a3b-instruct-2507",
+        "qwen3-coder-30b-a3b-instruct",
+        "qwen3-coder-480b-a35b-instruct",
+        "qwen3-next-80b-a3b-instruct",
+        "qwen3-vl-235b-a22b-instruct",
+        "qwen3-vl-30b-a3b-instruct",
+        "qwen3-vl-32b-instruct",
+        "qwen3-vl-8b-instruct",
+    }
+
+    for model_id in fixed_reasoning:
+        reasoning = catalog.models[
+            ("alibaba_cloud", model_id, "openai_chat_completions")
+        ].reasoning
+        assert reasoning.supported
+        assert not reasoning.controllable
+    for model_id in non_reasoning_instruct:
+        reasoning = catalog.models[
+            ("alibaba_cloud", model_id, "openai_chat_completions")
+        ].reasoning
+        assert not reasoning.supported
+        assert not reasoning.controllable
+
+
 @pytest.mark.parametrize(
     "name, structured, tools, reasoning",
     [

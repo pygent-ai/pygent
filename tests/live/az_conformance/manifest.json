@@ -3758,13 +3758,10 @@
         {
           "protocol": "openai_chat_completions",
           "required_scenarios": [
-            "text",
             "text_stream",
-            "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -3783,8 +3780,7 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema"
+            "json_object"
           ]
         }
       ],
@@ -3799,6 +3795,7 @@
         {
           "protocol": "openai_chat_completions",
           "required_scenarios": [
+            "image_input",
             "image_output",
             "image_edit"
           ]
@@ -3815,6 +3812,7 @@
         {
           "protocol": "openai_chat_completions",
           "required_scenarios": [
+            "image_input",
             "image_output",
             "image_edit"
           ]
@@ -3835,8 +3833,7 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema"
+            "json_object"
           ]
         }
       ],
@@ -3854,9 +3851,9 @@
             "text",
             "text_stream",
             "image_input",
-            "audio_input",
+            "video_input",
             "audio_output",
-            "video_input"
+            "audio_input"
           ]
         }
       ],
@@ -3875,8 +3872,7 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema"
+            "json_object"
           ]
         }
       ],
@@ -3893,11 +3889,9 @@
           "required_scenarios": [
             "text",
             "text_stream",
-            "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
-            "image_input"
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -3914,8 +3908,9 @@
           "required_scenarios": [
             "text",
             "text_stream",
-            "json_object",
-            "json_schema"
+            "tools",
+            "tool_choice",
+            "json_object"
           ]
         }
       ],
@@ -3932,8 +3927,9 @@
           "required_scenarios": [
             "text",
             "text_stream",
-            "json_object",
-            "json_schema"
+            "tools",
+            "tool_choice",
+            "json_object"
           ]
         }
       ],
@@ -3951,9 +3947,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema"
+            "tool_choice"
           ]
         }
       ],
@@ -3971,9 +3965,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema"
+            "tool_choice"
           ]
         }
       ],
@@ -3990,9 +3982,8 @@
           "required_scenarios": [
             "text",
             "text_stream",
-            "json_object",
-            "json_schema",
-            "image_input"
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4012,7 +4003,6 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -4033,7 +4023,6 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -4053,9 +4042,7 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema",
-            "reasoning"
+            "json_object"
           ]
         }
       ],
@@ -4074,8 +4061,6 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -4096,7 +4081,6 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -4116,9 +4100,7 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema",
-            "reasoning"
+            "json_object"
           ]
         }
       ],
@@ -4138,7 +4120,6 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -4159,7 +4140,6 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -4179,9 +4159,7 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema",
-            "reasoning"
+            "json_object"
           ]
         }
       ],
@@ -4200,9 +4178,7 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema",
-            "reasoning"
+            "json_object"
           ]
         }
       ],
@@ -4222,7 +4198,6 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -4241,10 +4216,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         }
       ],
@@ -4263,8 +4235,6 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -4315,9 +4285,8 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
-            "reasoning",
-            "image_input"
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4336,10 +4305,9 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning",
-            "image_input"
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4359,9 +4327,8 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
-            "reasoning",
-            "image_input"
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4380,10 +4347,9 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning",
-            "image_input"
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4403,9 +4369,8 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
-            "reasoning",
-            "image_input"
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4424,10 +4389,9 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning",
-            "image_input"
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4447,9 +4411,8 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
-            "reasoning",
-            "image_input"
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4468,10 +4431,9 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning",
-            "image_input"
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4491,9 +4453,9 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning",
-            "image_input"
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4513,8 +4475,9 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4534,8 +4497,9 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4555,8 +4519,9 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4576,8 +4541,9 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4597,9 +4563,9 @@
             "tools",
             "tool_choice",
             "image_input",
-            "audio_input",
+            "video_input",
             "audio_output",
-            "video_input"
+            "audio_input"
           ]
         }
       ],
@@ -4620,9 +4586,9 @@
             "tool_choice",
             "json_object",
             "image_input",
-            "audio_input",
+            "video_input",
             "audio_output",
-            "video_input"
+            "audio_input"
           ]
         }
       ],
@@ -4642,8 +4608,9 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4663,8 +4630,9 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4706,7 +4674,9 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4726,8 +4696,9 @@
             "tools",
             "tool_choice",
             "json_object",
-            "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4748,7 +4719,9 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4769,7 +4742,9 @@
             "tool_choice",
             "json_object",
             "json_schema",
-            "reasoning"
+            "reasoning",
+            "image_input",
+            "video_input"
           ]
         }
       ],
@@ -4788,8 +4763,6 @@
             "text_stream",
             "tools",
             "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning"
           ]
         }

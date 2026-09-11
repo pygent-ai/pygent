@@ -251,6 +251,46 @@ async def test_openai_choice_and_structured_probes_project_exact_controls() -> N
 
 
 @pytest.mark.asyncio
+async def test_alibaba_named_tool_choice_probe_disables_thinking() -> None:
+    client = ScriptedClient(
+        responses=[
+            _openai_response(
+                "",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            )
+        ]
+    )
+    route = route_from_mapping(
+        {
+            "route_id": "qwen3.8-max",
+            "kind": "official_model",
+            "canonical_provider": "alibaba_cloud",
+            "canonical_model_id": "qwen3.8-max",
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["tool_choice"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+
+    result = await openai_tool_choice_probe(
+        _context(client, Scenario.TOOL_CHOICE), route
+    )
+
+    assert result.status == "passed"
+    assert client.requests[0]["enable_thinking"] is False
+
+
+@pytest.mark.asyncio
 async def test_openai_reasoning_and_image_probes_validate_protocol_evidence() -> None:
     client = ScriptedClient(
         responses=[
@@ -272,6 +312,75 @@ async def test_openai_reasoning_and_image_probes_validate_protocol_evidence() ->
     data_uri = parts[1]["image_url"]["url"]
     assert data_uri.startswith("data:image/png;base64,")
     assert base64.b64decode(data_uri.partition(",")[2]).endswith(b"IEND\xaeB`\x82")
+
+
+@pytest.mark.asyncio
+async def test_qvq_reasoning_probe_uses_stream_without_a_control_option() -> None:
+    client = ScriptedClient(
+        stream=[
+            {"choices": [{"delta": {"reasoning_content": "thinking"}}]},
+            {"choices": [{"delta": {"content": "answer"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            {"done": True},
+        ]
+    )
+    route = route_from_mapping(
+        {
+            "route_id": "qvq-max",
+            "kind": "official_model",
+            "canonical_provider": "alibaba_cloud",
+            "canonical_model_id": "qvq-max",
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["reasoning"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+
+    result = await openai_reasoning_probe(
+        _context(client, Scenario.REASONING), route
+    )
+
+    assert result.status == "passed"
+    assert "reasoning_effort" not in client.requests[0]
+    assert "enable_thinking" not in client.requests[0]
+
+
+@pytest.mark.asyncio
+async def test_qvq_image_probe_uses_its_stream_only_transport() -> None:
+    client = ScriptedClient(
+        stream=[
+            {"choices": [{"delta": {"content": "blue"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            {"done": True},
+        ]
+    )
+    route = route_from_mapping(
+        {
+            "route_id": "qvq-max",
+            "kind": "official_model",
+            "canonical_provider": "alibaba_cloud",
+            "canonical_model_id": "qvq-max",
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["image_input"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+
+    result = await openai_image_input_probe(
+        _context(client, Scenario.IMAGE_INPUT), route
+    )
+
+    assert result.status == "passed"
+    parts = client.requests[0]["messages"][-1]["content"]
+    assert parts[1]["type"] == "image_url"
 
 
 @pytest.mark.asyncio
