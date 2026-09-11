@@ -25,7 +25,7 @@ from tests.live.az_conformance.inventory import (
     InventoryDriftError,
     compare_inventory,
     require_matching_inventory,
-    require_snapshot_coverage,
+    require_probe_scope,
 )
 from tests.live.az_conformance.probe_registry import builtin_probe_registry
 from tests.live.az_conformance.results import ResultLedger
@@ -297,6 +297,7 @@ def _parser() -> argparse.ArgumentParser:
         if name == "run":
             command.add_argument("--route")
             command.add_argument("--scenario", choices=[item.value for item in Scenario])
+            command.add_argument("--text-concurrency", type=int, default=1)
     return parser
 
 
@@ -353,7 +354,7 @@ async def _async_main(
         )
         return 1
     try:
-        require_snapshot_coverage(inventory)
+        require_probe_scope(inventory, route_id=args.route)
     except InventoryDriftError:
         return 1
 
@@ -379,6 +380,7 @@ async def _async_main(
             builtin_probe_registry(),
             ledger,
             revision,
+            text_concurrency=args.text_concurrency,
             clients=cast(Mapping[str, object], clients),
         )
         report = await runner.run(inventory, route_id=args.route, scenario=scenario)

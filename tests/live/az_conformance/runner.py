@@ -8,7 +8,7 @@ from typing import TypeAlias
 
 from tests.live.az_conformance.inventory import (
     InventoryDiff,
-    require_snapshot_coverage,
+    require_probe_scope,
 )
 from tests.live.az_conformance.results import (
     ErrorKind,
@@ -194,7 +194,7 @@ class ConformanceRunner:
         route_id: str | None = None,
         scenario: Scenario | None = None,
     ) -> ConformanceReport:
-        require_snapshot_coverage(inventory)
+        require_probe_scope(inventory, route_id=route_id)
         queue = build_probe_queue(
             self.manifest, route_id=route_id, scenario=scenario
         )
@@ -261,16 +261,16 @@ class ConformanceRunner:
             if case.scenario in _MEDIA_SCENARIOS
             else self._text_semaphore
         )
-        for attempt in range(1, 4):
-            context = ProbeContext(
-                snapshot_sha256=self.manifest.snapshot.sha256,
-                source_revision=self.source_revision,
-                protocol=case.protocol,
-                scenario=case.scenario,
-                attempt=attempt,
-                client=self._clients.get(case.protocol),
-            )
-            async with semaphore:
+        async with semaphore:
+            for attempt in range(1, 4):
+                context = ProbeContext(
+                    snapshot_sha256=self.manifest.snapshot.sha256,
+                    source_revision=self.source_revision,
+                    protocol=case.protocol,
+                    scenario=case.scenario,
+                    attempt=attempt,
+                    client=self._clients.get(case.protocol),
+                )
                 try:
                     result = await asyncio.wait_for(
                         probe(context, case.route),
@@ -289,18 +289,19 @@ class ConformanceRunner:
                         attempts=context.attempt,
                         error_kind=ErrorKind.TIMEOUT,
                     )
-            self._validate_result(case, result, attempt)
-            self.ledger.record(result)
-            if result.status == "passed" or result.error_kind not in _RETRYABLE:
-                return
-            if attempt < 3:
-                hint = result.private_detail
-                delay = (
-                    hint.retry_after_seconds
-                    if isinstance(hint, RetryHint)
-                    else float(2 ** (attempt - 1))
-                )
-                await self._sleep(delay)
+                self._validate_result(case, result, attempt)
+                self.ledger.record(result)
+                if result.status == "passed" or result.error_kind not in _RETRYABLE:
+                    return
+                if attempt < 3:
+                    hint = result.private_detail
+                    if isinstance(hint, RetryHint):
+                        delay = hint.retry_after_seconds
+                    elif result.error_kind is ErrorKind.RATE_LIMIT:
+                        delay = float(15 * attempt)
+                    else:
+                        delay = float(2 ** (attempt - 1))
+                    await self._sleep(delay)
 
     def _validate_result(
         self, case: ProbeCase, result: ProbeResult, attempt: int

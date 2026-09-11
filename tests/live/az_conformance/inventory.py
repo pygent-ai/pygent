@@ -124,6 +124,13 @@ def require_snapshot_coverage(diff: InventoryDiff) -> None:
         raise InventoryDriftError(diff)
 
 
+def require_probe_scope(diff: InventoryDiff, *, route_id: str | None) -> None:
+    if route_id is None:
+        require_snapshot_coverage(diff)
+    elif route_id in diff.removed:
+        raise InventoryDriftError(diff)
+
+
 __all__ = [
     "InventoryDiff",
     "InventoryDriftError",
@@ -131,5 +138,6 @@ __all__ = [
     "fetch_inventory_ids",
     "inventory_digest",
     "require_matching_inventory",
+    "require_probe_scope",
     "require_snapshot_coverage",
 ]

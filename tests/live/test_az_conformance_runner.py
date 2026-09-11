@@ -244,7 +244,11 @@ async def test_runner_retries_only_transient_failures(
     report = await runner.run(_matching(manifest))
     assert report.complete
     assert attempts == [1, 2, 3]
-    assert delays == [4.5, 2.0]
+    assert delays == (
+        [4.5, 30.0]
+        if error_kind is ErrorKind.RATE_LIMIT
+        else [4.5, 2.0]
+    )
 
 
 @pytest.mark.asyncio

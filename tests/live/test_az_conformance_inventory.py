@@ -12,6 +12,7 @@ from tests.live.az_conformance.inventory import (
     compare_inventory,
     inventory_digest,
     require_matching_inventory,
+    require_probe_scope,
     require_snapshot_coverage,
 )
 from tests.live.az_conformance.schemas import manifest_from_mapping
@@ -129,6 +130,16 @@ def test_snapshot_coverage_allows_additions_but_rejects_removals() -> None:
     removal = InventoryDiff(2, 1, "a", "b", (), ("required",))
     with pytest.raises(InventoryDriftError, match="inventory drift"):
         require_snapshot_coverage(removal)
+
+
+def test_probe_scope_ignores_unrelated_missing_routes() -> None:
+    diff = InventoryDiff(3, 2, "a", "b", (), ("offline",))
+
+    require_probe_scope(diff, route_id="online")
+    with pytest.raises(InventoryDriftError, match="inventory drift"):
+        require_probe_scope(diff, route_id="offline")
+    with pytest.raises(InventoryDriftError, match="inventory drift"):
+        require_probe_scope(diff, route_id=None)
 
 
 @pytest.mark.asyncio
