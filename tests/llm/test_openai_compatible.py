@@ -313,6 +313,35 @@ def test_openai_stream_rejects_non_string_reasoning_content() -> None:
     assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
 
 
+def test_openai_stream_accepts_null_reasoning_content_with_text() -> None:
+    entry = model_entry("main", "custom_gateway", "reasoning-model")
+    request = provider_request(
+        entry=entry,
+        message=UserMessage(content="question"),
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+    decoder = OpenAICompatibleAdapter().create_stream_decoder(request)
+
+    parts = decoder.feed(
+        freeze_json_object(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "content": "answer",
+                            "reasoning_content": None,
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+    )
+
+    assert [part.kind for part in parts] == ["text", "finish"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize(

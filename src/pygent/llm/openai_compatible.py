@@ -617,8 +617,9 @@ class OpenAICompatibleAdapter:
                 delta = {}
             if not isinstance(delta, dict):
                 raise TypeError
-            if "reasoning_content" in delta and not isinstance(
-                delta["reasoning_content"], str
+            if (
+                delta.get("reasoning_content") is not None
+                and not isinstance(delta["reasoning_content"], str)
             ):
                 raise TypeError
             reasoning = next(
