@@ -175,10 +175,10 @@ def _source_revision() -> str:
 def _validate(manifest: AzManifest) -> tuple[int, int]:
     registry = builtin_probe_registry()
     required_probes = {
-        (protocol, scenario)
+        (requirements.protocol, scenario)
         for route in manifest.routes
-        for protocol in route.protocols
-        for scenario in route.required_scenarios
+        for requirements in route.protocols
+        for scenario in requirements.required_scenarios
     }
     missing_probes = len(required_probes - set(registry.probes))
     source_keys = set(load_sources().sources)
@@ -190,10 +190,10 @@ def _validate(manifest: AzManifest) -> tuple[int, int]:
                 (
                     route.canonical_provider,
                     route.canonical_model_id,
-                    protocol,
+                    requirements.protocol,
                 )
                 not in source_keys
-                for protocol in route.protocols
+                for requirements in route.protocols
             )
         elif route.kind is RouteKind.GATEWAY_ALIAS and (
             route.canonical_provider,

@@ -41,8 +41,12 @@ def _route(**changes: object) -> dict[str, object]:
         "kind": "gateway_alias",
         "canonical_provider": "openai",
         "canonical_model_id": "gpt-5.4",
-        "protocols": ["openai_chat_completions"],
-        "required_scenarios": ["text", "text_stream"],
+        "protocols": [
+            {
+                "protocol": "openai_chat_completions",
+                "required_scenarios": ["text", "text_stream"],
+            }
+        ],
         "catalog_eligible": False,
     }
     value.update(changes)
@@ -53,7 +57,7 @@ def _manifest(routes: list[dict[str, object]]) -> dict[str, object]:
     ids = [str(route["route_id"]) for route in routes]
     digest = sha256(("\n".join(ids) + "\n").encode()).hexdigest()
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "snapshot": {
             "captured_at": "2026-09-11",
             "count": len(ids),
@@ -68,8 +72,11 @@ def test_gateway_alias_requires_canonical_model_and_is_not_catalog_eligible() ->
 
     assert route.kind is RouteKind.GATEWAY_ALIAS
     assert route.canonical_model_id == "gpt-5.4"
-    assert route.protocols == ("openai_chat_completions",)
-    assert route.required_scenarios == (Scenario.TEXT, Scenario.TEXT_STREAM)
+    assert route.protocols[0].protocol == "openai_chat_completions"
+    assert route.protocols[0].required_scenarios == (
+        Scenario.TEXT,
+        Scenario.TEXT_STREAM,
+    )
 
 
 @pytest.mark.parametrize("kind", ["gateway_alias", "external_service"])
@@ -79,8 +86,9 @@ def test_nonofficial_route_cannot_enter_catalog(kind: str) -> None:
         value.update(
             canonical_provider=None,
             canonical_model_id=None,
-            protocols=["serpapi_search"],
-            required_scenarios=["search"],
+            protocols=[
+                {"protocol": "serpapi_search", "required_scenarios": ["search"]}
+            ],
         )
 
     with pytest.raises(ValueError, match="cannot be catalog eligible"):
@@ -110,8 +118,9 @@ def test_external_service_has_no_canonical_model() -> None:
             kind="external_service",
             canonical_provider=None,
             canonical_model_id=None,
-            protocols=["serpapi_search"],
-            required_scenarios=["search"],
+            protocols=[
+                {"protocol": "serpapi_search", "required_scenarios": ["search"]}
+            ],
         )
     )
     assert route.kind is RouteKind.EXTERNAL_SERVICE
@@ -121,8 +130,12 @@ def test_external_service_has_no_canonical_model() -> None:
         route_from_mapping(
             _route(
                 kind="external_service",
-                protocols=["serpapi_search"],
-                required_scenarios=["search"],
+                protocols=[
+                    {
+                        "protocol": "serpapi_search",
+                        "required_scenarios": ["search"],
+                    }
+                ],
             )
         )
 
@@ -132,10 +145,35 @@ def test_external_service_has_no_canonical_model() -> None:
     [
         ({"extra": True}, "unknown fields"),
         ({"protocols": []}, "protocols must not be empty"),
-        ({"protocols": ["openai_chat_completions"] * 2}, "duplicate protocol"),
-        ({"required_scenarios": []}, "required_scenarios must not be empty"),
-        ({"required_scenarios": ["text"] * 2}, "duplicate scenario"),
-        ({"required_scenarios": ["made_up"]}, "invalid scenario"),
+        (
+            {
+                "protocols": [
+                    {"protocol": "p1", "required_scenarios": ["text"]},
+                    {"protocol": "p1", "required_scenarios": ["tools"]},
+                ]
+            },
+            "duplicate protocol",
+        ),
+        (
+            {"protocols": [{"protocol": "p1", "required_scenarios": []}]},
+            "required_scenarios must not be empty",
+        ),
+        (
+            {
+                "protocols": [
+                    {"protocol": "p1", "required_scenarios": ["text", "text"]}
+                ]
+            },
+            "duplicate scenario",
+        ),
+        (
+            {
+                "protocols": [
+                    {"protocol": "p1", "required_scenarios": ["made_up"]}
+                ]
+            },
+            "invalid scenario",
+        ),
     ],
 )
 def test_route_mapping_is_strict(change: dict[str, object], message: str) -> None:
@@ -211,16 +249,63 @@ def test_builtin_manifest_classifies_the_exact_frozen_inventory() -> None:
     assert tuple(route.route_id for route in manifest.routes) == frozen_ids
     assert len(manifest.routes) == 211
     assert all(route.protocols for route in manifest.routes)
-    assert all(route.required_scenarios for route in manifest.routes)
+    assert all(
+        requirements.required_scenarios
+        for route in manifest.routes
+        for requirements in route.protocols
+    )
 
 
 def test_builtin_manifest_preserves_advertised_protocol_counts() -> None:
     manifest = load_manifest()
 
-    assert sum("openai_chat_completions" in route.protocols for route in manifest.routes) == 211
-    assert sum("anthropic_messages" in route.protocols for route in manifest.routes) == 46
-    assert sum("gemini_generate_content" in route.protocols for route in manifest.routes) == 28
-    assert sum("serpapi_search" in route.protocols for route in manifest.routes) == 7
+    protocol_names = [
+        requirements.protocol
+        for route in manifest.routes
+        for requirements in route.protocols
+    ]
+    assert protocol_names.count("openai_chat_completions") == 209
+    assert protocol_names.count("anthropic_messages") == 46
+    assert protocol_names.count("gemini_generate_content") == 28
+    assert protocol_names.count("serpapi_search") == 7
+
+
+def test_builtin_manifest_scopes_capability_probes_to_their_wire_protocol() -> None:
+    routes = {route.route_id: route for route in load_manifest().routes}
+    image_protocols = {
+        item.protocol: {scenario.value for scenario in item.required_scenarios}
+        for item in routes["gemini-2.5-flash-image"].protocols
+    }
+    assert image_protocols["gemini_generate_content"] == {
+        "image_input",
+        "image_output",
+        "image_edit",
+    }
+    assert image_protocols["openai_chat_completions"] == {"image_input"}
+    assert [
+        item.protocol for item in routes["gemini-2.5-flash-preview-tts"].protocols
+    ] == ["gemini_generate_content"]
+    assert all(
+        Scenario.JSON_OBJECT not in item.required_scenarios
+        for route in routes.values()
+        for item in route.protocols
+        if item.protocol == "anthropic_messages"
+    )
+
+
+def test_builtin_manifest_exercises_every_catalogued_video_input() -> None:
+    routes = {route.route_id: route for route in load_manifest().routes}
+    for model_id in (
+        "qwen-omni-turbo",
+        "qwen3.5-omni-flash",
+        "qwen3.5-omni-plus",
+    ):
+        protocol = next(
+            item
+            for item in routes[model_id].protocols
+            if item.protocol == "openai_chat_completions"
+        )
+        assert Scenario.VIDEO_INPUT in protocol.required_scenarios
 
 
 def test_every_official_catalog_triple_and_alias_target_has_a_source() -> None:
@@ -232,11 +317,11 @@ def test_every_official_catalog_triple_and_alias_target_has_a_source() -> None:
         if route.catalog_eligible:
             assert route.canonical_provider is not None
             assert route.canonical_model_id is not None
-            for protocol in route.protocols:
+            for requirements in route.protocols:
                 assert (
                     route.canonical_provider,
                     route.canonical_model_id,
-                    protocol,
+                    requirements.protocol,
                 ) in source_keys
         elif route.kind is RouteKind.GATEWAY_ALIAS:
             assert (route.canonical_provider, route.canonical_model_id) in sourced_identities

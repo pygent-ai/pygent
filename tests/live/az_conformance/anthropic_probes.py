@@ -276,25 +276,6 @@ async def anthropic_tool_choice_probe(
         return _failed(context, route, exc)
 
 
-async def anthropic_json_object_probe(
-    context: ProbeContext, route: AzRoute
-) -> ProbeResult:
-    request = _request(
-        route,
-        message=UserMessage(content="Return only JSON with string field answer."),
-    )
-    try:
-        response = await _non_stream(context, route, request)
-        value = json.loads(response.message.content)
-        if not isinstance(value, dict):
-            raise TypeError("JSON object response is not an object")
-        return _passed(context, route)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - probe records classified failure
-        return _failed(context, route, exc)
-
-
 async def anthropic_json_schema_probe(
     context: ProbeContext, route: AzRoute
 ) -> ProbeResult:
@@ -369,7 +350,6 @@ async def anthropic_image_input_probe(
 
 __all__ = [
     "anthropic_image_input_probe",
-    "anthropic_json_object_probe",
     "anthropic_json_schema_probe",
     "anthropic_reasoning_probe",
     "anthropic_stream_probe",

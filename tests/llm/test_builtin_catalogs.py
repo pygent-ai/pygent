@@ -171,12 +171,16 @@ def test_builtin_provider_catalog_has_official_multi_provider_connections() -> N
 def test_builtin_catalog_projects_every_official_manifest_model() -> None:
     manifest = load_manifest()
     expected = {
-        (route.canonical_provider, route.canonical_model_id, protocol)
+        (
+            route.canonical_provider,
+            route.canonical_model_id,
+            requirements.protocol,
+        )
         for route in manifest.routes
         if route.catalog_eligible
         and route.canonical_provider in OFFICIAL_ROUTE_PROTOCOLS
-        for protocol in route.protocols
-        if protocol in OFFICIAL_ROUTE_PROTOCOLS[route.canonical_provider]
+        for requirements in route.protocols
+        if requirements.protocol in OFFICIAL_ROUTE_PROTOCOLS[route.canonical_provider]
     }
     actual = {
         key
@@ -520,6 +524,49 @@ def test_builtin_deepseek_capabilities_are_identical_across_protocols(
     assert catalog.models[
         ("deepseek", model_id, "anthropic_messages")
     ] == catalog.models[("deepseek", model_id, "openai_chat_completions")]
+
+
+def test_builtin_alibaba_omni_capabilities_follow_official_model_boundaries() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    turbo = catalog.models[
+        ("alibaba_cloud", "qwen-omni-turbo", "openai_chat_completions")
+    ]
+    assert turbo.modalities.input == ("text", "image", "audio", "video")
+    assert turbo.modalities.output == ("text", "audio")
+    assert turbo.streaming.output == ("text", "audio")
+    assert not turbo.tools.call
+    assert not turbo.structured_output.json_object
+    assert not turbo.reasoning.supported
+
+    flash = catalog.models[
+        ("alibaba_cloud", "qwen3.5-omni-flash", "openai_chat_completions")
+    ]
+    plus = catalog.models[
+        ("alibaba_cloud", "qwen3.5-omni-plus", "openai_chat_completions")
+    ]
+    assert flash.modalities.output == plus.modalities.output == ("text", "audio")
+    assert flash.tools.call and plus.tools.call
+    assert not flash.structured_output.json_object
+    assert plus.structured_output.json_object
+    assert not flash.structured_output.json_schema
+    assert not plus.structured_output.json_schema
+    assert not flash.reasoning.supported
+    assert not plus.reasoning.supported
+
+    captioner = catalog.models[
+        (
+            "alibaba_cloud",
+            "qwen3-omni-30b-a3b-captioner",
+            "openai_chat_completions",
+        )
+    ]
+    assert captioner.modalities.input == ("audio",)
+    assert captioner.modalities.output == ("text",)
+    assert not captioner.tools.call
+    assert not captioner.structured_output.json_object
+    assert not captioner.reasoning.supported
+    assert captioner.limits.context_tokens == 65_536
+    assert captioner.limits.max_output_tokens == 32_768
 
 
 @pytest.mark.parametrize(

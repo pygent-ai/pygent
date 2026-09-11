@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from collections.abc import AsyncIterator
 
 import httpx
@@ -10,7 +11,6 @@ from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import ModelSpec
 from tests.live.az_conformance.anthropic_probes import (
     anthropic_image_input_probe,
-    anthropic_json_object_probe,
     anthropic_json_schema_probe,
     anthropic_reasoning_probe,
     anthropic_stream_probe,
@@ -19,7 +19,10 @@ from tests.live.az_conformance.anthropic_probes import (
     anthropic_tool_probe,
 )
 from tests.live.az_conformance.gemini_probes import (
+    gemini_audio_output_probe,
+    gemini_image_edit_probe,
     gemini_image_input_probe,
+    gemini_image_output_probe,
     gemini_json_schema_probe,
     gemini_reasoning_probe,
     gemini_stream_probe,
@@ -33,6 +36,7 @@ from tests.live.az_conformance.media_probes import (
     image_edit_probe,
     image_output_probe,
     realtime_probe,
+    video_input_probe,
     video_output_probe,
 )
 from tests.live.az_conformance.openai_probes import (
@@ -104,8 +108,9 @@ def _route(protocol: str = "openai_chat_completions"):
             "kind": "gateway_alias",
             "canonical_provider": "openai",
             "canonical_model_id": "gpt-5.4",
-            "protocols": [protocol],
-            "required_scenarios": ["text"],
+            "protocols": [
+                {"protocol": protocol, "required_scenarios": ["text"]}
+            ],
             "catalog_eligible": False,
         }
     )
@@ -347,22 +352,19 @@ async def test_anthropic_text_choice_and_structured_probes_use_native_controls()
                 "tool_use",
             ),
             _anthropic_response([{"type": "text", "text": '{"answer":"ok"}'}]),
-            _anthropic_response([{"type": "text", "text": '{"answer":"ok"}'}]),
         ]
     )
     route = _route("anthropic_messages")
     probes = (
         (anthropic_text_probe, Scenario.TEXT),
         (anthropic_tool_choice_probe, Scenario.TOOL_CHOICE),
-        (anthropic_json_object_probe, Scenario.JSON_OBJECT),
         (anthropic_json_schema_probe, Scenario.JSON_SCHEMA),
     )
     for probe, scenario in probes:
         result = await probe(_context(client, scenario, "anthropic_messages"), route)
         assert result.status == "passed"
     assert client.requests[1]["tool_choice"] == {"type": "tool", "name": "lookup"}
-    assert "output_config" not in client.requests[2]
-    assert client.requests[3]["output_config"]["format"]["type"] == "json_schema"
+    assert client.requests[2]["output_config"]["format"]["type"] == "json_schema"
 
 
 @pytest.mark.asyncio
@@ -492,6 +494,47 @@ async def test_gemini_schema_reasoning_and_image_probes_use_native_fields() -> N
     image_part = client.requests[2]["contents"][-1]["parts"][1]["inlineData"]
     assert image_part["mimeType"] == "image/png"
     assert base64.b64decode(image_part["data"]).endswith(b"IEND\xaeB`\x82")
+
+
+@pytest.mark.asyncio
+async def test_gemini_output_probes_use_native_inline_media_contracts() -> None:
+    route = _route("gemini_generate_content")
+    client = ScriptedClient(
+        responses=[
+            _gemini_response(
+                [{"inlineData": {"mimeType": "image/png", "data": _PNG}}]
+            ),
+            _gemini_response(
+                [{"inlineData": {"mimeType": "image/png", "data": _PNG}}]
+            ),
+            _gemini_response(
+                [{"inlineData": {"mimeType": "audio/L16", "data": "AAE="}}]
+            ),
+        ]
+    )
+
+    assert (
+        await gemini_image_output_probe(
+            _context(client, Scenario.IMAGE_OUTPUT, "gemini_generate_content"), route
+        )
+    ).status == "passed"
+    assert (
+        await gemini_image_edit_probe(
+            _context(client, Scenario.IMAGE_EDIT, "gemini_generate_content"), route
+        )
+    ).status == "passed"
+    assert (
+        await gemini_audio_output_probe(
+            _context(client, Scenario.AUDIO_OUTPUT, "gemini_generate_content"), route
+        )
+    ).status == "passed"
+
+    assert client.requests[0]["generationConfig"]["responseModalities"] == ["IMAGE"]
+    image_input = client.requests[1]["contents"][0]["parts"][1]["inlineData"]
+    assert image_input["mimeType"] == "image/png"
+    assert client.requests[2]["generationConfig"]["responseModalities"] == ["AUDIO"]
+    voice = client.requests[2]["generationConfig"]["speechConfig"]["voiceConfig"]
+    assert voice["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
 
 def _responses_response(output: list[dict[str, object]]) -> dict[str, object]:
@@ -761,6 +804,137 @@ async def test_audio_output_feeds_transcription_dependency() -> None:
 
 
 @pytest.mark.asyncio
+async def test_conversational_audio_output_uses_chat_modalities() -> None:
+    wave = b"RIFF" + b"\x00" * 40 + b"WAVE"
+    route = route_from_mapping(
+        {
+            "route_id": "gpt-audio",
+            "kind": "official_model",
+            "canonical_provider": "openai",
+            "canonical_model_id": "gpt-audio",
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["audio_output"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+    client = RawScriptedClient(
+        [
+            httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "audio": {
+                                    "data": base64.b64encode(wave).decode("ascii")
+                                }
+                            }
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+
+    result = await audio_output_probe(
+        _raw_context(client, Scenario.AUDIO_OUTPUT), route
+    )
+
+    assert result.status == "passed"
+    assert client.audio_fixture == wave
+    body = client.requests[0][2]["json"]
+    assert client.requests[0][1] == "/chat/completions"
+    assert body["modalities"] == ["text", "audio"]
+    assert body["audio"] == {"voice": "alloy", "format": "wav"}
+
+
+@pytest.mark.asyncio
+async def test_qwen_omni_audio_output_uses_streaming_chat_contract() -> None:
+    pcm = b"\x00\x01\x02\x03"
+    event = {
+        "choices": [
+            {
+                "delta": {
+                    "audio": {"data": base64.b64encode(pcm).decode("ascii")}
+                }
+            }
+        ]
+    }
+    route = route_from_mapping(
+        {
+            "route_id": "qwen3.5-omni-plus",
+            "kind": "official_model",
+            "canonical_provider": "alibaba_cloud",
+            "canonical_model_id": "qwen3.5-omni-plus",
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["audio_output"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+    response = b"data: " + json.dumps(event).encode("utf-8") + b"\n\ndata: [DONE]\n\n"
+    client = RawScriptedClient([httpx.Response(200, content=response)])
+
+    result = await audio_output_probe(
+        _raw_context(client, Scenario.AUDIO_OUTPUT), route
+    )
+
+    assert result.status == "passed"
+    assert client.audio_fixture is not None
+    assert client.audio_fixture.startswith(b"RIFF")
+    body = client.requests[0][2]["json"]
+    assert body["stream"] is True
+    assert body["audio"] == {"voice": "Tina", "format": "wav"}
+
+
+@pytest.mark.asyncio
+async def test_qwen_omni_turbo_uses_its_supported_voice() -> None:
+    event = {
+        "choices": [
+            {
+                "delta": {
+                    "audio": {"data": base64.b64encode(b"RIFFWAVE").decode("ascii")}
+                }
+            }
+        ]
+    }
+    route = route_from_mapping(
+        {
+            "route_id": "qwen-omni-turbo",
+            "kind": "official_model",
+            "canonical_provider": "alibaba_cloud",
+            "canonical_model_id": "qwen-omni-turbo",
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["audio_output"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+    response = b"data: " + json.dumps(event).encode("utf-8") + b"\n\ndata: [DONE]\n\n"
+    client = RawScriptedClient([httpx.Response(200, content=response)])
+
+    result = await audio_output_probe(
+        _raw_context(client, Scenario.AUDIO_OUTPUT), route
+    )
+
+    assert result.status == "passed"
+    assert client.requests[0][2]["json"]["audio"] == {
+        "voice": "Chelsie",
+        "format": "wav",
+    }
+
+
+@pytest.mark.asyncio
 async def test_audio_input_reports_missing_generated_dependency() -> None:
     client = RawScriptedClient([])
     result = await audio_input_probe(
@@ -772,6 +946,48 @@ async def test_audio_input_reports_missing_generated_dependency() -> None:
 
 
 @pytest.mark.asyncio
+async def test_audio_captioner_receives_audio_without_a_text_part() -> None:
+    route = route_from_mapping(
+        {
+            "route_id": "qwen3-omni-30b-a3b-captioner",
+            "kind": "official_model",
+            "canonical_provider": "alibaba_cloud",
+            "canonical_model_id": "qwen3-omni-30b-a3b-captioner",
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["audio_input"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+    client = RawScriptedClient(
+        [
+            httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {"message": {"content": "ambient workshop noise"}}
+                    ]
+                },
+            )
+        ]
+    )
+    client.audio_fixture = b"RIFF" + b"\x00" * 40 + b"WAVE"
+
+    result = await audio_input_probe(
+        _raw_context(client, Scenario.AUDIO_INPUT), route
+    )
+
+    assert result.status == "passed"
+    content = client.requests[0][2]["json"]["messages"][0]["content"]
+    assert len(content) == 1
+    assert content[0]["type"] == "input_audio"
+    assert content[0]["input_audio"]["data"].startswith("data:;base64,")
+
+
+@pytest.mark.asyncio
 async def test_realtime_probe_exchanges_one_legal_event() -> None:
     client = RawScriptedClient([])
     result = await realtime_probe(
@@ -780,6 +996,38 @@ async def test_realtime_probe_exchanges_one_legal_event() -> None:
 
     assert result.status == "passed"
     assert client.requests[0][0] == "WS"
+
+
+@pytest.mark.asyncio
+async def test_video_input_uses_openai_compatible_image_sequence() -> None:
+    event = {"choices": [{"delta": {"content": "No change."}}]}
+    client = RawScriptedClient(
+        [
+            httpx.Response(
+                200,
+                content=(
+                    b"data: "
+                    + json.dumps(event).encode("utf-8")
+                    + b"\n\ndata: [DONE]\n\n"
+                ),
+            )
+        ]
+    )
+
+    result = await video_input_probe(
+        _raw_context(client, Scenario.VIDEO_INPUT), _route()
+    )
+
+    assert result.status == "passed"
+    body = client.requests[0][2]["json"]
+    video = body["messages"][0]["content"][0]
+    assert video["type"] == "video"
+    assert len(video["video"]) == 4
+    assert all(
+        frame.startswith("data:image/png;base64,") for frame in video["video"]
+    )
+    assert body["modalities"] == ["text"]
+    assert body["stream"] is True
 
 
 @pytest.mark.asyncio
@@ -843,8 +1091,9 @@ async def test_serpapi_probe_requires_at_least_one_result() -> None:
             "kind": "external_service",
             "canonical_provider": None,
             "canonical_model_id": None,
-            "protocols": ["serpapi_search"],
-            "required_scenarios": ["search"],
+            "protocols": [
+                {"protocol": "serpapi_search", "required_scenarios": ["search"]}
+            ],
             "catalog_eligible": False,
         }
     )
@@ -900,8 +1149,12 @@ async def test_openai_search_probe_uses_the_advertised_chat_endpoint() -> None:
             "kind": "external_service",
             "canonical_provider": None,
             "canonical_model_id": None,
-            "protocols": ["openai_chat_completions"],
-            "required_scenarios": ["search"],
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["search"],
+                }
+            ],
             "catalog_eligible": False,
         }
     )
@@ -922,10 +1175,10 @@ async def test_openai_search_probe_uses_the_advertised_chat_endpoint() -> None:
 def test_builtin_probe_registry_covers_every_manifest_protocol_scenario() -> None:
     manifest = load_manifest()
     expected = {
-        (protocol, scenario)
+        (requirements.protocol, scenario)
         for route in manifest.routes
-        for protocol in route.protocols
-        for scenario in route.required_scenarios
+        for requirements in route.protocols
+        for scenario in requirements.required_scenarios
     }
 
     assert set(builtin_probe_registry().probes) == expected

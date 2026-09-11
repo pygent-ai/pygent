@@ -40,7 +40,7 @@
       "provider": "alibaba_cloud",
       "model_id": "qwen-omni-turbo",
       "protocol": "openai_chat_completions",
-      "url": "https://help.aliyun.com/en/model-studio/models",
+      "url": "https://help.aliyun.com/en/model-studio/qwen-omni",
       "checked_at": "2026-09-11"
     },
     {
@@ -187,7 +187,7 @@
       "provider": "alibaba_cloud",
       "model_id": "qwen3-omni-30b-a3b-captioner",
       "protocol": "openai_chat_completions",
-      "url": "https://help.aliyun.com/en/model-studio/models",
+      "url": "https://help.aliyun.com/en/model-studio/qwen3-omni-captioner",
       "checked_at": "2026-09-11"
     },
     {
@@ -292,14 +292,14 @@
       "provider": "alibaba_cloud",
       "model_id": "qwen3.5-omni-flash",
       "protocol": "openai_chat_completions",
-      "url": "https://help.aliyun.com/en/model-studio/models",
+      "url": "https://help.aliyun.com/en/model-studio/qwen-omni",
       "checked_at": "2026-09-11"
     },
     {
       "provider": "alibaba_cloud",
       "model_id": "qwen3.5-omni-plus",
       "protocol": "openai_chat_completions",
-      "url": "https://help.aliyun.com/en/model-studio/models",
+      "url": "https://help.aliyun.com/en/model-studio/qwen-omni",
       "checked_at": "2026-09-11"
     },
     {

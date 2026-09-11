@@ -208,30 +208,28 @@
           "input": [
             "text",
             "image",
-            "audio"
+            "audio",
+            "video"
           ],
           "output": [
-            "text"
+            "text",
+            "audio"
           ]
         },
         "streaming": {
           "output": [
-            "text"
+            "text",
+            "audio"
           ]
         },
         "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "call": false,
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": false,
@@ -1077,8 +1075,6 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text",
-            "image",
             "audio"
           ],
           "output": [
@@ -1091,26 +1087,21 @@
           ]
         },
         "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
+          "call": false,
+          "choice": [],
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
+          "context_tokens": 65536,
+          "max_output_tokens": 32768
         }
       }
     },
@@ -1713,15 +1704,18 @@
           "input": [
             "text",
             "image",
-            "audio"
+            "audio",
+            "video"
           ],
           "output": [
-            "text"
+            "text",
+            "audio"
           ]
         },
         "streaming": {
           "output": [
-            "text"
+            "text",
+            "audio"
           ]
         },
         "tools": {
@@ -1735,12 +1729,12 @@
           "parallel": true
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -1757,15 +1751,18 @@
           "input": [
             "text",
             "image",
-            "audio"
+            "audio",
+            "video"
           ],
           "output": [
-            "text"
+            "text",
+            "audio"
           ]
         },
         "streaming": {
           "output": [
-            "text"
+            "text",
+            "audio"
           ]
         },
         "tools": {
@@ -1780,11 +1777,11 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -3598,7 +3595,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -3640,7 +3637,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -3682,7 +3679,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -3724,7 +3721,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -3766,7 +3763,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -3808,7 +3805,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -3850,7 +3847,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -3892,7 +3889,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -3934,7 +3931,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -3976,7 +3973,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -4102,7 +4099,7 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,

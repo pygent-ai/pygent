@@ -23,8 +23,12 @@ def _manifest(route_ids: list[str]):
             "kind": "gateway_alias",
             "canonical_provider": "openai",
             "canonical_model_id": "canonical-model",
-            "protocols": ["openai_chat_completions"],
-            "required_scenarios": ["text"],
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["text"],
+                }
+            ],
             "catalog_eligible": False,
         }
         for route_id in route_ids
@@ -32,7 +36,7 @@ def _manifest(route_ids: list[str]):
     digest = inventory_digest(route_ids)
     return manifest_from_mapping(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "snapshot": {
                 "captured_at": "2026-09-11",
                 "count": len(routes),

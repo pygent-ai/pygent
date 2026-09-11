@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
@@ -359,8 +361,118 @@ async def gemini_image_input_probe(
         return _failed(context, route, exc)
 
 
+def _inline_media(payload: FrozenJsonObject, *, expected_type: str) -> bytes:
+    body = payload.to_dict()
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise ValueError("Gemini response has no candidate")
+    candidate = candidates[0]
+    if not isinstance(candidate, dict):
+        raise TypeError("Gemini candidate must be an object")
+    content = candidate.get("content")
+    if not isinstance(content, dict):
+        raise TypeError("Gemini candidate has no content")
+    parts = content.get("parts")
+    if not isinstance(parts, list):
+        raise TypeError("Gemini candidate parts must be an array")
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        inline = part.get("inlineData")
+        if not isinstance(inline, dict):
+            continue
+        mime = inline.get("mimeType")
+        data = inline.get("data")
+        if not isinstance(mime, str) or not mime.startswith(expected_type + "/"):
+            continue
+        if not isinstance(data, str) or not data:
+            raise ValueError("Gemini inline media data is empty")
+        try:
+            decoded = base64.b64decode(data, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("Gemini inline media is not valid base64") from exc
+        if not decoded or len(decoded) > 20 * 1024 * 1024:
+            raise ValueError("Gemini inline media byte length is invalid")
+        return decoded
+    raise ValueError(f"Gemini response has no inline {expected_type}")
+
+
+def _output_request(
+    route: AzRoute, *, prompt: str, modality: str
+) -> tuple[ModelProviderRequest, FrozenJsonObject]:
+    request = _request(route, message=UserMessage(content=prompt))
+    body = GeminiGenerateContentAdapter().build_request(request).to_dict()
+    config = cast(dict[str, object], body.setdefault("generationConfig", {}))
+    config["responseModalities"] = [modality]
+    return request, freeze_json_object(body)
+
+
+async def gemini_image_output_probe(
+    context: ProbeContext, route: AzRoute
+) -> ProbeResult:
+    request, body = _output_request(
+        route, prompt="Create a single blue square.", modality="IMAGE"
+    )
+    try:
+        raw = await _client(context).invoke(_wire_model(request, route), body)
+        _inline_media(raw, expected_type="image")
+        return _passed(context, route)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - probe records classified failure
+        return _failed(context, route, exc)
+
+
+async def gemini_image_edit_probe(
+    context: ProbeContext, route: AzRoute
+) -> ProbeResult:
+    request, frozen_body = _output_request(
+        route, prompt="Keep the attached square blue.", modality="IMAGE"
+    )
+    body = frozen_body.to_dict()
+    contents = cast(list[dict[str, object]], body["contents"])
+    parts = cast(list[dict[str, object]], contents[-1]["parts"])
+    parts.append({"inlineData": {"mimeType": "image/png", "data": _PNG}})
+    try:
+        raw = await _client(context).invoke(
+            _wire_model(request, route), freeze_json_object(body)
+        )
+        _inline_media(raw, expected_type="image")
+        return _passed(context, route)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - probe records classified failure
+        return _failed(context, route, exc)
+
+
+async def gemini_audio_output_probe(
+    context: ProbeContext, route: AzRoute
+) -> ProbeResult:
+    request, frozen_body = _output_request(
+        route, prompt="Say cheerfully: Pygent audio probe.", modality="AUDIO"
+    )
+    body = frozen_body.to_dict()
+    config = cast(dict[str, object], body["generationConfig"])
+    config["speechConfig"] = {
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
+    }
+    try:
+        raw = await _client(context).invoke(
+            _wire_model(request, route), freeze_json_object(body)
+        )
+        _inline_media(raw, expected_type="audio")
+        return _passed(context, route)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - probe records classified failure
+        return _failed(context, route, exc)
+
+
 __all__ = [
+    "gemini_audio_output_probe",
+    "gemini_image_edit_probe",
     "gemini_image_input_probe",
+    "gemini_image_output_probe",
     "gemini_json_object_probe",
     "gemini_json_schema_probe",
     "gemini_reasoning_probe",

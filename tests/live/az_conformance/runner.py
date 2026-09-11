@@ -80,6 +80,7 @@ _MEDIA_SCENARIOS = frozenset(
     {
         Scenario.IMAGE_OUTPUT,
         Scenario.IMAGE_EDIT,
+        Scenario.VIDEO_INPUT,
         Scenario.VIDEO_OUTPUT,
         Scenario.AUDIO_OUTPUT,
         Scenario.AUDIO_INPUT,
@@ -103,11 +104,11 @@ def build_probe_queue(
     scenario: Scenario | None = None,
 ) -> tuple[ProbeCase, ...]:
     return tuple(
-        ProbeCase(route, protocol, required_scenario)
+        ProbeCase(route, requirements.protocol, required_scenario)
         for route in manifest.routes
         if route_id is None or route.route_id == route_id
-        for protocol in route.protocols
-        for required_scenario in route.required_scenarios
+        for requirements in route.protocols
+        for required_scenario in requirements.required_scenarios
         if scenario is None or required_scenario is scenario
     )
 

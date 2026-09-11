@@ -31,8 +31,10 @@ def _manifest(
             "kind": "gateway_alias",
             "canonical_provider": "openai",
             "canonical_model_id": "canonical-model",
-            "protocols": protocols,
-            "required_scenarios": scenarios,
+            "protocols": [
+                {"protocol": protocol, "required_scenarios": scenarios}
+                for protocol in protocols
+            ],
             "catalog_eligible": False,
         }
         for route_id, protocols, scenarios in routes
@@ -40,7 +42,7 @@ def _manifest(
     route_ids = [value["route_id"] for value in values]
     return manifest_from_mapping(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "snapshot": {
                 "captured_at": "2026-09-11",
                 "count": len(values),
@@ -111,6 +113,37 @@ def test_probe_queue_is_exact_and_deterministic() -> None:
         ("a", "p2", Scenario.TEXT),
         ("a", "p2", Scenario.TOOLS),
         ("b", "p1", Scenario.TEXT),
+    ]
+
+
+def test_probe_queue_keeps_scenarios_scoped_to_their_protocol() -> None:
+    manifest = manifest_from_mapping(
+        {
+            "schema_version": 2,
+            "snapshot": {
+                "captured_at": "2026-09-11",
+                "count": 1,
+                "sha256": inventory_digest(["a"]),
+            },
+            "routes": [
+                {
+                    "route_id": "a",
+                    "kind": "gateway_alias",
+                    "canonical_provider": "openai",
+                    "canonical_model_id": "canonical-model",
+                    "protocols": [
+                        {"protocol": "p1", "required_scenarios": ["text"]},
+                        {"protocol": "p2", "required_scenarios": ["tools"]},
+                    ],
+                    "catalog_eligible": False,
+                }
+            ],
+        }
+    )
+
+    assert [case.short_key for case in build_probe_queue(manifest)] == [
+        ("a", "p1", Scenario.TEXT),
+        ("a", "p2", Scenario.TOOLS),
     ]
 
 

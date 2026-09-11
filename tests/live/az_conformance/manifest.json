@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "snapshot": {
     "captured_at": "2026-09-11",
     "count": 211,
@@ -12,16 +12,18 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-1-5-vision-pro",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -31,16 +33,18 @@
       "canonical_provider": "kuaishou",
       "canonical_model_id": "KAT-Coder-Pro-V2",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -50,17 +54,29 @@
       "canonical_provider": "minimax",
       "canonical_model_id": "MiniMax-M2.1",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -70,17 +86,29 @@
       "canonical_provider": "minimax",
       "canonical_model_id": "MiniMax-M2.5",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -90,17 +118,29 @@
       "canonical_provider": "minimax",
       "canonical_model_id": "MiniMax-M2.5-highspeed",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -110,17 +150,29 @@
       "canonical_provider": "minimax",
       "canonical_model_id": "MiniMax-M2.7",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -130,17 +182,29 @@
       "canonical_provider": "minimax",
       "canonical_model_id": "MiniMax-M2.7-highspeed",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -150,17 +214,29 @@
       "canonical_provider": "minimax",
       "canonical_model_id": "MiniMax-M2.7",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -170,17 +246,29 @@
       "canonical_provider": "minimax",
       "canonical_model_id": "MiniMax-M3",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -190,17 +278,29 @@
       "canonical_provider": "minimax",
       "canonical_model_id": "MiniMax-M3",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -210,16 +310,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "chatgpt-4o-latest",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -229,17 +331,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-fable-5",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -249,17 +364,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-fable-5",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -269,17 +397,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-haiku-4-5-20251001",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -289,17 +430,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-opus-4-6",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -309,17 +463,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-opus-4-6",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -329,17 +496,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-opus-4-6",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -349,17 +529,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-opus-4-6",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -369,17 +562,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-opus-4-6",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -389,17 +595,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-opus-4-7",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -409,17 +628,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-opus-4-7",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -429,17 +661,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-opus-4-8",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -449,17 +694,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-opus-4-8",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -469,17 +727,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-opus-5",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -489,17 +760,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-sonnet-4-6",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -509,17 +793,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-sonnet-4-6",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -529,17 +826,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-sonnet-4-6",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -549,17 +859,30 @@
       "canonical_provider": "anthropic",
       "canonical_model_id": "claude-sonnet-5",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -569,15 +892,17 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-6-astra",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -587,16 +912,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-chat",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -606,16 +932,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-r1",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -625,16 +952,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-r1-250528",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -644,16 +972,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-r1",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -663,16 +992,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-reasoner",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -682,16 +1012,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-v3",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -701,16 +1032,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-v3.1-terminus",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -720,16 +1052,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-v3.2",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -739,16 +1072,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-v3.2-251201",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -758,17 +1092,27 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-v4-flash",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -778,17 +1122,27 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-v4-flash-0731",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -798,16 +1152,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-v4-flash-0731",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -817,17 +1172,27 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-v4-pro",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -837,16 +1202,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-v4-pro-0813",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -856,16 +1222,17 @@
       "canonical_provider": "deepseek",
       "canonical_model_id": "deepseek-v4-pro",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -875,15 +1242,17 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-1-5-pro-256k-250115",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -893,16 +1262,18 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-1-5-thinking-pro-250415",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -912,17 +1283,19 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-1-5-thinking-vision-pro-250428",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -932,15 +1305,17 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seed-1-6-250615",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -950,16 +1325,18 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seed-1-6-thinking-250715",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -969,16 +1346,18 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seed-1-6-vision-250815",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -988,15 +1367,17 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seed-1-8-251215",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1006,15 +1387,17 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seed-1-8-251228",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1024,15 +1407,17 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seed-2-0-lite-260215",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1042,15 +1427,17 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seed-2-0-pro-260215",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1060,15 +1447,17 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seed-2-1-pro-260628",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1078,10 +1467,12 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seedance-2-0-260128",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "video_output"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "video_output"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1091,10 +1482,12 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seedance-2-5-260628",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "video_output"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "video_output"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1104,10 +1497,12 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seedance-2-0-260128",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "video_output"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "video_output"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1117,11 +1512,13 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seedream-5-0-260128",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_output",
+            "image_edit"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1131,11 +1528,13 @@
       "canonical_provider": "volcengine",
       "canonical_model_id": "doubao-seedream-5-0-pro-260628",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_output",
+            "image_edit"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1145,17 +1544,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-2.5-flash",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1165,13 +1577,20 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-2.5-flash-image",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_input",
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "image_input",
+            "image_output",
+            "image_edit"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1181,11 +1600,12 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-2.5-flash-preview-tts",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "audio_output"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "audio_output"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1195,17 +1615,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-2.5-pro",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1215,18 +1648,32 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-2.5-pro",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1236,17 +1683,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3-flash-preview",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1256,18 +1716,32 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3-flash-preview",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1277,18 +1751,32 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3-flash-preview",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1298,17 +1786,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3-flash-preview",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1318,13 +1819,20 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3-pro-image",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_input",
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "image_input",
+            "image_output",
+            "image_edit"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1334,13 +1842,20 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3-pro-image",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_input",
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "image_input",
+            "image_output",
+            "image_edit"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1350,13 +1865,20 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.1-flash-image",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_input",
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "image_input",
+            "image_output",
+            "image_edit"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1366,13 +1888,20 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.1-flash-image",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_input",
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "image_input",
+            "image_output",
+            "image_edit"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1382,17 +1911,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.1-flash-lite",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1402,11 +1944,12 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.1-flash-tts-preview",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "audio_output"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "audio_output"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1416,17 +1959,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.1-pro-preview",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1436,18 +1992,32 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.1-pro-preview",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1457,18 +2027,32 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.1-pro-preview",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1478,17 +2062,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.1-pro-preview",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1498,17 +2095,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.5-flash",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1518,17 +2128,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.5-flash-lite",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1538,18 +2161,32 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.5-flash",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1559,17 +2196,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.5-flash",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1579,17 +2229,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.6-flash",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1599,18 +2262,32 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.6-flash",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1620,17 +2297,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.7-flash",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1640,18 +2330,32 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.7-flash",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1661,17 +2365,30 @@
       "canonical_provider": "google",
       "canonical_model_id": "gemini-3.8-flash",
       "protocols": [
-        "gemini_generate_content",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "gemini_generate_content",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1681,17 +2398,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-4.5",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1701,17 +2430,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-4.6",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1721,17 +2462,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-4.7",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1741,17 +2494,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-4.7-flash",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1761,17 +2526,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-4.7-flashx",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1781,17 +2558,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-5",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1801,17 +2590,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-5-turbo",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1821,17 +2622,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-5",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1841,17 +2654,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-5.1",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1861,17 +2686,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-5.2",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1881,17 +2718,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-5.2",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -1901,17 +2750,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-5.3",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1921,17 +2782,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-5.3-flash",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1941,17 +2814,29 @@
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-5v-turbo",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1961,16 +2846,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-4.1",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1980,16 +2867,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-4.1-2025-04-14",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -1999,16 +2888,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-4.1-mini",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2018,16 +2909,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-4o",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2037,16 +2930,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-4o-2024-05-13",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2056,16 +2951,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-4o-2024-08-06",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2075,16 +2972,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-4o-2024-11-20",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2094,16 +2993,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-4o-mini",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2113,16 +3014,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-4o-mini-2024-07-18",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2132,10 +3035,12 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-4o-mini-tts",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "audio_output"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "audio_output"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2145,16 +3050,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2164,16 +3071,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5-chat-latest",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2183,16 +3092,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5-mini",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2202,16 +3113,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5-nano",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2221,16 +3134,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -2240,16 +3155,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.1",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2259,16 +3176,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.2",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2278,16 +3197,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.4",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2297,16 +3218,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.4",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -2316,16 +3239,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.4-mini",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2335,16 +3260,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.4-nano",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2354,16 +3281,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.4",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -2373,16 +3302,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.5",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2392,16 +3323,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.5",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -2411,16 +3344,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.5",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -2430,16 +3365,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.6-luna",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2449,16 +3386,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.6-sol",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2468,16 +3407,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-5.6-terra",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2487,16 +3428,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-6-astra",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2506,13 +3449,15 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-audio",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "audio_input",
-        "audio_output"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "audio_input",
+            "audio_output"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2522,13 +3467,15 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-audio-1.5",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "audio_input",
-        "audio_output"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "audio_input",
+            "audio_output"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2538,11 +3485,13 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-image-2",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_output",
+            "image_edit"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2552,11 +3501,13 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-image-2",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_output",
+            "image_edit"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -2566,11 +3517,13 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-image-2.5-flare",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_output",
+            "image_edit"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2580,16 +3533,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-oss-120b",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2599,12 +3554,14 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-realtime",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "realtime",
-        "audio_input",
-        "audio_output"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "realtime",
+            "audio_input",
+            "audio_output"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2614,12 +3571,14 @@
       "canonical_provider": "openai",
       "canonical_model_id": "gpt-realtime-2",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "realtime",
-        "audio_input",
-        "audio_output"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "realtime",
+            "audio_input",
+            "audio_output"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2629,17 +3588,19 @@
       "canonical_provider": "xai",
       "canonical_model_id": "grok-4.5",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2649,17 +3610,19 @@
       "canonical_provider": "xai",
       "canonical_model_id": "grok-4.6",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2669,11 +3632,13 @@
       "canonical_provider": "xai",
       "canonical_model_id": "grok-imagine-image-2.0",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_output",
+            "image_edit"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2683,16 +3648,18 @@
       "canonical_provider": "moonshot",
       "canonical_model_id": "kimi-k2-250711",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2702,17 +3669,29 @@
       "canonical_provider": "moonshot",
       "canonical_model_id": "kimi-k2-thinking",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2722,17 +3701,29 @@
       "canonical_provider": "moonshot",
       "canonical_model_id": "kimi-k2.5",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2742,17 +3733,29 @@
       "canonical_provider": "moonshot",
       "canonical_model_id": "kimi-k2.6",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2762,17 +3765,29 @@
       "canonical_provider": "moonshot",
       "canonical_model_id": "kimi-k2.7-code",
       "protocols": [
-        "anthropic_messages",
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_schema",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2782,16 +3797,18 @@
       "canonical_provider": "moonshot",
       "canonical_model_id": "kimi-k3",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2801,16 +3818,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "o3",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2820,16 +3839,18 @@
       "canonical_provider": "openai",
       "canonical_model_id": "o4-mini",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2839,16 +3860,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qvq-max",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2858,15 +3881,17 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen-coder-turbo",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2876,11 +3901,13 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen-image-3.0",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_output",
+            "image_edit"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2890,11 +3917,13 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen-image-edit",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "image_output",
-        "image_edit"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "image_output",
+            "image_edit"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2904,15 +3933,17 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen-max",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2922,17 +3953,17 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen-omni-turbo",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input",
-        "audio_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "image_input",
+            "audio_input",
+            "audio_output",
+            "video_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2942,15 +3973,17 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen-plus",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2960,16 +3993,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen-vl-max",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2979,13 +4014,15 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen2.5-32b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -2995,13 +4032,15 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen2.5-72b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3011,15 +4050,17 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen2.5-coder-32b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3029,15 +4070,17 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen2.5-coder-7b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3047,14 +4090,16 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen2.5-vl-32b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "json_object",
-        "json_schema",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "json_object",
+            "json_schema",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3064,16 +4109,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-14b",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3083,16 +4130,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-235b-a22b",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3102,16 +4151,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-235b-a22b-instruct-2507",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3121,16 +4172,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-235b-a22b-thinking-2507",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3140,16 +4193,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-30b-a3b",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3159,16 +4214,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-30b-a3b-instruct-2507",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3178,16 +4235,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-32b",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3197,16 +4256,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-8b",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3216,16 +4277,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-coder-30b-a3b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3235,16 +4298,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-coder-480b-a35b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3254,16 +4319,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-max",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3273,16 +4340,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-next-80b-a3b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3292,16 +4361,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-next-80b-a3b-thinking",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3311,18 +4382,12 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-omni-30b-a3b-captioner",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input",
-        "audio_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "audio_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3332,10 +4397,12 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-tts-flash",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "audio_output"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "audio_output"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3345,17 +4412,19 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-vl-235b-a22b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3365,17 +4434,19 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-vl-235b-a22b-thinking",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3385,17 +4456,19 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-vl-30b-a3b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3405,17 +4478,19 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-vl-30b-a3b-thinking",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3425,17 +4500,19 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-vl-32b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3445,17 +4522,19 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-vl-32b-thinking",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3465,17 +4544,19 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-vl-8b-instruct",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3485,17 +4566,19 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-vl-8b-thinking",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3505,17 +4588,19 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3-vl-plus",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning",
+            "image_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3525,16 +4610,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.5-122b-a10b",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3544,16 +4631,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.5-27b",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3563,16 +4652,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.5-35b-a3b",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3582,16 +4673,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.5-397b-a17b",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3601,18 +4694,19 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.5-omni-flash",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input",
-        "audio_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "image_input",
+            "audio_input",
+            "audio_output",
+            "video_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3622,18 +4716,20 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.5-omni-plus",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning",
-        "image_input",
-        "audio_input"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "image_input",
+            "audio_input",
+            "audio_output",
+            "video_input"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3643,16 +4739,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.5-plus",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3662,16 +4760,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.6-plus",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3681,16 +4781,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.7-max",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3700,16 +4802,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.7-plus",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3719,16 +4823,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.8-27b",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3738,16 +4844,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.8-flash",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3757,16 +4865,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwen3.8-max",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3776,16 +4886,18 @@
       "canonical_provider": "alibaba_cloud",
       "canonical_model_id": "qwq-plus",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "text",
-        "text_stream",
-        "tools",
-        "tool_choice",
-        "json_object",
-        "json_schema",
-        "reasoning"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "json_schema",
+            "reasoning"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3795,11 +4907,18 @@
       "canonical_provider": null,
       "canonical_model_id": null,
       "protocols": [
-        "openai_chat_completions",
-        "serpapi_search"
-      ],
-      "required_scenarios": [
-        "search"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "search"
+          ]
+        },
+        {
+          "protocol": "serpapi_search",
+          "required_scenarios": [
+            "search"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -3809,11 +4928,18 @@
       "canonical_provider": null,
       "canonical_model_id": null,
       "protocols": [
-        "openai_chat_completions",
-        "serpapi_search"
-      ],
-      "required_scenarios": [
-        "search"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "search"
+          ]
+        },
+        {
+          "protocol": "serpapi_search",
+          "required_scenarios": [
+            "search"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -3823,11 +4949,18 @@
       "canonical_provider": null,
       "canonical_model_id": null,
       "protocols": [
-        "openai_chat_completions",
-        "serpapi_search"
-      ],
-      "required_scenarios": [
-        "search"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "search"
+          ]
+        },
+        {
+          "protocol": "serpapi_search",
+          "required_scenarios": [
+            "search"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -3837,11 +4970,18 @@
       "canonical_provider": null,
       "canonical_model_id": null,
       "protocols": [
-        "openai_chat_completions",
-        "serpapi_search"
-      ],
-      "required_scenarios": [
-        "search"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "search"
+          ]
+        },
+        {
+          "protocol": "serpapi_search",
+          "required_scenarios": [
+            "search"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -3851,11 +4991,18 @@
       "canonical_provider": null,
       "canonical_model_id": null,
       "protocols": [
-        "openai_chat_completions",
-        "serpapi_search"
-      ],
-      "required_scenarios": [
-        "search"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "search"
+          ]
+        },
+        {
+          "protocol": "serpapi_search",
+          "required_scenarios": [
+            "search"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -3865,11 +5012,18 @@
       "canonical_provider": null,
       "canonical_model_id": null,
       "protocols": [
-        "openai_chat_completions",
-        "serpapi_search"
-      ],
-      "required_scenarios": [
-        "search"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "search"
+          ]
+        },
+        {
+          "protocol": "serpapi_search",
+          "required_scenarios": [
+            "search"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -3879,11 +5033,18 @@
       "canonical_provider": null,
       "canonical_model_id": null,
       "protocols": [
-        "openai_chat_completions",
-        "serpapi_search"
-      ],
-      "required_scenarios": [
-        "search"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "search"
+          ]
+        },
+        {
+          "protocol": "serpapi_search",
+          "required_scenarios": [
+            "search"
+          ]
+        }
       ],
       "catalog_eligible": false
     },
@@ -3893,10 +5054,12 @@
       "canonical_provider": "openai",
       "canonical_model_id": "text-embedding-3-large",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "embedding"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "embedding"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3906,10 +5069,12 @@
       "canonical_provider": "openai",
       "canonical_model_id": "text-embedding-3-small",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "embedding"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "embedding"
+          ]
+        }
       ],
       "catalog_eligible": true
     },
@@ -3919,10 +5084,12 @@
       "canonical_provider": "openai",
       "canonical_model_id": "text-embedding-ada-002",
       "protocols": [
-        "openai_chat_completions"
-      ],
-      "required_scenarios": [
-        "embedding"
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "embedding"
+          ]
+        }
       ],
       "catalog_eligible": true
     }

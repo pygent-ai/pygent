@@ -29,6 +29,7 @@ class Scenario(StrEnum):
     IMAGE_INPUT = "image_input"
     IMAGE_OUTPUT = "image_output"
     IMAGE_EDIT = "image_edit"
+    VIDEO_INPUT = "video_input"
     VIDEO_OUTPUT = "video_output"
     AUDIO_OUTPUT = "audio_output"
     AUDIO_INPUT = "audio_input"
@@ -38,13 +39,18 @@ class Scenario(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ProtocolRequirements:
+    protocol: str
+    required_scenarios: tuple[Scenario, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class AzRoute:
     route_id: str
     kind: RouteKind
     canonical_provider: str | None
     canonical_model_id: str | None
-    protocols: tuple[str, ...]
-    required_scenarios: tuple[Scenario, ...]
+    protocols: tuple[ProtocolRequirements, ...]
     catalog_eligible: bool
 
 
@@ -85,10 +91,10 @@ _ROUTE_FIELDS = frozenset(
         "canonical_provider",
         "canonical_model_id",
         "protocols",
-        "required_scenarios",
         "catalog_eligible",
     }
 )
+_PROTOCOL_FIELDS = frozenset({"protocol", "required_scenarios"})
 _SOURCE_FIELDS = frozenset(
     {"provider", "model_id", "protocol", "url", "checked_at"}
 )
@@ -173,14 +179,29 @@ def route_from_mapping(value: object) -> AzRoute:
     canonical_model_id = _optional_non_empty(
         raw["canonical_model_id"], "canonical_model_id"
     )
-    protocols = _strings(raw["protocols"], "protocols", "protocol")
-    scenario_values = _strings(
-        raw["required_scenarios"], "required_scenarios", "scenario"
-    )
-    try:
-        scenarios = tuple(Scenario(item) for item in scenario_values)
-    except ValueError as exc:
-        raise ValueError("invalid scenario") from exc
+    protocol_values = raw["protocols"]
+    if not isinstance(protocol_values, list):
+        raise TypeError("protocols must be a list")
+    if not protocol_values:
+        raise ValueError("protocols must not be empty")
+    protocols: list[ProtocolRequirements] = []
+    for item in protocol_values:
+        protocol_raw = _object(item, "protocol requirements")
+        _exact_fields(protocol_raw, _PROTOCOL_FIELDS, "protocol requirements")
+        protocol = _non_empty(protocol_raw["protocol"], "protocol")
+        scenario_values = _strings(
+            protocol_raw["required_scenarios"],
+            "required_scenarios",
+            "scenario",
+        )
+        try:
+            scenarios = tuple(Scenario(value) for value in scenario_values)
+        except ValueError as exc:
+            raise ValueError("invalid scenario") from exc
+        protocols.append(ProtocolRequirements(protocol, scenarios))
+    protocol_names = [item.protocol for item in protocols]
+    if len(protocol_names) != len(set(protocol_names)):
+        raise ValueError("protocols contains a duplicate protocol")
     catalog_eligible = raw["catalog_eligible"]
     if not isinstance(catalog_eligible, bool):
         raise TypeError("catalog_eligible must be a boolean")
@@ -210,8 +231,7 @@ def route_from_mapping(value: object) -> AzRoute:
         kind=kind,
         canonical_provider=canonical_provider,
         canonical_model_id=canonical_model_id,
-        protocols=protocols,
-        required_scenarios=scenarios,
+        protocols=tuple(protocols),
         catalog_eligible=catalog_eligible,
     )
 
@@ -219,7 +239,7 @@ def route_from_mapping(value: object) -> AzRoute:
 def manifest_from_mapping(value: object) -> AzManifest:
     raw = _object(value, "manifest")
     _exact_fields(raw, frozenset({"schema_version", "snapshot", "routes"}), "manifest")
-    if raw["schema_version"] != 1:
+    if raw["schema_version"] != 2:
         raise ValueError("unsupported manifest schema_version")
 
     snapshot_raw = _object(raw["snapshot"], "snapshot")
@@ -300,6 +320,7 @@ __all__ = [
     "AzManifest",
     "AzRoute",
     "InventorySnapshot",
+    "ProtocolRequirements",
     "RouteKind",
     "Scenario",
     "SourceIndex",

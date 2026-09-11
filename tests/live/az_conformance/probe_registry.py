@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from tests.live.az_conformance.anthropic_probes import (
     anthropic_image_input_probe,
-    anthropic_json_object_probe,
     anthropic_json_schema_probe,
     anthropic_reasoning_probe,
     anthropic_stream_probe,
@@ -11,7 +10,10 @@ from tests.live.az_conformance.anthropic_probes import (
     anthropic_tool_probe,
 )
 from tests.live.az_conformance.gemini_probes import (
+    gemini_audio_output_probe,
+    gemini_image_edit_probe,
     gemini_image_input_probe,
+    gemini_image_output_probe,
     gemini_json_object_probe,
     gemini_json_schema_probe,
     gemini_reasoning_probe,
@@ -27,6 +29,7 @@ from tests.live.az_conformance.media_probes import (
     image_edit_probe,
     image_output_probe,
     realtime_probe,
+    video_input_probe,
     video_output_probe,
 )
 from tests.live.az_conformance.openai_probes import (
@@ -57,6 +60,7 @@ def builtin_probe_registry() -> ProbeRegistry:
             ("openai_chat_completions", Scenario.IMAGE_INPUT): openai_image_input_probe,
             ("openai_chat_completions", Scenario.IMAGE_OUTPUT): image_output_probe,
             ("openai_chat_completions", Scenario.IMAGE_EDIT): image_edit_probe,
+            ("openai_chat_completions", Scenario.VIDEO_INPUT): video_input_probe,
             ("openai_chat_completions", Scenario.VIDEO_OUTPUT): video_output_probe,
             ("openai_chat_completions", Scenario.AUDIO_OUTPUT): audio_output_probe,
             ("openai_chat_completions", Scenario.AUDIO_INPUT): audio_input_probe,
@@ -67,7 +71,6 @@ def builtin_probe_registry() -> ProbeRegistry:
             ("anthropic_messages", Scenario.TEXT_STREAM): anthropic_stream_probe,
             ("anthropic_messages", Scenario.TOOLS): anthropic_tool_probe,
             ("anthropic_messages", Scenario.TOOL_CHOICE): anthropic_tool_choice_probe,
-            ("anthropic_messages", Scenario.JSON_OBJECT): anthropic_json_object_probe,
             ("anthropic_messages", Scenario.JSON_SCHEMA): anthropic_json_schema_probe,
             ("anthropic_messages", Scenario.REASONING): anthropic_reasoning_probe,
             ("anthropic_messages", Scenario.IMAGE_INPUT): anthropic_image_input_probe,
@@ -79,9 +82,9 @@ def builtin_probe_registry() -> ProbeRegistry:
             ("gemini_generate_content", Scenario.JSON_SCHEMA): gemini_json_schema_probe,
             ("gemini_generate_content", Scenario.REASONING): gemini_reasoning_probe,
             ("gemini_generate_content", Scenario.IMAGE_INPUT): gemini_image_input_probe,
-            ("gemini_generate_content", Scenario.IMAGE_OUTPUT): image_output_probe,
-            ("gemini_generate_content", Scenario.IMAGE_EDIT): image_edit_probe,
-            ("gemini_generate_content", Scenario.AUDIO_OUTPUT): audio_output_probe,
+            ("gemini_generate_content", Scenario.IMAGE_OUTPUT): gemini_image_output_probe,
+            ("gemini_generate_content", Scenario.IMAGE_EDIT): gemini_image_edit_probe,
+            ("gemini_generate_content", Scenario.AUDIO_OUTPUT): gemini_audio_output_probe,
             ("serpapi_search", Scenario.SEARCH): search_probe,
         }
     )
