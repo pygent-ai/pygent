@@ -380,6 +380,46 @@ async def test_alibaba_named_tool_choice_probe_disables_thinking() -> None:
 
 
 @pytest.mark.asyncio
+async def test_alibaba_tool_continuation_probe_disables_thinking() -> None:
+    client = ScriptedClient(
+        responses=[
+            _openai_response(
+                "",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            ),
+            _openai_response("DONE"),
+        ]
+    )
+    route = route_from_mapping(
+        {
+            "route_id": "qwen3-vl-plus",
+            "kind": "official_model",
+            "canonical_provider": "alibaba_cloud",
+            "canonical_model_id": "qwen3-vl-plus",
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["tools"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+
+    result = await openai_tool_probe(_context(client, Scenario.TOOLS), route)
+
+    assert result.status == "passed"
+    assert client.requests[0]["enable_thinking"] is False
+    assert client.requests[1]["enable_thinking"] is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "protocol",
     ["openai_chat_completions", "anthropic_messages"],
@@ -1310,6 +1350,41 @@ async def test_qwen_omni_turbo_uses_its_supported_voice() -> None:
         "voice": "Chelsie",
         "format": "wav",
     }
+
+
+@pytest.mark.asyncio
+async def test_qwen_omni_audio_input_uses_data_url_and_streaming_text() -> None:
+    event = {"choices": [{"delta": {"content": "probe audio"}}]}
+    response = b"data: " + json.dumps(event).encode("utf-8") + b"\n\ndata: [DONE]\n\n"
+    route = route_from_mapping(
+        {
+            "route_id": "qwen3.5-omni-plus",
+            "kind": "official_model",
+            "canonical_provider": "alibaba_cloud",
+            "canonical_model_id": "qwen3.5-omni-plus",
+            "protocols": [
+                {
+                    "protocol": "openai_chat_completions",
+                    "required_scenarios": ["audio_input"],
+                }
+            ],
+            "catalog_eligible": True,
+        }
+    )
+    client = RawScriptedClient([httpx.Response(200, content=response)])
+    client.audio_fixture = b"RIFF" + b"\x00" * 40 + b"WAVE"
+
+    result = await audio_input_probe(
+        _raw_context(client, Scenario.AUDIO_INPUT), route
+    )
+
+    assert result.status == "passed"
+    body = client.requests[0][2]["json"]
+    audio = body["messages"][0]["content"][1]["input_audio"]
+    assert audio["data"].startswith("data:;base64,")
+    assert body["modalities"] == ["text"]
+    assert body["stream"] is True
+    assert body["stream_options"] == {"include_usage": True}
 
 
 @pytest.mark.asyncio

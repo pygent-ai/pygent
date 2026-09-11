@@ -425,12 +425,17 @@ async def audio_input_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
     try:
         encoded_audio = base64.b64encode(client.audio_fixture).decode("ascii")
         captioner = "captioner" in (route.canonical_model_id or "").lower()
+        alibaba_conversational = (
+            route.canonical_provider == "alibaba_cloud" and not captioner
+        )
         content: list[dict[str, object]] = [
             {
                 "type": "input_audio",
                 "input_audio": {
                     "data": (
-                        f"data:;base64,{encoded_audio}" if captioner else encoded_audio
+                        f"data:;base64,{encoded_audio}"
+                        if route.canonical_provider == "alibaba_cloud"
+                        else encoded_audio
                     ),
                     "format": "wav",
                 },
@@ -456,21 +461,33 @@ async def audio_input_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
                     }
                 ],
                 "max_tokens": 1024,
+                **(
+                    {
+                        "modalities": ["text"],
+                        "stream": True,
+                        "stream_options": {"include_usage": True},
+                    }
+                    if alibaba_conversational
+                    else {}
+                ),
             },
         )
         error = _http_error(response)
         if error is not None:
             return _result(context, route, error_kind=error)
-        choices = _json(response).get("choices")
-        if (
-            not isinstance(choices, list)
-            or not choices
-            or not isinstance(choices[0], Mapping)
-            or not isinstance(choices[0].get("message"), Mapping)
-            or not isinstance(choices[0]["message"].get("content"), str)
-            or not choices[0]["message"]["content"].strip()
-        ):
-            raise ValueError("transcription text is empty")
+        if alibaba_conversational:
+            _text_from_sse(response.content)
+        else:
+            choices = _json(response).get("choices")
+            if (
+                not isinstance(choices, list)
+                or not choices
+                or not isinstance(choices[0], Mapping)
+                or not isinstance(choices[0].get("message"), Mapping)
+                or not isinstance(choices[0]["message"].get("content"), str)
+                or not choices[0]["message"]["content"].strip()
+            ):
+                raise ValueError("transcription text is empty")
     except (httpx.HTTPError, OSError, TypeError, ValueError, AttributeError):
         return _result(context, route, error_kind=ErrorKind.INVALID_RESPONSE)
     return _result(context, route)

@@ -294,12 +294,18 @@ async def openai_stream_probe(context: ProbeContext, route: AzRoute) -> ProbeRes
 
 async def openai_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
     adapter = OpenAICompatibleAdapter()
+    provider_options: dict[str, object] | None = (
+        {"enable_thinking": False}
+        if route.canonical_provider == "alibaba_cloud"
+        else None
+    )
     first_request = _request(
         route,
         message=UserMessage(
             content="Use lookup with value probe. After receiving the result, reply with exactly DONE."
         ),
         tools=(_TOOL,),
+        provider_options=provider_options,
     )
     try:
         first_payload = _wire_payload(adapter, first_request, route).to_dict()
@@ -328,6 +334,7 @@ async def openai_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
             ),
             context=Context(messages=(first.message,)),
             tools=(_TOOL,),
+            provider_options=provider_options,
         )
         second_payload = _wire_payload(adapter, second_request, route).to_dict()
         if _is_openai_audio(route):
