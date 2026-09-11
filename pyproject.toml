@@ -27,6 +27,9 @@ dependencies = [
 performance = [
     "psutil>=6.0",
 ]
+az-conformance = [
+    "websockets>=15.0",
+]
 dev = [
     "build>=1.2",
     "mypy>=1.11",
@@ -67,6 +70,7 @@ markers = [
     "security: verifies hostile inputs, redaction, and bounded-data guarantees",
     "release: verifies built and installed distribution artifacts from outside the source tree",
     "live_llm: opt-in tests against externally configured OpenAI-compatible model APIs",
+    "az_conformance: opt-in tests for the frozen AZ provider conformance suite",
     "performance: verifies the native benchmark harness without running long campaigns",
     "contract_02: verifies the breaking Pygent 0.2.x contract documented under docs",
     "contract_meta: validates 0.2.x contract traceability",

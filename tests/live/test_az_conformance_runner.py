@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.live.az_conformance import cli
 from tests.live.az_conformance.inventory import InventoryDiff, inventory_digest
 from tests.live.az_conformance.results import ErrorKind, ProbeResult, ResultLedger
 from tests.live.az_conformance.runner import (
@@ -341,3 +342,82 @@ def test_completion_requires_every_required_key_to_pass() -> None:
     assert report.passed_routes == ()
     assert report.missing_keys
     assert report.complete is False
+
+
+def test_cli_validate_needs_no_credentials_and_reports_sanitized_summary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest = Path(__file__).with_name("az_conformance") / "manifest.json"
+
+    assert cli.main(["validate", "--manifest", str(manifest)], environ={}) == 0
+
+    output = capsys.readouterr().out
+    assert "routes=211 classified=211" in output
+    assert "missing_sources=0 missing_probes=0" in output
+
+
+def test_cli_connection_is_strict_and_hides_credentials() -> None:
+    connection = cli._connection_from_environment(
+        {"AZ_BASE_URL": "https://gateway.example/v1", "AZ_API_KEY": "secret-key"}
+    )
+    assert "secret-key" not in repr(connection)
+
+    with pytest.raises(ValueError, match="HTTPS"):
+        cli._connection_from_environment(
+            {"AZ_BASE_URL": "http://gateway.example", "AZ_API_KEY": "secret-key"}
+        )
+    with pytest.raises(ValueError, match="credentials"):
+        cli._connection_from_environment(
+            {
+                "AZ_BASE_URL": "https://user:password@gateway.example",
+                "AZ_API_KEY": "secret-key",
+            }
+        )
+
+
+def test_cli_inventory_drift_stops_before_client_construction(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest_path = Path(__file__).with_name("az_conformance") / "manifest.json"
+    manifest = cli.load_manifest(manifest_path)
+    drift = InventoryDiff(
+        expected_count=211,
+        actual_count=210,
+        expected_sha256=manifest.snapshot.sha256,
+        actual_sha256="8" * 64,
+        added=(),
+        removed=(manifest.routes[0].route_id,),
+    )
+
+    async def inventory(*args, **kwargs):
+        return drift
+
+    monkeypatch.setattr(cli, "_inventory", inventory)
+    monkeypatch.setattr(cli, "_source_revision", lambda: "revision")
+    monkeypatch.setattr(
+        cli,
+        "_clients",
+        lambda connection: pytest.fail("clients constructed before drift gate"),
+    )
+
+    result = cli.main(
+        [
+            "run",
+            "--manifest",
+            str(manifest_path),
+            "--output-dir",
+            str(manifest_path.parent / "unused-output"),
+            "--scenario",
+            "text",
+        ],
+        environ={
+            "AZ_BASE_URL": "https://gateway.example",
+            "AZ_API_KEY": "secret-key",
+        },
+    )
+
+    assert result == 1
+    output = capsys.readouterr().out
+    assert "inventory_match=false" in output
+    assert "secret-key" not in output
