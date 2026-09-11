@@ -377,6 +377,73 @@ def test_anthropic_stream_rejects_missing_signature_and_premature_eof() -> None:
     assert eof.value.reason_code is ModelFailureReason.STREAM_INCOMPLETE
 
 
+def test_anthropic_compatible_stream_preserves_unsigned_thinking() -> None:
+    compatible_request = request(entry=anthropic_entry(provider="deepseek"))
+    decoder = AnthropicMessagesAdapter().create_stream_decoder(compatible_request)
+    payloads = [
+        {"type": "message_start", "message": {"id": "msg-1", "usage": {}}},
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": "reasoning"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "text", "text": "answer"},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {},
+        },
+        {"type": "message_stop"},
+    ]
+
+    parts = [
+        part
+        for payload in payloads
+        for part in decoder.feed(freeze_json_object(payload))
+    ]
+
+    continuation = next(part for part in parts if part.kind == "continuation")
+    assert continuation.data["data"]["blocks"][0] == freeze_json_object(
+        {"type": "thinking", "thinking": "reasoning"}
+    )
+
+
+def test_anthropic_compatible_non_stream_replays_unsigned_thinking() -> None:
+    compatible_request = request(entry=anthropic_entry(provider="deepseek"))
+    adapter = AnthropicMessagesAdapter()
+    response = adapter.parse_response(
+        compatible_request,
+        freeze_json_object(
+            {
+                "id": "msg-1",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "reasoning"},
+                    {"type": "text", "text": "answer"},
+                ],
+                "stop_reason": "end_turn",
+                "usage": {},
+            }
+        ),
+    )
+
+    replay = adapter.build_request(
+        request(entry=anthropic_entry(provider="deepseek"), message=response.message)
+    ).to_dict()
+
+    assert replay["messages"][0]["content"][0] == {
+        "type": "thinking",
+        "thinking": "reasoning",
+    }
+
+
 def test_anthropic_matching_continuation_rebuilds_exact_assistant_layout() -> None:
     adapter = AnthropicMessagesAdapter()
     response = adapter.parse_response(

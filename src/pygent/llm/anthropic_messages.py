@@ -268,7 +268,10 @@ class AnthropicMessagesAdapter:
             blocks = body.get("content")
             if not isinstance(blocks, list):
                 raise TypeError
-            content, calls, layout = _decode_blocks(blocks)
+            content, calls, layout = _decode_blocks(
+                blocks,
+                allow_unsigned_thinking=request.model.provider != "anthropic",
+            )
             stop_reason = body.get("stop_reason")
             finish_reason = _finish_reason(stop_reason)
             usage = _anthropic_usage(body.get("usage"))
@@ -511,11 +514,14 @@ class _AnthropicStreamDecoder:
             self._text_offset += len(text)
         elif kind == "thinking":
             signature = state["signature"]
-            if not isinstance(signature, str) or not signature:
+            if not isinstance(signature, str) or (
+                not signature and self._request.model.provider == "anthropic"
+            ):
                 raise TypeError
-            self._layout.append(
-                {"type": "thinking", "thinking": state["thinking"], "signature": signature}
-            )
+            thinking_block = {"type": "thinking", "thinking": state["thinking"]}
+            if signature:
+                thinking_block["signature"] = signature
+            self._layout.append(thinking_block)
         elif kind == "redacted_thinking":
             self._layout.append({"type": "redacted_thinking", "data": state["data"]})
         elif kind == "tool_use":
@@ -718,12 +724,29 @@ def _assistant_blocks(
                 used_tools.add(index)
                 call = message.tool_calls[index]
                 rebuilt.append({"type": "tool_use", "id": call.call_id, "name": call.name, "input": _thaw(call.arguments)})
+            elif kind == "thinking":
+                fields = set(raw)
+                if (
+                    fields not in (
+                        {"type", "thinking"},
+                        {"type", "thinking", "signature"},
+                    )
+                    or not isinstance(raw["thinking"], str)
+                    or (
+                        "signature" in raw
+                        and not isinstance(raw["signature"], str)
+                    )
+                    or (
+                        model.provider == "anthropic"
+                        and (
+                            "signature" not in raw
+                            or not cast(str, raw["signature"])
+                        )
+                    )
+                ):
+                    raise ValueError
+                rebuilt.append(raw.to_dict())
             elif (
-                kind == "thinking"
-                and set(raw) == {"type", "thinking", "signature"}
-                and isinstance(raw["thinking"], str)
-                and isinstance(raw["signature"], str)
-            ) or (
                 kind == "redacted_thinking"
                 and set(raw) == {"type", "data"}
                 and isinstance(raw["data"], str)
@@ -816,6 +839,8 @@ def _tool_choice(
 
 def _decode_blocks(
     blocks: list[object],
+    *,
+    allow_unsigned_thinking: bool = False,
 ) -> tuple[str, tuple[ToolCall, ...], list[dict[str, object]]]:
     text_parts: list[str] = []
     calls: list[ToolCall] = []
@@ -840,9 +865,14 @@ def _decode_blocks(
             calls.append(ToolCall(call_id=call_id, name=name, arguments=cast(Mapping[str, object], arguments)))
         elif kind == "thinking":
             thinking, signature = block.get("thinking"), block.get("signature")
-            if not isinstance(thinking, str) or not isinstance(signature, str) or not signature:
+            if not isinstance(thinking, str) or (
+                signature is not None and not isinstance(signature, str)
+            ) or (not signature and not allow_unsigned_thinking):
                 raise TypeError
-            layout.append({"type": "thinking", "thinking": thinking, "signature": signature})
+            thinking_block = {"type": "thinking", "thinking": thinking}
+            if signature:
+                thinking_block["signature"] = signature
+            layout.append(thinking_block)
         elif kind == "redacted_thinking":
             data = block.get("data")
             if not isinstance(data, str) or not data:
