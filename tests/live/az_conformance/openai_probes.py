@@ -111,6 +111,39 @@ def _client(context: ProbeContext) -> ModelProviderClient:
     return cast(ModelProviderClient, context.client)
 
 
+def _is_openai_audio(route: AzRoute) -> bool:
+    return route.canonical_provider == "openai" and (
+        route.canonical_model_id or ""
+    ).startswith("gpt-audio")
+
+
+def _add_audio_output(body: dict[str, object], *, streaming: bool = False) -> None:
+    body["modalities"] = ["text", "audio"]
+    body["audio"] = {
+        "voice": "alloy",
+        "format": "pcm16" if streaming else "wav",
+    }
+
+
+def _audio_transcript(raw: FrozenJsonObject) -> str:
+    choices = raw.to_dict().get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("audio response has no choices")
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        raise TypeError("audio response choice must be an object")
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        raise TypeError("audio response has no message")
+    audio = message.get("audio")
+    if not isinstance(audio, dict):
+        raise TypeError("audio response has no audio")
+    transcript = audio.get("transcript")
+    if not isinstance(transcript, str) or not transcript.strip():
+        raise ValueError("audio response has no transcript")
+    return transcript
+
+
 def _passed(context: ProbeContext, route: AzRoute) -> ProbeResult:
     return ProbeResult(
         snapshot_sha256=context.snapshot_sha256,
@@ -183,6 +216,16 @@ async def _non_stream(
 
 async def openai_text_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
     try:
+        if _is_openai_audio(route):
+            request = _request(route)
+            adapter = OpenAICompatibleAdapter()
+            payload = _wire_payload(adapter, request, route).to_dict()
+            _add_audio_output(payload)
+            raw = await _client(context).invoke(
+                request.model, freeze_json_object(payload)
+            )
+            _audio_transcript(raw)
+            return _passed(context, route)
         response = await _non_stream(context, route, _request(route))
         if not response.message.content.strip():
             raise ValueError("text response is empty")
@@ -197,6 +240,35 @@ async def openai_stream_probe(context: ProbeContext, route: AzRoute) -> ProbeRes
     request = _request(route)
     adapter = OpenAICompatibleAdapter()
     try:
+        if _is_openai_audio(route):
+            payload = _wire_payload(adapter, request, route).to_dict()
+            _add_audio_output(payload, streaming=True)
+            saw_transcript = False
+            saw_done = False
+            stream = _client(context).stream(
+                request.model, freeze_json_object(payload)
+            )
+            async for item in stream:
+                event = item.to_dict()
+                saw_done = saw_done or event.get("done") is True
+                choices = event.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta")
+                if not isinstance(delta, dict):
+                    continue
+                audio = delta.get("audio")
+                if isinstance(audio, dict):
+                    transcript = audio.get("transcript")
+                    saw_transcript = saw_transcript or (
+                        isinstance(transcript, str) and bool(transcript)
+                    )
+            if not saw_transcript or not saw_done:
+                raise ValueError("audio stream lacks transcript or termination evidence")
+            return _passed(context, route)
         decoder = adapter.create_stream_decoder(request)
         saw_text = False
         saw_finish = False
@@ -226,8 +298,11 @@ async def openai_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
         tools=(_TOOL,),
     )
     try:
+        first_payload = _wire_payload(adapter, first_request, route).to_dict()
+        if _is_openai_audio(route):
+            _add_audio_output(first_payload)
         first_raw = await _client(context).invoke(
-            first_request.model, _wire_payload(adapter, first_request, route)
+            first_request.model, freeze_json_object(first_payload)
         )
         first = adapter.parse_response(first_request, first_raw)
         if len(first.message.tool_calls) != 1:
@@ -250,9 +325,15 @@ async def openai_tool_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
             context=Context(messages=(first.message,)),
             tools=(_TOOL,),
         )
+        second_payload = _wire_payload(adapter, second_request, route).to_dict()
+        if _is_openai_audio(route):
+            _add_audio_output(second_payload)
         second_raw = await _client(context).invoke(
-            second_request.model, _wire_payload(adapter, second_request, route)
+            second_request.model, freeze_json_object(second_payload)
         )
+        if _is_openai_audio(route):
+            _audio_transcript(second_raw)
+            return _passed(context, route)
         second = adapter.parse_response(second_request, second_raw)
         if not second.message.content.strip():
             raise ValueError("tool continuation response is empty")
@@ -283,7 +364,12 @@ async def openai_tool_choice_probe(
         provider_options=provider_options,
     )
     try:
-        response = await _non_stream(context, route, request)
+        response = await _non_stream(
+            context,
+            route,
+            request,
+            mutate=_add_audio_output if _is_openai_audio(route) else None,
+        )
         if len(response.message.tool_calls) != 1:
             raise ValueError("forced tool choice did not produce one tool call")
         return _passed(context, route)

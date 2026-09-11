@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import io
 import json
 import math
+import struct
 import wave
+import zlib
 from collections.abc import Mapping, Sequence
 from typing import Protocol, cast
 
@@ -130,9 +133,49 @@ async def _media_bytes(
 
 
 def _is_png(value: bytes) -> bool:
-    return value.startswith(b"\x89PNG\r\n\x1a\n") and value.endswith(
-        b"IEND\xaeB\x60\x82"
-    )
+    if not value.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False
+    position = 8
+    chunks: list[tuple[bytes, bytes]] = []
+    try:
+        while position < len(value):
+            length = struct.unpack(">I", value[position : position + 4])[0]
+            kind_start = position + 4
+            data_start = kind_start + 4
+            data_end = data_start + length
+            checksum_end = data_end + 4
+            if checksum_end > len(value):
+                return False
+            kind = value[kind_start:data_start]
+            data = value[data_start:data_end]
+            expected = struct.unpack(">I", value[data_end:checksum_end])[0]
+            if zlib.crc32(kind + data) & 0xFFFFFFFF != expected:
+                return False
+            chunks.append((kind, data))
+            position = checksum_end
+            if kind == b"IEND":
+                break
+        if position != len(value) or not chunks or chunks[0][0] != b"IHDR":
+            return False
+        header = chunks[0][1]
+        if len(header) != 13:
+            return False
+        width, height = struct.unpack(">II", header[:8])
+        if width == 0 or height == 0:
+            return False
+        if chunks[-1] != (b"IEND", b""):
+            return False
+        compressed = b"".join(data for kind, data in chunks if kind == b"IDAT")
+        decoder = zlib.decompressobj()
+        pixels = decoder.decompress(compressed, _MAX_MEDIA_BYTES + 1)
+        return bool(
+            compressed
+            and pixels
+            and len(pixels) <= _MAX_MEDIA_BYTES
+            and decoder.eof
+        )
+    except (struct.error, zlib.error):
+        return False
 
 
 def _is_audio(value: bytes) -> bool:
@@ -436,12 +479,18 @@ async def audio_input_probe(context: ProbeContext, route: AzRoute) -> ProbeResul
 async def realtime_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
     client = _client(context)
     scenario = context.scenario
-    output_modality = "audio" if scenario.value == "audio_output" else "text"
+    output_modalities = (
+        ["text", "audio"] if scenario.value == "audio_output" else ["text"]
+    )
     session: dict[str, object] = {
-        "type": "realtime",
-        "output_modalities": [output_modality],
+        "modalities": output_modalities,
         "instructions": "Be concise and complete the requested probe.",
     }
+    if "audio" in output_modalities:
+        session["voice"] = "alloy"
+        session["output_audio_format"] = "pcm16"
+    if scenario.value == "audio_input":
+        session["input_audio_format"] = "pcm16"
     prompt = "Reply with the word probe."
     if scenario.value in {"tools", "tool_choice"}:
         session["tools"] = [
@@ -457,11 +506,7 @@ async def realtime_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
                 },
             }
         ]
-        session["tool_choice"] = (
-            {"type": "function", "name": "lookup"}
-            if scenario.value == "tool_choice"
-            else "required"
-        )
+        session["tool_choice"] = "required"
         prompt = "Call lookup with value probe."
     if scenario.value == "reasoning":
         session["reasoning"] = {"effort": "low"}
@@ -470,14 +515,20 @@ async def realtime_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
         {"type": "session.update", "session": session}
     ]
     if scenario.value == "audio_input":
-        events.extend(
-            [
-                {
-                    "type": "input_audio_buffer.append",
-                    "audio": base64.b64encode(_pcm16_tone()).decode("ascii"),
+        events.append(
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_audio",
+                            "audio": base64.b64encode(_pcm16_tone()).decode("ascii"),
+                        }
+                    ],
                 },
-                {"type": "input_audio_buffer.commit"},
-            ]
+            }
         )
     else:
         content: list[dict[str, object]] = [
@@ -519,12 +570,17 @@ async def realtime_probe(context: ProbeContext, route: AzRoute) -> ProbeResult:
         if scenario.value == "audio_output":
             if not any("audio.delta" in item for item in event_types):
                 raise ValueError("realtime response has no audio evidence")
+        elif scenario.value == "audio_input":
+            if "conversation.item.created" not in event_types:
+                raise ValueError("realtime response has no accepted audio item")
         elif scenario.value in {"tools", "tool_choice"}:
             if not any("function_call" in item for item in event_types):
                 raise ValueError("realtime response has no function-call evidence")
         elif not any("text.delta" in item for item in event_types):
             raise ValueError("realtime response has no text evidence")
-    except (httpx.HTTPError, OSError, TypeError, ValueError, AttributeError):
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - probe records classified transport failure
         return _result(context, route, error_kind=ErrorKind.PROTOCOL_MISMATCH)
     return _result(context, route)
 
