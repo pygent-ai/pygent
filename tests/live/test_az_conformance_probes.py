@@ -885,6 +885,25 @@ async def test_gemini_schema_reasoning_and_image_probes_use_native_fields() -> N
 
 
 @pytest.mark.asyncio
+async def test_gemini_reasoning_probe_rejects_signature_without_thought() -> None:
+    route = _route("gemini_generate_content")
+    client = ScriptedClient(
+        responses=[
+            _gemini_response(
+                [{"text": "answer", "thoughtSignature": "not-reasoning-evidence"}]
+            )
+        ]
+    )
+
+    result = await gemini_reasoning_probe(
+        _context(client, Scenario.REASONING, "gemini_generate_content"), route
+    )
+
+    assert result.status == "failed"
+    assert result.error_kind.value == "invalid_response"
+
+
+@pytest.mark.asyncio
 async def test_gemini_output_probes_use_native_inline_media_contracts() -> None:
     route = _route("gemini_generate_content")
     client = ScriptedClient(

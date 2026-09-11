@@ -325,6 +325,9 @@ async def gemini_reasoning_probe(
 ) -> ProbeResult:
     request = _request(
         route,
+        message=UserMessage(
+            content="Which is larger, 17 * 19 or 18 * 18? Think carefully."
+        ),
         provider_options={
             "thinking_config": {
                 "include_thoughts": True,
@@ -333,9 +336,30 @@ async def gemini_reasoning_probe(
         },
     )
     try:
-        response = await _non_stream(context, route, request)
-        if response.message.continuation is None:
-            raise ValueError("thinking response has no thought signature")
+        adapter = GeminiGenerateContentAdapter()
+        raw = await _client(context).invoke(
+            _wire_model(request, route), adapter.build_request(request)
+        )
+        adapter.parse_response(request, raw)
+        body = raw.to_dict()
+        candidates = body.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            raise ValueError("thinking response has no candidate")
+        candidate = candidates[0]
+        if not isinstance(candidate, dict):
+            raise TypeError("thinking candidate must be an object")
+        content = candidate.get("content")
+        if not isinstance(content, dict):
+            raise TypeError("thinking candidate has no content")
+        parts = content.get("parts")
+        if not isinstance(parts, list) or not any(
+            isinstance(part, dict)
+            and part.get("thought") is True
+            and isinstance(part.get("text"), str)
+            and bool(part["text"].strip())
+            for part in parts
+        ):
+            raise ValueError("thinking response has no reasoning summary")
         return _passed(context, route)
     except asyncio.CancelledError:
         raise
