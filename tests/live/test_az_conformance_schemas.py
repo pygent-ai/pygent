@@ -308,6 +308,18 @@ def test_builtin_manifest_exercises_every_catalogued_video_input() -> None:
         assert Scenario.VIDEO_INPUT in protocol.required_scenarios
 
 
+def test_builtin_manifest_does_not_probe_unsupported_zhipu_controls() -> None:
+    for route in load_manifest().routes:
+        if route.canonical_provider != "zhipu":
+            continue
+        for requirements in route.protocols:
+            assert Scenario.JSON_SCHEMA not in requirements.required_scenarios
+            if requirements.protocol == "anthropic_messages":
+                assert Scenario.JSON_OBJECT not in requirements.required_scenarios
+            if requirements.protocol == "openai_chat_completions":
+                assert Scenario.TOOL_CHOICE not in requirements.required_scenarios
+
+
 def test_every_official_catalog_triple_and_alias_target_has_a_source() -> None:
     manifest = load_manifest()
     source_keys = set(load_sources().sources)

@@ -39,7 +39,7 @@ OFFICIAL_ROUTE_PROTOCOLS = {
     "google": {"gemini_generate_content"},
     "alibaba_cloud": {"openai_chat_completions"},
     "deepseek": {"openai_chat_completions", "anthropic_messages"},
-    "zhipu": {"openai_chat_completions"},
+    "zhipu": {"openai_chat_completions", "anthropic_messages"},
     "moonshot": {"openai_chat_completions", "anthropic_messages"},
     "minimax": {"openai_chat_completions", "anthropic_messages"},
     "volcengine": {"openai_chat_completions"},
@@ -162,6 +162,9 @@ def test_builtin_provider_catalog_has_official_multi_provider_connections() -> N
     )
     assert catalog.providers["moonshot"].protocols["anthropic_messages"].base_url == (
         "https://api.moonshot.cn/anthropic"
+    )
+    assert catalog.providers["zhipu"].protocols["anthropic_messages"].base_url == (
+        "https://open.bigmodel.cn/api/anthropic"
     )
     assert catalog.providers["minimax"].protocols["anthropic_messages"].base_url == (
         "https://api.minimax.io/anthropic"
@@ -554,6 +557,25 @@ def test_builtin_minimax_capabilities_follow_official_protocol_boundaries() -> N
     assert m3.modalities.input == ("text", "image", "video")
     assert m3.reasoning.supported and m3.reasoning.controllable
     assert m3.limits.context_tokens == 1_000_000
+
+
+def test_builtin_zhipu_capabilities_follow_official_protocol_boundaries() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    openai = catalog.models[("zhipu", "glm-5.2", "openai_chat_completions")]
+    anthropic = catalog.models[("zhipu", "glm-5.2", "anthropic_messages")]
+    vision = catalog.models[
+        ("zhipu", "glm-5v-turbo", "openai_chat_completions")
+    ]
+
+    assert openai.tools.call
+    assert openai.tools.choice == ("auto",)
+    assert not openai.tools.parallel
+    assert openai.structured_output.json_object
+    assert not openai.structured_output.json_schema
+    assert not anthropic.structured_output.json_object
+    assert not anthropic.structured_output.json_schema
+    assert not anthropic.reasoning.supported
+    assert not vision.structured_output.json_object
 
 
 def test_builtin_alibaba_omni_capabilities_follow_official_model_boundaries() -> None:

@@ -566,6 +566,48 @@
     },
     {
       "provider": "alibaba_cloud",
+      "model_id": "qwen3-235b-a22b",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "alibaba_cloud",
       "model_id": "qwen3-235b-a22b-instruct-2507",
       "protocol": "openai_chat_completions",
       "capabilities": {
@@ -650,7 +692,7 @@
     },
     {
       "provider": "alibaba_cloud",
-      "model_id": "qwen3-235b-a22b",
+      "model_id": "qwen3-30b-a3b",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -693,48 +735,6 @@
     {
       "provider": "alibaba_cloud",
       "model_id": "qwen3-30b-a3b-instruct-2507",
-      "protocol": "openai_chat_completions",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "alibaba_cloud",
-      "model_id": "qwen3-30b-a3b",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -2211,7 +2211,7 @@
     },
     {
       "provider": "aliyun_token_plan",
-      "model_id": "deepseek-v4-pro-0813",
+      "model_id": "deepseek-v4-pro",
       "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {
@@ -2253,7 +2253,7 @@
     },
     {
       "provider": "aliyun_token_plan",
-      "model_id": "deepseek-v4-pro-0813",
+      "model_id": "deepseek-v4-pro",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -2295,7 +2295,7 @@
     },
     {
       "provider": "aliyun_token_plan",
-      "model_id": "deepseek-v4-pro",
+      "model_id": "deepseek-v4-pro-0813",
       "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {
@@ -2337,7 +2337,7 @@
     },
     {
       "provider": "aliyun_token_plan",
-      "model_id": "deepseek-v4-pro",
+      "model_id": "deepseek-v4-pro-0813",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -3151,7 +3151,7 @@
     },
     {
       "provider": "aliyun_token_plan",
-      "model_id": "wan2.7-image-pro",
+      "model_id": "wan2.7-image",
       "protocol": "dashscope_multimodal_generation",
       "capabilities": {
         "modalities": {
@@ -3187,7 +3187,7 @@
     },
     {
       "provider": "aliyun_token_plan",
-      "model_id": "wan2.7-image",
+      "model_id": "wan2.7-image-pro",
       "protocol": "dashscope_multimodal_generation",
       "capabilities": {
         "modalities": {
@@ -3609,7 +3609,7 @@
     },
     {
       "provider": "deepseek",
-      "model_id": "deepseek-r1-250528",
+      "model_id": "deepseek-r1",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -3651,7 +3651,7 @@
     },
     {
       "provider": "deepseek",
-      "model_id": "deepseek-r1",
+      "model_id": "deepseek-r1-250528",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -3735,7 +3735,7 @@
     },
     {
       "provider": "deepseek",
-      "model_id": "deepseek-v3.1-terminus",
+      "model_id": "deepseek-v3",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -3777,7 +3777,7 @@
     },
     {
       "provider": "deepseek",
-      "model_id": "deepseek-v3.2-251201",
+      "model_id": "deepseek-v3.1-terminus",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -3861,91 +3861,7 @@
     },
     {
       "provider": "deepseek",
-      "model_id": "deepseek-v3",
-      "protocol": "openai_chat_completions",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": false
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "deepseek",
-      "model_id": "deepseek-v4-flash-0731",
-      "protocol": "anthropic_messages",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": false,
-          "json_schema": false
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "deepseek",
-      "model_id": "deepseek-v4-flash-0731",
+      "model_id": "deepseek-v3.2-251201",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -4030,6 +3946,174 @@
     {
       "provider": "deepseek",
       "model_id": "deepseek-v4-flash",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": 384000
+        }
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-flash-0731",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-flash-0731",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": 384000
+        }
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-pro",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -4112,55 +4196,14 @@
       }
     },
     {
-      "provider": "deepseek",
-      "model_id": "deepseek-v4-pro",
-      "protocol": "anthropic_messages",
+      "provider": "google",
+      "model_id": "gemini-2.5-flash",
+      "protocol": "gemini_generate_content",
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": false,
-          "json_schema": false
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": 1000000,
-          "max_output_tokens": 384000
-        }
-      }
-    },
-    {
-      "provider": "deepseek",
-      "model_id": "deepseek-v4-pro",
-      "protocol": "openai_chat_completions",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
+            "text",
+            "image"
           ],
           "output": [
             "text"
@@ -4183,15 +4226,15 @@
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": false
+          "json_schema": true
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
-          "context_tokens": 1000000,
-          "max_output_tokens": 384000
+          "context_tokens": null,
+          "max_output_tokens": null
         }
       }
     },
@@ -4255,49 +4298,6 @@
         "structured_output": {
           "json_object": false,
           "json_schema": false
-        },
-        "reasoning": {
-          "supported": false,
-          "controllable": false
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "google",
-      "model_id": "gemini-2.5-flash",
-      "protocol": "gemini_generate_content",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
         },
         "reasoning": {
           "supported": false,
@@ -4590,7 +4590,7 @@
     },
     {
       "provider": "google",
-      "model_id": "gemini-3.5-flash-lite",
+      "model_id": "gemini-3.5-flash",
       "protocol": "gemini_generate_content",
       "capabilities": {
         "modalities": {
@@ -4633,7 +4633,7 @@
     },
     {
       "provider": "google",
-      "model_id": "gemini-3.5-flash",
+      "model_id": "gemini-3.5-flash-lite",
       "protocol": "gemini_generate_content",
       "capabilities": {
         "modalities": {
@@ -4884,85 +4884,6 @@
     },
     {
       "provider": "minimax",
-      "model_id": "MiniMax-M2.5-highspeed",
-      "protocol": "anthropic_messages",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": false
-        },
-        "structured_output": {
-          "json_object": false,
-          "json_schema": false
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": false
-        },
-        "limits": {
-          "context_tokens": 204800,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "minimax",
-      "model_id": "MiniMax-M2.5-highspeed",
-      "protocol": "openai_chat_completions",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [],
-          "parallel": false
-        },
-        "structured_output": {
-          "json_object": false,
-          "json_schema": false
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": false
-        },
-        "limits": {
-          "context_tokens": 204800,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "minimax",
       "model_id": "MiniMax-M2.5",
       "protocol": "anthropic_messages",
       "capabilities": {
@@ -5042,7 +4963,7 @@
     },
     {
       "provider": "minimax",
-      "model_id": "MiniMax-M2.7-highspeed",
+      "model_id": "MiniMax-M2.5-highspeed",
       "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {
@@ -5084,7 +5005,7 @@
     },
     {
       "provider": "minimax",
-      "model_id": "MiniMax-M2.7-highspeed",
+      "model_id": "MiniMax-M2.5-highspeed",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -5164,6 +5085,85 @@
     {
       "provider": "minimax",
       "model_id": "MiniMax-M2.7",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": 204800,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "minimax",
+      "model_id": "MiniMax-M2.7-highspeed",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": 204800,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "minimax",
+      "model_id": "MiniMax-M2.7-highspeed",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -5745,6 +5745,92 @@
     },
     {
       "provider": "openai",
+      "model_id": "gpt-4.1",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4.1",
+      "protocol": "openai_responses",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "openai",
       "model_id": "gpt-4.1-2025-04-14",
       "protocol": "openai_chat_completions",
       "capabilities": {
@@ -5917,7 +6003,7 @@
     },
     {
       "provider": "openai",
-      "model_id": "gpt-4.1",
+      "model_id": "gpt-4o",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -5960,7 +6046,7 @@
     },
     {
       "provider": "openai",
-      "model_id": "gpt-4.1",
+      "model_id": "gpt-4o",
       "protocol": "openai_responses",
       "capabilities": {
         "modalities": {
@@ -6219,6 +6305,92 @@
     {
       "provider": "openai",
       "model_id": "gpt-4o-2024-11-20",
+      "protocol": "openai_responses",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4o-mini",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4o-mini",
       "protocol": "openai_responses",
       "capabilities": {
         "modalities": {
@@ -6382,13 +6554,12 @@
     },
     {
       "provider": "openai",
-      "model_id": "gpt-4o-mini",
+      "model_id": "gpt-5",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
           "input": [
-            "text",
-            "image"
+            "text"
           ],
           "output": [
             "text"
@@ -6414,8 +6585,8 @@
           "json_schema": true
         },
         "reasoning": {
-          "supported": false,
-          "controllable": false
+          "supported": true,
+          "controllable": true
         },
         "limits": {
           "context_tokens": null,
@@ -6425,13 +6596,12 @@
     },
     {
       "provider": "openai",
-      "model_id": "gpt-4o-mini",
+      "model_id": "gpt-5",
       "protocol": "openai_responses",
       "capabilities": {
         "modalities": {
           "input": [
-            "text",
-            "image"
+            "text"
           ],
           "output": [
             "text"
@@ -6457,94 +6627,8 @@
           "json_schema": true
         },
         "reasoning": {
-          "supported": false,
-          "controllable": false
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "openai",
-      "model_id": "gpt-4o",
-      "protocol": "openai_chat_completions",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
-        },
-        "reasoning": {
-          "supported": false,
-          "controllable": false
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "openai",
-      "model_id": "gpt-4o",
-      "protocol": "openai_responses",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
-        },
-        "reasoning": {
-          "supported": false,
-          "controllable": false
+          "supported": true,
+          "controllable": true
         },
         "limits": {
           "context_tokens": null,
@@ -6974,6 +7058,90 @@
     },
     {
       "provider": "openai",
+      "model_id": "gpt-5.4",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.4",
+      "protocol": "openai_responses",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "openai",
       "model_id": "gpt-5.4-mini",
       "protocol": "openai_chat_completions",
       "capabilities": {
@@ -7101,90 +7269,6 @@
     {
       "provider": "openai",
       "model_id": "gpt-5.4-nano",
-      "protocol": "openai_responses",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "openai",
-      "model_id": "gpt-5.4",
-      "protocol": "openai_chat_completions",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "openai",
-      "model_id": "gpt-5.4",
       "protocol": "openai_responses",
       "capabilities": {
         "modalities": {
@@ -7562,90 +7646,6 @@
     },
     {
       "provider": "openai",
-      "model_id": "gpt-5",
-      "protocol": "openai_chat_completions",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "openai",
-      "model_id": "gpt-5",
-      "protocol": "openai_responses",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "openai",
       "model_id": "gpt-6-astra",
       "protocol": "openai_chat_completions",
       "capabilities": {
@@ -7721,84 +7721,6 @@
         "reasoning": {
           "supported": true,
           "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "openai",
-      "model_id": "gpt-audio-1.5",
-      "protocol": "openai_chat_completions",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text",
-            "audio"
-          ],
-          "output": [
-            "text",
-            "audio"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": false,
-          "choice": [],
-          "parallel": false
-        },
-        "structured_output": {
-          "json_object": false,
-          "json_schema": false
-        },
-        "reasoning": {
-          "supported": false,
-          "controllable": false
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "openai",
-      "model_id": "gpt-audio-1.5",
-      "protocol": "openai_responses",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text",
-            "audio"
-          ],
-          "output": [
-            "text",
-            "audio"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": false,
-          "choice": [],
-          "parallel": false
-        },
-        "structured_output": {
-          "json_object": false,
-          "json_schema": false
-        },
-        "reasoning": {
-          "supported": false,
-          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -7886,20 +7808,62 @@
     },
     {
       "provider": "openai",
-      "model_id": "gpt-image-2.5-flare",
+      "model_id": "gpt-audio-1.5",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
           "input": [
             "text",
-            "image"
+            "audio"
           ],
           "output": [
-            "image"
+            "text",
+            "audio"
           ]
         },
         "streaming": {
-          "output": []
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": false,
+          "choice": [],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-audio-1.5",
+      "protocol": "openai_responses",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
         },
         "tools": {
           "call": false,
@@ -7958,6 +7922,42 @@
     },
     {
       "provider": "openai",
+      "model_id": "gpt-image-2.5-flare",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "streaming": {
+          "output": []
+        },
+        "tools": {
+          "call": false,
+          "choice": [],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "openai",
       "model_id": "gpt-oss-120b",
       "protocol": "openai_chat_completions",
       "capabilities": {
@@ -8042,7 +8042,7 @@
     },
     {
       "provider": "openai",
-      "model_id": "gpt-realtime-2",
+      "model_id": "gpt-realtime",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -8081,7 +8081,7 @@
     },
     {
       "provider": "openai",
-      "model_id": "gpt-realtime",
+      "model_id": "gpt-realtime-2",
       "protocol": "openai_chat_completions",
       "capabilities": {
         "modalities": {
@@ -9122,7 +9122,7 @@
     {
       "provider": "zhipu",
       "model_id": "glm-4.5",
-      "protocol": "openai_chat_completions",
+      "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {
           "input": [
@@ -9145,15 +9145,96 @@
             "required",
             "named"
           ],
-          "parallel": true
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-4.5",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "auto"
+          ],
+          "parallel": false
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
           "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-4.6",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -9182,16 +9263,13 @@
         "tools": {
           "call": true,
           "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
+            "auto"
           ],
-          "parallel": true
+          "parallel": false
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -9205,8 +9283,8 @@
     },
     {
       "provider": "zhipu",
-      "model_id": "glm-4.7-flash",
-      "protocol": "openai_chat_completions",
+      "model_id": "glm-4.7",
+      "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {
           "input": [
@@ -9229,57 +9307,15 @@
             "required",
             "named"
           ],
-          "parallel": true
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "zhipu",
-      "model_id": "glm-4.7-flashx",
-      "protocol": "openai_chat_completions",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -9308,16 +9344,13 @@
         "tools": {
           "call": true,
           "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
+            "auto"
           ],
-          "parallel": true
+          "parallel": false
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -9331,8 +9364,8 @@
     },
     {
       "provider": "zhipu",
-      "model_id": "glm-5-turbo",
-      "protocol": "openai_chat_completions",
+      "model_id": "glm-4.7-flash",
+      "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {
           "input": [
@@ -9355,11 +9388,50 @@
             "required",
             "named"
           ],
-          "parallel": true
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-4.7-flash",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "auto"
+          ],
+          "parallel": false
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -9373,8 +9445,8 @@
     },
     {
       "provider": "zhipu",
-      "model_id": "glm-5.1",
-      "protocol": "openai_chat_completions",
+      "model_id": "glm-4.7-flashx",
+      "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {
           "input": [
@@ -9397,11 +9469,50 @@
             "required",
             "named"
           ],
-          "parallel": true
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-4.7-flashx",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "auto"
+          ],
+          "parallel": false
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
@@ -9415,8 +9526,8 @@
     },
     {
       "provider": "zhipu",
-      "model_id": "glm-5.2",
-      "protocol": "openai_chat_completions",
+      "model_id": "glm-5",
+      "protocol": "anthropic_messages",
       "capabilities": {
         "modalities": {
           "input": [
@@ -9439,99 +9550,15 @@
             "required",
             "named"
           ],
-          "parallel": true
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "zhipu",
-      "model_id": "glm-5.3-flash",
-      "protocol": "openai_chat_completions",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
-        },
-        "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
-        }
-      }
-    },
-    {
-      "provider": "zhipu",
-      "model_id": "glm-5.3",
-      "protocol": "openai_chat_completions",
-      "capabilities": {
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "streaming": {
-          "output": [
-            "text"
-          ]
-        },
-        "tools": {
-          "call": true,
-          "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
-          ],
-          "parallel": true
-        },
-        "structured_output": {
-          "json_object": true,
-          "json_schema": true
-        },
-        "reasoning": {
-          "supported": true,
-          "controllable": true
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -9560,20 +9587,464 @@
         "tools": {
           "call": true,
           "choice": [
+            "auto"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5-turbo",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
             "none",
             "auto",
             "required",
             "named"
           ],
-          "parallel": true
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5-turbo",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "auto"
+          ],
+          "parallel": false
         },
         "structured_output": {
           "json_object": true,
-          "json_schema": true
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,
           "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.1",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.1",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "auto"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.2",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.2",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "auto"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.3",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.3",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "auto"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.3-flash",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.3-flash",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "auto"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5v-turbo",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": false,
+          "controllable": false
         },
         "limits": {
           "context_tokens": null,
@@ -9602,16 +10073,13 @@
         "tools": {
           "call": true,
           "choice": [
-            "none",
-            "auto",
-            "required",
-            "named"
+            "auto"
           ],
-          "parallel": true
+          "parallel": false
         },
         "structured_output": {
-          "json_object": true,
-          "json_schema": true
+          "json_object": false,
+          "json_schema": false
         },
         "reasoning": {
           "supported": true,

@@ -2356,9 +2356,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2367,9 +2365,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2388,9 +2384,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2399,9 +2393,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2420,9 +2412,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2431,9 +2421,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2452,9 +2440,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2463,9 +2449,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2484,9 +2468,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2495,9 +2477,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2516,9 +2496,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2527,9 +2505,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2548,9 +2524,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2559,9 +2533,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2580,9 +2552,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2591,9 +2561,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2612,9 +2580,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2623,9 +2589,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2644,9 +2608,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2655,9 +2617,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2676,9 +2636,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2687,9 +2645,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2708,9 +2664,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2719,9 +2673,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2740,9 +2692,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2751,9 +2701,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
             "json_object",
-            "json_schema",
             "reasoning"
           ]
         }
@@ -2772,9 +2720,7 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_schema",
-            "reasoning"
+            "tool_choice"
           ]
         },
         {
@@ -2783,9 +2729,6 @@
             "text",
             "text_stream",
             "tools",
-            "tool_choice",
-            "json_object",
-            "json_schema",
             "reasoning"
           ]
         }

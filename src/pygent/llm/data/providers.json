@@ -16,14 +16,26 @@
               "thinking": {
                 "type": "object",
                 "properties": {
-                  "type": {"type": "string", "enum": ["enabled", "disabled"]}
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "enabled",
+                      "disabled"
+                    ]
+                  }
                 },
-                "required": ["type"],
+                "required": [
+                  "type"
+                ],
                 "additionalProperties": false
               },
               "reasoning_effort": {
                 "type": "string",
-                "enum": ["low", "high", "max"]
+                "enum": [
+                  "low",
+                  "high",
+                  "max"
+                ]
               }
             },
             "additionalProperties": true
@@ -41,27 +53,57 @@
                 "oneOf": [
                   {
                     "type": "object",
-                    "properties": {"type": {"const": "disabled"}},
-                    "required": ["type"],
+                    "properties": {
+                      "type": {
+                        "const": "disabled"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
                     "additionalProperties": false
                   },
                   {
                     "type": "object",
                     "properties": {
-                      "type": {"const": "enabled"},
-                      "budget_tokens": {"type": "integer", "minimum": 1024},
-                      "display": {"type": "string", "enum": ["summarized", "omitted"]}
+                      "type": {
+                        "const": "enabled"
+                      },
+                      "budget_tokens": {
+                        "type": "integer",
+                        "minimum": 1024
+                      },
+                      "display": {
+                        "type": "string",
+                        "enum": [
+                          "summarized",
+                          "omitted"
+                        ]
+                      }
                     },
-                    "required": ["type", "budget_tokens"],
+                    "required": [
+                      "type",
+                      "budget_tokens"
+                    ],
                     "additionalProperties": false
                   },
                   {
                     "type": "object",
                     "properties": {
-                      "type": {"const": "adaptive"},
-                      "display": {"type": "string", "enum": ["summarized", "omitted"]}
+                      "type": {
+                        "const": "adaptive"
+                      },
+                      "display": {
+                        "type": "string",
+                        "enum": [
+                          "summarized",
+                          "omitted"
+                        ]
+                      }
                     },
-                    "required": ["type"],
+                    "required": [
+                      "type"
+                    ],
                     "additionalProperties": false
                   }
                 ]
@@ -69,16 +111,36 @@
               "output_config": {
                 "type": "object",
                 "properties": {
-                  "effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]}
+                  "effort": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max"
+                    ]
+                  }
                 },
-                "required": ["effort"],
+                "required": [
+                  "effort"
+                ],
                 "additionalProperties": false
               },
-              "service_tier": {"type": "string", "enum": ["auto", "standard_only"]},
+              "service_tier": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "standard_only"
+                ]
+              },
               "stop_sequences": {
                 "type": "array",
                 "minItems": 1,
-                "items": {"type": "string", "minLength": 1}
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
               }
             },
             "additionalProperties": false
@@ -102,27 +164,57 @@
                 "oneOf": [
                   {
                     "type": "object",
-                    "properties": {"type": {"const": "disabled"}},
-                    "required": ["type"],
+                    "properties": {
+                      "type": {
+                        "const": "disabled"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
                     "additionalProperties": false
                   },
                   {
                     "type": "object",
                     "properties": {
-                      "type": {"const": "enabled"},
-                      "budget_tokens": {"type": "integer", "minimum": 1024},
-                      "display": {"type": "string", "enum": ["summarized", "omitted"]}
+                      "type": {
+                        "const": "enabled"
+                      },
+                      "budget_tokens": {
+                        "type": "integer",
+                        "minimum": 1024
+                      },
+                      "display": {
+                        "type": "string",
+                        "enum": [
+                          "summarized",
+                          "omitted"
+                        ]
+                      }
                     },
-                    "required": ["type", "budget_tokens"],
+                    "required": [
+                      "type",
+                      "budget_tokens"
+                    ],
                     "additionalProperties": false
                   },
                   {
                     "type": "object",
                     "properties": {
-                      "type": {"const": "adaptive"},
-                      "display": {"type": "string", "enum": ["summarized", "omitted"]}
+                      "type": {
+                        "const": "adaptive"
+                      },
+                      "display": {
+                        "type": "string",
+                        "enum": [
+                          "summarized",
+                          "omitted"
+                        ]
+                      }
                     },
-                    "required": ["type"],
+                    "required": [
+                      "type"
+                    ],
                     "additionalProperties": false
                   }
                 ]
@@ -130,16 +222,36 @@
               "output_config": {
                 "type": "object",
                 "properties": {
-                  "effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]}
+                  "effort": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max"
+                    ]
+                  }
                 },
-                "required": ["effort"],
+                "required": [
+                  "effort"
+                ],
                 "additionalProperties": false
               },
-              "service_tier": {"type": "string", "enum": ["auto", "standard_only"]},
+              "service_tier": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "standard_only"
+                ]
+              },
               "stop_sequences": {
                 "type": "array",
                 "minItems": 1,
-                "items": {"type": "string", "minLength": 1}
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
               }
             },
             "additionalProperties": false
@@ -302,6 +414,25 @@
               "max_completion_tokens": {
                 "type": "integer",
                 "minimum": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "anthropic_messages": {
+          "protocol": "anthropic_messages",
+          "base_url": "https://open.bigmodel.cn/api/anthropic",
+          "authentication": "bearer",
+          "api_key_env": "ZHIPU_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "max_tokens": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "thinking": {
+                "type": "object"
               }
             },
             "additionalProperties": true
@@ -635,22 +766,47 @@
           "provider_options_schema": {
             "type": "object",
             "properties": {
-              "enable_thinking": {"type": "boolean"},
-              "preserve_thinking": {"type": "boolean"},
+              "enable_thinking": {
+                "type": "boolean"
+              },
+              "preserve_thinking": {
+                "type": "boolean"
+              },
               "reasoning_effort": {
                 "type": "string",
-                "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ]
               },
               "thinking": {
                 "type": "object",
                 "properties": {
-                  "type": {"type": "string", "enum": ["adaptive", "disabled"]}
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "adaptive",
+                      "disabled"
+                    ]
+                  }
                 },
-                "required": ["type"],
+                "required": [
+                  "type"
+                ],
                 "additionalProperties": false
               },
-              "thinking_budget": {"type": "integer", "minimum": 0},
-              "tool_stream": {"type": "boolean"}
+              "thinking_budget": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tool_stream": {
+                "type": "boolean"
+              }
             },
             "additionalProperties": false
           }

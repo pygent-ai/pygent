@@ -1335,7 +1335,7 @@
       "provider": "zhipu",
       "model_id": "glm-4.5",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
@@ -1349,7 +1349,7 @@
       "provider": "zhipu",
       "model_id": "glm-4.6",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
@@ -1363,7 +1363,7 @@
       "provider": "zhipu",
       "model_id": "glm-4.7-flash",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
@@ -1377,7 +1377,7 @@
       "provider": "zhipu",
       "model_id": "glm-4.7-flashx",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
@@ -1391,7 +1391,7 @@
       "provider": "zhipu",
       "model_id": "glm-4.7",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
@@ -1405,7 +1405,7 @@
       "provider": "zhipu",
       "model_id": "glm-5-turbo",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
@@ -1419,7 +1419,7 @@
       "provider": "zhipu",
       "model_id": "glm-5.1",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
@@ -1433,7 +1433,7 @@
       "provider": "zhipu",
       "model_id": "glm-5.2",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
@@ -1447,7 +1447,7 @@
       "provider": "zhipu",
       "model_id": "glm-5.3-flash",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
@@ -1461,7 +1461,7 @@
       "provider": "zhipu",
       "model_id": "glm-5.3",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
@@ -1475,7 +1475,7 @@
       "provider": "zhipu",
       "model_id": "glm-5",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
@@ -1489,7 +1489,7 @@
       "provider": "zhipu",
       "model_id": "glm-5v-turbo",
       "protocol": "anthropic_messages",
-      "url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "checked_at": "2026-09-11"
     },
     {
