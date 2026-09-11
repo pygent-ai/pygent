@@ -71,3 +71,5 @@ Alibaba Cloud Token Plan 严格接受 `enable_thinking`、`preserve_thinking`、
 `AnthropicMessagesAdapter` 只接受 `thinking`、`output_config`、`service_tier` 和 `stop_sequences`。`thinking` 支持 `disabled`、带显式 token budget 的 `enabled`，以及 `adaptive`；`output_config` 只接受 `effort`。未知字段、非法组合和越界值在 Provider I/O 前拒绝。
 
 Anthropic Messages 的 `GenerationConfig.max_output_tokens` 是必填正整数。它是 Provider-neutral 生成参数，不放入 `provider_options`。结构化输出由 Pygent 的 response schema 投影到 `output_config.format`，用户不能通过 Provider options 覆盖该保留字段。
+
+Anthropic 官方 thinking block 必须带非空 signature。使用相同 Messages wire contract 的其他 Provider 可以省略 signature；Adapter 在 continuation 中保留实际收到的形状，并只在 Provider 与 protocol 同时匹配时回传。兼容规则不允许放宽 Anthropic 官方响应校验。

@@ -35,15 +35,17 @@ Provider 是开放字符串。Provider preset 只提供 UI/配置默认值；Ada
 内置协议使用 `BuiltinModelProtocol` 表达当前由 Pygent 实现的 wire contract：
 
 - `OPENAI_CHAT_COMPLETIONS`：`openai_chat_completions`；
-- `ANTHROPIC_MESSAGES`：`anthropic_messages`。
+- `OPENAI_RESPONSES`：`openai_responses`；
+- `ANTHROPIC_MESSAGES`：`anthropic_messages`；
+- `GEMINI_GENERATE_CONTENT`：`gemini_generate_content`。
 
-`ModelSpec.protocol` 仍保存开放字符串，第三方 Adapter 可以定义自己的 protocol。内置 Provider 目录按 protocol 提供连接默认值：DeepSeek 官方和 Alibaba Cloud Token Plan 各自提供 OpenAI Chat Completions 与 Anthropic Messages endpoint，Anthropic 官方提供 Messages endpoint。目录只提供 base URL、credential 环境变量名和表单 schema，不提供或读取真实 API key。
+`ModelSpec.protocol` 仍保存开放字符串，第三方 Adapter 可以定义自己的 protocol。内置 Provider 目录按 protocol 提供连接默认值，当前覆盖 DeepSeek、Anthropic、OpenAI、Google Gemini、Alibaba Cloud Model Studio、智谱、Moonshot、MiniMax、火山引擎和 xAI；Alibaba Cloud Token Plan 作为独立 Provider。一个 Provider 可以提供多个协议，例如 OpenAI 同时提供 Chat Completions 与 Responses，DeepSeek、Moonshot、MiniMax 和 Token Plan 同时提供 OpenAI Chat Completions 与 Anthropic Messages。目录只提供 base URL、credential 环境变量名和表单 schema，不提供或读取真实 API key。
 
-内置能力目录按 `(provider, model_id, protocol)` 区分同一模型的不同服务与协议。DeepSeek 收录 `deepseek-v4-flash`、`deepseek-v4-pro` 的两种协议条目；Anthropic 收录四个官方模型；Alibaba Cloud Token Plan 收录 18 个官方 Model ID 和 27 条分协议记录。其中 OpenAI Chat Completions 与 Anthropic Messages 可由内置 Adapter 执行，五个 DashScope 图像、视频、音频 protocol 只进入目录，第一版没有内置 Adapter。
+内置能力目录按 `(provider, model_id, protocol)` 区分同一模型的不同服务与协议。目录中的模型身份和能力来自对应官方 Provider 资料；网关别名和外部搜索服务不进入生产目录。OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini Generate Content 由内置 Adapter 执行；仅进入目录但没有内置 Adapter 的媒体协议，需要应用自行装配对应 Adapter 后才能调用。
 
 Provider 私有生成语义放在 `ModelSpec.provider_options`。连接、secret、认证头、代理、TLS、retry、deadline、stream 开关和框架保留请求字段不能放入其中。第三方 Adapter 只有实现 `ModelProviderSpecValidator` 才能接受非空选项。
 
-Anthropic Messages 请求必须由 `GenerationConfig.max_output_tokens` 提供正整数，没有框架默认值。需要工具循环回传的 Provider 私有 thinking/reasoning 状态保存在 `AIMessage.continuation`；该值只交给 Provider 与 protocol 同时匹配的后续请求，不进入公开事件、请求摘要或 `repr`。OpenAI Chat Completions 不维护 Provider 白名单：响应实际携带合法 `reasoning_content` 时才创建对应 continuation。
+Anthropic Messages 请求必须由 `GenerationConfig.max_output_tokens` 提供正整数，没有框架默认值。需要工具循环回传的 Provider 私有 thinking/reasoning 状态保存在 `AIMessage.continuation`；该值只交给 Provider 与 protocol 同时匹配的后续请求，不进入公开事件、请求摘要或 `repr`。Anthropic 官方 thinking block 必须携带 signature；其他 Anthropic-compatible Provider 可以返回无 signature 的 thinking block，Adapter 会保持原形回传。OpenAI Chat Completions 不维护 Provider 白名单：响应实际携带合法 `reasoning_content` 时才创建对应 continuation。
 
 ## Layer 与执行
 

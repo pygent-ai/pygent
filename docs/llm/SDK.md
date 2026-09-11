@@ -16,7 +16,9 @@ assistant = config.model_groups["assistant"]
 connection = config.connections["deepseek_primary"]
 
 assert BuiltinModelProtocol.OPENAI_CHAT_COMPLETIONS == "openai_chat_completions"
+assert BuiltinModelProtocol.OPENAI_RESPONSES == "openai_responses"
 assert BuiltinModelProtocol.ANTHROPIC_MESSAGES == "anthropic_messages"
+assert BuiltinModelProtocol.GEMINI_GENERATE_CONTENT == "gemini_generate_content"
 ```
 
 完整配置形状：
@@ -245,7 +247,7 @@ provider_options={
 
 ## Provider continuation
 
-任意 OpenAI Chat Completions Provider 的响应实际返回合法 `reasoning_content` 时，以及 Anthropic Messages 返回 thinking/signature block 时，Adapter 会将其规范化为 `AIMessage.continuation`。ReAct 工具循环会把它原样回传给 Provider 与 protocol 同时匹配的后续请求；不匹配时忽略。Continuation 会随 Message 经过 Worker、effect 与 SQLite 持久化，但不会出现在 `repr`、公开模型事件或 prepared-request snapshot 中。应用通常不需要读取或修改它。
+任意 OpenAI Chat Completions Provider 的响应实际返回合法 `reasoning_content` 时，以及 Anthropic Messages 返回 thinking block 时，Adapter 会将其规范化为 `AIMessage.continuation`。Anthropic 官方 block 必须有 signature；Anthropic-compatible Provider 的无 signature block 会保持无 signature。ReAct 工具循环会把它原样回传给 Provider 与 protocol 同时匹配的后续请求；不匹配时忽略。Continuation 会随 Message 经过 Worker、effect 与 SQLite 持久化，但不会出现在 `repr`、公开模型事件或 prepared-request snapshot 中。应用通常不需要读取或修改它。
 
 ## 能力警告与事件
 
@@ -261,3 +263,19 @@ provider_options={
 ```
 
 所有 attempt、prepared request、usage、reset 和 completion 事件也使用 `model_key`。`model.output.reset` 到达时，消费者按 `(model_key, attempt)` 撤销暂存输出。
+
+## 可选 AZ 一致性验证
+
+AZ 只作为外部测试网关，不是 Pygent 内置 Provider。验证清单固定为 `tests/live/az_conformance/manifest.json` 中的 211 个 route；runner 会先比较实时 `/v1/models` 与冻结 SHA-256，发生漂移时在任何付费模型调用前退出。
+
+凭据只通过进程环境传入：`AZ_BASE_URL` 必须是无内嵌凭据的 HTTPS URL，`AZ_API_KEY` 必须非空。结果目录必须放在仓库外；结果键包含快照 digest、Git source revision、route、protocol 和 scenario，因此代码或清单变化后不会复用旧通过记录。命令可能产生费用，输出与 ledger 不保存 API key、Provider 原始正文或下载媒体。
+
+```powershell
+$azResultDir = 'C:\Users\Administrator\.codex\artifacts\pygent-az-211-7398801a'
+uv run --extra az-conformance python -m tests.live.az_conformance.cli validate --manifest tests/live/az_conformance/manifest.json
+uv run --extra az-conformance python -m tests.live.az_conformance.cli inventory --manifest tests/live/az_conformance/manifest.json
+uv run --extra az-conformance python -m tests.live.az_conformance.cli run --manifest tests/live/az_conformance/manifest.json --output-dir $azResultDir
+uv run --extra az-conformance python -m tests.live.az_conformance.cli report --manifest tests/live/az_conformance/manifest.json --output-dir $azResultDir
+```
+
+只有同一 source revision 下 211 个 route 的所有 required scenario 都有 `passed` 记录时，report 才返回 `complete=true`；权限、限流、网关或上游故障仍是失败，不会被记成 skipped。
