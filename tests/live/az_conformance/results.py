@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -30,6 +32,9 @@ class ErrorKind(StrEnum):
 
 ResultKey: TypeAlias = tuple[str, str, str, str, Scenario]
 ResultStatus: TypeAlias = Literal["passed", "failed"]
+
+_REPLACE_ATTEMPTS = 20
+_REPLACE_RETRY_SECONDS = 0.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,21 +223,38 @@ class ResultLedger:
 
     def _write(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(f"{self.path.suffix}.tmp")
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            for result in self.results:
-                stream.write(
-                    json.dumps(
-                        result.to_public_mapping(),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=self.path.parent,
+            prefix=f".{self.path.name}.",
+            suffix=".tmp",
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(
+                descriptor, "w", encoding="utf-8", newline="\n"
+            ) as stream:
+                for result in self.results:
+                    stream.write(
+                        json.dumps(
+                            result.to_public_mapping(),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
                     )
-                )
-                stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, self.path)
+                    stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            for attempt in range(_REPLACE_ATTEMPTS):
+                try:
+                    os.replace(temporary, self.path)
+                    break
+                except PermissionError:
+                    if attempt == _REPLACE_ATTEMPTS - 1:
+                        raise
+                    time.sleep(_REPLACE_RETRY_SECONDS)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 __all__ = [

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
 
+from tests.live.az_conformance import results as results_module
 from tests.live.az_conformance.results import (
     ErrorKind,
     ProbeResult,
@@ -97,6 +99,30 @@ def test_ledger_writes_atomically_and_round_trips(tmp_path: Path) -> None:
     lines = checkpoint.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert ResultLedger.load(checkpoint).results == (_passed(),)
+
+
+def test_ledger_retries_when_atomic_replace_is_temporarily_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "results.jsonl"
+    real_replace = os.replace
+    attempts = 0
+
+    def replace_once_unavailable(source: str | Path, target: str | Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise PermissionError("target is temporarily open by a reader")
+        real_replace(source, target)
+
+    monkeypatch.setattr(results_module.os, "replace", replace_once_unavailable)
+
+    ledger = ResultLedger(checkpoint)
+    ledger.record(_passed())
+
+    assert attempts == 2
+    assert ResultLedger.load(checkpoint).results == (_passed(),)
+    assert not tuple(tmp_path.glob("*.tmp"))
 
 
 def test_ledger_rejects_malformed_or_duplicate_checkpoint(tmp_path: Path) -> None:
