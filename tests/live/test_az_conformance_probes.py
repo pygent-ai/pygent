@@ -823,9 +823,10 @@ async def test_anthropic_reasoning_probe_uses_current_model_thinking_mode(
     )
 
     assert result.status == "passed"
+    assert "17 * 19" in client.requests[0]["messages"][0]["content"][0]["text"]
     assert client.requests[0]["thinking"]["type"] == thinking_type
     if thinking_type == "adaptive":
-        assert client.requests[0]["output_config"] == {"effort": "low"}
+        assert client.requests[0]["output_config"] == {"effort": "high"}
     else:
         assert client.requests[0]["thinking"]["budget_tokens"] == 1024
 

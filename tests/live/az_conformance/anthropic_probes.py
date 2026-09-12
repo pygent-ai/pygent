@@ -319,7 +319,7 @@ async def anthropic_reasoning_probe(
     ):
         provider_options = {
             "thinking": {"type": "adaptive", "display": "summarized"},
-            "output_config": {"effort": "low"},
+            "output_config": {"effort": "high"},
         }
     elif route.canonical_provider == "moonshot":
         if route.canonical_model_id == "kimi-k3":
@@ -328,6 +328,9 @@ async def anthropic_reasoning_probe(
             provider_options = {}
     request = _request(
         route,
+        message=UserMessage(
+            content="Which is larger, 17 * 19 or 18 * 18? Think carefully."
+        ),
         generation=GenerationConfig(max_output_tokens=2048),
         provider_options=provider_options,
     )
