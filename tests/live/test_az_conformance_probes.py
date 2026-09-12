@@ -785,6 +785,51 @@ async def test_anthropic_reasoning_and_image_probes_use_native_blocks() -> None:
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_id", "thinking_type"),
+    [
+        ("claude-haiku-4-5-20251001", "enabled"),
+        ("claude-opus-4-6", "adaptive"),
+        ("claude-opus-4-7", "adaptive"),
+        ("claude-opus-4-8", "adaptive"),
+        ("claude-opus-5", "adaptive"),
+        ("claude-fable-5", "adaptive"),
+        ("claude-sonnet-5", "adaptive"),
+    ],
+)
+async def test_anthropic_reasoning_probe_uses_current_model_thinking_mode(
+    model_id: str, thinking_type: str
+) -> None:
+    client = ScriptedClient(
+        responses=[
+            _anthropic_response(
+                [
+                    {"type": "thinking", "thinking": "reason", "signature": "sig"},
+                    {"type": "text", "text": "answer"},
+                ]
+            )
+        ]
+    )
+    route = _route(
+        "anthropic_messages",
+        provider="anthropic",
+        model_id=model_id,
+        route_id=model_id,
+    )
+
+    result = await anthropic_reasoning_probe(
+        _context(client, Scenario.REASONING, "anthropic_messages"), route
+    )
+
+    assert result.status == "passed"
+    assert client.requests[0]["thinking"]["type"] == thinking_type
+    if thinking_type == "adaptive":
+        assert client.requests[0]["output_config"] == {"effort": "low"}
+    else:
+        assert client.requests[0]["thinking"]["budget_tokens"] == 1024
+
+
 def _gemini_response(
     parts: list[dict[str, object]], finish_reason: str = "STOP"
 ) -> dict[str, object]:

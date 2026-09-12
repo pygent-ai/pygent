@@ -262,7 +262,7 @@ async def anthropic_tool_choice_probe(
     context: ProbeContext, route: AzRoute
 ) -> ProbeResult:
     tool_choice = "required" if route.canonical_model_id == "kimi-k3" else "lookup"
-    provider_options = (
+    provider_options: dict[str, object] | None = (
         {"thinking": {"type": "disabled"}}
         if route.canonical_model_id == "kimi-k2.6"
         else None
@@ -314,7 +314,14 @@ async def anthropic_reasoning_probe(
     provider_options: dict[str, object] = {
         "thinking": {"type": "enabled", "budget_tokens": 1024}
     }
-    if route.canonical_provider == "moonshot":
+    if route.canonical_provider == "anthropic" and route.canonical_model_id != (
+        "claude-haiku-4-5-20251001"
+    ):
+        provider_options = {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "low"},
+        }
+    elif route.canonical_provider == "moonshot":
         if route.canonical_model_id == "kimi-k3":
             provider_options = {"output_config": {"effort": "low"}}
         elif route.canonical_model_id in {"kimi-k2.7-code", "kimi-k2-thinking"}:
