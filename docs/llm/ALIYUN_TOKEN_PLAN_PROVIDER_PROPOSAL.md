@@ -198,12 +198,13 @@ OpenAI Chat Completions Adapter 不维护支持 `reasoning_content` 的 Provider
 ```python
 ModelContinuation(
     provider="aliyun_token_plan",
+    model_id="qwen3.8-max",
     protocol="openai_chat_completions",
     data={"version": 1, "reasoning_content": "..."},
 )
 ```
 
-流式与非流式调用采用同一规则：字段不存在时不产生 continuation；字段存在时必须是字符串，否则按非法 Provider 响应拒绝。Continuation 的 `provider` 来自当前 `ModelSpec`，后续工具调用只在 Provider 与 protocol 同时匹配时回传。逻辑不依赖 Provider 白名单或具体 Model ID，也不跨 Provider 或 protocol 转换。现有 DeepSeek continuation 自然落入同一条协议规则，行为保持不变。
+流式与非流式调用采用同一规则：字段不存在时不产生 continuation；字段存在时必须是字符串，否则按非法 Provider 响应拒绝。Continuation 的 `provider` 与 `model_id` 来自当前 `ModelSpec`，后续工具调用只在 Provider、model ID 与 protocol 同时匹配时回传。逻辑不依赖 Provider 白名单，也不跨 Provider、模型或 protocol 转换。现有 DeepSeek continuation 自然落入同一条协议规则，行为保持不变。
 
 ## Invoker 与能力警告
 

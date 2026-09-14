@@ -51,7 +51,7 @@ def build_assistant_model(
             ),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=2,
+            max_attempts_per_model=2,
             retry_on=(
                 ModelErrorKind.TIMEOUT,
                 ModelErrorKind.RATE_LIMIT,
@@ -76,7 +76,7 @@ def build_reviewer_model(*, invoker: ModelInvoker | None = None) -> ModelCallLay
             models=(_model("review", provider="openai", model_id="reviewer"),),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=1,
+            max_attempts_per_model=1,
             retry_on=(ModelErrorKind.TIMEOUT, ModelErrorKind.UNAVAILABLE),
             backoff=ExponentialBackoff(initial=0.1, maximum=1.0),
         ),

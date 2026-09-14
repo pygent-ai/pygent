@@ -113,7 +113,9 @@ def test_openai_reasoning_content_creates_provider_scoped_continuation(
     )
 
     assert response.message.continuation == ModelContinuation(
+        model_key="main",
         provider=provider,
+        model_id="reasoning-model",
         protocol="openai_chat_completions",
         data={"version": 1, "reasoning_content": "reasoning"},
     )
@@ -195,7 +197,9 @@ def test_matching_openai_continuation_is_returned_on_tool_loop(provider: str) ->
     message = AIMessage(
         tool_calls=(ToolCall(call_id="call-1", name="lookup", arguments={}),),
         continuation=ModelContinuation(
+            model_key="main",
             provider=provider,
+            model_id="reasoning-model",
             protocol="openai_chat_completions",
             data={"version": 1, "reasoning_content": "reasoning"},
         ),
@@ -216,7 +220,9 @@ def test_openai_continuation_is_not_replayed_across_providers() -> None:
     entry = model_entry("main", "custom_gateway", "reasoning-model")
     message = AIMessage(
         continuation=ModelContinuation(
+            model_key="main",
             provider="other_gateway",
+            model_id="reasoning-model",
             protocol="openai_chat_completions",
             data={"version": 1, "reasoning_content": "private"},
         ),
@@ -239,7 +245,9 @@ def test_deepseek_matching_malformed_continuation_fails_closed() -> None:
         entry=entry,
         message=AIMessage(
             continuation=ModelContinuation(
+                model_key="main",
                 provider="deepseek",
+                model_id="deepseek-reasoner",
                 protocol="openai_chat_completions",
                 data={"version": 2, "reasoning_content": "reasoning"},
             )
@@ -260,7 +268,9 @@ def test_deepseek_continuation_version_rejects_boolean() -> None:
         entry=entry,
         message=AIMessage(
             continuation=ModelContinuation(
+                model_key="main",
                 provider="deepseek",
+                model_id="deepseek-reasoner",
                 protocol="openai_chat_completions",
                 data={"version": True, "reasoning_content": "reasoning"},
             )
@@ -475,11 +485,10 @@ def test_openai_codec_parses_usage_tools_and_structured_output():
         (
             {
                 "message": {
-                    "content": [
-                        {"type": "text", "text": "part-"},
-                        {"type": "output_text", "text": "answer"},
-                        {"type": "audio", "audio": "ignored"},
-                    ]
+                        "content": [
+                            {"type": "text", "text": "part-"},
+                            {"type": "output_text", "text": "answer"},
+                        ]
                 }
             },
             "part-answer",
@@ -495,6 +504,53 @@ def test_non_streaming_accepts_recoverable_completion_shapes(
     )
 
     assert response.message.content == expected
+
+
+def test_non_streaming_rejects_non_text_content_parts() -> None:
+    with pytest.raises(ModelProviderError) as raised:
+        OpenAICompatibleAdapter().parse_response(
+            _request(),
+            freeze_json_object(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": [
+                                    {"type": "text", "text": "answer"},
+                                    {"type": "audio", "audio": "opaque"},
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ),
+        )
+
+    assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
+
+
+def test_openai_continuation_is_not_replayed_across_models() -> None:
+    entry = model_entry("main", "deepseek", "deepseek-chat")
+    message = AIMessage(
+        continuation=ModelContinuation(
+            model_key="main",
+            provider="deepseek",
+            model_id="deepseek-reasoner",
+            protocol="openai_chat_completions",
+            data={"version": 1, "reasoning_content": "private"},
+        ),
+    )
+
+    payload = OpenAICompatibleAdapter().build_request(
+        provider_request(
+            entry=entry,
+            message=message,
+            context=Context(),
+            generation=GenerationConfig(),
+        )
+    ).to_dict()
+
+    assert "reasoning_content" not in payload["messages"][0]
 
 
 @pytest.mark.parametrize(

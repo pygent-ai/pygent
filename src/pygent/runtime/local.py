@@ -67,15 +67,11 @@ from .plan import CodeArtifactSpec, ExecutionPlan
 def _validate_deployment_invoker(
     deployment: ModelProfileSnapshot, invoker: object
 ) -> None:
-    models = tuple(
-        model
-        for model in deployment.model_group.models
-        if model.spec.provider_options
-    )
-    if not models:
-        return
+    models = deployment.model_group.models
     validate_model = getattr(invoker, "validate_model", None)
     if not callable(validate_model):
+        if not any(model.spec.provider_options for model in models):
+            return
         raise ModelDeploymentUnavailableError(
             "current model invoker cannot validate pinned provider options"
         )

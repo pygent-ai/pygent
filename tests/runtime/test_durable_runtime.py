@@ -65,7 +65,9 @@ class ContinuationEcho(Module[UserMessage, AIMessage]):
         output = AIMessage(
             content=message.content,
             continuation=ModelContinuation(
+                model_key="main",
                 provider="anthropic",
+                model_id="claude-opus-5",
                 protocol="anthropic_messages",
                 data={"version": 1, "blocks": []},
             ),

@@ -27,6 +27,7 @@ from ._adapter_contracts import (
     ModelProviderStreamPart,
     _canonical_usage,
 )
+from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
 from .configuration import ModelSpec
 from .types import (
@@ -181,7 +182,9 @@ class OpenAIResponsesAdapter:
                 "input": [
                     item
                     for message in (*request.context.messages, request.message)
-                    for item in _input_items(message, request.model)
+                    for item in _input_items(
+                        message, request.model, request.model_key
+                    )
                 ],
             }
             if request.context.system_prompt:
@@ -243,7 +246,9 @@ class OpenAIResponsesAdapter:
             ) from exc
         continuation = (
             ModelContinuation(
+                model_key=request.model_key,
                 provider=request.model.provider,
+                model_id=request.model.model_id,
                 protocol=self.protocol,
                 data={"version": 1, "items": continuation_items},
             )
@@ -335,7 +340,9 @@ class _OpenAIResponsesStreamDecoder:
                         ModelProviderStreamPart(
                             "continuation",
                             {
+                                "model_key": self._request.model_key,
                                 "provider": self._request.model.provider,
+                                "model_id": self._request.model.model_id,
                                 "protocol": _PROTOCOL,
                                 "data": {"version": 1, "items": continuation_items},
                             },
@@ -376,15 +383,18 @@ class _OpenAIResponsesStreamDecoder:
         return ()
 
 
-def _input_items(message: Message, model: ModelSpec) -> list[dict[str, object]]:
+def _input_items(
+    message: Message, model: ModelSpec, model_key: str
+) -> list[dict[str, object]]:
     if isinstance(message, ToolMessage):
         return [_tool_result_value(result) for result in message.results]
     items: list[dict[str, object]] = []
     if isinstance(message, AIMessage):
         continuation = message.continuation
-        if continuation is not None and (
-            continuation.provider == model.provider
-            and continuation.protocol == model.protocol
+        if continuation is not None and continuation_matches(
+            continuation,
+            model_key=model_key,
+            model=model,
         ):
             items.extend(_continuation_items(continuation))
     if message.content:
@@ -476,7 +486,7 @@ def _decode_output(
                 elif part.get("type") == "refusal":
                     value = part.get("refusal")
                 else:
-                    continue
+                    raise TypeError
                 if not isinstance(value, str):
                     raise TypeError
                 text.append(value)
@@ -499,6 +509,8 @@ def _decode_output(
             if not isinstance(decoded, Mapping):
                 raise TypeError
             calls.append(ToolCall(call_id=call_id, name=name, arguments=decoded))
+        else:
+            raise TypeError
     return "".join(text), tuple(calls), reasoning
 
 

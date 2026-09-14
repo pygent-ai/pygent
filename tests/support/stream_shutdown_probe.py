@@ -88,7 +88,7 @@ async def main() -> None:
             ),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=1,
+            max_attempts_per_model=1,
             attempt_idle_timeout_seconds=0.005,
         ),
         generation=GenerationConfig(),

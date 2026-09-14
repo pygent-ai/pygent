@@ -513,7 +513,7 @@ def build_resources(
     )
     model_policy = ModelCallPolicy(allow_profile_override=dynamic_model)
     retry = RetryPolicy(
-        max_attempts_per_route=settings.retry_max_attempts,
+        max_attempts_per_model=settings.retry_max_attempts,
         retry_on=tuple(ModelErrorKind(kind) for kind in settings.retry_on),
         backoff=ExponentialBackoff(
             settings.retry_backoff_seconds,

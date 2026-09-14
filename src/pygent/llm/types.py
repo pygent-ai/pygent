@@ -320,7 +320,7 @@ class ExponentialBackoff:
 
 @dataclass(frozen=True, slots=True)
 class RetryPolicy:
-    max_attempts_per_route: int = 2
+    max_attempts_per_model: int = 2
     retry_on: tuple[ModelErrorKind, ...] = (
         ModelErrorKind.TIMEOUT,
         ModelErrorKind.RATE_LIMIT,
@@ -332,11 +332,11 @@ class RetryPolicy:
 
     def __post_init__(self) -> None:
         if (
-            not isinstance(self.max_attempts_per_route, int)
-            or isinstance(self.max_attempts_per_route, bool)
-            or self.max_attempts_per_route < 1
+            not isinstance(self.max_attempts_per_model, int)
+            or isinstance(self.max_attempts_per_model, bool)
+            or self.max_attempts_per_model < 1
         ):
-            raise ValueError("max_attempts_per_route must be at least one")
+            raise ValueError("max_attempts_per_model must be at least one")
         retry_on = tuple(self.retry_on)
         if any(not isinstance(kind, ModelErrorKind) for kind in retry_on):
             raise TypeError("retry_on must contain ModelErrorKind values")

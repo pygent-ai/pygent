@@ -22,12 +22,15 @@ from pygent import (
 )
 from pygent.core import FrozenJsonObject, Module, RemoteModule
 from pygent.llm import (
+    DefaultModelInvoker,
     ModelDeploymentConflictError,
     ModelDeploymentUnavailableError,
     ModelExecution,
+    ModelGroupConfigurationError,
     ModelProfileSelectionError,
     ModelResourceOwnership,
     ModelResourceRef,
+    OpenAICompatibleAdapter,
 )
 from pygent.llm.spi import ModelProviderResponse
 from pygent.runtime import (
@@ -251,6 +254,29 @@ async def test_profile_and_generation_policy_fail_closed() -> None:
             ),
         )
         await handle.result()
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_profile_rejects_an_unbound_model_even_without_provider_options() -> None:
+    requirement = _requirement()
+    runtime = LocalRuntime()
+    bound = runtime.bind(_layer(requirement))
+    group = bound.model_groups.get(requirement)
+    invoker = DefaultModelInvoker(
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
+        clients={},
+    )
+
+    with pytest.raises(ModelGroupConfigurationError, match="no local protocol/client"):
+        await group.ensure_profile(
+            profile="invalid",
+            models=(model_entry("main", "test", "model"),),
+            invoker=invoker,
+            deadline=time.monotonic() + 2,
+        )
+
+    await invoker.aclose()
     await runtime.close()
 
 

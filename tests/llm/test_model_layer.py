@@ -292,7 +292,9 @@ def test_durable_effect_identity_includes_tool_results() -> None:
 
 def test_model_effect_round_trip_preserves_opaque_continuation() -> None:
     continuation = ModelContinuation(
+        model_key="main",
         provider="deepseek",
+        model_id="deepseek-reasoner",
         protocol="anthropic_messages",
         data={"thinking": [{"signature": "opaque-signature"}]},
     )
@@ -320,6 +322,21 @@ def test_model_effect_round_trip_preserves_opaque_continuation() -> None:
     )
     with pytest.raises(TypeError, match="continuation"):
         _message_from_effect(missing)
+
+    raw_message = _message_effect_value(message)
+    raw_continuation = raw_message["continuation"]
+    assert isinstance(raw_continuation, dict)
+    raw_continuation.pop("model_id")
+    legacy = freeze_json_object(
+        {
+            "outcome": "succeeded",
+            "message": raw_message,
+            "usage": {},
+            "provider_request_id": None,
+        }
+    )
+    with pytest.raises(TypeError, match="continuation"):
+        _message_from_effect(legacy)
 
 
 @pytest.mark.asyncio
@@ -471,7 +488,7 @@ async def test_provider_errors_are_sanitized_for_invoke_stream_and_run_events() 
                 ),
                 ("primary", "fallback"),
             ),
-            retry_policy=RetryPolicy(max_attempts_per_route=1),
+            retry_policy=RetryPolicy(max_attempts_per_model=1),
             generation=GenerationConfig(),
             invoker=invoker,
         )

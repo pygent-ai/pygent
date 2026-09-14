@@ -248,7 +248,9 @@ def _message_effect_value(message: Message) -> dict[str, object]:
             None
             if message.continuation is None
             else {
+                "model_key": message.continuation.model_key,
                 "provider": message.continuation.provider,
+                "model_id": message.continuation.model_id,
                 "protocol": message.continuation.protocol,
                 "data": thaw_json(cast(JsonValue, message.continuation.data)),
             }
@@ -324,7 +326,7 @@ def _model_effect_request(
                     ),
                 },
                 "retry": {
-                    "max_attempts_per_route": retry.max_attempts_per_route,
+                    "max_attempts_per_model": retry.max_attempts_per_model,
                     "retry_on": [kind.value for kind in retry.retry_on],
                     "attempt_idle_timeout_seconds": (
                         retry.attempt_idle_timeout_seconds
@@ -418,13 +420,21 @@ def _message_from_effect(value: JsonValue) -> AIMessage:
     if raw_continuation is not None:
         if not isinstance(raw_continuation, Mapping):
             raise TypeError("replayed model continuation must be a JSON object")
-        if set(raw_continuation) != {"provider", "protocol", "data"}:
+        if set(raw_continuation) != {
+            "model_key",
+            "provider",
+            "model_id",
+            "protocol",
+            "data",
+        }:
             raise TypeError("replayed model continuation has invalid fields")
         continuation_data = raw_continuation["data"]
         if not isinstance(continuation_data, Mapping):
             raise TypeError("replayed model continuation data must be a JSON object")
         continuation = ModelContinuation(
+            model_key=cast(str, raw_continuation["model_key"]),
             provider=cast(str, raw_continuation["provider"]),
+            model_id=cast(str, raw_continuation["model_id"]),
             protocol=cast(str, raw_continuation["protocol"]),
             data=cast(Mapping[str, object], continuation_data),
         )

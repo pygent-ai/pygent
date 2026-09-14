@@ -158,12 +158,18 @@ class ModelProviderStreamPart:
             else freeze_json_object(self.data)
         )
         if kind is ModelProviderStreamKind.CONTINUATION:
-            if set(data) != {"provider", "protocol", "data"}:
+            if set(data) != {
+                "model_key",
+                "provider",
+                "model_id",
+                "protocol",
+                "data",
+            }:
                 raise ValueError(
-                    "continuation stream-part fields must be exactly provider, "
-                    "protocol, and data"
+                    "continuation stream-part fields must be exactly model_key, "
+                    "provider, model_id, protocol, and data"
                 )
-            for name in ("provider", "protocol"):
+            for name in ("model_key", "provider", "model_id", "protocol"):
                 value = data[name]
                 if not isinstance(value, str) or not value:
                     raise ValueError(f"continuation {name} must be a non-empty string")

@@ -83,12 +83,14 @@ class UserMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
 class ModelContinuation:
     """Opaque, portable provider state required by a later model turn."""
 
+    model_key: str
     provider: str
+    model_id: str
     protocol: str
     data: JsonObjectInput = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
-        for name in ("provider", "protocol"):
+        for name in ("model_key", "provider", "model_id", "protocol"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"ModelContinuation {name} must be a non-empty string")

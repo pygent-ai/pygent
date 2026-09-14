@@ -143,6 +143,7 @@ Adapter 不硬编码具体 Claude 型号对 adaptive、manual thinking、effort 
 ```python
 ModelContinuation(
     provider: str,
+    model_id: str,
     protocol: str,
     data: Mapping[str, JsonValue],
 )
@@ -158,7 +159,7 @@ Continuation 是一次模型输出的后续调用状态，不属于 `ModelSpec`�
 
 Continuation 不进入 repr、普通模型事件、异常文本或日志。请求快照只记录 continuation digest，不记录原始 data。
 
-Adapter 只消费 `provider` 与 `protocol` 同时匹配的 continuation。匹配但结构或版本非法时必须在 I/O 前拒绝；不匹配时不发送，不尝试协议转换。
+Adapter 只消费 `provider`、`model_id` 与 `protocol` 同时匹配的 continuation。匹配但结构或版本非法时必须在 I/O 前拒绝；不匹配时不发送，不尝试协议或模型转换。
 
 ### Anthropic continuation
 
@@ -167,6 +168,7 @@ Anthropic continuation 使用版本化的紧凑 block layout：
 ```python
 ModelContinuation(
     provider="anthropic",
+    model_id="claude-opus-5",
     protocol="anthropic_messages",
     data={
         "version": 1,
@@ -186,6 +188,7 @@ OpenAI Chat Completions 响应实际包含合法 `reasoning_content` 时，Adapt
 ```python
 ModelContinuation(
     provider="aliyun_token_plan",
+    model_id="qwen3.8-max",
     protocol="openai_chat_completions",
     data={
         "version": 1,
@@ -194,7 +197,7 @@ ModelContinuation(
 )
 ```
 
-后续工具调用请求只在 Provider 与 protocol 同时匹配时将 `reasoning_content` 放回对应 assistant message。Adapter 不维护 Provider 白名单；字段不存在时不生成 continuation，字段存在但不是字符串时拒绝响应。
+后续工具调用请求只在 Provider、model ID 与 protocol 同时匹配时将 `reasoning_content` 放回对应 assistant message。Adapter 不维护 Provider 白名单；字段不存在时不生成 continuation，字段存在但不是字符串时拒绝响应。
 
 ## 有状态流解码
 

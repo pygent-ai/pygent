@@ -480,9 +480,40 @@ class ModelConfig:
     connections: Mapping[str, ModelConnection]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "models", MappingProxyType(dict(self.models)))
-        object.__setattr__(self, "model_groups", MappingProxyType(dict(self.model_groups)))
-        object.__setattr__(self, "connections", MappingProxyType(dict(self.connections)))
+        for name, value in (
+            ("models", self.models),
+            ("model_groups", self.model_groups),
+            ("connections", self.connections),
+        ):
+            if not isinstance(value, Mapping):
+                raise TypeError(f"{name} must be a mapping")
+        models = dict(self.models)
+        groups = dict(self.model_groups)
+        connections = dict(self.connections)
+        if not models:
+            raise ValueError("models must be non-empty")
+        for key, entry in models.items():
+            _non_empty(key, "model key")
+            if not isinstance(entry, ModelEntry):
+                raise TypeError("models must contain ModelEntry values")
+            if entry.name != key:
+                raise ValueError("model entry name must match its configuration key")
+        if set(connections) != set(models):
+            raise ValueError("connections must contain exactly the configured model keys")
+        if any(not isinstance(item, ModelConnection) for item in connections.values()):
+            raise TypeError("connections must contain ModelConnection values")
+        for key, group in groups.items():
+            _non_empty(key, "model group key")
+            if not isinstance(group, ModelGroup):
+                raise TypeError("model_groups must contain ModelGroup values")
+            if group.name != key:
+                raise ValueError("model group name must match its configuration key")
+            for entry in group.models:
+                if models.get(entry.name) != entry:
+                    raise ValueError("model group entries must reference configured models")
+        object.__setattr__(self, "models", MappingProxyType(models))
+        object.__setattr__(self, "model_groups", MappingProxyType(groups))
+        object.__setattr__(self, "connections", MappingProxyType(connections))
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelConfig:

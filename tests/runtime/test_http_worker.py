@@ -1246,7 +1246,9 @@ async def test_domain_message_and_context_history_cross_http_worker_losslessly()
     model_prior = AIMessage(
         content="prior model output",
         continuation=ModelContinuation(
+            model_key="main",
             provider="anthropic",
+            model_id="claude-opus-5",
             protocol="anthropic_messages",
             data={"version": 1, "blocks": []},
         ),

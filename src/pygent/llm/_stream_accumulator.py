@@ -54,7 +54,7 @@ class ModelStreamAccumulator:
     text_parts: list[str] = field(default_factory=list)
     usage: FrozenJsonObject = field(default_factory=freeze_json_object)
     calls: dict[int, dict[str, str]] = field(default_factory=dict)
-    selected_route: str | None = None
+    selected_model_key: str | None = None
     selected_attempt: int | None = None
     finish_reason: str = "other"
     provider_request_id: str | None = None
@@ -71,7 +71,7 @@ class ModelStreamAccumulator:
             self.text_parts.clear()
             self.usage = freeze_json_object()
             self.calls.clear()
-            self.selected_route = None
+            self.selected_model_key = None
             self.selected_attempt = None
             self.finish_reason = "other"
             self.provider_request_id = None
@@ -86,9 +86,9 @@ class ModelStreamAccumulator:
                     },
                 )
             return
-        route_value = data.get("model_key")
-        if isinstance(route_value, str):
-            self.selected_route = route_value
+        model_key_value = data.get("model_key")
+        if isinstance(model_key_value, str):
+            self.selected_model_key = model_key_value
         attempt_value = data.get("attempt")
         if isinstance(attempt_value, int) and not isinstance(attempt_value, bool):
             self.selected_attempt = attempt_value
@@ -98,7 +98,9 @@ class ModelStreamAccumulator:
             if not isinstance(continuation_data, FrozenJsonObject):
                 raise TypeError("model continuation data must be a JSON object")
             self.continuation = ModelContinuation(
+                model_key=cast(str, data.get("model_key")),
                 provider=cast(str, data.get("provider")),
+                model_id=cast(str, data.get("model_id")),
                 protocol=cast(str, data.get("protocol")),
                 data=continuation_data,
             )
@@ -134,7 +136,7 @@ class ModelStreamAccumulator:
             await _raise_invalid_model_response(
                 event_sink,
                 "model stream returned an invalid tool-call index",
-                model_key=self.selected_route,
+                model_key=self.selected_model_key,
                 attempt=self.selected_attempt,
                 usage=self.usage,
             )
@@ -165,7 +167,7 @@ class ModelStreamAccumulator:
         await self._validate_content(content, event_sink)
         content = "".join(self.text_parts)
         tool_calls = await self._finish_tool_calls(event_sink)
-        if self.selected_route is None or self.selected_attempt is None:
+        if self.selected_model_key is None or self.selected_attempt is None:
             raise ModelCallError(
                 "model stream completed without attempt identity",
                 kind=ModelErrorKind.INVALID_RESPONSE,
@@ -177,7 +179,7 @@ class ModelStreamAccumulator:
             ModelEventKind.USAGE,
             _usage_event_payload(
                 self.usage,
-                model_key=self.selected_route,
+                model_key=self.selected_model_key,
                 attempt=self.selected_attempt,
                 final=True,
             ),
@@ -185,13 +187,13 @@ class ModelStreamAccumulator:
         await _emit(
             event_sink,
             ModelEventKind.ATTEMPT_SUCCEEDED,
-            {"model_key": self.selected_route, "attempt": self.selected_attempt},
+            {"model_key": self.selected_model_key, "attempt": self.selected_attempt},
         )
         await _emit(
             event_sink,
             ModelEventKind.COMPLETED,
             {
-                "model_key": self.selected_route,
+                "model_key": self.selected_model_key,
                 "attempt": self.selected_attempt,
                 "finish_reason": self.finish_reason,
                 "provider_request_id": self.provider_request_id,
@@ -201,7 +203,7 @@ class ModelStreamAccumulator:
             message=AIMessage(
                 content=content,
                 tool_calls=tuple(tool_calls),
-                metadata={"model_key": self.selected_route},
+                metadata={"model_key": self.selected_model_key},
                 continuation=self.continuation,
             ),
             usage=self.usage,
@@ -225,7 +227,7 @@ class ModelStreamAccumulator:
             await _raise_invalid_model_response(
                 event_sink,
                 "model output does not match the declared JSON schema",
-                model_key=self.selected_route,
+                model_key=self.selected_model_key,
                 attempt=self.selected_attempt,
                 usage=self.usage,
                 reason_code=ModelFailureReason.GENERATION_SCHEMA_INVALID,
@@ -243,7 +245,7 @@ class ModelStreamAccumulator:
                     raise TypeError
                 name = _original_tool_name(call["name"], self.tools)
                 call_id = call["call_id"] or _synthetic_tool_call_id(
-                    model_key=self.selected_route or "provider",
+                    model_key=self.selected_model_key or "provider",
                     provider_request_id=self.provider_request_id,
                     index=index,
                     name=name,
@@ -265,7 +267,7 @@ class ModelStreamAccumulator:
                         "call_id": call_id,
                         "name": name,
                         "arguments": cast(Mapping[str, object], arguments),
-                        "model_key": self.selected_route,
+                        "model_key": self.selected_model_key,
                         "attempt": self.selected_attempt,
                     },
                 )
@@ -273,7 +275,7 @@ class ModelStreamAccumulator:
                 await _raise_invalid_model_response(
                     event_sink,
                     "model stream returned an invalid tool call",
-                    model_key=self.selected_route,
+                    model_key=self.selected_model_key,
                     attempt=self.selected_attempt,
                     usage=self.usage,
                     reason_code=ModelFailureReason.TOOL_CALL_INVALID,

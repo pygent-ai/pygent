@@ -13,6 +13,9 @@ from pygent import (
     AIMessage,
     Context,
     ModelContinuation,
+    ToolCall,
+    ToolMessage,
+    ToolResult,
     UserMessage,
 )
 from pygent.core import FrozenJsonObject, freeze_json_object
@@ -153,6 +156,14 @@ def group():
     )
 
 
+def test_invoker_rejects_adapter_registered_under_another_protocol() -> None:
+    with pytest.raises(ValueError, match="different protocol"):
+        DefaultModelInvoker(
+            adapters={"wrong_protocol": OpenAICompatibleAdapter()},
+            clients={},
+        )
+
+
 def test_continuation_stream_part_has_one_strict_private_shape() -> None:
     with pytest.raises(ValueError, match="fields must be exactly"):
         ModelProviderStreamPart(
@@ -167,9 +178,124 @@ def test_continuation_stream_part_has_one_strict_private_shape() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("producer_key", "producer_model_id", "producer_fails"),
+    [
+        ("fallback", "second", True),
+        ("fallback", "second", False),
+        ("removed", "second", False),
+        ("fallback", "previous-model", False),
+    ],
+)
+async def test_tool_continuation_preserves_history_and_resumes_only_its_producer(
+    producer_key, producer_model_id, producer_fails, monkeypatch
+) -> None:
+    call_order = []
+    projections = []
+    project_context = invoker_module.neutral_tool_context
+
+    def record_projection(context, pending):
+        projections.append(tuple(call_order))
+        return project_context(context, pending)
+
+    monkeypatch.setattr(invoker_module, "neutral_tool_context", record_projection)
+
+    class RecordingClient(FakeClient):
+        def __init__(self, outcomes):
+            super().__init__(outcomes)
+            self.payloads: list[FrozenJsonObject] = []
+
+        async def invoke(self, route, payload):
+            call_order.append(route.model_id)
+            self.payloads.append(payload)
+            return await super().invoke(route, payload)
+
+    primary = RecordingClient([completion("recovered")])
+    fallback = RecordingClient(
+        [
+            ModelProviderError(ModelErrorKind.UNAVAILABLE, "offline")
+            if producer_fails
+            else completion("resumed")
+        ]
+    )
+    invoker = configured_invoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": primary, "fallback": fallback},
+        capabilities={
+            "primary": transport_mode(streaming=False),
+            "fallback": transport_mode(streaming=False),
+        },
+    )
+    assistant = AIMessage(
+        tool_calls=(ToolCall(call_id="call-1", name="lookup", arguments={}),),
+        continuation=ModelContinuation(
+            model_key=producer_key,
+            provider="openai",
+            model_id=producer_model_id,
+            protocol="openai_chat_completions",
+            data={"version": 1, "reasoning_content": "private"},
+        ),
+    )
+    tool_message = ToolMessage(
+        results=(
+            ToolResult(
+                call_id="call-1",
+                name="lookup",
+                status="succeeded",
+                output={"value": 42},
+            ),
+        )
+    )
+
+    context = Context(messages=(assistant,), metadata={"keep": "value"})
+    result = await invoker.execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=tool_message,
+        context=context,
+    ).result()
+
+    matches = producer_key == "fallback" and producer_model_id == "second"
+    if matches:
+        assert fallback.calls == 1
+        fallback_messages = fallback.payloads[0]["messages"]
+        assert fallback_messages[0]["reasoning_content"] == "private"
+        if producer_fails:
+            assert call_order == ["second", "first"]
+            assert projections == [("second",)]
+        else:
+            assert call_order == ["second"]
+            assert projections == []
+            assert primary.calls == 0
+            assert result.message.content == "resumed"
+    else:
+        assert call_order == ["first"]
+        assert projections == [()]
+        assert fallback.calls == 0
+    if not matches or producer_fails:
+        assert result.message.content == "recovered"
+        primary_messages = primary.payloads[0]["messages"]
+        assert "reasoning_content" not in primary_messages[0]
+        assert primary_messages[0]["tool_calls"][0]["id"] == "call-1"
+        assert primary_messages[1]["tool_call_id"] == "call-1"
+        assert "42" in primary_messages[1]["content"]
+        if matches:
+            assert fallback_messages[0]["tool_calls"] == primary_messages[0]["tool_calls"]
+            assert fallback_messages[1] == primary_messages[1]
+    assert context.messages[0] is assistant
+    assert assistant.continuation is not None
+    assert assistant.continuation.data["reasoning_content"] == "private"
+    assert context.metadata["keep"] == "value"
+    await invoker.aclose()
+
+
+@pytest.mark.asyncio
 async def test_non_streaming_response_continuation_uses_common_reducer() -> None:
     continuation = ModelContinuation(
+        model_key="primary",
         provider="deepseek",
+        model_id="deepseek-chat",
         protocol="openai_chat_completions",
         data={"reasoning_content": "opaque"},
     )
@@ -228,7 +354,9 @@ async def test_each_retry_gets_a_new_decoder_and_reset_discards_continuation() -
                     ModelProviderStreamPart(
                         "continuation",
                         {
+                            "model_key": "primary",
                             "provider": "deepseek",
+                            "model_id": "deepseek-chat",
                             "protocol": "openai_chat_completions",
                             "data": {"reasoning_content": "failed-attempt"},
                         },
@@ -345,7 +473,9 @@ async def test_deepseek_stream_reasoning_becomes_result_continuation() -> None:
         events = [event async for event in subscription]
 
     assert result.message.continuation == ModelContinuation(
+        model_key="primary",
         provider="deepseek",
+        model_id="deepseek-reasoner",
         protocol="openai_chat_completions",
         data={"version": 1, "reasoning_content": "reasoning"},
     )
@@ -475,7 +605,7 @@ async def test_non_streaming_content_filter_fails_without_successful_output():
     )
     execution = invoker.execute(
         model_group=model_group,
-        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
         context=Context(),
@@ -516,7 +646,7 @@ async def test_absolute_deadline_covers_provider_wait():
     with pytest.raises(ModelCallError) as raised:
         await invoker.execute(
             model_group=group(),
-            retry_policy=RetryPolicy(max_attempts_per_route=1),
+            retry_policy=RetryPolicy(max_attempts_per_model=1),
             generation=GenerationConfig(),
             message=UserMessage(content="hello"),
             context=Context(),
@@ -546,7 +676,7 @@ async def test_cancellation_cleanup_timeout_is_terminal_and_quarantines_client(
     execution = invoker.execute(
         model_group=group(),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=3,
+            max_attempts_per_model=3,
             attempt_idle_timeout_seconds=0.01,
         ),
         generation=GenerationConfig(),
@@ -569,7 +699,7 @@ async def test_cancellation_cleanup_timeout_is_terminal_and_quarantines_client(
 
     quarantined = invoker.execute(
         model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_route=3),
+        retry_policy=RetryPolicy(max_attempts_per_model=3),
         generation=GenerationConfig(),
         message=UserMessage(content="hello again"),
         context=Context(),
@@ -589,7 +719,7 @@ async def test_cancellation_cleanup_timeout_is_terminal_and_quarantines_client(
         await asyncio.sleep(0)
     recovered = await invoker.execute(
         model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=UserMessage(content="recovered"),
         context=Context(),
@@ -618,7 +748,7 @@ async def test_close_waits_for_running_stream_anext_before_closing_client(
             order=("primary",),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=1,
+            max_attempts_per_model=1,
             attempt_idle_timeout_seconds=0.01,
         ),
         generation=GenerationConfig(),
@@ -667,7 +797,7 @@ async def test_close_cancels_active_execution_before_closing_stream_client(
             order=("primary",),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=1,
+            max_attempts_per_model=1,
             attempt_idle_timeout_seconds=1,
         ),
         generation=GenerationConfig(),
@@ -727,7 +857,7 @@ async def test_close_is_idempotent_and_rejects_new_executions() -> None:
 
     execution = invoker.execute(
         model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=UserMessage(content="after close"),
         context=Context(),
@@ -750,7 +880,7 @@ async def test_explicit_task_cancellation_stays_cancelled_when_cleanup_is_unknow
     )
     execution = invoker.execute(
         model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_route=3),
+        retry_policy=RetryPolicy(max_attempts_per_model=3),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
         context=Context(),
@@ -778,7 +908,7 @@ async def test_explicit_cancellation_is_not_retried():
     with pytest.raises(asyncio.CancelledError):
         await invoker.execute(
             model_group=group(),
-            retry_policy=RetryPolicy(max_attempts_per_route=3),
+            retry_policy=RetryPolicy(max_attempts_per_model=3),
             generation=GenerationConfig(),
             message=UserMessage(content="hello"),
             context=Context(),
@@ -801,7 +931,7 @@ async def test_stream_normalizes_text_usage_and_completion():
     )
     execution = invoker.execute(
         model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
         context=Context(),
@@ -855,7 +985,7 @@ async def test_stream_idle_timeout_resets_after_every_provider_frame() -> None:
     result = await invoker.execute(
         model_group=group(),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=1,
+            max_attempts_per_model=1,
             attempt_idle_timeout_seconds=0.1,
         ),
         generation=GenerationConfig(),
@@ -895,7 +1025,7 @@ async def test_first_stream_frame_idle_timeout_retries_before_public_output() ->
     result = await invoker.execute(
         model_group=group(),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=2,
+            max_attempts_per_model=2,
             attempt_idle_timeout_seconds=0.03,
             backoff=ExponentialBackoff(0, 0),
         ),
@@ -958,7 +1088,7 @@ async def test_stream_idle_timeout_resets_partial_output_and_retries() -> None:
     execution = invoker.execute(
         model_group=group(),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=2,
+            max_attempts_per_model=2,
             attempt_idle_timeout_seconds=0.03,
             backoff=ExponentialBackoff(0, 0),
         ),
@@ -1016,7 +1146,7 @@ async def test_stream_idle_timeout_exhaustion_keeps_last_partial_output() -> Non
             order=("primary",),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=2,
+            max_attempts_per_model=2,
             attempt_idle_timeout_seconds=0.03,
             backoff=ExponentialBackoff(0, 0),
         ),
@@ -1071,7 +1201,7 @@ async def test_stream_partial_idle_timeout_obeys_retry_on_policy() -> None:
             order=("primary",),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=2,
+            max_attempts_per_model=2,
             retry_on=(),
             attempt_idle_timeout_seconds=0.03,
         ),
@@ -1118,7 +1248,7 @@ async def test_stream_partial_output_is_not_reset_when_backoff_exhausts_deadline
             order=("primary",),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=2,
+            max_attempts_per_model=2,
             attempt_idle_timeout_seconds=0.1,
             backoff=ExponentialBackoff(1, 1),
         ),
@@ -1170,7 +1300,7 @@ async def test_stream_partial_idle_timeout_resets_before_fallback_route() -> Non
     execution = invoker.execute(
         model_group=group(),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=1,
+            max_attempts_per_model=1,
             attempt_idle_timeout_seconds=0.03,
         ),
         generation=GenerationConfig(),
@@ -1208,7 +1338,7 @@ async def test_execution_deadline_still_bounds_an_active_provider_stream() -> No
     execution = invoker.execute(
         model_group=group(),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=1,
+            max_attempts_per_model=1,
             attempt_idle_timeout_seconds=0.1,
         ),
         generation=GenerationConfig(),
@@ -1292,7 +1422,7 @@ async def test_stream_owner_does_not_create_a_task_for_each_provider_item(
     monkeypatch.setattr(asyncio, "create_task", record_task)
     result = await invoker.execute(
         model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
         context=Context(),
@@ -1317,7 +1447,7 @@ async def test_stream_rejects_transport_eof_without_completion_marker():
     with pytest.raises(ModelCallError, match="after output was emitted") as raised:
         await invoker.execute(
             model_group=group(),
-            retry_policy=RetryPolicy(max_attempts_per_route=1),
+            retry_policy=RetryPolicy(max_attempts_per_model=1),
             generation=GenerationConfig(),
             message=UserMessage(content="hello"),
             context=Context(),
@@ -1349,7 +1479,7 @@ async def test_stream_retries_only_when_failure_precedes_public_output():
     execution = invoker.execute(
         model_group=group(),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=2,
+            max_attempts_per_model=2,
             retry_on=(ModelErrorKind.UNAVAILABLE,),
             backoff=ExponentialBackoff(0, 0),
         ),
@@ -1390,7 +1520,7 @@ async def test_stream_fallback_emits_attempt_lifecycle_before_public_output():
     )
     execution = invoker.execute(
         model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
         context=Context(),
@@ -1501,7 +1631,7 @@ async def test_stream_emits_fixed_reasoning_and_multiple_tool_call_events():
         clients={"openai": client},
     ).execute(
         model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
         context=Context(),
@@ -1576,7 +1706,7 @@ async def test_stream_synthesizes_a_missing_tool_call_id():
         clients={"openai": client},
     ).execute(
         model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
         context=Context(),
@@ -1620,7 +1750,7 @@ async def test_invalid_tool_arguments_never_emit_model_completed():
         clients={"openai": client},
     ).execute(
         model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
         context=Context(),

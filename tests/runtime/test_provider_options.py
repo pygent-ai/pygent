@@ -95,7 +95,7 @@ def test_provider_options_change_definition_and_effect_identity_but_empty_does_n
     )
     assert (
         compile_execution_plan(empty_layer).modules[0].config_ref
-        == "sha256:5e4ae28a8d1e833e4cb06c8e90fd0d0a8ffc7902afae1eecf7feb160aa435991"
+        == "sha256:41fa15a5d99b3ccee4b645e3e02cfea35593a28a11a294efcb1b003248e39480"
     )
     assert (
         compile_execution_plan(empty_layer).modules[0].config_ref
@@ -121,7 +121,7 @@ def test_provider_options_change_definition_and_effect_identity_but_empty_does_n
     assert empty_spec["provider_options"] == freeze_json_object({})
     assert empty_effect["retry"] == freeze_json_object(
         {
-            "max_attempts_per_route": 2,
+            "max_attempts_per_model": 2,
             "retry_on": [
                 "timeout",
                 "rate_limit",

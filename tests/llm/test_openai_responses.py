@@ -153,7 +153,9 @@ def test_responses_parse_preserves_reasoning_and_function_call() -> None:
     assert response.finish_reason == "tool_calls"
     assert response.usage["reasoning_tokens"] == 1
     assert response.message.continuation == ModelContinuation(
+        model_key="main",
         provider="openai",
+        model_id="gpt-5.4",
         protocol="openai_responses",
         data={
             "version": 1,
@@ -199,7 +201,9 @@ def test_responses_structured_output_rejects_schema_mismatch() -> None:
 
 def test_responses_continuation_is_replayed_before_visible_assistant_items() -> None:
     continuation = ModelContinuation(
+        model_key="main",
         provider="openai",
+        model_id="gpt-5.4",
         protocol="openai_responses",
         data={"version": 1, "items": [{"id": "rs-1", "type": "reasoning"}]},
     )
@@ -212,6 +216,27 @@ def test_responses_continuation_is_replayed_before_visible_assistant_items() -> 
     ).to_dict()
     assert payload["input"][0] == {"id": "rs-1", "type": "reasoning"}
     assert payload["input"][1]["role"] == "assistant"
+
+
+def test_responses_rejects_non_text_output_parts() -> None:
+    with pytest.raises(ModelProviderError) as raised:
+        OpenAIResponsesAdapter().parse_response(
+            _request(),
+            freeze_json_object(
+                {
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_image", "image": "opaque"}],
+                        }
+                    ],
+                }
+            ),
+        )
+
+    assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
 
 
 def test_responses_stream_decodes_text_reasoning_usage_and_finish() -> None:

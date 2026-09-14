@@ -45,7 +45,7 @@ Provider 是开放字符串。Provider preset 只提供 UI/配置默认值；Ada
 
 Provider 私有生成语义放在 `ModelSpec.provider_options`。连接、secret、认证头、代理、TLS、retry、deadline、stream 开关和框架保留请求字段不能放入其中。第三方 Adapter 只有实现 `ModelProviderSpecValidator` 才能接受非空选项。
 
-Anthropic Messages 请求必须由 `GenerationConfig.max_output_tokens` 提供正整数，没有框架默认值。需要工具循环回传的 Provider 私有 thinking/reasoning 状态保存在 `AIMessage.continuation`；该值只交给 Provider 与 protocol 同时匹配的后续请求，不进入公开事件、请求摘要或 `repr`。Anthropic 官方 thinking block 必须携带 signature；其他 Anthropic-compatible Provider 可以返回无 signature 的 thinking block，Adapter 会保持原形回传。OpenAI Chat Completions 不维护 Provider 白名单：响应实际携带合法 `reasoning_content` 时才创建对应 continuation。
+Anthropic Messages 请求必须由 `GenerationConfig.max_output_tokens` 提供正整数，没有框架默认值。需要工具循环回传的 Provider 私有 thinking/reasoning 状态保存在 `AIMessage.continuation`；该值记录实际生产它的 `model_key`，并只交给 `model_key`、Provider、model ID 与 protocol 都匹配的后续请求。工具结果返回后，模型组优先续接原生产模型；如果该模型失败，后续 fallback 仍接收完整的 assistant tool call 与 tool result 历史，但不接收原模型的私有 continuation。其原始 `data` 不进入公开事件、请求摘要或 `repr`。Anthropic 官方 thinking block 必须携带 signature；其他 Anthropic-compatible Provider 可以返回无 signature 的 thinking block，Adapter 会保持原形回传。OpenAI Chat Completions 不维护 Provider 白名单：响应实际携带合法 `reasoning_content` 时才创建对应 continuation。
 
 ## Layer 与执行
 
@@ -53,7 +53,9 @@ Anthropic Messages 请求必须由 `GenerationConfig.max_output_tokens` 提供�
 
 Direct 模式显式传入部署阶段构造的 `ModelInvoker`，调用方负责 client 生命周期。Managed 模式可省略 invoker，由 Runtime 使用现有 invoker 注册或 resource resolver。两种模式都把完整模型语义保存在 Layer；Runtime 不通过字符串重新查找模型配置。
 
-Invoker 按 `ModelGroup.models` 顺序尝试模型，并在每个模型内执行 retry。公开 attempt、请求快照和事件统一使用 `model_key`。Provider 原始载荷、异常消息和 secret 不跨越公开边界。
+Invoker 通常按 `ModelGroup.models` 顺序尝试模型，并在每个模型内执行 retry。工具 continuation 续接时，先尝试组内身份匹配的原生产模型，其余模型按原组顺序 fallback。公开 attempt、请求快照和事件统一使用 `model_key`。Provider 原始载荷、异常消息和 secret 不跨越公开边界。
+
+`ModelCallLayer` 当前结果契约是文本与 ToolCall。能力目录可以描述图像、音频、视频和 embedding，但不代表文本协议 Adapter 能消费这些返回；内置文本 Adapter 遇到非文本响应部件会明确拒绝，专用媒体协议必须由对应 Adapter 执行。
 
 Managed 模型并发只由 Binding 的 `model_capacity` 控制。Layer 调用无参数 `model_permit()`；`ModelSpec` 和 `ModelGroup` 不声明容量。
 

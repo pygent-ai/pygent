@@ -160,7 +160,9 @@ def test_message_and_context_validate_typed_elements():
 def test_model_continuation_is_portable_immutable_and_redacted() -> None:
     source = {"thinking": {"signature": "secret-signature"}}
     continuation = ModelContinuation(
+        model_key="primary",
         provider="deepseek",
+        model_id="deepseek-reasoner",
         protocol="anthropic_messages",
         data=source,
     )
@@ -171,10 +173,34 @@ def test_model_continuation_is_portable_immutable_and_redacted() -> None:
     assert continuation.data["thinking"]["signature"] == "secret-signature"
     assert "secret-signature" not in repr(continuation)
     assert "secret-signature" not in repr(message)
+    with pytest.raises(ValueError, match="model_key"):
+        ModelContinuation(
+            model_key="",
+            provider="deepseek",
+            model_id="deepseek-reasoner",
+            protocol="anthropic_messages",
+        )
     with pytest.raises(ValueError, match="provider"):
-        ModelContinuation(provider="", protocol="anthropic_messages")
+        ModelContinuation(
+            model_key="primary",
+            provider="",
+            model_id="deepseek-reasoner",
+            protocol="anthropic_messages",
+        )
+    with pytest.raises(ValueError, match="model_id"):
+        ModelContinuation(
+            model_key="primary",
+            provider="deepseek",
+            model_id="",
+            protocol="anthropic_messages",
+        )
     with pytest.raises(ValueError, match="protocol"):
-        ModelContinuation(provider="deepseek", protocol="")
+        ModelContinuation(
+            model_key="primary",
+            provider="deepseek",
+            model_id="deepseek-reasoner",
+            protocol="",
+        )
     with pytest.raises(TypeError, match="continuation"):
         AIMessage(continuation=object())  # type: ignore[arg-type]
 

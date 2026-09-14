@@ -263,7 +263,7 @@ def _compiled_agent(
             models=(model_entry("primary", "openai", model_name),),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=retry_attempts,
+            max_attempts_per_model=retry_attempts,
             retry_on=(ModelErrorKind.UNAVAILABLE,),
             backoff=ExponentialBackoff(0.1, 0.5),
         ),

@@ -298,7 +298,7 @@ def build_live_agent(
             ),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=1,
+            max_attempts_per_model=1,
             retry_on=(
                 ModelErrorKind.TIMEOUT,
                 ModelErrorKind.RATE_LIMIT,

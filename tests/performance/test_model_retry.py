@@ -75,7 +75,7 @@ async def test_benchmark_resources_project_retry_configuration() -> None:
     )
     try:
         policy = resources.model.retry_policy
-        assert policy.max_attempts_per_route == 2
+        assert policy.max_attempts_per_model == 2
         assert policy.retry_on == (
             ModelErrorKind.TIMEOUT,
             ModelErrorKind.UNAVAILABLE,
@@ -102,7 +102,7 @@ async def test_benchmark_attempt_idle_timeout_retries_through_model_policy() -> 
             models=(model_entry("live", "openai", "private"),),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=2,
+            max_attempts_per_model=2,
             retry_on=(ModelErrorKind.TIMEOUT,),
             backoff=ExponentialBackoff(0, 0),
             attempt_idle_timeout_seconds=0.01,
@@ -190,7 +190,7 @@ async def test_benchmark_attempt_idle_timeout_fails_closed_when_cleanup_is_unkno
             models=(model_entry("live", "openai", "private"),),
         ),
         retry_policy=RetryPolicy(
-            max_attempts_per_route=3,
+            max_attempts_per_model=3,
             retry_on=(ModelErrorKind.TIMEOUT,),
             backoff=ExponentialBackoff(0, 0),
             attempt_idle_timeout_seconds=0.01,

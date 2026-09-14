@@ -112,6 +112,44 @@ def test_model_config_parses_named_semantics_and_connection_projection() -> None
         config.models["other"] = entry  # type: ignore[index]
 
 
+def test_direct_model_config_construction_enforces_complete_projection() -> None:
+    parsed = ModelConfig.from_mapping(_mapping())
+    entry = parsed.models["deepseek_primary"]
+    connection = parsed.connections["deepseek_primary"]
+
+    with pytest.raises(ValueError, match="models must be non-empty"):
+        ModelConfig(models={}, model_groups={}, connections={})
+    with pytest.raises(ValueError, match="entry name"):
+        ModelConfig(
+            models={"other": entry},
+            model_groups={},
+            connections={"other": connection},
+        )
+    with pytest.raises(ValueError, match="exactly the configured model keys"):
+        ModelConfig(models={entry.name: entry}, model_groups={}, connections={})
+    with pytest.raises(ValueError, match="reference configured models"):
+        ModelConfig(
+            models={entry.name: entry},
+            model_groups={
+                "assistant": ModelGroup(
+                    "assistant",
+                    (
+                        ModelEntry(
+                            entry.name,
+                            ModelSpec(
+                                provider="deepseek",
+                                model_id="different-model",
+                                protocol=entry.spec.protocol,
+                                capabilities=entry.spec.capabilities,
+                            ),
+                        ),
+                    ),
+                )
+            },
+            connections={entry.name: connection},
+        )
+
+
 def test_credential_resolution_is_explicit_and_secret_free() -> None:
     credential = CredentialRef.environment("DEEPSEEK_API_KEY")
     assert credential.resolve({"DEEPSEEK_API_KEY": "secret-value"}) == "secret-value"

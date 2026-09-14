@@ -121,7 +121,9 @@ def _continuation_digest(continuation: ModelContinuation | None) -> str | None:
         return None
     encoded = json.dumps(
         {
+            "model_key": continuation.model_key,
             "provider": continuation.provider,
+            "model_id": continuation.model_id,
             "protocol": continuation.protocol,
             "data": thaw_json(cast(JsonValue, continuation.data)),
         },

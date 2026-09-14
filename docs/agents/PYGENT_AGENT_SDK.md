@@ -80,14 +80,14 @@ Return only the continuation text.
 
 foreground_model = ModelCallLayer(
     model_group=foreground_model_group,
-    retry_policy=RetryPolicy(max_attempts_per_route=2),
+    retry_policy=RetryPolicy(max_attempts_per_model=2),
     generation=GenerationConfig(temperature=0.2, max_output_tokens=8_000),
     tools=all_tool_definitions,
 )
 
 compressor = ModelCallLayer(
     model_group=compression_model_group,
-    retry_policy=RetryPolicy(max_attempts_per_route=2),
+    retry_policy=RetryPolicy(max_attempts_per_model=2),
     generation=GenerationConfig(temperature=0.0, max_output_tokens=4_000),
     tools=(),
 )

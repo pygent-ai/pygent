@@ -28,7 +28,9 @@ from ._adapter_contracts import (
     ModelProviderResponse,
     ModelProviderStreamPart,
 )
+from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
+from ._provider_policies import provider_protocol_policy
 from .catalog import ModelCatalog, ModelInfo
 from .configuration import ModelSpec
 from .types import (
@@ -218,7 +220,9 @@ class AnthropicMessagesAdapter:
             _validate_option_combinations(options, generation.temperature, max_tokens)
             messages: list[dict[str, object]] = []
             for message in (*request.context.messages, request.message):
-                messages.append(_encode_message(message, request.model))
+                messages.append(
+                    _encode_message(message, request.model, request.model_key)
+                )
             body: dict[str, object] = {
                 "model": request.model.model_id,
                 "max_tokens": max_tokens,
@@ -270,7 +274,9 @@ class AnthropicMessagesAdapter:
                 raise TypeError
             content, calls, layout = _decode_blocks(
                 blocks,
-                allow_unsigned_thinking=request.model.provider != "anthropic",
+                allow_unsigned_thinking=not provider_protocol_policy(
+                    request.model.provider, request.model.protocol
+                ).requires_signed_thinking,
             )
             stop_reason = body.get("stop_reason")
             finish_reason = _finish_reason(stop_reason)
@@ -286,7 +292,9 @@ class AnthropicMessagesAdapter:
         continuation = None
         if layout and any(item["type"] != "text" for item in layout):
             continuation = ModelContinuation(
+                model_key=request.model_key,
                 provider=request.model.provider,
+                model_id=request.model.model_id,
                 protocol=self.protocol,
                 data={"version": 1, "blocks": layout},
             )
@@ -515,7 +523,10 @@ class _AnthropicStreamDecoder:
         elif kind == "thinking":
             signature = state["signature"]
             if not isinstance(signature, str) or (
-                not signature and self._request.model.provider == "anthropic"
+                not signature
+                and provider_protocol_policy(
+                    self._request.model.provider, self._request.model.protocol
+                ).requires_signed_thinking
             ):
                 raise TypeError
             thinking_block: dict[str, object] = {
@@ -588,7 +599,9 @@ class _AnthropicStreamDecoder:
         continuation = ModelProviderStreamPart(
             "continuation",
             {
+                "model_key": self._request.model_key,
                 "provider": self._request.model.provider,
+                "model_id": self._request.model.model_id,
                 "protocol": _PROTOCOL,
                 "data": {"version": 1, "blocks": self._layout},
             },
@@ -660,7 +673,9 @@ def _validate_option_combinations(
         raise ValueError("thinking budget_tokens must be below max_output_tokens")
 
 
-def _encode_message(message: Message, model: ModelSpec) -> dict[str, object]:
+def _encode_message(
+    message: Message, model: ModelSpec, model_key: str
+) -> dict[str, object]:
     if isinstance(message, ToolMessage):
         return {
             "role": "user",
@@ -670,13 +685,17 @@ def _encode_message(message: Message, model: ModelSpec) -> dict[str, object]:
     if message.content:
         blocks.append({"type": "text", "text": message.content})
     if isinstance(message, AIMessage):
-        continuation_matches = (
-            message.continuation is not None
-            and message.continuation.provider == model.provider
-            and message.continuation.protocol == model.protocol
-        )
-        blocks = _assistant_blocks(message, model, blocks)
-        if not continuation_matches:
+        continuation = message.continuation
+        if (
+            continuation is not None
+            and continuation_matches(
+                continuation,
+                model_key=model_key,
+                model=model,
+            )
+        ):
+            blocks = _assistant_blocks(message, continuation)
+        else:
             for call in message.tool_calls:
                 blocks.append(
                     {
@@ -690,13 +709,9 @@ def _encode_message(message: Message, model: ModelSpec) -> dict[str, object]:
 
 
 def _assistant_blocks(
-    message: AIMessage, model: ModelSpec, default: list[dict[str, object]]
+    message: AIMessage,
+    continuation: ModelContinuation,
 ) -> list[dict[str, object]]:
-    continuation = message.continuation
-    if continuation is None or (
-        continuation.provider != model.provider or continuation.protocol != model.protocol
-    ):
-        return default
     try:
         data = cast(FrozenJsonObject, continuation.data)
         if set(data) != {"version", "blocks"} or type(data["version"]) is not int or data["version"] != 1:
@@ -740,7 +755,9 @@ def _assistant_blocks(
                         and not isinstance(raw["signature"], str)
                     )
                     or (
-                        model.provider == "anthropic"
+                        provider_protocol_policy(
+                            continuation.provider, continuation.protocol
+                        ).requires_signed_thinking
                         and (
                             "signature" not in raw
                             or not cast(str, raw["signature"])

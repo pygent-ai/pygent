@@ -154,7 +154,9 @@ def test_gemini_parse_preserves_thought_signature_and_function_call() -> None:
     assert response.usage["reasoning_tokens"] == 1
     assert response.finish_reason == "tool_calls"
     assert response.message.continuation == ModelContinuation(
+        model_key="main",
         provider="google",
+        model_id="gemini-3.7-flash",
         protocol="gemini_generate_content",
         data={
             "version": 1,
@@ -200,9 +202,40 @@ def test_gemini_structured_output_rejects_schema_mismatch() -> None:
     assert raised.value.reason_code is ModelFailureReason.GENERATION_SCHEMA_INVALID
 
 
+def test_gemini_rejects_non_text_response_parts() -> None:
+    with pytest.raises(ModelProviderError) as raised:
+        GeminiGenerateContentAdapter().parse_response(
+            _request(),
+            freeze_json_object(
+                {
+                    "candidates": [
+                        {
+                            "content": {
+                                "role": "model",
+                                "parts": [
+                                    {
+                                        "inlineData": {
+                                            "mimeType": "image/png",
+                                            "data": "opaque",
+                                        }
+                                    }
+                                ],
+                            },
+                            "finishReason": "STOP",
+                        }
+                    ]
+                }
+            ),
+        )
+
+    assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
+
+
 def test_gemini_continuation_is_replayed_with_visible_assistant_text() -> None:
     continuation = ModelContinuation(
+        model_key="main",
         provider="google",
+        model_id="gemini-3.7-flash",
         protocol="gemini_generate_content",
         data={
             "version": 1,
@@ -227,7 +260,9 @@ def test_gemini_continuation_is_replayed_with_visible_assistant_text() -> None:
 
 def test_gemini_signed_function_call_is_replayed_exactly_once() -> None:
     continuation = ModelContinuation(
+        model_key="main",
         provider="google",
+        model_id="gemini-3.7-flash",
         protocol="gemini_generate_content",
         data={
             "version": 1,
@@ -265,7 +300,9 @@ def test_gemini_signed_function_call_is_replayed_exactly_once() -> None:
 
 def test_gemini_signed_continuation_must_match_assistant_message() -> None:
     continuation = ModelContinuation(
+        model_key="main",
         provider="google",
+        model_id="gemini-3.7-flash",
         protocol="gemini_generate_content",
         data={
             "version": 1,

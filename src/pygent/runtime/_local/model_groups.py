@@ -79,14 +79,16 @@ class ModelGroupHandle:
                     await self._runtime._ensure_model_store_open()
                     if invoker is not None:
                         validate_model = getattr(invoker, "validate_model", None)
-                        for model in prepared_group.models:
-                            if not model.spec.provider_options:
-                                continue
-                            if not callable(validate_model):
-                                raise ModelGroupConfigurationError(
-                                    "non-empty provider options require an invoker model validator"
-                                )
-                            validate_model(model)
+                        if callable(validate_model):
+                            for model in prepared_group.models:
+                                validate_model(model)
+                        elif any(
+                            model.spec.provider_options
+                            for model in prepared_group.models
+                        ):
+                            raise ModelGroupConfigurationError(
+                                "non-empty provider options require an invoker model validator"
+                            )
                     if resources is not None:
                         resolver = self._runtime._model_resource_resolvers.get(
                             resources.resolver_id

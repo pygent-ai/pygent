@@ -132,7 +132,7 @@ async def test_invoker_dispatches_by_protocol_and_falls_back_in_model_order() ->
     execution = invoker.execute(
         model_group=group,
         retry_policy=RetryPolicy(
-            max_attempts_per_route=1,
+            max_attempts_per_model=1,
             retry_on=(ModelErrorKind.UNAVAILABLE,),
             backoff=ExponentialBackoff(0, 0),
         ),
@@ -178,7 +178,7 @@ async def test_capability_warning_is_once_per_reached_model_not_retry() -> None:
     execution = invoker.execute(
         model_group=group,
         retry_policy=RetryPolicy(
-            max_attempts_per_route=2,
+            max_attempts_per_model=2,
             retry_on=(ModelErrorKind.UNAVAILABLE,),
             backoff=ExponentialBackoff(0, 0),
         ),

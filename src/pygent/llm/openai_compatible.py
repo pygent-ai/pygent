@@ -33,7 +33,9 @@ from ._adapter_contracts import (
     _canonical_usage,
     _normalized_finish_reason,
 )
+from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
+from ._provider_policies import provider_protocol_policy
 from .catalog import ModelCatalog, ModelInfo
 from .configuration import ModelSpec
 from .types import (
@@ -68,19 +70,6 @@ _OPENAI_RESERVED_PROVIDER_FIELDS = frozenset(
     }
 )
 _TOKEN_LIMIT_PROVIDER_FIELDS = frozenset({"max_tokens", "max_completion_tokens"})
-_ALIYUN_TOKEN_PLAN_PROVIDER_FIELDS = frozenset(
-    {
-        "enable_thinking",
-        "preserve_thinking",
-        "reasoning_effort",
-        "thinking",
-        "thinking_budget",
-        "tool_stream",
-    }
-)
-_ALIYUN_REASONING_EFFORTS = frozenset(
-    {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
-)
 _JSON_FENCE = re.compile(
     r"\A\s*```(?:json)?\s*(.*?)\s*```\s*\Z",
     flags=re.IGNORECASE | re.DOTALL,
@@ -157,39 +146,6 @@ def _validate_no_forbidden_option_keys(value: object) -> None:
             pending.extend(current)
 
 
-def _validate_aliyun_token_plan_options(options: FrozenJsonObject) -> None:
-    unknown = set(options) - _ALIYUN_TOKEN_PLAN_PROVIDER_FIELDS
-    if unknown:
-        raise ValueError(
-            "unknown Alibaba Token Plan provider options: "
-            + ", ".join(sorted(unknown))
-        )
-    for key in ("enable_thinking", "preserve_thinking", "tool_stream"):
-        if key in options and not isinstance(options[key], bool):
-            raise TypeError(f"provider option {key!r} must be a bool")
-    if (
-        "reasoning_effort" in options
-        and options["reasoning_effort"] not in _ALIYUN_REASONING_EFFORTS
-    ):
-        raise ValueError("provider option 'reasoning_effort' is not supported")
-    if "thinking" in options:
-        thinking = options["thinking"]
-        if not isinstance(thinking, FrozenJsonObject):
-            raise TypeError("provider option 'thinking' must be an object")
-        if set(thinking) != {"type"}:
-            raise ValueError("provider option 'thinking' accepts only the 'type' field")
-        if thinking["type"] not in ("adaptive", "disabled"):
-            raise ValueError(
-                "provider option 'thinking.type' must be 'adaptive' or 'disabled'"
-            )
-    if "thinking_budget" in options:
-        budget = options["thinking_budget"]
-        if not isinstance(budget, int) or isinstance(budget, bool) or budget < 0:
-            raise ValueError(
-                "provider option 'thinking_budget' must be a non-negative integer"
-            )
-
-
 def _validate_openai_provider_options(model: ModelSpec) -> None:
     options = cast(FrozenJsonObject, model.provider_options)
     conflicts = set(options) & _OPENAI_RESERVED_PROVIDER_FIELDS
@@ -209,20 +165,9 @@ def _validate_openai_provider_options(model: ModelSpec) -> None:
         value = options[key]
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"provider option {key!r} must be a positive integer")
-    if model.provider == "aliyun_token_plan":
-        _validate_aliyun_token_plan_options(options)
-        return
-    if model.provider != "deepseek" or "thinking" not in options:
-        return
-    thinking = options["thinking"]
-    if not isinstance(thinking, FrozenJsonObject):
-        raise TypeError("provider option 'thinking' must be an object")
-    if set(thinking) != {"type"}:
-        raise ValueError("provider option 'thinking' accepts only the 'type' field")
-    if thinking["type"] not in ("enabled", "disabled"):
-        raise ValueError(
-            "provider option 'thinking.type' must be 'enabled' or 'disabled'"
-        )
+    policy = provider_protocol_policy(model.provider, model.protocol)
+    if policy.validate_options is not None:
+        policy.validate_options(options)
 
 
 class OpenAICompatibleClient:
@@ -425,9 +370,21 @@ class OpenAICompatibleAdapter:
                 {"role": "system", "content": request.context.system_prompt}
             )
         for item in request.context.messages:
-            messages.extend(_encode_messages(item, wire_names, model=request.model))
+            messages.extend(
+                _encode_messages(
+                    item,
+                    wire_names,
+                    model=request.model,
+                    model_key=request.model_key,
+                )
+            )
         messages.extend(
-            _encode_messages(request.message, wire_names, model=request.model)
+            _encode_messages(
+                request.message,
+                wire_names,
+                model=request.model,
+                model_key=request.model_key,
+            )
         )
         body: dict[str, object] = {
             "model": request.model.model_id,
@@ -568,7 +525,9 @@ class OpenAICompatibleAdapter:
         continuation = None
         if isinstance(reasoning_content, str):
             continuation = ModelContinuation(
+                model_key=request.model_key,
                 provider=request.model.provider,
+                model_id=request.model.model_id,
                 protocol=self.protocol,
                 data={"version": 1, "reasoning_content": reasoning_content},
             )
@@ -760,7 +719,9 @@ class _OpenAIStreamDecoder:
             continuation = ModelProviderStreamPart(
                 "continuation",
                 {
+                    "model_key": self._request.model_key,
                     "provider": self._request.model.provider,
+                    "model_id": self._request.model.model_id,
                     "protocol": self._adapter.protocol,
                     "data": {
                         "version": 1,
@@ -904,6 +865,7 @@ def _encode_messages(
     wire_names: Mapping[str, str] | None = None,
     *,
     model: ModelSpec | None = None,
+    model_key: str | None = None,
 ) -> list[dict[str, object]]:
     if isinstance(message, ToolMessage) and message.results:
         encoded_results: list[dict[str, object]] = [
@@ -924,8 +886,12 @@ def _encode_messages(
         continuation = message.continuation
         if (
             continuation is not None
-            and continuation.provider == model.provider
-            and continuation.protocol == model.protocol
+            and model_key is not None
+            and continuation_matches(
+                continuation,
+                model_key=model_key,
+                model=model,
+            )
         ):
             data = cast(FrozenJsonObject, continuation.data)
             if (
@@ -986,11 +952,13 @@ def _decode_text_content(value: object) -> str:
             recognized = True
             continue
         if not isinstance(item, Mapping):
-            continue
+            raise TypeError("message content parts must be objects")
         text = item.get("text")
         if isinstance(text, str):
             parts.append(text)
             recognized = True
+            continue
+        raise TypeError("message content contains a non-text part")
     if value and not recognized:
         raise TypeError("message content parts contain no text")
     return "".join(parts)

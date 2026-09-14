@@ -425,6 +425,7 @@ def test_openai_reasoning_content_creates_provider_scoped_continuation(provider:
     )
     assert response.message.continuation == ModelContinuation(
         provider=provider,
+        model_id="reasoning-model",
         protocol="openai_chat_completions",
         data={"version": 1, "reasoning_content": "r"},
     )
@@ -457,7 +458,7 @@ Expected: FAIL because continuation creation, validation, and replay are gated o
 
 - [ ] **Step 3: Remove only the Provider whitelist checks**
 
-When a non-streamed message or streamed delta contains `reasoning_content`, validate and accumulate it regardless of Provider. Construct continuation with `request.model.provider`. In message encoding, replay a matching version-1 `reasoning_content` continuation for any Provider, while preserving the existing provider/protocol equality check and malformed-data rejection.
+When a non-streamed message or streamed delta contains `reasoning_content`, validate and accumulate it regardless of Provider. Construct continuation with `request.model.provider` and `request.model.model_id`. In message encoding, replay a matching version-1 `reasoning_content` continuation for any Provider, while preserving provider/model/protocol equality checks and malformed-data rejection.
 
 - [ ] **Step 4: Scan and run GREEN tests**
 

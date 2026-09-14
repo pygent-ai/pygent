@@ -372,7 +372,9 @@ def _message_value(
             None
             if value.continuation is None
             else {
+                "model_key": value.continuation.model_key,
                 "provider": value.continuation.provider,
+                "model_id": value.continuation.model_id,
                 "protocol": value.continuation.protocol,
                 "data": project(value.continuation.data),
             }
@@ -464,11 +466,13 @@ def message_from_dict(value: object) -> Message:
                 continuation_data = _object(raw_continuation, "Message.continuation")
                 _only(
                     continuation_data,
-                    {"provider", "protocol", "data"},
+                    {"model_key", "provider", "model_id", "protocol", "data"},
                     "Message.continuation",
                 )
                 continuation = ModelContinuation(
+                    model_key=continuation_data["model_key"],
                     provider=continuation_data["provider"],
+                    model_id=continuation_data["model_id"],
                     protocol=continuation_data["protocol"],
                     data=_object(
                         continuation_data["data"], "Message.continuation.data"

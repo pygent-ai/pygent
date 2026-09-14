@@ -4,7 +4,7 @@
 
 **Goal:** Add native Anthropic Messages support, DeepSeek OpenAI/Anthropic protocol selection, and lossless model continuation while preserving existing OpenAI Chat Completions behavior.
 
-**Architecture:** Provider identity, wire protocol, semantic model configuration, and connection resources remain separate. A private JSON/SSE transport is shared by composition, while each protocol owns a per-call stateful stream decoder. `AIMessage` carries a provider/protocol-scoped opaque continuation through the existing portable-message and durable-execution paths.
+**Architecture:** Provider identity, wire protocol, semantic model configuration, and connection resources remain separate. A private JSON/SSE transport is shared by composition, while each protocol owns a per-call stateful stream decoder. `AIMessage` carries a provider/model/protocol-scoped opaque continuation through the existing portable-message and durable-execution paths.
 
 **Tech Stack:** Python 3.11 dataclasses and protocols, asyncio, httpx, native HTTP extension, JSON/SSE, jsonschema, pytest, Ruff, mypy, Maturin.
 
@@ -188,6 +188,7 @@ Cover defensive freezing, equality, repr redaction, wire round-trip, effect roun
 ```python
 continuation = ModelContinuation(
     provider="deepseek",
+    model_id="deepseek-reasoner",
     protocol="openai_chat_completions",
     data={"version": 1, "reasoning_content": "private-reasoning"},
 )
@@ -217,11 +218,13 @@ Add:
 @dataclass(frozen=True, slots=True)
 class ModelContinuation:
     provider: str
+    model_id: str
     protocol: str
     data: JsonObjectInput = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.provider, "continuation provider")
+        _require_non_empty_string(self.model_id, "continuation model_id")
         _require_non_empty_string(self.protocol, "continuation protocol")
         object.__setattr__(self, "data", freeze_json_object(self.data))
 ```
@@ -235,16 +238,17 @@ Use one strict shape everywhere:
 ```python
 {
     "provider": continuation.provider,
+    "model_id": continuation.model_id,
     "protocol": continuation.protocol,
     "data": thaw_json(continuation.data),
 }
 ```
 
-Always write `continuation` on assistant messages. Update runtime decode, context projection, model effect request, and effect replay to require either `null` or the exact three-field object.
+Always write `continuation` on assistant messages. Update runtime decode, context projection, model effect request, and effect replay to require either `null` or the exact four-field object.
 
 - [ ] **Step 5: Add digest-only request snapshots**
 
-Canonicalize `{provider, protocol, data}` with sorted compact JSON and SHA-256. Add only `continuation_digest` to AI-message projections; never include raw data.
+Canonicalize `{provider, model_id, protocol, data}` with sorted compact JSON and SHA-256. Add only `continuation_digest` to AI-message projections; never include raw data.
 
 - [ ] **Step 6: Run focused tests**
 
@@ -303,7 +307,7 @@ class ModelProviderAdapter(Protocol):
     def create_stream_decoder(self, request: ModelProviderRequest) -> ModelProviderStreamDecoder: ...
 ```
 
-Remove `parse_stream_events()` from the SPI. Add `CONTINUATION = "continuation"` to `ModelProviderStreamKind`. A continuation part contains exactly `provider`, `protocol`, and `data`; it is an internal reduction item, not a `ModelEventKind`.
+Remove `parse_stream_events()` from the SPI. Add `CONTINUATION = "continuation"` to `ModelProviderStreamKind`. A continuation part contains exactly `provider`, `model_id`, `protocol`, and `data`; it is an internal reduction item, not a `ModelEventKind`.
 
 - [ ] **Step 4: Drive one decoder per attempt in the invoker**
 
@@ -403,12 +407,13 @@ Use `provider="deepseek"` responses containing `reasoning_content`. Verify the r
 ```python
 ModelContinuation(
     provider="deepseek",
+    model_id="deepseek-reasoner",
     protocol="openai_chat_completions",
     data={"version": 1, "reasoning_content": "reasoning"},
 )
 ```
 
-Verify a subsequent assistant tool-call message sends the exact `reasoning_content`; malformed matching continuation fails before client I/O; a continuation with another provider or protocol is omitted; official OpenAI models never fabricate this continuation.
+Verify a subsequent assistant tool-call message sends the exact `reasoning_content`; malformed matching continuation fails before client I/O; a continuation with another provider, model ID, or protocol is omitted; official OpenAI models never fabricate this continuation.
 
 - [ ] **Step 2: Run focused tests and confirm failure**
 
@@ -534,7 +539,7 @@ Maintain indexed block state inside the decoder, emit public reasoning/text/tool
 
 - [ ] **Step 5: Implement continuation replay**
 
-For matching provider/protocol only, validate version 1 and rebuild the prior assistant blocks by slicing `AIMessage.content`, indexing `AIMessage.tool_calls`, and inserting stored thinking/redacted blocks unchanged. Reject modified, missing, overlapping, duplicate, or out-of-range references before I/O.
+For matching provider/model ID/protocol only, validate version 1 and rebuild the prior assistant blocks by slicing `AIMessage.content`, indexing `AIMessage.tool_calls`, and inserting stored thinking/redacted blocks unchanged. Reject modified, missing, overlapping, duplicate, or out-of-range references before I/O.
 
 - [ ] **Step 6: Verify agent tool loops**
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from pygent import (
@@ -109,7 +111,9 @@ def test_historical_message_usage_does_not_change_the_request_snapshot() -> None
 
 def test_snapshot_projects_only_a_digest_of_model_continuation() -> None:
     continuation = ModelContinuation(
+        model_key="main",
         provider="deepseek",
+        model_id="deepseek-reasoner",
         protocol="anthropic_messages",
         data={"thinking": [{"signature": "secret-signature"}]},
     )
@@ -136,6 +140,32 @@ def test_prepared_request_preserves_content_above_one_mib() -> None:
     prepared = prepared_request_event(request(content=content), attempt=1)
     event = ModelStreamEvent("model.request.prepared", prepared)
     assert event.data["request"]["current_message"]["content"] == content
+
+
+def test_continuation_producer_changes_request_digest() -> None:
+    continuation = ModelContinuation(
+        model_key="primary",
+        provider="openai",
+        model_id="model-1",
+        protocol="openai_chat_completions",
+        data={"version": 1, "reasoning_content": "private"},
+    )
+    original = request()
+    first = replace(
+        original,
+        context=Context(messages=(AIMessage(continuation=continuation),)),
+    )
+    second = replace(
+        original,
+        context=Context(
+            messages=(
+                AIMessage(continuation=replace(continuation, model_key="secondary")),
+            )
+        ),
+    )
+    assert prepared_request_event(first, attempt=1)["request_digest"] != (
+        prepared_request_event(second, attempt=1)["request_digest"]
+    )
 
 
 @pytest.mark.asyncio
@@ -169,7 +199,7 @@ async def test_large_snapshot_reaches_provider_io() -> None:
             "snapshot-limit",
             (model_entry("primary", "openai", "model-1"),),
         ),
-        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=UserMessage(
             content=content

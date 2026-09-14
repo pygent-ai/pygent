@@ -247,7 +247,9 @@ provider_options={
 
 ## Provider continuation
 
-任意 OpenAI Chat Completions Provider 的响应实际返回合法 `reasoning_content` 时，以及 Anthropic Messages 返回 thinking block 时，Adapter 会将其规范化为 `AIMessage.continuation`。Anthropic 官方 block 必须有 signature；Anthropic-compatible Provider 的无 signature block 会保持无 signature。ReAct 工具循环会把它原样回传给 Provider 与 protocol 同时匹配的后续请求；不匹配时忽略。Continuation 会随 Message 经过 Worker、effect 与 SQLite 持久化，但不会出现在 `repr`、公开模型事件或 prepared-request snapshot 中。应用通常不需要读取或修改它。
+任意 OpenAI Chat Completions Provider 的响应实际返回合法 `reasoning_content` 时，以及 Anthropic Messages 返回 thinking block 时，Adapter 会将其规范化为 `AIMessage.continuation`，并记录实际生产它的 `model_key`。Anthropic 官方 block 必须有 signature；Anthropic-compatible Provider 的无 signature block 会保持无 signature。ReAct 工具循环会把它原样回传给 `model_key`、Provider、model ID 与 protocol 都匹配的后续请求。工具结果返回后，模型组先尝试原生产模型；fallback 保留 assistant tool call 和 tool result，只移除不属于它的私有 continuation。Continuation 会随 Message 经过 Worker、effect 与 SQLite 持久化；其原始 `data` 不会出现在 `repr`、公开模型事件或 prepared-request snapshot 中，snapshot 只保留摘要。应用通常不需要读取或修改它。
+
+当前 `ModelCallLayer` 返回文本与 ToolCall。内置文本 Adapter 遇到图片、音频、视频或 embedding 返回部件会明确拒绝；能力目录中的这些输出类型用于配置与专用 Adapter，不会被文本 Adapter 静默转换为空文本。
 
 ## 能力警告与事件
 

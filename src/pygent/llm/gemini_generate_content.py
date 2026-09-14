@@ -27,6 +27,7 @@ from ._adapter_contracts import (
     ModelProviderResponse,
     ModelProviderStreamPart,
 )
+from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
 from .configuration import ModelSpec
 from .types import (
@@ -158,7 +159,7 @@ class GeminiGenerateContentAdapter:
             self.validate_model(request.model)
             body: dict[str, object] = {
                 "contents": [
-                    _content(message, request.model)
+                    _content(message, request.model, request.model_key)
                     for message in (*request.context.messages, request.message)
                 ]
             }
@@ -234,7 +235,9 @@ class GeminiGenerateContentAdapter:
             ) from exc
         continuation = (
             ModelContinuation(
+                model_key=request.model_key,
                 provider=request.model.provider,
+                model_id=request.model.model_id,
                 protocol=self.protocol,
                 data={"version": 1, "parts": continuation_parts},
             )
@@ -339,7 +342,9 @@ class _GeminiStreamDecoder:
                         ModelProviderStreamPart(
                             "continuation",
                             {
+                                "model_key": self._request.model_key,
                                 "provider": self._request.model.provider,
+                                "model_id": self._request.model.model_id,
                                 "protocol": _PROTOCOL,
                                 "data": {
                                     "version": 1,
@@ -374,7 +379,9 @@ class _GeminiStreamDecoder:
         return ()
 
 
-def _content(message: Message, model: ModelSpec) -> dict[str, object]:
+def _content(
+    message: Message, model: ModelSpec, model_key: str
+) -> dict[str, object]:
     role = "model" if isinstance(message, AIMessage) else "user"
     if isinstance(message, ToolMessage):
         return {
@@ -384,9 +391,10 @@ def _content(message: Message, model: ModelSpec) -> dict[str, object]:
     parts: list[dict[str, object]] = []
     if isinstance(message, AIMessage):
         continuation = message.continuation
-        if continuation is not None and (
-            continuation.provider == model.provider
-            and continuation.protocol == model.protocol
+        if continuation is not None and continuation_matches(
+            continuation,
+            model_key=model_key,
+            model=model,
         ):
             parts = _continuation_parts(continuation)
             replay_text, replay_calls, _ = _decode_parts(parts)
@@ -507,6 +515,8 @@ def _decode_parts(
                     arguments=arguments,
                 )
             )
+        else:
+            raise TypeError
     continuation = originals if has_thought_signature else []
     return "".join(text), tuple(calls), continuation
 

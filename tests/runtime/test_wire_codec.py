@@ -61,7 +61,9 @@ def test_message_and_context_wire_round_trip_all_public_variants():
             tool_calls=(call,),
             usage={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
             continuation=ModelContinuation(
+                model_key="main",
                 provider="deepseek",
+                model_id="deepseek-reasoner",
                 protocol="anthropic_messages",
                 data={"thinking": [{"signature": "opaque"}]},
             ),
@@ -105,6 +107,26 @@ def test_assistant_wire_requires_explicit_continuation() -> None:
     value = message_to_dict(AIMessage(content="answer"))
     assert value["continuation"] is None
     value.pop("continuation")
+
+    with pytest.raises(WireCodecError, match="invalid Message"):
+        message_from_dict(value)
+
+
+def test_assistant_wire_rejects_continuation_without_model_identity() -> None:
+    value = message_to_dict(
+        AIMessage(
+            content="answer",
+            continuation=ModelContinuation(
+                model_key="main",
+                provider="deepseek",
+                model_id="deepseek-reasoner",
+                protocol="openai_chat_completions",
+            ),
+        )
+    )
+    continuation = value["continuation"]
+    assert isinstance(continuation, dict)
+    continuation.pop("model_id")
 
     with pytest.raises(WireCodecError, match="invalid Message"):
         message_from_dict(value)

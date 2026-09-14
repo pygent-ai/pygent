@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from typing import Any, cast
 
 from pygent.core import (
@@ -31,6 +31,11 @@ from ._adapter_contracts import (
     _usage_event_payload,
     _validated_canonical_usage,
 )
+from ._continuation import (
+    continuation_matches,
+    neutral_tool_context,
+    pending_tool_continuation,
+)
 from ._model_execution import ModelExecution, _ProviderStreamOwner
 from ._request_snapshot import prepared_request_event
 from ._stream_accumulator import ModelStreamAccumulator
@@ -49,8 +54,41 @@ from .types import (
 _CANCELLATION_CLEANUP_GRACE_SECONDS = 1.0
 
 
+def _model_attempt_plans(
+    model_group: ModelGroup,
+    message: Message,
+    context: Context,
+) -> Iterator[tuple[ModelEntry, Context]]:
+    pending = pending_tool_continuation(message, context)
+    if pending is None:
+        yield from ((entry, context) for entry in model_group.models)
+        return
+
+    producer = next(
+        (
+            entry
+            for entry in model_group.models
+            if continuation_matches(
+                pending.continuation,
+                model_key=entry.name,
+                model=entry.spec,
+            )
+        ),
+        None,
+    )
+    if producer is not None:
+        yield producer, context
+    neutral_context = None
+    for entry in model_group.models:
+        if producer is not None and entry.name == producer.name:
+            continue
+        if neutral_context is None:
+            neutral_context = neutral_tool_context(context, pending)
+        yield entry, neutral_context
+
+
 class DefaultModelInvoker:
-    """Bounded model executor with deterministic route/retry/fallback order."""
+    """Bounded model executor with deterministic model/retry/fallback order."""
 
     def __init__(
         self,
@@ -60,6 +98,15 @@ class DefaultModelInvoker:
     ) -> None:
         self._adapters = dict(adapters)
         self._clients = dict(clients)
+        for protocol, adapter in self._adapters.items():
+            if not isinstance(protocol, str) or not protocol:
+                raise ValueError("adapter protocol keys must be non-empty strings")
+            if getattr(adapter, "protocol", None) != protocol:
+                raise ValueError(
+                    f"adapter registered for {protocol!r} declares a different protocol"
+                )
+        if any(not isinstance(model_key, str) or not model_key for model_key in self._clients):
+            raise ValueError("client model keys must be non-empty strings")
         self._quarantined_tasks: dict[int, set[asyncio.Future[Any]]] = {}
         self._active_executions: set[asyncio.Task[Any]] = set()
         self._stream_owner_tasks: set[asyncio.Task[None]] = set()
@@ -279,7 +326,8 @@ class DefaultModelInvoker:
         _validate_deadline(deadline)
         attempts: list[ModelAttempt] = []
         last_kind = ModelErrorKind.UNKNOWN
-        for model_index, entry in enumerate(model_group.models):
+        model_plans = _model_attempt_plans(model_group, message, context)
+        for model_index, (entry, model_context) in enumerate(model_plans):
             model_key = entry.name
             model = entry.spec
             adapter, client = self._resolve(entry)
@@ -304,12 +352,12 @@ class DefaultModelInvoker:
                 model_key=model_key,
                 model=model,
                 message=message,
-                context=context,
+                context=model_context,
                 generation=generation,
                 tools=tuple(tools),
             )
             payload = adapter.build_request(request)
-            for number in range(1, retry_policy.max_attempts_per_route + 1):
+            for number in range(1, retry_policy.max_attempts_per_model + 1):
                 prepared_event = prepared_request_event(request, attempt=number)
                 emitted = False
                 completed = False
@@ -415,9 +463,11 @@ class DefaultModelInvoker:
                     can_retry = (
                         has_budget
                         and kind in retry_policy.retry_on
-                        and number < retry_policy.max_attempts_per_route
+                        and number < retry_policy.max_attempts_per_model
                     )
-                    can_fallback = has_budget and model_index + 1 < len(model_group.models)
+                    can_fallback = (
+                        has_budget and model_index + 1 < len(model_group.models)
+                    )
                     retryable_partial = (
                         emitted
                         and reason_code
@@ -518,7 +568,9 @@ class DefaultModelInvoker:
                 yield ModelProviderStreamPart(
                     "continuation",
                     {
+                        "model_key": continuation.model_key,
                         "provider": continuation.provider,
+                        "model_id": continuation.model_id,
                         "protocol": continuation.protocol,
                         "data": continuation.data,
                     },

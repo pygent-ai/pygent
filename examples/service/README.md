@@ -2,7 +2,7 @@
 
 This application-owned example composes the Pygent 0.2 SDK and executes real managed `invoke()` and `stream()` flows with an offline deterministic model boundary.
 
-- `models.py` owns model routes, retry policy, generation config, and tool projection.
+- `models.py` owns model entries/groups, retry policy, generation config, and tool projection.
 - `tools.py` owns portable tool declarations, application authorization, and executor wiring.
 - `agents.py` composes ReAct and review Modules. ReAct commits the draft; the Coordinator appends the reviewed answer without deleting it.
 - `app.py` owns Runtime binding, finite deadlines, invoke/stream mapping, and commit timing.

@@ -193,7 +193,9 @@ def test_anthropic_non_stream_response_decodes_blocks_usage_and_continuation() -
     assert response.provider_request_id == "msg-1"
     assert response.finish_reason == "tool_calls"
     assert response.message.continuation == ModelContinuation(
+        model_key="main",
         provider="anthropic",
+        model_id="claude-opus-5",
         protocol="anthropic_messages",
         data={
             "version": 1,

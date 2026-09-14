@@ -185,7 +185,7 @@ async def _validate_worker_model_admission(
         raise WorkerRemoteError(
             _worker_failure(
                 "capability_mismatch",
-                "model route provider options require "
+                "model provider options require "
                 + MODEL_PROVIDER_OPTIONS_CAPABILITY,
             )
         )

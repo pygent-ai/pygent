@@ -358,7 +358,7 @@ async def test_fallback_models_receive_only_their_own_provider_options() -> None
     )
     response = await invoker.execute(
         model_group=model_group("fallback", models, ("primary", "fallback")),
-        retry_policy=RetryPolicy(max_attempts_per_route=1),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=UserMessage(content="hello"),
         context=Context(),
