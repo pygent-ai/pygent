@@ -14,6 +14,7 @@ from pygent.core import (
     RemoteModule,
     ToolMessage,
     UserMessage,
+    independent_execution,
 )
 from pygent.runtime import (
     CapacityPolicy,
@@ -68,22 +69,24 @@ class RemoteCaller(Module[UserMessage, AIMessage]):
         return await self.target(message, context)
 
 
-def _capacity(*, queue: int = 2, live: int = 1) -> ExecutionCapacityPolicy:
+def _capacity(
+    *, queue: int = 2, live: int = 1, max_child_depth: int = 4
+) -> ExecutionCapacityPolicy:
     return ExecutionCapacityPolicy(
         scope=CapacityScope.RUNTIME_INSTANCE,
         max_live_executions=live,
         max_runnable_executions=1,
         max_queue_size=queue,
         max_waiters=2,
-        max_child_depth=4,
+        max_child_depth=max_child_depth,
         max_children_per_execution=8,
     )
 
 
-def _binding(runtime: LocalRuntime, *, queue: int = 2):
+def _binding(runtime: LocalRuntime, *, queue: int = 2, max_child_depth: int = 4):
     return runtime.create_binding(
         name="test",
-        execution_capacity=_capacity(queue=queue),
+        execution_capacity=_capacity(queue=queue, max_child_depth=max_child_depth),
         model_capacity=CapacityPolicy.passthrough(),
         tool_capacity=CapacityPolicy.passthrough(),
     )
@@ -112,6 +115,41 @@ async def test_invoke_stream_and_run_handle_share_result_and_event_source():
     ]
     assert [event.sequence for event in events] == list(range(7))
     await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_independent_execution_does_not_inherit_managed_module_stack():
+    class IndependentLauncher(Module[UserMessage, AIMessage]):
+        def __init__(self, target) -> None:
+            super().__init__()
+            self.target = target
+
+        async def forward(self, message, context):
+            with independent_execution():
+                task = asyncio.create_task(self.target.invoke(message, context))
+            return await task
+
+    class NestedParent(Module[UserMessage, AIMessage]):
+        def __init__(self, launcher: IndependentLauncher) -> None:
+            super().__init__()
+            self.launcher = launcher
+
+        async def forward(self, message, context):
+            return await self.launcher(message, context)
+
+    parent_runtime = LocalRuntime()
+    target_runtime = LocalRuntime()
+    target = _binding(target_runtime, max_child_depth=1).bind(Echo())
+    bound = _binding(parent_runtime, max_child_depth=1).bind(
+        NestedParent(IndependentLauncher(target))
+    )
+    try:
+        result = await bound.invoke(UserMessage(content="independent"), Context())
+    finally:
+        await parent_runtime.close()
+        await target_runtime.close()
+
+    assert result[0].content == "INDEPENDENT"
 
 
 @pytest.mark.asyncio

@@ -47,7 +47,7 @@ from .capacity import _ExecutionCapacityState
 from .handles import _DurableExecutionHandle, _LocalBoundModule, _LocalExecutionHandle
 from .policies import _apply_binding_policy, _finite_deadline_requirement
 from .scope import _ManagedScope
-from .state import _execution_frame, _ExecutionFrame, _ExecutionRecord
+from .state import _execution_frame, _ExecutionFrame, _ExecutionRecord, _module_stack
 
 InputMessageT = TypeVar("InputMessageT", bound=Message)
 OutputMessageT = TypeVar("OutputMessageT", bound=Message)
@@ -448,12 +448,14 @@ class _LifecycleMixin:
             model_admission=record.model_admission,
         )
         frame_token = _execution_frame.set(root_frame)
+        stack_token = _module_stack.set(())
         try:
             return await self._await_with_deadline(
                 record, scope.invoke_module(bound.module, message, context)
             )
         finally:
             record.runnable_held = root_frame.runnable_held
+            _module_stack.reset(stack_token)
             _execution_frame.reset(frame_token)
             _execution_scope.reset(token)
 
