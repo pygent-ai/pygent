@@ -357,6 +357,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
                         or f"detached:{context.task_id or call.call_id}",
                         task_id=context.task_id,
                         recovery=context.recovery,
+                        publish_output=context.publish_output,
                     )
                     return await registry.execute(spec, call, managed_context)
                 finally:

@@ -413,6 +413,12 @@ class _DirectExecutionScope:
     async def submit_tool_task(self, spec: Any, call: Any) -> None:
         return None
 
+    def resolve_tool_task_manager(self) -> None:
+        return None
+
+    async def wait_tool_task(self, task_id: str, timeout: float) -> None:
+        raise DirectExecutionError("direct task waits use the caller's task facility")
+
     def resolve_model_invoker(self, model_group: str) -> object:
         raise DirectExecutionError(
             "ModelCallLayer has no local ModelInvoker for direct execution"

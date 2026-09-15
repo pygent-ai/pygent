@@ -8,7 +8,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 from pygent.core import (
     CapacityPermit,
@@ -637,6 +637,30 @@ class _ManagedScope(ExecutionScope):
         occurrence = frame.module_occurrence if frame is not None else 0
         return f"{self.record.execution_id}:{module_path}:{occurrence}:{call_id}"
 
+    def resolve_tool_task_manager(self) -> object | None:
+        frame = _execution_frame.get()
+        return None if frame is None else frame.runtime._tool_tasks
+
+    async def wait_tool_task(self, task_id: str, timeout: float) -> object | None:
+        from pygent.tool.executors import ToolTaskManager
+        from pygent.tool.task_handle import ToolTaskHandle
+
+        manager = self.resolve_tool_task_manager()
+        if manager is None:
+            raise RuntimeError("this Runtime has no ToolTaskManager")
+        frame = _execution_frame.get()
+        if frame is None:
+            raise RuntimeError("managed task wait has no execution frame")
+        held = frame.runnable_held
+        if held:
+            self._release_runnable(frame)
+        try:
+            return await ToolTaskHandle(cast(ToolTaskManager, manager), task_id).wait(timeout)
+        finally:
+            current = asyncio.current_task()
+            if held and (current is None or current.cancelling() == 0):
+                await self._resume_runnable(frame)
+
     async def submit_tool_task(self, spec: ToolSpec, call: ToolCall) -> ToolTaskAdmission:
         """Submit a detached ToolTask through the active deployment Runtime."""
 
@@ -655,7 +679,8 @@ class _ManagedScope(ExecutionScope):
         try:
             executor = registry.resolve(spec.tool_id, spec.version)
             support = validate_executor_sandbox(
-                spec, executor, durable=self.record.history is not None
+                spec, executor,
+                durable=self.record.history is not None and spec.wait_timeout is None,
             )
         except ToolExecutionError as exc:
             return ToolTaskAdmission(
@@ -730,7 +755,12 @@ class _ManagedScope(ExecutionScope):
             )
         else:
             task = await manager.prepare(spec, call, execution=execute)
-        self.record.deferred_tool_tasks.append((manager, task.task_id))
+        if spec.wait_timeout is not None:
+            # Independent work must start before the Parent observes it. Its
+            # execution context is cleared by ToolCallLayer's admission scope.
+            await manager.start(task.task_id)
+        else:
+            self.record.deferred_tool_tasks.append((manager, task.task_id))
         return ToolTaskAdmission(task=task)
 
     @asynccontextmanager

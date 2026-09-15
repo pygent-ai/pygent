@@ -45,6 +45,14 @@ The successful attempt's available canonical counters are also frozen onto the r
 
 `ToolRunner.execute(...) -> ToolExecution` is the only tool-operation owner. It owns timeout, cancellation, executor failure normalization, output freezing, and `ToolResult`. `ToolCallLayer` continues to own visibility, schema validation, authorization, detach choice, and batch ordering. Executors receive `ToolExecutionContext` with the effective deadline and event emitter.
 
+`ToolSpec.wait_timeout` is an assembly-time observation policy for independently admitted tasks. Authorization must select `lifecycle="detach"`; the policy cannot grant that lifecycle. Admission happens once. Completion within the wait returns the final result; expiry returns `status="detached"`, the same task identity, and captured output. Unconfigured detach returns immediately. Parent waiting releases and restores its runnable lease; the independent operation retains its tool resources. A Parent deadline bounds observation, while applicable task execution budgets still bound the operation. Waiting expiry and observer cancellation do not cancel the independent task, reset its budget, or send its later terminal events to a completed Parent stream.
+
+Bash declares `wait_timeout=600` and no execution timeout. Its model signature has no per-call timeout. Native `BashTools` uses an explicitly supplied task manager or owns an automatically created local manager; it returns a string on completion and `ToolTaskHandle` on wait expiry or explicit background submission. Model adaptation converts this exact handle to a portable detached result before output validation and serialization. Managed calls execute the process under the existing ToolRunner context, without creating another task owner. Synchronous authorization retains synchronous execution.
+
+`ToolExecutionContext.publish_output` publishes bounded immutable output snapshots through the owner. Task queries and stop requests use the same manager; trusted `task_control` adapters remain subject to authorization and Execution capacity but do not acquire a tool permit that the target task may hold. Stopping requests owner cancellation, and an uncertain side effect remains uncertain after cleanup. Bash process-tree cleanup is bounded and retains ownership through startup and pipe closure.
+
+Persisted task records support querying state, saved output, and final results after restart. Owner lease loss marks unconfirmed work unknown without replaying or taking control of a process. This observation contract does not claim durable process recovery or turn a local Bash executor into a reconnect-capable sandbox adapter.
+
 Managed effects return `EffectOutcome(value, disposition, effect_id, attempt)`. `disposition` is `executed`, `replayed`, or `retried`. Replay returns the committed value and emits an effect replay event; it never fabricates provider/tool deltas or counts usage again.
 
 ## Contract boundary

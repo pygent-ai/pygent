@@ -442,14 +442,47 @@ class ParallelPipeline(Module[UserMessage, AIMessage]):
 - 结构化 Child 不提供 `detached=True`；
 - 普通工具或 Agent-backed Tool 的 detach 通过独立 ToolTask admission 完成，需要 durable recovery 时由独立 Job 承载该 ToolTask；它不是 Child 选项，Parent 只获得稳定引用，新任务仍受 Binding 与资源治理。
 
-Tool detach 的稳定语义如下：生命周期由应用或自定义授权 Module 选择，模型不能自行提升；Runtime 独立 admission 后，ToolCallLayer 立即返回带不可变 ToolTask 快照的 detached ToolResult。Parent 只保留该快照，并使用稳定 `task_id` 查询、取消或取得终态：
+Tool detach 的稳定语义如下：生命周期由应用或自定义授权 Module 选择，模型不能自行提升；Runtime 独立 admission 后，未配置 `ToolSpec.wait_timeout` 时立即返回 detached ToolResult；配置有限等待时，期限内完成返回最终 ToolResult，否则返回带不可变 ToolTask 快照和当前输出的 detached ToolResult。等待到期不取消独立任务，观察者取消也不转移执行 owner。Parent 只保留该快照，并使用稳定 `task_id` 查询、取消或取得终态：
 
 ```python
 task = detached_result.task
 snapshot = await runtime.get_tool_task(task.task_id)
+output = await runtime.get_tool_output(task.task_id)
 await runtime.cancel_tool_task(task.task_id)
 final_result = await runtime.get_tool_result(task.task_id)
 ```
+
+Bash 的 `wait_timeout` 默认 600 秒，由 `BashTools(timeout=...)` 的 `.toolkit` 或 `ToolKit(..., wait_timeouts={"bash": ...})` 装配。模型调用只在授权 `lifecycle="detach"` 后使用该等待策略；同步授权保持同步执行，`is_background=True` 不授予独立生命周期。有限等待期间 Parent 释放 runnable lease，独立工具仍持有相应工具资源。模型工具 `tool_task_get(task_id)`、`tool_task_stop(task_id)` 使用同一 Runtime 任务设施；其他 Agent 可持稳定引用访问，访问仍经应用授权。控制工具的受信 adapter 标记允许其在 Execution 容量下执行而不争用 Bash 占用的工具 permit。
+
+### Bash 任务记录与重启查询
+
+`DurableToolTaskManager(history, registry)` 在已有 SQLite history 中保存任务状态、当前输出和最终结果。部署应将同一 history 传给 Runtime，并显式 `runtime.attach_tool_task_manager(manager)`。记录查询不要求恢复 Binding、重新执行命令或重新连接 Bash 进程：
+
+```python
+from pygent.runtime import DurableToolTaskManager, LocalRuntime, SQLiteHistoryStore
+from pygent.tool import ExecutorRegistry
+
+
+async def read_saved_task(database_path, task_id):
+    history = await SQLiteHistoryStore(database_path).open()
+    runtime = LocalRuntime(history=history)
+    runtime.attach_tool_task_manager(
+        DurableToolTaskManager(history, ExecutorRegistry())
+    )
+    try:
+        return {
+            "task": await runtime.get_tool_task(task_id),
+            "output": await runtime.get_tool_output(task_id),
+            "result": await runtime.get_tool_result(task_id, wait=False),
+        }
+    finally:
+        await runtime.close()
+        await history.close()
+```
+
+此例返回 Python SDK 值；模型控制工具会将其转换成严格 JSON。正常关闭会取消、清理并保存所属任务结果，之后仍可按原 task_id 查询。异常退出后，当前实现使用约 30 秒的 owner 观察租约（每约 10 秒续期）；租约失效后查询将没有确认终态的记录标为 `unknown`，保留已提交输出。`unknown` 不证明旧进程已停止，查询不会重放或接管命令。旧 owner 无法继续覆盖失效租约后的记录。存储中的终态结果保持可查；未持久化的输出不承诺恢复。
+
+普通任务的持久记录与下面的 durable Job 恢复能力是两项独立契约。Bash 的本机进程 adapter 不提供重启后的进程重连或控制转移；仅希望重启查询时不应把它声明为支持 durable reconnect。
 
 普通工具与 Agent-backed Tool 共享同一公开契约。Agent-backed Tool 在 detach admission 成功后不再是结构化 Child。需要故障后重新获得时，Runtime 必须由独立 Job 承载 ToolTask；不满足必需 durable task capability 时必须拒绝 detach。
 

@@ -21,7 +21,7 @@ def test_tool_sdk_pins_the_minimal_external_sandbox_adapter() -> None:
     assert "SandboxExecutorSupport(" in sdk
     assert "runtime.register_tool(spec, E2BWorkspaceExecutor(e2b_sandboxes))" in sdk
     assert "参考实现已经提供 `SandboxExecutorSupport`" in sdk
-    assert "只有真正申请 durable detach 时才要求" in sdk
+    assert "只有真正申请可恢复的 durable Job detach 时才要求" in sdk
     assert "ToolSpec 不得为 Runtime 自动授予 `tool.sandbox.<profile>`" in sdk
     assert "error_code: missing_sandbox_capability" in sdk
     assert "并发调用不依赖全局“当前沙箱”" in sdk

@@ -33,6 +33,7 @@ class ToolSpec:
     side_effect: ToolSideEffect = ToolSideEffect.PURE
     idempotency: IdempotencyPolicy = IdempotencyPolicy.INHERENT
     timeout: float | None = None
+    wait_timeout: float | None = None
     resource_key: str | None = None
     sandbox_profile: str | None = None
     required_permissions: tuple[str, ...] = ()
@@ -60,6 +61,13 @@ class ToolSpec:
             value = getattr(self, name)
             if value is not None:
                 _non_empty(value, name)
+        if self.wait_timeout is not None and (
+            isinstance(self.wait_timeout, bool)
+            or not isinstance(self.wait_timeout, (int, float))
+            or not math.isfinite(self.wait_timeout)
+            or self.wait_timeout < 0
+        ):
+            raise ValueError("tool wait_timeout must be finite and non-negative")
         permissions = tuple(self.required_permissions)
         if any(not isinstance(item, str) or not item for item in permissions):
             raise ValueError("required_permissions must contain non-empty strings")

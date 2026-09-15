@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import aiosqlite
 
+from pygent.core import JsonValue
+
 from ._history_ownership import validate_writers, write_authority
 from ._history_types import (
     HistoryConflictError,
@@ -25,6 +27,90 @@ class JobHistoryMixin:
 
         def _db(self) -> aiosqlite.Connection: ...
 
+    async def _validate_tool_owner(self, task_id: str, owner_id: str | None) -> None:
+        if owner_id is None:
+            return
+        cursor = await self._db().execute(
+            "SELECT owner_id FROM tool_task_observations WHERE task_id=?", (task_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None or row[0] != owner_id:
+            raise HistoryConflictError("tool task writer no longer owns its observation lease")
+
+    @_serialized_access
+    async def admit_tool_observation(
+        self, task_id: str, owner_id: str, lease_ttl: float, *, replace_owner: bool = False
+    ) -> bool:
+        """Acquire a new observation or atomically take over an expired owner."""
+        db = self._db()
+        try:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO tool_task_observations(task_id,owner_id,expires_at) "
+                "VALUES(?,?,unixepoch('subsec')+?) " + (
+                    "ON CONFLICT(task_id) DO UPDATE SET "
+                    "owner_id=excluded.owner_id,expires_at=excluded.expires_at "
+                    "WHERE tool_task_observations.owner_id=excluded.owner_id "
+                    "OR tool_task_observations.expires_at<=unixepoch('subsec')"
+                    if replace_owner else ""
+                ), (task_id, owner_id, lease_ttl),
+            )
+            acquired = cursor.rowcount == 1
+            await db.commit()
+            return acquired
+        except BaseException:
+            await db.rollback()
+            raise
+
+    @_serialized_access
+    async def renew_tool_observations(self, owner_id: str, lease_ttl: float) -> None:
+        await self._db().execute(
+            "UPDATE tool_task_observations SET expires_at=unixepoch('subsec')+? WHERE owner_id=?",
+            (lease_ttl, owner_id),
+        )
+        await self._db().commit()
+
+    @_serialized_access
+    async def put_tool_output(self, task_id: str, owner_id: str, output: object) -> None:
+        cursor = await self._db().execute(
+            "UPDATE tool_task_observations SET output_json=? WHERE task_id=? AND owner_id=?",
+            (_json(output), task_id, owner_id),
+        )
+        if cursor.rowcount != 1:
+            await self._db().rollback()
+            raise HistoryConflictError("tool output owner is no longer current")
+        await self._db().commit()
+
+    async def get_tool_output(self, task_id: str) -> JsonValue:
+        cursor = await self._db().execute(
+            "SELECT output_json FROM tool_task_observations WHERE task_id=?", (task_id,),
+        )
+        row = await cursor.fetchone()
+        return None if row is None else _load(row[0])
+
+    @_serialized_access
+    async def finalize_lost_tool_owner(self, task_id: str, result: object, *, job: bool) -> bool:
+        """Fence a lost observation owner and preserve its last output atomically."""
+        db = self._db()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "UPDATE tool_task_observations SET owner_id='' WHERE task_id=? "
+                "AND owner_id<>'' AND expires_at<=unixepoch('subsec')", (task_id,),
+            )
+            if cursor.rowcount != 1:
+                await db.rollback()
+                return False
+            table = "jobs" if job else "tasks"
+            await db.execute(
+                f"UPDATE {table} SET status='unknown',result_json=?,updated_at=CURRENT_TIMESTAMP "
+                "WHERE task_id=? AND status IN ('pending','running')", (_json(result), task_id),
+            )
+            await db.commit()
+            return True
+        except BaseException:
+            await db.rollback()
+            raise
+
     @_serialized_access
     async def _finalize_worker_job(
         self,
@@ -38,8 +124,8 @@ class JobHistoryMixin:
     ) -> None:
         """Commit a Worker outcome and its terminal cursor under one owner fence."""
         db = self._db()
-        await db.execute("BEGIN IMMEDIATE")
         try:
+            await db.execute("BEGIN IMMEDIATE")
             await validate_writers(db, (write_authority(f"worker-job:{task_id}"),))
             cursor = await db.execute(
                 "UPDATE tasks SET status=?,result_json=?,error_json=?,updated_at=CURRENT_TIMESTAMP "
@@ -72,11 +158,13 @@ class JobHistoryMixin:
         request: object,
         result: object | None = None,
         error: object | None = None,
+        observation_owner: str | None = None,
     ) -> None:
         request_json = _json(request)
         db = self._db()
-        await db.execute("BEGIN IMMEDIATE")
         try:
+            await db.execute("BEGIN IMMEDIATE")
+            await self._validate_tool_owner(task_id, observation_owner)
             if kind == "job":
                 await validate_writers(db, (write_authority(f"worker-job:{task_id}"),))
             cursor = await db.execute(
@@ -120,6 +208,8 @@ class JobHistoryMixin:
         required_capabilities: tuple[str, ...],
         request: object,
         status: str = "pending",
+        observation_owner: str | None = None,
+        observation_lease_ttl: float = 30.0,
     ) -> StoredJob:
         """Atomically admit one Job carrying one durable ToolTask request."""
 
@@ -143,6 +233,12 @@ class JobHistoryMixin:
                     request_json,
                 ),
             )
+            if observation_owner is not None:
+                await db.execute(
+                    "INSERT INTO tool_task_observations(task_id,owner_id,expires_at) "
+                    "VALUES(?,?,unixepoch('subsec')+?)",
+                    (task_id, observation_owner, observation_lease_ttl),
+                )
             await db.commit()
         except aiosqlite.IntegrityError as exc:
             await db.rollback()
@@ -158,6 +254,9 @@ class JobHistoryMixin:
                     "Job identity is already committed with different admission data"
                 ) from exc
             return existing
+        except BaseException:
+            await db.rollback()
+            raise
         stored = await self.get_job(job_id)
         assert stored is not None
         return stored
@@ -171,23 +270,36 @@ class JobHistoryMixin:
         result: object | None = None,
         error: object | None = None,
         attempt: int | None = None,
+        observation_owner: str | None = None,
     ) -> None:
-        cursor = await self._db().execute(
-            "UPDATE jobs SET status=?,result_json=?,error_json=?,"
-            "attempt=COALESCE(?,attempt),updated_at=CURRENT_TIMESTAMP "
-            "WHERE job_id=?",
-            (
-                status,
-                None if result is None else _json(result),
-                None if error is None else _json(error),
-                attempt,
-                job_id,
-            ),
-        )
-        if cursor.rowcount != 1:
-            await self._db().rollback()
-            raise KeyError(f"unknown Job {job_id!r}")
-        await self._db().commit()
+        db = self._db()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            if observation_owner is not None:
+                stored = await self.get_job(job_id)
+                if stored is None:
+                    raise KeyError(job_id)
+                await self._validate_tool_owner(stored.task_id, observation_owner)
+            cursor = await self._db().execute(
+                "UPDATE jobs SET status=?,result_json=?,error_json=?,"
+                "attempt=COALESCE(?,attempt),updated_at=CURRENT_TIMESTAMP "
+                "WHERE job_id=?",
+                (
+                    status,
+                    None if result is None else _json(result),
+                    None if error is None else _json(error),
+                    attempt,
+                    job_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                await self._db().rollback()
+                raise KeyError(f"unknown Job {job_id!r}")
+            await self._db().commit()
+
+        except BaseException:
+            await db.rollback()
+            raise
 
     async def get_job(self, job_id: str) -> StoredJob | None:
         return await self._select_job("job_id", job_id)

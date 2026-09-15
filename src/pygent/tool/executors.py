@@ -7,11 +7,13 @@ import hashlib
 import inspect
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import Protocol, TypeAlias, cast, runtime_checkable
 from uuid import uuid4
 
 import httpx
+from jsonschema import ValidationError, validate
 
 from pygent.core import (
     Context,
@@ -59,6 +61,7 @@ class ToolExecutionContext:
     execution_id: str | None = None
     task_id: str | None = None
     recovery: bool = False
+    publish_output: Callable[[JsonValue], Awaitable[None]] | None = None
 
     def __post_init__(self) -> None:
         for name in ("execution_id", "task_id"):
@@ -67,6 +70,16 @@ class ToolExecutionContext:
                 raise ValueError(f"{name} must be a non-empty string or None")
         if not isinstance(self.recovery, bool):
             raise TypeError("recovery must be a bool")
+
+
+_current_tool_execution: ContextVar[ToolExecutionContext | None] = ContextVar(
+    "pygent_tool_execution", default=None
+)
+
+
+def current_tool_execution() -> ToolExecutionContext | None:
+    """Return the invocation-local execution channel, if inside a tool."""
+    return _current_tool_execution.get()
 
 
 @dataclass(frozen=True, slots=True)
@@ -514,9 +527,13 @@ class ToolRunner:
         await emit("tool.started", {"call_id": call.call_id, "tool_id": spec.tool_id})
         try:
             async def invoke() -> object:
-                if operation is not None:
-                    return await operation(spec, call, context)
-                return await registry.execute(spec, call, context)
+                token = _current_tool_execution.set(context)
+                try:
+                    if operation is not None:
+                        return await operation(spec, call, context)
+                    return await registry.execute(spec, call, context)
+                finally:
+                    _current_tool_execution.reset(token)
 
             deadlines = [value for value in (context.deadline,) if value is not None]
             if spec.timeout is not None:
@@ -562,12 +579,38 @@ class ToolRunner:
                 {"call_id": call.call_id, "error_kind": result.error_kind or "executor_error"},
             )
             return result
+        from .task_handle import ToolTaskHandle
+
+        if isinstance(value, ToolTaskHandle):
+            return ToolResult(
+                call_id=call.call_id, name=call.name, status="detached",
+                task=await value.snapshot(),
+                output=await value.manager.get_output(value.task_id),
+                tool_id=spec.tool_id, tool_version=spec.version,
+            )
+        try:
+            output = freeze_json(value)
+            if spec.definition.output_schema is not None:
+                validate(
+                    thaw_json(output),
+                    cast(Mapping[str, object], thaw_json(cast(FrozenJsonObject, spec.definition.output_schema))),
+                )
+        except (ValidationError, TypeError, ValueError) as exc:
+            result = ToolResult(
+                call_id=call.call_id, name=call.name, status="failed", task=task,
+                error=exc.message if isinstance(exc, ValidationError) else "tool output is not JSON",
+                error_kind="validation_error", error_code="invalid_output",
+                retryable=False, side_effect_committed=True,
+                tool_id=spec.tool_id, tool_version=spec.version,
+            )
+            await emit("tool.failed", {"call_id": call.call_id, "error_kind": "validation_error"})
+            return result
         result = ToolResult(
             call_id=call.call_id,
             name=call.name,
             status="succeeded",
             task=task,
-            output=freeze_json(value),
+            output=output,
             side_effect_committed=True,
             tool_id=spec.tool_id,
             tool_version=spec.version,
@@ -593,6 +636,7 @@ class ToolTaskManager(Protocol):
         execution: ToolTaskExecution | None = None,
     ) -> ToolTask: ...
     async def get_task(self, task_id: str) -> ToolTask | None: ...
+    async def get_output(self, task_id: str) -> JsonValue: ...
     async def cancel(self, task_id: str) -> bool: ...
     async def get_result(
         self, task_id: str, *, wait: bool = False
@@ -650,6 +694,7 @@ class InMemoryToolTaskManager:
         self._max_retained_tasks = max_retained_tasks
         self._snapshots: dict[str, ToolTask] = {}
         self._results: dict[str, ToolResult] = {}
+        self._outputs: dict[str, JsonValue] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._cleanup_task: asyncio.Task[None] | None = None
         self._invocations: dict[
@@ -690,8 +735,10 @@ class InMemoryToolTaskManager:
 
     async def start(self, task_id: str) -> None:
         async with self._lock:
+            if task_id in self._results:
+                return
             existing = self._tasks.get(task_id)
-            if existing is not None and not existing.done():
+            if existing is not None:
                 return
             try:
                 spec, call, execution = self._invocations[task_id]
@@ -715,13 +762,17 @@ class InMemoryToolTaskManager:
         running = replace(snapshot, state=ToolTaskState.RUNNING)
         async with self._lock:
             self._snapshots[snapshot.task_id] = running
+        async def publish_output(value: JsonValue) -> None:
+            async with self._lock:
+                self._outputs[snapshot.task_id] = freeze_json(value)
+
         try:
             value = await _execute_with_timeout(
                 self._registry,
                 spec,
                 call,
                 execution=execution,
-                context=ToolExecutionContext(task_id=snapshot.task_id),
+                context=ToolExecutionContext(task_id=snapshot.task_id, publish_output=publish_output),
             )
             result = ToolResult(
                 call_id=call.call_id,
@@ -751,6 +802,8 @@ class InMemoryToolTaskManager:
         async with self._lock:
             self._snapshots[snapshot.task_id] = replace(snapshot, state=state)
             self._results[snapshot.task_id] = result
+            if result.output is not None:
+                self._outputs[snapshot.task_id] = result.output
             self._invocations.pop(snapshot.task_id, None)
 
     def _task_finished(self, _task: asyncio.Task[None]) -> None:
@@ -785,8 +838,13 @@ class InMemoryToolTaskManager:
         for task_id in terminal_ids[: max(0, excess)]:
             self._snapshots.pop(task_id, None)
             self._results.pop(task_id, None)
+            self._outputs.pop(task_id, None)
             self._tasks.pop(task_id, None)
             self._invocations.pop(task_id, None)
+
+    async def get_output(self, task_id: str) -> JsonValue:
+        async with self._lock:
+            return self._outputs.get(task_id)
 
     async def get_task(self, task_id: str) -> ToolTask | None:
         async with self._lock:
@@ -795,10 +853,23 @@ class InMemoryToolTaskManager:
     async def cancel(self, task_id: str) -> bool:
         async with self._lock:
             task = self._tasks.get(task_id)
-            if task is None or task.done():
+            if task is None:
+                invocation = self._invocations.get(task_id)
+                if invocation is None:
+                    return False
+                spec, call, _ = invocation
+                result = _cancelled_task_result(
+                    spec, call, self._snapshots[task_id], started=False,
+                )
+                assert result.task is not None
+                self._snapshots[task_id] = result.task
+                self._results[task_id] = result
+                self._invocations.pop(task_id, None)
+                return True
+            if task.done() and not task.cancelled():
                 return False
             task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.shield(asyncio.gather(task, return_exceptions=True))
         async with self._lock:
             if task_id not in self._results:
                 snapshot = self._snapshots[task_id]
@@ -819,7 +890,7 @@ class InMemoryToolTaskManager:
             result = self._results.get(task_id)
         if result is not None or not wait or task is None:
             return result
-        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.shield(asyncio.gather(task, return_exceptions=True))
         async with self._lock:
             return self._results.get(task_id)
 
@@ -830,6 +901,9 @@ class InMemoryToolTaskManager:
             for task in tasks:
                 if not task.done():
                     task.cancel()
+            await asyncio.gather(*(
+                self.cancel(task_id) for task_id in set(self._tasks) | set(self._invocations)
+            ))
         await asyncio.gather(*tasks, return_exceptions=True)
         cleanup = self._cleanup_task
         if cleanup is not None:
@@ -930,6 +1004,7 @@ __all__ = [
     "ToolTaskAdmission",
     "ToolTaskExecution",
     "ToolTaskManager",
+    "current_tool_execution",
     "result_from_exception",
     "validate_executor_sandbox",
 ]

@@ -14,6 +14,8 @@ from ._helpers import allow
 
 STANDARD_TOOL_NAMES = [
     "bash",
+    "tool_task_get",
+    "tool_task_stop",
     "edit",
     "edit_notebook",
     "glob",
@@ -78,7 +80,9 @@ def _prepare_files(tmp_path) -> None:
 
 def _arguments(name: str) -> dict[str, object]:
     return {
-        "bash": {"command": "printf agent-bash", "timeout": 5000},
+        "bash": {"command": "printf agent-bash"},
+        "tool_task_get": {"task_id": "missing-task"},
+        "tool_task_stop": {"task_id": "missing-task"},
         "edit": {
             "file_path": "docs/edit.txt",
             "old_string": "old value",
@@ -102,7 +106,7 @@ def _arguments(name: str) -> dict[str, object]:
     }[name]
 
 
-def test_standard_tools_explicitly_assemble_all_ten_model_definitions(tmp_path):
+def test_standard_tools_explicitly_assemble_all_twelve_model_definitions(tmp_path):
     suite = _suite(tmp_path)
 
     assert [item.name for item in suite.toolkit.definitions] == STANDARD_TOOL_NAMES

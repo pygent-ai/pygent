@@ -118,7 +118,8 @@ grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=10
 
 | 工具 | ToolSideEffect / 幂等 | 权限 | 关键边界 |
 |---|---|---|---|
-| `bash` | `EXTERNAL / NOT_IDEMPOTENT` | `shell:execute` | 默认限制 cwd 在 workspace；执行及输出读取默认超时 30 秒，最多 600 秒；取消或超时共用最多 2 秒的进程树清理预算；超时返回 `unknown` 且副作用提交状态未知；输出最多投影 512 KiB |
+| `bash` | `EXTERNAL / NOT_IDEMPOTENT` | `shell:execute` | 默认限制 cwd 在 workspace；独立任务默认前台等待 600 秒，到期返回任务引用并继续执行；显式停止和治理取消使用最多 2 秒的进程树清理预算；输出最多投影 512 KiB |
+| `tool_task_get`, `tool_task_stop` | `READ / INHERENT`、`WRITE / INHERENT` | 由应用授权 | 查询同一管理器中的任务、输出和结果，或请求取消；停止请求不证明副作用未发生 |
 | `read`, `glob`, `grep`, `read_lints` | `READ / INHERENT` | `filesystem:read` | 默认拒绝 workspace 外路径；glob pattern、匹配结果和符号链接目标都重新验证；读取与搜索有界 |
 | `write` | `WRITE / INHERENT` | `filesystem:write` | 完整 UTF-8 原子替换；同一 FileTools 实例内的同路径变更串行；相同输入可重复得到相同文件内容 |
 | `edit`, `edit_notebook` | `WRITE / NOT_IDEMPOTENT` | `filesystem:write` | 同一实例内串行 read-modify-write 并原子提交；取消在所属写线程退出后返回；不确定失败不谎报未提交 |
@@ -126,11 +127,104 @@ grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=10
 
 `write@2.1.0` 的模型可见契约只把它用于新建或刻意整文件替换，要求提供完整字面内容并禁止省略占位符。已有文件的局部、复杂或较长修改必须改用多个更小的原子 `edit` 调用，不能借整文件重写规避拆分。`edit@2.1.0` 要求先读取当前文件并保持精确空白、缩进和换行；`old_string` 只携带定位所需的未变上下文，不应包含长段未修改文本。
 
-所有标准工具的 `sandbox_profile` 为 `workspace`（Web 工具除外，它们通过 URL/DNS 边界限制访问）。该字段只是隔离需求，不是标准工具或 Runtime 已经实施宿主机沙箱的证明。在 managed/durable 部署中，应用必须为精确工具版本注册实际支持 `workspace` 的 sandbox-aware executor，Runtime 据此派生并验证 capability；应用不得通过重复 ToolSpec 声明或手工添加 capability 绕过该验证。Direct 模式不会因为工具名是“标准工具”而自动获得沙箱、授权或跨 Root 容量治理。
+Bash 与文件工具的 `sandbox_profile` 为 `workspace`；Web 工具通过 URL/DNS 边界限制访问，任务查询与停止工具只调用已装配的任务设施。该字段只是隔离需求，不是标准工具或 Runtime 已经实施宿主机沙箱的证明。在 managed/durable 部署中，应用必须为精确工具版本注册实际支持 `workspace` 的 sandbox-aware executor，Runtime 据此派生并验证 capability；应用不得通过重复 ToolSpec 声明或手工添加 capability 绕过该验证。Direct 模式不会因为工具名是“标准工具”而自动获得沙箱、授权或跨 Root 容量治理。
 
-`bash(is_background=True)` 是显式外部进程启动：返回 PID 后，该进程不再属于当前同步 ToolTask，调用方负责自己的进程监督与关闭策略。需要 Runtime 管理的独立生命周期时，应使用授权决定选择的 managed detach/Job，而不是把后台进程误当作 durable ToolTask。
+### Bash 的有限等待与任务控制
 
-前台 Bash 的截止时间覆盖启动、进程退出和输出管道 EOF；父进程退出并不代表输出已经结束。超时、取消和失败由同一资源所有者收尾，重复取消不会重置清理预算。收尾到期会关闭本地输出管道并保留已捕获内容，不再等待后代关闭继承的 stdout。Windows 使用 `taskkill /T /F`，POSIX 使用进程组信号；若无法确认清理完成（例如 Windows 父进程已退出或后代脱离进程组），超时结果明确标注 `process cleanup incomplete`，不保证所有后代均已退出。尚未完成的启动保留关闭标记，稍后交付的 transport 会立即关闭。
+`BashTools(workspace_root=..., timeout=600, task_manager=None)` 的 `timeout` 单位为秒，只控制独立任务的前台等待时长。`standard.shell.bash@3.0.0` 声明 `wait_timeout=600`，没有执行硬超时；模型参数中没有 `timeout`。`bash(command, working_directory=None, description=None, is_background=False)` 只提交一次命令。期限内完成返回结果；等待到期或 `is_background=True` 返回同一任务的引用，进程与输出捕获继续由任务管理器持有。
+
+Python 原生调用返回 `str | ToolTaskHandle`。handle 提供稳定 `task_id`、`snapshot()`、`wait(timeout=None)`、`result()` 和 `cancel()`；`wait()` 到期返回 `None`，取消观察不会取消任务。未传管理器时，BashTools 自动创建并持有本地 `InMemoryToolTaskManager`，应用用异步上下文或 `await tools.aclose()`（也可 `await tools.close()`）关闭。传入的管理器仍由原所有者关闭；已接纳任务不因装配对象关闭而失去执行 owner。
+
+以下 direct 示例可以直接运行，需要本机有可用的 Bash：
+
+```python
+import asyncio
+from pathlib import Path
+
+from pygent.tool import BashTools, ToolTaskHandle
+
+
+async def main():
+    async with BashTools(workspace_root=Path.cwd(), timeout=0.1) as tools:
+        result = await tools.bash("printf 'before\n'; sleep 1; printf 'after\n'")
+        if isinstance(result, ToolTaskHandle):
+            print(result.task_id)
+            print(await tools.tool_task_get(result.task_id))
+            print((await result.result()).output)
+        else:
+            print(result)
+
+        background = await tools.bash("sleep 30", is_background=True)
+        assert isinstance(background, ToolTaskHandle)
+        print(await tools.tool_task_stop(background.task_id))
+
+
+asyncio.run(main())
+```
+
+`tools.toolkit` 包含 Bash、`tool_task_get(task_id)` 和 `tool_task_stop(task_id)`，并投影实例等待配置。`StandardTools(..., bash_timeout=600, task_manager=None)` 提供相同装配和关闭接口，共十二个工具。也可用 `ToolKit(tools.bash, tools.tool_task_get, tools.tool_task_stop, wait_timeouts={"bash": 2.0})` 按模型可见工具名覆盖等待时长。`@tool(wait_timeout=...)` 与 `ToolSpec.wait_timeout` 是可移植的装配策略；普通 `ToolSpec.timeout` 的执行截止语义仍适用于其他工具。
+
+模型调用必须由应用授权选择 `lifecycle="detach"`，才会 admission 独立任务并应用有限等待；`is_background=True` 只请求立即返回，不授予权限。`lifecycle="sync"` 保持当前执行内同步等待；显式后台参数与同步授权冲突时拒绝调用。未配置 `wait_timeout` 的 detach 默认立即返回。有限等待释放并恢复 Parent runnable lease，实际工具执行仍占用其工具资源。Parent 的截止限制观察等待，不作为新任务的命令截止时间。
+
+模型侧得到严格 JSON `ToolResult`：完成时是最终结果，仍运行时为 `status="detached"`、`task` 快照和当前 `output`，并附查询/停止提示。活 handle 在工具适配边界转换，不进入 schema output、Context 或 wire。`tool_task_get` 不等待，返回 `task`、已保存 `output` 和可选最终 `result`；`tool_task_stop` 返回 `cancel_requested` 及同样快照，不把取消请求解释为已停止或副作用已撤销。
+
+下面的 managed 入口可由部署直接调用；参数 `workspace_executor_factory` 必须提供实际实施 workspace 隔离的 executor。示例不通过给本机执行器添加声明来伪造沙箱：
+
+```python
+from pathlib import Path
+from pygent import AIMessage, Context, ToolAuthorizationDecision, ToolCall
+from pygent.runtime import LocalRuntime
+from pygent.tool import BashTools, ExecutorRegistry, InMemoryToolTaskManager, LocalToolExecutor
+
+
+async def run_managed(workspace_executor_factory):
+    tools = BashTools(workspace_root=Path.cwd(), timeout=0.1)
+    runtime = LocalRuntime()
+
+    def authorize(request, _context):
+        return ToolAuthorizationDecision(
+            call_id=request.call.call_id,
+            allowed=True,  # 示例允许调用；生产部署在这里检查身份与权限。
+            reason_code="application_allowed",
+            lifecycle="detach" if request.call.name == "bash" else "sync",
+        )
+
+    def executor_factory(spec, handler):
+        if spec.sandbox_profile == "workspace":
+            return workspace_executor_factory(spec, handler)
+        return LocalToolExecutor(handler)
+
+    toolkit = tools.toolkit
+    layer = toolkit.managed_layer(
+        runtime, executor_factory=executor_factory,
+        authorization_adapter=authorize,
+    )
+    # Runtime 执行回调按部署 registry 解析 executor；管理器持有同一次任务。
+    runtime.attach_tool_task_manager(InMemoryToolTaskManager(ExecutorRegistry()))
+    bound = runtime.bind(layer)
+    try:
+        message, _ = await bound.invoke(
+            AIMessage(tool_calls=(ToolCall(
+                call_id="shell-example", name="bash",
+                arguments={"command": "printf 'before\n'; sleep 1; printf 'after\n'"},
+            ),)),
+            toolkit.make_visible_in(Context()),
+        )
+        result = message.results[0]
+        if result.status == "detached":
+            assert result.task is not None
+            print(await runtime.get_tool_output(result.task.task_id))
+            print(await runtime.get_tool_result(result.task.task_id, wait=True))
+        else:
+            print(result)
+    finally:
+        await runtime.close()
+        await tools.aclose()
+```
+
+任务控制声明使用 `@tool(task_control=True)`；这是受信部署 adapter 标记，不是模型可设置的权限，也不进入 ToolSpec。解析到 `ToolTaskControlExecutor` 的同步控制调用仍受 Execution 容量与授权约束，但不等待工具 permit，因此可以查询或停止已经占满工具容量的 Bash。
+
+进程 owner 等待启动、进程退出和管道 EOF；父进程退出不代表输出结束。显式取消、适用执行预算到期和失败使用同一有界清理路径，重复取消不重置预算。Windows 使用 `taskkill /T /F`，POSIX 使用进程组信号。无法确认全部后代退出时保留不确定结果；关闭本地管道不证明后代停止。捕获总量上限 16 MiB，超限仍排空管道；投影截断时保留原有完整捕获文件提示。内存设施只承诺当前进程内查询；重启查询须显式装配持久任务设施，见 Runtime SDK。
 
 默认 `web_fetch` 不使用环境 HTTP 代理，因为代理会使实际连接目标脱离本地 DNS 校验。部署方注入的 `web_fetcher` 属于受信 adapter，必须自行提供等价的目标解析、实际 peer 约束、逐跳重定向校验、响应大小和连接清理保证。
 
@@ -291,7 +385,7 @@ runtime.attach_tool_task_manager(DurableToolTaskManager(history, registry))
 
 `runtime.register_tool(spec, executor)` 是部署装配助手，不进入 Module 图，也不改变 `ToolSpec + ToolExecutor + ExecutorRegistry` 三者已有职责。它必须先验证 executor 实现 `ToolExecutor`，再核对 `spec.sandbox_profile` 与 `executor.sandbox_support.profiles`，成功后才注册 executor 并为该精确工具身份提供对应 sandbox capability。ToolSpec 不得为 Runtime 自动授予 `tool.sandbox.<profile>`；单独向 Runtime 传入同名字符串也不能代替兼容 executor。普通无 sandbox profile 的 `LocalToolExecutor`、`HttpToolExecutor`、`AgentToolExecutor` 和 MCP executor 保持原装配语义。
 
-应用仍可直接操作 `ExecutorRegistry`，但不能借此绕过 managed invocation 验证。bind/compile 会预检图中每个 sandbox ToolSpec 是否存在精确 executor、该 executor 是否支持所需 profile，并通过 `bound.durability.detached_tool_gaps` 报告具体缺口；为了不阻塞只使用同步沙箱的应用，该报告本身不会拒绝 Binding。每次 managed invocation 都会重新核对基础 profile。只有真正申请 durable detach 时才要求 `durable_reconnect=True` 与稳定 `deployment_fingerprint`；首次 detach admission 和恢复还会重新验证，以覆盖注册表替换、Worker 漂移、provider session 过期与部署修订变化。
+应用仍可直接操作 `ExecutorRegistry`，但不能借此绕过 managed invocation 验证。bind/compile 会预检图中每个 sandbox ToolSpec 是否存在精确 executor、该 executor 是否支持所需 profile，并通过 `bound.durability.detached_tool_gaps` 报告具体缺口；为了不阻塞只使用同步沙箱的应用，该报告本身不会拒绝 Binding。每次 managed invocation 都会重新核对基础 profile。只有真正申请可恢复的 durable Job detach 时才要求 `durable_reconnect=True` 与稳定 `deployment_fingerprint`；首次 detach admission 和恢复还会重新验证，以覆盖注册表替换、Worker 漂移、provider session 过期与部署修订变化。
 
 验证失败必须保留可判定原因。例如缺少 `workspace-write` 时，结果或 admission error 至少包含：
 
@@ -302,7 +396,7 @@ missing_capabilities: [tool.sandbox.workspace-write]
 message: shell.command@1 requires tool.sandbox.workspace-write
 ```
 
-不得把 executor 缺失、profile 不匹配、durable reconnect 不可用或 provider session 过期都折叠为 `detach_unavailable`。`ToolExecutionContext` 只增加 Runtime 提供的稳定 `execution_id`、可选 `task_id` 与 `recovery` 事实；它不携带 provider client 或活 session。外部 adapter 可以据此在自己的并发安全存储中解析 session，因此并发调用不依赖全局“当前沙箱”，Pygent Module 仍保持无状态。
+不得把 executor 缺失、profile 不匹配、durable reconnect 不可用或 provider session 过期都折叠为 `detach_unavailable`。`ToolExecutionContext` 提供稳定 `execution_id`、可选 `task_id`、`recovery` 事实和可选异步 `publish_output(JsonValue)` 回调；它不携带 provider client 或活 session。外部 adapter 可以据此在自己的并发安全存储中解析 session，因此并发调用不依赖全局“当前沙箱”，Pygent Module 仍保持无状态。`DurableToolTaskManager` 仅保存普通任务的状态、输出与结果用于重启查询，不因此要求进程重连能力；查询也不调用 executor 或重放命令。
 
 Direct execution 可以继续显式传入同一个外部 executor，但没有 managed capability 派生、跨 Root 容量或 durable recovery。调用方必须确保 adapter 真正实施所声明的隔离，并负责 provider session 的拥有、取消、join 和关闭。框架可以提供基于 command/file 最小接口的标准工具便捷 adapter，但该 helper 必须建立在 `ToolExecutor` 之上，不能成为接入外部沙箱的强制协议。
 
@@ -335,13 +429,13 @@ ToolCallLayer 必须显式接收自定义授权 Module 或受信执行适配器�
 
 ## ToolTask 与 ToolResult
 
-ToolCall 是 AIMessage 中的调用请求，不代表已经获得授权或已被执行。授权允许后，调用才被接纳执行。被拒绝的调用不创建 ToolTask，但必须生成 `ToolResult(status="rejected", call_id=<原 call_id>)`，以便 ToolMessage 保留原批次的身份与顺序。direct execution 只在当前 Root 同步执行本地调用，由调用方与 adapter 管理资源、并发和清理；managed Runtime 才把已接纳调用建模为受管 ToolTask。两种模式都不把业务授权决策交给 Runtime。
+ToolCall 是 AIMessage 中的调用请求，不代表已经获得授权或已被执行。授权允许后，调用才被接纳执行。被拒绝的调用不创建 ToolTask，但必须生成 `ToolResult(status="rejected", call_id=<原 call_id>)`，以便 ToolMessage 保留原批次的身份与顺序。direct execution 的同步调用由当前 Root 执行；独立调用须有显式任务设施，Bash 装配对象可以自动持有本地设施。managed Runtime 通过公共基础设施接纳并持有 ToolTask。两种模式都不把业务授权决策交给 Runtime。
 
 同一 `AIMessage` 内的 `ToolCall.call_id` 必须唯一。重复 ID 的所有调用在 visibility、authorization 和 ToolTask admission 之前明确返回 `error_code="duplicate_call_id"` 的 validation rejection；框架不能依赖 Provider 通常生成唯一 ID，也不能让两个调用共享同一 ToolTask。
 
-ToolTask 的公开快照至少包含 `task_id`、`call_id`、`tool_id`、`version` 和 `state`。ToolResult 至少包含 `call_id`、`status`、可选 `task`、可选的严格 JSON `output`、`error_kind`、`retryable` 与 `side_effect_committed`。`timeout` 或 `unknown` 状态不得默认把 `side_effect_committed` 设为 false。direct execution 只直接支持同步本地调用；独立生命周期任务由调用方自己的任务设施承载，不伪装成 Runtime ToolTask。
+ToolTask 的公开快照至少包含 `task_id`、`call_id`、`tool_id`、`version` 和 `state`。ToolResult 至少包含 `call_id`、`status`、可选 `task`、可选的严格 JSON `output`、`error_kind`、`retryable` 与 `side_effect_committed`。`timeout` 或 `unknown` 状态不得默认把 `side_effect_committed` 设为 false。direct 独立任务由显式传入或 Bash 装配对象持有的任务设施承载；自动内存设施不承诺 Runtime 持久恢复。
 
-以下同步 Child 与 detach 语义只属于 managed execution。同步 Agent-backed Tool 可以作为当前 Execution 的结构化 Child；detach 时 Runtime 创建独立 ToolTask，ToolCallLayer 立即返回 `ToolResult(status="detached", task=<ToolTask 公开快照>)`。该调用自此不再是 Child，但仍受声明的 Binding、资源与 capability 治理。需要故障后重新获得时，由独立 Job 承载该 ToolTask，调用方必须要求并获得相应 durable task capability。
+同步 Agent-backed Tool 在 managed execution 中可以作为当前 Execution 的结构化 Child；detach 时任务设施创建独立 ToolTask，未配置有限等待时 ToolCallLayer 立即返回 `ToolResult(status="detached", task=<ToolTask 公开快照>)`。该调用自此不再是 Child，但仍受声明的 Binding、资源与 capability 治理。需要故障后重新获得时，由独立 Job 承载该 ToolTask，调用方必须要求并获得相应 durable task capability。
 
 ```python
 detached_tools = ToolCallLayer(
@@ -459,7 +553,7 @@ assert [r.call_id for r in tool_message.results] == [
 tool_message, context = await tools.invoke(ai_message, context)
 ```
 
-直接调用要求 ToolCallLayer 具有可用的本地执行 adapter，只支持当前 Root 内同步等待；调用方自行管理跨 Root 并发和独立后台任务。
+直接调用要求 ToolCallLayer 具有本地执行 adapter；独立 admission 另需任务设施和 detach 授权。Bash 的 local_layer 装配可复用 bound handler 所属的 task_manager，调用方负责设施关闭与跨 Root 治理。
 
 ## 作为 Root 使用已有 Binding
 

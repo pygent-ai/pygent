@@ -23,6 +23,9 @@ class _ToolJobsMixin:
     async def get_tool_task(self, task_id: str) -> ToolTask | None:
         return await self._task_manager().get_task(task_id)
 
+    async def get_tool_output(self, task_id: str) -> object:
+        return await self._task_manager().get_output(task_id)
+
     async def get_job(self, job_id: str) -> JobSnapshot | None:
         manager = self._task_manager()
         get_job = getattr(manager, "get_job", None)
@@ -97,7 +100,7 @@ class _ToolJobsMixin:
                 validate_executor_sandbox(
                     spec,
                     executor,
-                    durable=spec.sandbox_profile is not None,
+                    durable=spec.sandbox_profile is not None and spec.wait_timeout is None,
                     required_capabilities=stored.required_capabilities,
                 )
             except LookupError as exc:

@@ -145,6 +145,7 @@ def _tool_spec_to_dict(
         "side_effect": value.side_effect.value,
         "idempotency": value.idempotency.value,
         "timeout": value.timeout,
+        "wait_timeout": value.wait_timeout,
         "resource_key": value.resource_key,
         "sandbox_profile": value.sandbox_profile,
         "required_permissions": list(value.required_permissions),
@@ -162,6 +163,7 @@ def _tool_spec_from_dict(value: object) -> ToolSpec:
             "side_effect",
             "idempotency",
             "timeout",
+            "wait_timeout",
             "resource_key",
             "sandbox_profile",
             "required_permissions",
@@ -181,6 +183,7 @@ def _tool_spec_from_dict(value: object) -> ToolSpec:
                 data.get("idempotency", "inherent")
             ),
             timeout=data.get("timeout"),
+            wait_timeout=data.get("wait_timeout"),
             resource_key=data.get("resource_key"),
             sandbox_profile=data.get("sandbox_profile"),
             required_permissions=tuple(permissions),

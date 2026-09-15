@@ -176,6 +176,12 @@ class SQLiteHistoryStore(
                 attempt INTEGER NOT NULL DEFAULT 1,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS tool_task_observations (
+                task_id TEXT PRIMARY KEY,
+                output_json TEXT,
+                owner_id TEXT NOT NULL,
+                expires_at REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS effects (
                 execution_id TEXT NOT NULL,
                 module_path TEXT NOT NULL,

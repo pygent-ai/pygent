@@ -181,6 +181,10 @@ class Infrastructure(Protocol):
 
     async def submit_tool_task(self, spec: Any, call: Any) -> object | None: ...
 
+    def resolve_tool_task_manager(self) -> object | None: ...
+
+    async def wait_tool_task(self, task_id: str, timeout: float) -> object | None: ...
+
 
 class ExecutionScope(Infrastructure, Protocol):
     async def invoke_module(

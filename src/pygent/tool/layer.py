@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Awaitable, Mapping
+from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any, Protocol, cast
 from uuid import uuid4
@@ -254,8 +255,15 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
 
         if decision.lifecycle == "detach":
             result = await self._detach(admitted_call, spec)
-            await self.emit(kind="tool.detached", data={"call_id": call.call_id})
+            event_kind = (
+                "tool.detached" if result.status == "detached" else
+                "tool.completed" if result.status == "succeeded" else
+                "tool.rejected" if result.status == "rejected" else "tool.failed"
+            )
+            await self.emit(kind=event_kind, data={"call_id": call.call_id})
             return result
+        if spec.wait_timeout is not None and cast(FrozenJsonObject, call.arguments).get("is_background") is True:
+            return await self._reject_event(call, "background_requires_detach", spec)
         return await self._execute_sync(admitted_call, spec)
 
     async def _reject_event(
@@ -335,7 +343,15 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
 
             async def execute() -> JsonValue:
                 try:
-                    async with infrastructure.tool_permit(spec.resource_key):
+                    from .control import ToolTaskControlExecutor
+                    assert registry is not None
+                    executor = registry.resolve(spec.tool_id, spec.version)
+                    permit = (
+                        nullcontext()
+                        if isinstance(executor, ToolTaskControlExecutor)
+                        else infrastructure.tool_permit(spec.resource_key)
+                    )
+                    async with permit:
                         async def emit_tool_event(
                             kind: str, data: Mapping[str, JsonValue]
                         ) -> None:
@@ -355,6 +371,12 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                             ),
                             task=task,
                         ).result()
+                    if tool_result.status == "detached":
+                        return freeze_json({
+                            "outcome": "detached",
+                            "task_id": tool_result.task.task_id if tool_result.task else task.task_id,
+                            "result": _result_effect_value(tool_result),
+                        })
                     if tool_result.status != "succeeded":
                         return freeze_json(
                             {
@@ -444,7 +466,10 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             return replace(result, task=replace(task, state=state))
 
     async def _detach(self, call: ToolCall, spec: ToolSpec) -> ToolResult:
+        from .task_handle import ToolTaskHandle
+
         infrastructure = current_infrastructure()
+        manager = cast(ToolTaskManager | None, infrastructure.resolve_tool_task_manager()) or self.task_manager
         runtime_submit = getattr(infrastructure, "submit_tool_task", None)
         task = None
         admission: ToolTaskAdmission | None = None
@@ -489,12 +514,25 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                     admission.missing_capabilities if admission is not None else ()
                 ),
             )
+        if spec.wait_timeout is not None:
+            if manager is None:
+                raise RuntimeError("admitted tool task has no task manager")
+            timeout = 0.0 if cast(FrozenJsonObject, call.arguments).get("is_background") is True else spec.wait_timeout
+            if infrastructure.managed_execution_id is not None:
+                final = await infrastructure.wait_tool_task(task.task_id, timeout)
+            else:
+                final = await ToolTaskHandle(manager, task.task_id).wait(timeout)
+            if isinstance(final, ToolResult):
+                return final
+            task = await manager.get_task(task.task_id) or task
+        output = await manager.get_output(task.task_id) if manager is not None and spec.wait_timeout is not None else None
         return ToolResult(
             call_id=call.call_id,
             name=call.name,
             status="detached",
             task=task,
-            side_effect_committed=False,
+            output=output,
+            side_effect_committed=None if spec.wait_timeout is not None else False,
             tool_id=spec.tool_id,
             tool_version=spec.version,
         )
@@ -541,6 +579,16 @@ def _result_effect_value(result: ToolResult) -> dict[str, object]:
         "retryable": result.retryable,
         "side_effect_committed": result.side_effect_committed,
         "missing_capabilities": list(result.missing_capabilities),
+        "output": result.output,
+        "task": None if result.task is None else {
+            "task_id": result.task.task_id,
+            "call_id": result.task.call_id,
+            "tool_id": result.task.tool_id,
+            "version": result.task.version,
+            "state": result.task.state.value,
+            "job_id": result.task.job_id,
+            "metadata": result.task.metadata,
+        },
     }
 
 
@@ -553,7 +601,7 @@ def _result_from_replayed_effect(
     if not isinstance(task_id, str) or not task_id:
         raise TypeError("replayed tool effect task_id must be non-empty")
     task = replace(task, task_id=task_id)
-    if effect.get("outcome") == "failed":
+    if effect.get("outcome") in ("failed", "detached"):
         raw_result = effect.get("result")
         if not isinstance(raw_result, Mapping):
             raise TypeError("replayed tool failure must be a JSON object")
@@ -587,7 +635,7 @@ def _result_from_effect(
     task: ToolTask,
 ) -> ToolResult:
     status = value.get("status")
-    if status not in ("failed", "unknown"):
+    if status not in ("failed", "unknown", "detached"):
         raise TypeError("replayed tool failure has an invalid status")
     error = value.get("error")
     error_kind = value.get("error_kind")
@@ -610,11 +658,19 @@ def _result_from_effect(
     ):
         raise TypeError("replayed missing_capabilities must contain strings")
     state = ToolTaskState.UNKNOWN if status == "unknown" else ToolTaskState.FAILED
+    if status == "detached":
+        task_data = value.get("task")
+        if not isinstance(task_data, Mapping):
+            raise TypeError("detached tool result must have a task")
+        task = ToolTask(**dict(task_data))
+    else:
+        task = replace(task, state=state)
     return ToolResult(
         call_id=call.call_id,
         name=call.name,
         status=cast(Any, status),
-        task=replace(task, state=state),
+        task=task,
+        output=freeze_json(value.get("output")),
         error=error,
         error_kind=error_kind,
         error_code=error_code,

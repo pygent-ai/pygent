@@ -17,6 +17,7 @@ from typing import (
     Protocol,
     Required,
     TypeVar,
+    Union,
     cast,
     get_args,
     get_origin,
@@ -30,11 +31,13 @@ from typing_extensions import TypedDict
 
 from pygent.core import Context, FrozenJsonObject, JsonValue, Module, thaw_json
 
+from .control import ToolTaskControlExecutor
 from .executors import (
     ExecutorRegistry,
     LocalToolExecutor,
     ToolExecutor,
     ToolHandler,
+    ToolTaskManager,
 )
 from .layer import ToolCallLayer, TrustedAuthorizationAdapter
 from .types import (
@@ -71,9 +74,11 @@ class _ToolDeclaration:
     name: str | None
     description: str | None
     timeout: float | None
+    wait_timeout: float | None
     resource_key: str | None
     sandbox_profile: str | None
     required_permissions: tuple[str, ...]
+    task_control: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +87,7 @@ class _CompiledTool:
     input_model: type[BaseModel]
     return_adapter: TypeAdapter[Any] | None
     spec: ToolSpec
+    task_control: bool
 
     async def invoke(self, arguments: Mapping[str, JsonValue]) -> object:
         plain_arguments = (
@@ -96,6 +102,10 @@ class _CompiledTool:
         value = self.handler(**kwargs)
         if inspect.isawaitable(value):
             value = await cast(Awaitable[object], value)
+        from .task_handle import ToolTaskHandle
+
+        if type(value) is ToolTaskHandle:
+            return value
         if self.return_adapter is None:
             return value
         # ToolCallLayer owns the authoritative output-schema validation so that
@@ -112,9 +122,11 @@ def tool(
     description: str | None = None,
     idempotency: IdempotencyPolicy | None = None,
     timeout: float | None = None,
+    wait_timeout: float | None = None,
     resource_key: str | None = None,
     sandbox_profile: str | None = None,
     required_permissions: tuple[str, ...] = (),
+    task_control: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Declare a Python function for explicit assembly by :class:`ToolKit`."""
 
@@ -153,9 +165,11 @@ def tool(
         name=name,
         description=description.strip() if description is not None else None,
         timeout=timeout,
+        wait_timeout=wait_timeout,
         resource_key=resource_key,
         sandbox_profile=sandbox_profile,
         required_permissions=tuple(required_permissions),
+        task_control=task_control,
     )
 
     def decorate(function: Callable[P, R]) -> Callable[P, R]:
@@ -185,8 +199,29 @@ class ToolKit:
     def __init_subclass__(cls, **kwargs: object) -> None:
         raise TypeError("ToolKit cannot be subclassed")
 
-    def __init__(self, *handlers: Callable[..., object]) -> None:
+    def __init__(
+        self,
+        *handlers: Callable[..., object],
+        wait_timeouts: Mapping[str, float] | None = None,
+    ) -> None:
         compiled = tuple(_compile_tool(handler) for handler in handlers)
+        if wait_timeouts:
+            unknown = set(wait_timeouts) - {
+                item.spec.definition.name for item in compiled
+            }
+            if unknown:
+                raise ValueError(f"unknown tool wait configuration: {sorted(unknown)}")
+            compiled = tuple(
+                replace(
+                    item,
+                    spec=replace(
+                        item.spec, wait_timeout=wait_timeouts[item.spec.definition.name]
+                    ),
+                )
+                if item.spec.definition.name in wait_timeouts
+                else item
+                for item in compiled
+            )
         names = tuple(item.spec.definition.name for item in compiled)
         identities = tuple((item.spec.tool_id, item.spec.version) for item in compiled)
         if len(names) != len(set(names)):
@@ -223,7 +258,9 @@ class ToolKit:
             registry.register(
                 item.spec.tool_id,
                 item.spec.version,
-                LocalToolExecutor(item.invoke),
+                ToolTaskControlExecutor(LocalToolExecutor(item.invoke))
+                if item.task_control
+                else LocalToolExecutor(item.invoke),
                 replace_existing=replace_existing,
             )
         return registry
@@ -236,20 +273,35 @@ class ToolKit:
     def local_layer(
         self,
         *,
-        authorization: Module[
-            ToolAuthorizationRequest, ToolAuthorizationDecision
-        ]
+        authorization: Module[ToolAuthorizationRequest, ToolAuthorizationDecision]
         | None = None,
         authorization_adapter: TrustedAuthorizationAdapter | None = None,
         max_concurrency: int | None = None,
+        task_manager: ToolTaskManager | None = None,
     ) -> ToolCallLayer:
         """Build a direct/local ToolCallLayer without changing authorization."""
 
+        owners = [
+            getattr(item.handler, "__self__", None)
+            for item in self._compiled
+            if item.spec.wait_timeout is not None or item.task_control
+        ]
+        managers = [getattr(owner, "task_manager", None) for owner in owners]
+        managers = [manager for manager in managers if manager is not None]
+        if managers:
+            if any(manager is not managers[0] for manager in managers) or (
+                task_manager is not None and task_manager is not managers[0]
+            ):
+                raise ValueError(
+                    "background tools and controls must share one task_manager"
+                )
+            task_manager = managers[0]
         return ToolCallLayer(
             tools=self.specs,
             authorization=authorization,
             authorization_adapter=authorization_adapter,
             executor_registry=self.build_registry(),
+            task_manager=task_manager,
             max_concurrency=max_concurrency,
         )
 
@@ -268,7 +320,12 @@ class ToolKit:
         if not callable(executor_factory):
             raise TypeError("executor_factory must be callable")
         registrations = tuple(
-            (item.spec, executor_factory(item.spec, item.invoke))
+            (
+                item.spec,
+                ToolTaskControlExecutor(executor_factory(item.spec, item.invoke))
+                if item.task_control
+                else executor_factory(item.spec, item.invoke),
+            )
             for item in self._compiled
         )
         register_tools(
@@ -282,9 +339,7 @@ class ToolKit:
         runtime: _ManagedToolRuntime,
         *,
         executor_factory: ToolExecutorFactory,
-        authorization: Module[
-            ToolAuthorizationRequest, ToolAuthorizationDecision
-        ]
+        authorization: Module[ToolAuthorizationRequest, ToolAuthorizationDecision]
         | None = None,
         authorization_adapter: TrustedAuthorizationAdapter | None = None,
         max_concurrency: int | None = None,
@@ -372,7 +427,9 @@ def _compile_tool(handler: Callable[..., object]) -> _CompiledTool:
             f"Tool {visible_name!r} requires a description or a non-empty docstring"
         )
 
-    model_name = "".join(part.capitalize() for part in visible_name.replace("-", "_").split("_"))
+    model_name = "".join(
+        part.capitalize() for part in visible_name.replace("-", "_").split("_")
+    )
     input_model = create_model(
         f"{model_name or 'Tool'}Arguments",
         __config__=ConfigDict(extra="forbid"),
@@ -384,13 +441,26 @@ def _compile_tool(handler: Callable[..., object]) -> _CompiledTool:
     if isinstance(properties, dict):
         for parameter_name, parameter_description in parameter_descriptions.items():
             property_schema = properties.get(parameter_name)
-            if isinstance(property_schema, dict) and "description" not in property_schema:
+            if (
+                isinstance(property_schema, dict)
+                and "description" not in property_schema
+            ):
                 property_schema["description"] = parameter_description
 
     return_annotation = hints.get("return", signature.return_annotation)
     return_adapter: TypeAdapter[Any] | None = None
     output_schema: dict[str, Any] | None = None
     if return_annotation is not inspect.Signature.empty:
+        from .task_handle import ToolTaskHandle
+
+        if get_origin(return_annotation) in (UnionType, Union):
+            arguments = tuple(
+                a for a in get_args(return_annotation) if a is not ToolTaskHandle
+            )
+            if len(arguments) != len(get_args(return_annotation)):
+                return_annotation = (
+                    reduce(operator.or_, arguments) if arguments else Any
+                )
         return_adapter = TypeAdapter(_pydantic_annotation(return_annotation))
         output_schema = return_adapter.json_schema(mode="serialization")
 
@@ -407,11 +477,14 @@ def _compile_tool(handler: Callable[..., object]) -> _CompiledTool:
         side_effect=declaration.side_effect,
         idempotency=declaration.idempotency,
         timeout=declaration.timeout,
+        wait_timeout=declaration.wait_timeout,
         resource_key=declaration.resource_key,
         sandbox_profile=declaration.sandbox_profile,
         required_permissions=declaration.required_permissions,
     )
-    return _CompiledTool(handler, input_model, return_adapter, spec)
+    return _CompiledTool(
+        handler, input_model, return_adapter, spec, declaration.task_control
+    )
 
 
 def _docstring_summary(docstring: str) -> str:

@@ -481,6 +481,8 @@ async def test_recovery_reenters_binding_tool_capacity_and_cleans_cancelled_queu
         seed_bound = _binding(seed_runtime, spec, name="capacity-jobs")
         first = await _prepare_job(seed_manager, seed_bound, spec, _call(1))
         second = await _prepare_job(seed_manager, seed_bound, spec, _call(2))
+        # Model a crashed owner whose persisted lease has expired.
+        await history.renew_tool_observations(seed_manager._owner_id, -1)
 
     entered = 0
     peak = 0
@@ -619,6 +621,8 @@ async def test_running_job_recovery_obeys_idempotency_and_unknown_side_effects(
             unsafe_task.job_id, status=JobState.RUNNING.value
         )
         await history.update_tool_job(safe_task.job_id, status=JobState.RUNNING.value)
+        # Model a crashed owner whose persisted lease has expired.
+        await history.renew_tool_observations(manager._owner_id, -1)
 
     executed: list[int] = []
     registry = ExecutorRegistry()

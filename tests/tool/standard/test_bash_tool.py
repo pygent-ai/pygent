@@ -255,7 +255,6 @@ async def test_bash_ut_executes_in_requested_working_directory(tmp_path):
         tools.bash,
         command="import pathlib; print(pathlib.Path.cwd().name)",
         working_directory="nested",
-        timeout=5000,
     )
 
     exit_code, terminal_output = _parse_result(output)
@@ -287,7 +286,6 @@ async def test_bash_ut_can_disable_workspace_restriction(tmp_path):
         tools.bash,
         command="import pathlib; print(pathlib.Path.cwd())",
         working_directory=str(outside),
-        timeout=5000,
     )
 
     exit_code, terminal_output = _parse_result(output)
@@ -307,7 +305,6 @@ async def test_bash_ut_accepts_git_bash_msys_working_directory_on_windows(tmp_pa
         tools.bash,
         command="import pathlib; print(pathlib.Path.cwd().name)",
         working_directory=_to_msys_path(nested),
-        timeout=5000,
     )
     assert _parse_result(output) == ("0", f"nested{os.linesep}")
 
@@ -419,8 +416,8 @@ async def test_bash_timeout_terminates_windows_descendants(tmp_path):
         "print('started', flush=True); time.sleep(30)"
     )
 
-    result = await invoke_tool(tools.bash, {"command": parent, "timeout": 250})
-    assert result.error_code == "command_timeout"
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(tools._run_process(parent, str(tmp_path)), 0.25)
     await asyncio.sleep(1.1)
 
     assert not child_late.exists()
@@ -428,22 +425,14 @@ async def test_bash_timeout_terminates_windows_descendants(tmp_path):
 
 @pytest.mark.asyncio
 async def test_bash_ut_times_out_and_preserves_partial_terminal_output(tmp_path):
-    tools = PythonCommandTools(workspace_root=tmp_path)
-
-    result = await invoke_tool(
-        tools.bash,
-        {
-            "command": "import time; print('before', flush=True); time.sleep(1)",
-            "timeout": 250,
-        },
-    )
-
-    assert result.status == "unknown"
-    assert result.error_kind == "timeout"
-    assert result.error_code == "command_timeout"
-    assert result.side_effect_committed is None
-    assert f"before{os.linesep}" in (result.error or "")
-    assert "timed out after" in (result.error or "")
+    async with PythonCommandTools(workspace_root=tmp_path, timeout=0.25) as tools:
+        handle = await tools.bash(
+            "import time; print('before',flush=True); time.sleep(1)"
+        )
+        assert handle.task_id
+        snapshot = await tools.tool_task_get(handle.task_id)
+        assert "before" in snapshot["output"]
+        assert (await handle.result()).status == "succeeded"
 
 
 @pytest.mark.asyncio
@@ -457,12 +446,10 @@ async def test_bash_timeout_bounds_output_held_by_exited_parents_child(tmp_path)
     )
     started = time.monotonic()
 
-    with pytest.raises(ToolExecutionError) as raised:
-        await tools.bash(command=command, timeout=500)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(tools._run_process(command, str(tmp_path)), 0.5)
 
     elapsed = time.monotonic() - started
-    assert raised.value.code == "command_timeout"
-    assert "parent-exiting" in str(raised.value)
     assert elapsed < 3.5, f"output EOF held the invocation open for {elapsed:.3f}s"
 
 
@@ -475,7 +462,7 @@ async def test_bash_cancellation_bounds_output_held_by_exited_parents_child(tmp_
         "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)']); "
         f"pathlib.Path({str(started_file)!r}).write_text('ready')"
     )
-    task = asyncio.create_task(tools.bash(command=command))
+    task = asyncio.create_task(tools._run_process(command, str(tmp_path)))
     for _ in range(200):
         if started_file.exists():
             break
@@ -515,11 +502,12 @@ async def test_bash_bounds_stalled_taskkill_and_releases_transports(
 
     monkeypatch.setattr(loop, "subprocess_exec", spawn_with_stalled_taskkill)
     invocation = asyncio.create_task(
-        tools.bash(
-            command="import time; print('before', flush=True); time.sleep(10)",
-            timeout=250,
+        tools._run_process(
+            "import time; print('before', flush=True); time.sleep(10)", str(tmp_path)
         )
     )
+    await asyncio.sleep(0.25)
+    invocation.cancel()
     await asyncio.wait_for(terminator_started.wait(), 3)
     started = time.monotonic()
     if cancel:
@@ -530,12 +518,8 @@ async def test_bash_bounds_stalled_taskkill_and_releases_transports(
         with pytest.raises(asyncio.CancelledError):
             await invocation
     else:
-        with pytest.raises(ToolExecutionError) as raised:
+        with pytest.raises(asyncio.CancelledError):
             await invocation
-        assert raised.value.code == "command_timeout"
-        assert "before" in str(raised.value)
-        assert "cleanup incomplete" in str(raised.value)
-        assert "process terminated" not in str(raised.value)
     assert time.monotonic() - started < 3
     assert all(transport.is_closing() for transport in transports)
     for _ in range(100):
@@ -553,7 +537,7 @@ async def test_bash_bounds_stalled_taskkill_and_releases_transports(
 async def test_bash_drains_output_beyond_capture_limit(tmp_path, monkeypatch):
     monkeypatch.setattr(bash_module, "_MAX_FULL_OUTPUT_BYTES", 1024)
     output = await PythonCommandTools(workspace_root=tmp_path).bash(
-        command="import sys; sys.stdout.write('x' * 1000000)", timeout=5000
+        command="import sys; sys.stdout.write('x' * 1000000)"
     )
     exit_code, terminal_output = _parse_result(output)
     assert exit_code == "0"
@@ -589,9 +573,8 @@ async def test_bash_output_write_failure_terminates_process(tmp_path, monkeypatc
     monkeypatch.setattr(loop, "subprocess_exec", record_spawn)
     started = time.monotonic()
     with pytest.raises(OSError, match="capture disk full"):
-        await PythonCommandTools(workspace_root=tmp_path).bash(
-            command="import time; print('before', flush=True); time.sleep(10)",
-            timeout=5000,
+        await PythonCommandTools(workspace_root=tmp_path)._run_process(
+            "import time; print('before', flush=True); time.sleep(10)", str(tmp_path)
         )
     assert time.monotonic() - started < 3
     assert all(output.closed for output in files)
@@ -616,8 +599,8 @@ async def test_bash_owns_process_during_startup(tmp_path, monkeypatch, cancel):
 
     monkeypatch.setattr(loop, "subprocess_exec", delayed_spawn)
     task = asyncio.create_task(
-        PythonCommandTools(workspace_root=tmp_path).bash(
-            command="import time; time.sleep(10)", timeout=250
+        PythonCommandTools(workspace_root=tmp_path)._run_process(
+            "import time; time.sleep(10)", str(tmp_path)
         )
     )
     await asyncio.wait_for(started.wait(), 3)
@@ -628,9 +611,8 @@ async def test_bash_owns_process_during_startup(tmp_path, monkeypatch, cancel):
             with pytest.raises(asyncio.CancelledError):
                 await task
         else:
-            with pytest.raises(ToolExecutionError) as raised:
-                await task
-            assert raised.value.code == "command_timeout"
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(task, 0.25)
         assert time.monotonic() - begin < 3
         assert all(transport.is_closing() for transport in transports)
     finally:
@@ -656,8 +638,8 @@ async def test_bash_pipe_read_error_is_not_reported_as_timeout(
 
     monkeypatch.setattr(loop, "subprocess_exec", spawn_with_read_error)
     with pytest.raises(error_type, match="pipe read failed"):
-        await PythonCommandTools(workspace_root=tmp_path).bash(
-            command="import time; time.sleep(10)", timeout=250
+        await PythonCommandTools(workspace_root=tmp_path)._run_process(
+            "import time; time.sleep(10)", str(tmp_path)
         )
 
 
@@ -680,12 +662,13 @@ async def test_bash_cancellation_during_native_pipe_connection_is_bounded(
 
     monkeypatch.setattr(loop, "connect_read_pipe", slow_connect)
     task = asyncio.create_task(
-        PythonCommandTools(workspace_root=tmp_path).bash(
-            command=(
+        PythonCommandTools(workspace_root=tmp_path)._run_process(
+            (
                 "import subprocess,sys,time; "
                 "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)']); "
                 "time.sleep(10)"
-            )
+            ),
+            str(tmp_path),
         )
     )
     await asyncio.wait_for(connecting.wait(), 3)
@@ -714,7 +697,6 @@ async def test_bash_ut_truncates_large_output_without_losing_exit_code(tmp_path)
     output = await succeeded(
         tools.bash,
         command=f"import sys; sys.stdout.write('x' * ({_MAX_OUTPUT_BYTES} + 10))",
-        timeout=5000,
     )
 
     exit_code, terminal_output = _parse_result(output)
@@ -735,7 +717,6 @@ async def test_bash_ut_truncates_large_utf8_output_without_mojibake(tmp_path):
             "import sys; "
             f"sys.stdout.buffer.write(('\\u4e2d' * (({_MAX_OUTPUT_BYTES} // 3) + 10)).encode('utf-8'))"
         ),
-        timeout=5000,
     )
 
     exit_code, terminal_output = _parse_result(output)
@@ -750,14 +731,13 @@ async def test_bash_ut_truncates_large_utf8_output_without_mojibake(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_bash_ut_background_returns_pid(tmp_path):
-    output = await succeeded(
-        PythonCommandTools(workspace_root=tmp_path).bash,
-        command="import time; time.sleep(0.2)",
-        is_background=True,
-    )
-    assert "PID=" in output
-    assert "output is not captured" in output
+async def test_bash_ut_background_returns_managed_handle(tmp_path):
+    async with PythonCommandTools(workspace_root=tmp_path) as tools:
+        handle = await tools.bash(
+            command="import time; time.sleep(.2)", is_background=True
+        )
+        assert handle.task_id
+        assert (await handle.result()).status == "succeeded"
 
 
 @pytest.mark.parametrize(
@@ -793,7 +773,7 @@ async def test_bash_st_output_and_exit_code_match_real_bash(tmp_path, command):
     tools = BashTools(workspace_root=tmp_path, bash_executable=executable)
 
     expected = _run_real_bash(executable, command, str(tmp_path))
-    output = await succeeded(tools.bash, command=command, timeout=5000)
+    output = await succeeded(tools.bash, command=command)
     actual_exit_code, actual_output = _parse_result(output)
 
     assert actual_exit_code == str(expected[0])
@@ -809,9 +789,7 @@ async def test_bash_st_working_directory_matches_real_bash(tmp_path):
     tools = BashTools(workspace_root=tmp_path, bash_executable=executable)
 
     expected = _run_real_bash(executable, "pwd", str(nested))
-    output = await succeeded(
-        tools.bash, command="pwd", working_directory="nested", timeout=5000
-    )
+    output = await succeeded(tools.bash, command="pwd", working_directory="nested")
     actual_exit_code, actual_output = _parse_result(output)
     assert actual_exit_code == str(expected[0])
     assert actual_output == expected[1]
@@ -825,7 +803,7 @@ async def test_bash_st_glob_and_nonzero_exit_match_real_bash(tmp_path):
     command = "printf '%s\\n' *.txt; exit 7"
 
     expected = _run_real_bash(executable, command, str(tmp_path))
-    output = await succeeded(tools.bash, command=command, timeout=5000)
+    output = await succeeded(tools.bash, command=command)
     actual_exit_code, actual_output = _parse_result(output)
     assert actual_exit_code == str(expected[0])
     assert actual_output == expected[1]
@@ -844,7 +822,6 @@ async def test_bash_st_large_utf8_output_truncates_without_mojibake(tmp_path):
     output = await succeeded(
         tools.bash,
         command=f"{python_cmd} -c {shlex.quote(script)}",
-        timeout=10000,
     )
     actual_exit_code, actual_output = _parse_result(output)
 
@@ -886,7 +863,7 @@ async def test_bash_st_npm_commands_match_real_bash(tmp_path, command):
     tools = BashTools(workspace_root=tmp_path, bash_executable=executable)
 
     expected = _run_real_bash(executable, command, str(tmp_path))
-    output = await succeeded(tools.bash, command=command, timeout=30000)
+    output = await succeeded(tools.bash, command=command)
     actual_exit_code, actual_output = _parse_result(output)
     assert actual_exit_code == str(expected[0])
     assert actual_output == expected[1]
@@ -895,10 +872,12 @@ async def test_bash_st_npm_commands_match_real_bash(tmp_path, command):
 def test_bash_publishes_explicit_02_external_policy(tmp_path):
     spec = ToolKit(BashTools(workspace_root=tmp_path).bash).specs[0]
 
-    assert (spec.tool_id, spec.version) == ("standard.shell.bash", "2.0.0")
+    assert (spec.tool_id, spec.version) == ("standard.shell.bash", "3.0.0")
     assert spec.side_effect is ToolSideEffect.EXTERNAL
     assert spec.idempotency is IdempotencyPolicy.NOT_IDEMPOTENT
-    assert spec.timeout == 610
+    assert spec.timeout is None
+    assert spec.wait_timeout == 600
+    assert "timeout" not in spec.definition.parameters["properties"]
     assert spec.resource_key == "shell"
     assert spec.sandbox_profile == "workspace"
     assert spec.required_permissions == ("shell:execute",)

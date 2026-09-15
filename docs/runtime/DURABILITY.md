@@ -143,6 +143,10 @@ Pygent 不维护历史 durable 值的字段别名、迁移器或版本专用拒�
 
 结构化 Child 始终属于 Parent，Parent 终止前必须 cancel/join 未完成 Child。独立生命周期任务不得通过 `detached=True` 绕过这一规则。普通工具与 Agent-backed Tool 都可以 detach，但 Runtime 必须为调用创建独立 ToolTask 身份与 admission；需要 durable recovery 时，由独立 Job 承载该 ToolTask。转换完成后它不再是 Child，Parent 只保留稳定引用，但新任务仍受 Binding 与资源治理。
 
+ToolTask 的持久查询与执行恢复分开。`DurableToolTaskManager` 可利用现有 SQLite history 保存普通任务状态、输出快照和最终结果；`get_tool_task`、`get_tool_output`、`get_tool_result(wait=False)` 在重启后读取这些记录，不自动提交新 attempt。运行 owner 的观察租约失效后，未确认终态的任务查询为 `unknown` 并保留已保存输出；当前租约约 30 秒、约每 10 秒续期。该状态不证明进程已停止，也不授予新 owner 控制旧 Bash 进程的能力。记录写入受 owner 租约约束，丢失 owner 不能覆盖已经确定的查询结果。
+
+Bash 的有限等待不改变这条恢复边界：到期返回原 task_id，不取消、不重新启动、不延长既有执行预算。原生自动内存设施只承诺当前进程内管理；正常关闭仍承担取消、清理与保存结果责任。Bash 非幂等外部命令不因存在任务历史就获得重放资格。
+
 进程内 ToolTask 可以只具有 Runtime 生命周期内的独立身份，不自动承诺故障恢复。需要 durable recovery 的 Job 或 Workflow 必须拥有独立身份、持久化 admission、状态机、取消和保留策略。Parent 只能获得 `JobRef` 或等价引用；创建成功的判定点是 Job 已被可靠持久化，而不是后台 coroutine 已在本进程启动。
 
 参考实现把 durable detach 保存为独立 Job 记录。该记录原子携带 Job/ToolTask 两个稳定 ID、可移植请求、Binding/ExecutionPlan/resource/capability 身份与 attempt，不携带 Python callback 或 executor。重启恢复必须通过 `LocalRuntime.recover_tool_jobs(compatible_bound_module)`：Runtime 重新解析部署 registry、校验版本和 capability，并重新获取 Binding Tool capacity/resource gate。缺少兼容声明时 Job 保持可查询但不得执行。崩溃时已经 `RUNNING` 的非幂等写入或外部副作用进入 `unknown`；只有固有幂等，或已提交稳定 idempotency key 的调用，允许新 attempt 重放。

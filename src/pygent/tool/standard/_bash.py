@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import locale
+import math
 import os
 import shutil
 import signal
@@ -12,18 +13,26 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Any, cast
+from uuid import uuid4
 
-from pydantic import Field
-
-from pygent.tool.executors import ToolExecutionError
+from pygent.core import (
+    JsonValue,
+    active_infrastructure,
+    current_infrastructure,
+    thaw_json,
+)
+from pygent.core._tool_values import ToolCall, ToolResult, ToolTask
+from pygent.tool.executors import ToolExecutionError, ToolTaskManager
 from pygent.tool.functional import tool
-from pygent.tool.types import IdempotencyPolicy, ToolSideEffect
+from pygent.tool.task_handle import ToolTaskHandle
+from pygent.tool.types import (
+    IdempotencyPolicy,
+    ToolSideEffect,
+)
 
 from ._paths import ToolPathContext, resolve_dir_path
 
-_DEFAULT_TIMEOUT_MS = 30_000
-_MAX_TIMEOUT_MS = 600_000
 _MAX_OUTPUT_BYTES = 512 * 1024
 _MAX_FULL_OUTPUT_BYTES = 16 * 1024 * 1024
 _PROCESS_KILL_GRACE_SECONDS = 1.0
@@ -143,13 +152,6 @@ def _decode_output(data: bytes, max_bytes: int = _MAX_OUTPUT_BYTES) -> str:
         except LookupError:
             continue
     return data.decode("utf-8", errors="replace")
-
-
-def _normalize_timeout_seconds(timeout: float | None) -> float:
-    timeout_ms = _DEFAULT_TIMEOUT_MS if timeout is None else int(timeout)
-    if timeout_ms <= 0:
-        timeout_ms = _DEFAULT_TIMEOUT_MS
-    return min(timeout_ms, _MAX_TIMEOUT_MS) / 1000.0
 
 
 def _append_unique(paths: list[str], candidate: str | None) -> None:
@@ -272,14 +274,11 @@ def _format_result(
     truncated: bool = False,
     full_output_path: str | None = None,
     full_output_error: str | None = None,
-    timed_out_after: float | None = None,
     capture_truncated: bool = False,
     cleanup_complete: bool = True,
 ) -> str:
     result = f"exit_code: {exit_code}\noutput:\n{output}"
     notices = []
-    if timed_out_after is not None:
-        notices.append(f"timed out after {timed_out_after:.3g} seconds")
     if not cleanup_complete:
         notices.append(
             "process cleanup incomplete; output capture closed; descendants may still be running"
@@ -302,7 +301,7 @@ def _format_result(
 
 
 class _BashProcess(asyncio.SubprocessProtocol):
-    """Own a foreground transport and bounded capture until exit AND pipe EOF.
+    """Own a process transport and bounded capture until exit AND pipe EOF.
 
     Capturing through the public protocol API lets cleanup close the read end
     without waiting for inherited write handles or leaving a reader task behind.
@@ -433,7 +432,15 @@ class BashTools:
         workspace_root: str | Path,
         bash_executable: str | None = None,
         restrict_to_workspace: bool = True,
+        timeout: float = 600,
+        task_manager: ToolTaskManager | None = None,
     ) -> None:
+        if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout < 0:
+            raise ValueError("timeout must be finite and non-negative")
+        self.timeout = timeout
+        self._task_manager = task_manager
+        self._owns_task_manager = task_manager is None
+        self._closed = False
         self.path_context = ToolPathContext.from_workspace_root(
             workspace_root, restrict_to_workspace=restrict_to_workspace
         )
@@ -443,10 +450,10 @@ class BashTools:
 
     @tool(
         tool_id="standard.shell.bash",
-        version="2.0.0",
+        version="3.0.0",
         side_effect=ToolSideEffect.EXTERNAL,
         idempotency=IdempotencyPolicy.NOT_IDEMPOTENT,
-        timeout=610,
+        wait_timeout=600,
         resource_key="shell",
         sandbox_profile="workspace",
         required_permissions=("shell:execute",),
@@ -455,28 +462,130 @@ class BashTools:
         self,
         command: str,
         working_directory: str | None = None,
-        timeout: Annotated[float | None, Field(gt=0, le=_MAX_TIMEOUT_MS)] = None,
         description: str | None = None,
         is_background: bool = False,
-    ) -> str:
+    ) -> str | ToolTaskHandle:
         """Run one bash command in the configured workspace.
 
         Args:
             command: Complete command string passed to ``bash -lc``.
             working_directory: Directory resolved from workspace_root.
-            timeout: Execution and output timeout in milliseconds, capped at
-                600000, followed by at most two seconds of process cleanup.
             description: Optional caller-facing description; not executed.
-            is_background: Start an independent process and return its PID.
+            is_background: Immediately return a reference to the managed task.
         """
+
+        from pygent.tool.executors import current_tool_execution
 
         del description
         cwd = self._resolve_working_directory(working_directory)
-        if is_background:
-            return await self._run_background(command or "", cwd)
-        return await self._run_foreground(
-            command or "", cwd, _normalize_timeout_seconds(timeout)
+        context = current_tool_execution()
+        if context is not None:
+            return await self._run_process(command or "", cwd)
+        if self._closed:
+            raise RuntimeError("BashTools is closed")
+        kit = self.toolkit
+        spec = kit.specs[0]
+        registry = kit.build_registry()
+        task = await self.task_manager.submit(
+            spec,
+            ToolCall(
+                call_id=f"bash-{uuid4()}",
+                name="bash",
+                arguments={
+                    "command": command,
+                    "working_directory": working_directory,
+                },
+            ),
+            execution=registry.execute,
         )
+        handle = ToolTaskHandle(self.task_manager, task.task_id)
+        if is_background:
+            return handle
+        result = await handle.wait(self.timeout)
+        if result is None:
+            return handle
+        if result.status != "succeeded":
+            raise ToolExecutionError(
+                result.error or "bash task did not succeed",
+                kind=result.error_kind or "executor_error",
+                code=result.error_code,
+                retryable=result.retryable,
+                side_effect_committed=result.side_effect_committed,
+                missing_capabilities=result.missing_capabilities,
+            )
+        return cast(str, result.output)
+
+    @property
+    def toolkit(self):
+        from pygent.tool.functional import ToolKit
+
+        return ToolKit(
+            self.bash,
+            self.tool_task_get,
+            self.tool_task_stop,
+            wait_timeouts={"bash": self.timeout},
+        )
+
+    @property
+    def task_manager(self) -> ToolTaskManager:
+        from pygent.tool.executors import InMemoryToolTaskManager
+
+        if self._closed:
+            raise RuntimeError("BashTools is closed")
+        if self._task_manager is None:
+            self._task_manager = InMemoryToolTaskManager(self.toolkit.build_registry())
+        return self._task_manager
+
+    def _control_manager(self) -> ToolTaskManager:
+        if active_infrastructure() is not None:
+            manager = current_infrastructure().resolve_tool_task_manager()
+            if manager is not None:
+                return cast(ToolTaskManager, manager)
+        return self.task_manager
+
+    @tool(
+        tool_id="standard.shell.task_get",
+        version="3.0.0",
+        side_effect=ToolSideEffect.READ,
+        task_control=True,
+    )
+    async def tool_task_get(self, task_id: str) -> dict[str, Any]:
+        """Get a task snapshot, captured output and any final result without waiting."""
+        manager = self._control_manager()
+        result = await manager.get_result(task_id)
+        task = result.task if result is not None else await manager.get_task(task_id)
+        return {
+            "task": _task_json(task),
+            "output": thaw_json(await manager.get_output(task_id)),
+            "result": _result_json(result),
+        }
+
+    @tool(
+        tool_id="standard.shell.task_stop",
+        version="3.0.0",
+        side_effect=ToolSideEffect.WRITE,
+        idempotency=IdempotencyPolicy.INHERENT,
+        task_control=True,
+    )
+    async def tool_task_stop(self, task_id: str) -> dict[str, Any]:
+        """Request task cancellation; the returned snapshot records confirmed state."""
+        requested = await self._control_manager().cancel(task_id)
+        snapshot = await self.tool_task_get(task_id)
+        return {"cancel_requested": requested, **snapshot}
+
+    async def aclose(self) -> None:
+        self._closed = True
+        if self._owns_task_manager and self._task_manager is not None:
+            await self._task_manager.close(cancel=True)
+
+    async def close(self) -> None:
+        await self.aclose()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
 
     def _resolve_working_directory(self, working_directory: str | None) -> str:
         path = resolve_dir_path(working_directory, self.path_context)
@@ -505,59 +614,48 @@ class BashTools:
             kwargs["start_new_session"] = True
         return kwargs
 
-    async def _run_background(self, command: str, cwd: str) -> str:
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *self._command_args(command),
-                **self._process_kwargs(cwd, subprocess.DEVNULL),
-            )
-        except FileNotFoundError as exc:
-            raise ToolExecutionError(
-                "bash executable was not found",
-                kind="process_error",
-                code="executable_not_found",
-                side_effect_committed=False,
-            ) from exc
-        except OSError as exc:
-            raise ToolExecutionError(
-                "background command could not be started",
-                kind="process_error",
-                code="process_start_failed",
-                side_effect_committed=False,
-            ) from exc
-        return f"started background process PID={process.pid}; output is not captured"
+    async def _run_process(self, command: str, cwd: str) -> str:
+        from pygent.tool.executors import current_tool_execution
 
-    async def _run_foreground(
-        self, command: str, cwd: str, timeout_seconds: float
-    ) -> str:
+        context = current_tool_execution()
+        published_bytes = -1
         with tempfile.TemporaryFile() as output_file:
             process = _BashProcess(output_file)
-            timed_out = False
             cancelled = False
             try:
-                async with asyncio.timeout(timeout_seconds):
-                    try:
-                        await process.start(
-                            *self._command_args(command),
-                            **self._process_kwargs(cwd, asyncio.subprocess.PIPE),
-                        )
-                    except FileNotFoundError as exc:
-                        raise ToolExecutionError(
-                            "bash executable was not found",
-                            kind="process_error",
-                            code="executable_not_found",
-                            side_effect_committed=False,
-                        ) from exc
-                    except OSError as exc:
-                        raise ToolExecutionError(
-                            "command could not be started",
-                            kind="process_error",
-                            code="process_start_failed",
-                            side_effect_committed=False,
-                        ) from exc
-                    await asyncio.shield(process.outcome_ready)
-            except TimeoutError:
-                timed_out = True
+                try:
+                    await process.start(
+                        *self._command_args(command),
+                        **self._process_kwargs(cwd, asyncio.subprocess.PIPE),
+                    )
+                except FileNotFoundError as exc:
+                    raise ToolExecutionError(
+                        "bash executable was not found",
+                        kind="process_error",
+                        code="executable_not_found",
+                        side_effect_committed=False,
+                    ) from exc
+                except OSError as exc:
+                    raise ToolExecutionError(
+                        "command could not be started",
+                        kind="process_error",
+                        code="process_start_failed",
+                        side_effect_committed=False,
+                    ) from exc
+                while not process.outcome_ready.done():
+                    done, _ = await asyncio.wait({process.outcome_ready}, timeout=0.05)
+                    if (
+                        context is not None
+                        and context.publish_output is not None
+                        and process.captured != published_bytes
+                    ):
+                        position = output_file.tell()
+                        data, _ = _read_limited_output(output_file)
+                        output_file.seek(position)
+                        await context.publish_output(_decode_output(data))
+                        published_bytes = process.captured
+                    if done:
+                        break
             except asyncio.CancelledError:
                 cancelled = True
             finally:
@@ -576,9 +674,12 @@ class BashTools:
                             raise
                         cancelled = True
                 if cancelled:
+                    if context is not None and context.publish_output is not None:
+                        data, _ = _read_limited_output(output_file)
+                        await context.publish_output(_decode_output(data))
                     raise asyncio.CancelledError
 
-            if process.error is not None and not timed_out:
+            if process.error is not None:
                 raise process.error
             transport = process.transport
             output_file.flush()
@@ -590,28 +691,53 @@ class BashTools:
                     output_file, cwd, transport.get_pid() if transport else None
                 )
             returncode = transport.get_returncode() if transport else None
-            exit_code: int | str = (
-                "timeout" if timed_out else returncode if returncode is not None else -1
-            )
+            exit_code: int | str = returncode if returncode is not None else -1
             formatted = _format_result(
                 exit_code,
                 _decode_output(data),
                 truncated=truncated,
                 full_output_path=full_path,
                 full_output_error=full_error,
-                timed_out_after=timeout_seconds if timed_out else None,
                 capture_truncated=process.truncated,
                 cleanup_complete=cleanup_complete,
             )
-            if timed_out:
-                raise ToolExecutionError(
-                    formatted,
-                    kind="timeout",
-                    code="command_timeout",
-                    retryable=False,
-                    side_effect_committed=None,
-                )
+            if context is not None and context.publish_output is not None:
+                await context.publish_output(formatted)
             return formatted
+
+
+def _task_json(task: ToolTask | None) -> dict[str, Any] | None:
+    if task is None:
+        return None
+    return {
+        "task_id": task.task_id,
+        "call_id": task.call_id,
+        "tool_id": task.tool_id,
+        "version": task.version,
+        "state": task.state.value,
+        "job_id": task.job_id,
+        "metadata": thaw_json(cast(JsonValue, task.metadata)),
+    }
+
+
+def _result_json(result: ToolResult | None) -> dict[str, Any] | None:
+    if result is None:
+        return None
+    return {
+        "call_id": result.call_id,
+        "name": result.name,
+        "status": result.status,
+        "task": _task_json(result.task),
+        "output": thaw_json(result.output),
+        "error": result.error,
+        "error_kind": result.error_kind,
+        "error_code": result.error_code,
+        "retryable": result.retryable,
+        "side_effect_committed": result.side_effect_committed,
+        "tool_id": result.tool_id,
+        "tool_version": result.tool_version,
+        "missing_capabilities": list(result.missing_capabilities),
+    }
 
 
 async def _terminate_windows_process_tree(pid: int) -> bool:

@@ -22,6 +22,7 @@ from .standard import (
     WebFetchTools,
     WebSearchTools,
 )
+from .task_handle import ToolTaskHandle
 from .types import (
     IdempotencyPolicy,
     ToolAuthorizationDecision,
@@ -63,6 +64,7 @@ __all__ = [
     "ToolSpec",
     "ToolTask",
     "ToolTaskAdmission",
+    "ToolTaskHandle",
     "ToolTaskManager",
     "ToolTaskState",
     "TrustedAuthorizationAdapter",
