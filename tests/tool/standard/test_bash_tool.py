@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -443,6 +444,268 @@ async def test_bash_ut_times_out_and_preserves_partial_terminal_output(tmp_path)
     assert result.side_effect_committed is None
     assert f"before{os.linesep}" in (result.error or "")
     assert "timed out after" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_bash_timeout_bounds_output_held_by_exited_parents_child(tmp_path):
+    tools = PythonCommandTools(workspace_root=tmp_path)
+    child = "import time; time.sleep(4)"
+    command = (
+        "import subprocess,sys; "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
+        "print('parent-exiting', flush=True)"
+    )
+    started = time.monotonic()
+
+    with pytest.raises(ToolExecutionError) as raised:
+        await tools.bash(command=command, timeout=500)
+
+    elapsed = time.monotonic() - started
+    assert raised.value.code == "command_timeout"
+    assert "parent-exiting" in str(raised.value)
+    assert elapsed < 3.5, f"output EOF held the invocation open for {elapsed:.3f}s"
+
+
+@pytest.mark.asyncio
+async def test_bash_cancellation_bounds_output_held_by_exited_parents_child(tmp_path):
+    tools = PythonCommandTools(workspace_root=tmp_path)
+    started_file = tmp_path / "parent-exiting.txt"
+    command = (
+        "import subprocess,sys,pathlib; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)']); "
+        f"pathlib.Path({str(started_file)!r}).write_text('ready')"
+    )
+    task = asyncio.create_task(tools.bash(command=command))
+    for _ in range(200):
+        if started_file.exists():
+            break
+        await asyncio.sleep(0.01)
+    assert started_file.exists()
+    await asyncio.sleep(0.2)
+    started = time.monotonic()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    elapsed = time.monotonic() - started
+    assert elapsed < 3, f"cancellation waited for output EOF for {elapsed:.3f}s"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows taskkill behavior")
+@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.asyncio
+async def test_bash_bounds_stalled_taskkill_and_releases_transports(
+    tmp_path, monkeypatch, cancel
+):
+    tools = PythonCommandTools(workspace_root=tmp_path)
+    loop = asyncio.get_running_loop()
+    spawn = loop.subprocess_exec
+    transports = []
+    terminator_started = asyncio.Event()
+
+    async def spawn_with_stalled_taskkill(factory, executable, *args, **kwargs):
+        is_terminator = executable == "taskkill"
+        if is_terminator:
+            executable = sys.executable
+            args = ("-c", "import time; time.sleep(10)")
+        transport, protocol = await spawn(factory, executable, *args, **kwargs)
+        transports.append(transport)
+        if is_terminator:
+            terminator_started.set()
+        return transport, protocol
+
+    monkeypatch.setattr(loop, "subprocess_exec", spawn_with_stalled_taskkill)
+    invocation = asyncio.create_task(
+        tools.bash(
+            command="import time; print('before', flush=True); time.sleep(10)",
+            timeout=250,
+        )
+    )
+    await asyncio.wait_for(terminator_started.wait(), 3)
+    started = time.monotonic()
+    if cancel:
+        # Both cancellations arrive during cleanup; neither may abandon it.
+        invocation.cancel()
+        await asyncio.sleep(0.1)
+        invocation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await invocation
+    else:
+        with pytest.raises(ToolExecutionError) as raised:
+            await invocation
+        assert raised.value.code == "command_timeout"
+        assert "before" in str(raised.value)
+        assert "cleanup incomplete" in str(raised.value)
+        assert "process terminated" not in str(raised.value)
+    assert time.monotonic() - started < 3
+    assert all(transport.is_closing() for transport in transports)
+    for _ in range(100):
+        if all(transport.get_returncode() is not None for transport in transports):
+            break
+        await asyncio.sleep(0.01)
+    assert all(transport.get_returncode() is not None for transport in transports)
+    assert not any(
+        task.get_name().startswith("pygent-bash-") and not task.done()
+        for task in asyncio.all_tasks()
+    )
+
+
+@pytest.mark.asyncio
+async def test_bash_drains_output_beyond_capture_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(bash_module, "_MAX_FULL_OUTPUT_BYTES", 1024)
+    output = await PythonCommandTools(workspace_root=tmp_path).bash(
+        command="import sys; sys.stdout.write('x' * 1000000)", timeout=5000
+    )
+    exit_code, terminal_output = _parse_result(output)
+    assert exit_code == "0"
+    assert terminal_output.startswith("x" * 1024 + "\n[")
+    assert "captured output capped at 1024 bytes" in terminal_output
+
+
+@pytest.mark.asyncio
+async def test_bash_output_write_failure_terminates_process(tmp_path, monkeypatch):
+    real_temporary_file = bash_module.tempfile.TemporaryFile
+    files = []
+
+    def failing_output_file():
+        output = real_temporary_file()
+        files.append(output)
+
+        def fail_write(data):
+            raise OSError("capture disk full")
+
+        output.write = fail_write
+        return output
+
+    monkeypatch.setattr(bash_module.tempfile, "TemporaryFile", failing_output_file)
+    loop = asyncio.get_running_loop()
+    spawn = loop.subprocess_exec
+    transports = []
+
+    async def record_spawn(*args, **kwargs):
+        transport, protocol = await spawn(*args, **kwargs)
+        transports.append(transport)
+        return transport, protocol
+
+    monkeypatch.setattr(loop, "subprocess_exec", record_spawn)
+    started = time.monotonic()
+    with pytest.raises(OSError, match="capture disk full"):
+        await PythonCommandTools(workspace_root=tmp_path).bash(
+            command="import time; print('before', flush=True); time.sleep(10)",
+            timeout=5000,
+        )
+    assert time.monotonic() - started < 3
+    assert all(output.closed for output in files)
+    assert all(transport.is_closing() for transport in transports)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.asyncio
+async def test_bash_owns_process_during_startup(tmp_path, monkeypatch, cancel):
+    loop = asyncio.get_running_loop()
+    spawn = loop.subprocess_exec
+    transports = []
+    started = asyncio.Event()
+
+    async def delayed_spawn(factory, executable, *args, **kwargs):
+        transport, protocol = await spawn(factory, executable, *args, **kwargs)
+        transports.append(transport)
+        if executable != "taskkill":
+            started.set()
+            await asyncio.sleep(4)
+        return transport, protocol
+
+    monkeypatch.setattr(loop, "subprocess_exec", delayed_spawn)
+    task = asyncio.create_task(
+        PythonCommandTools(workspace_root=tmp_path).bash(
+            command="import time; time.sleep(10)", timeout=250
+        )
+    )
+    await asyncio.wait_for(started.wait(), 3)
+    begin = time.monotonic()
+    try:
+        if cancel:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            with pytest.raises(ToolExecutionError) as raised:
+                await task
+            assert raised.value.code == "command_timeout"
+        assert time.monotonic() - begin < 3
+        assert all(transport.is_closing() for transport in transports)
+    finally:
+        for transport in transports:
+            transport.close()
+
+
+@pytest.mark.parametrize("error_type", [OSError, TimeoutError])
+@pytest.mark.asyncio
+async def test_bash_pipe_read_error_is_not_reported_as_timeout(
+    tmp_path, monkeypatch, error_type
+):
+    loop = asyncio.get_running_loop()
+    spawn = loop.subprocess_exec
+
+    async def spawn_with_read_error(factory, *args, **kwargs):
+        transport, protocol = await spawn(factory, *args, **kwargs)
+        if args[0] != "taskkill":
+            loop.call_later(
+                0.02, protocol.pipe_connection_lost, 1, error_type("pipe read failed")
+            )
+        return transport, protocol
+
+    monkeypatch.setattr(loop, "subprocess_exec", spawn_with_read_error)
+    with pytest.raises(error_type, match="pipe read failed"):
+        await PythonCommandTools(workspace_root=tmp_path).bash(
+            command="import time; time.sleep(10)", timeout=250
+        )
+
+
+@pytest.mark.parametrize("connection_delay", [0.3, 3.0])
+@pytest.mark.asyncio
+async def test_bash_cancellation_during_native_pipe_connection_is_bounded(
+    tmp_path, monkeypatch, connection_delay
+):
+    loop = asyncio.get_running_loop()
+    connect = loop.connect_read_pipe
+    connecting = asyncio.Event()
+    pipes = []
+
+    async def slow_connect(*args, **kwargs):
+        result = await connect(*args, **kwargs)
+        pipes.append(result[0])
+        connecting.set()
+        await asyncio.sleep(connection_delay)
+        return result
+
+    monkeypatch.setattr(loop, "connect_read_pipe", slow_connect)
+    task = asyncio.create_task(
+        PythonCommandTools(workspace_root=tmp_path).bash(
+            command=(
+                "import subprocess,sys,time; "
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)']); "
+                "time.sleep(10)"
+            )
+        )
+    )
+    await asyncio.wait_for(connecting.wait(), 3)
+    begin = time.monotonic()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert time.monotonic() - begin < 3
+    # Even startup delivered after the cleanup deadline retains a closing owner.
+    for _ in range(200):
+        pending = [
+            task
+            for task in asyncio.all_tasks()
+            if task.get_name().startswith("pygent-bash-") and not task.done()
+        ]
+        if all(pipe.is_closing() for pipe in pipes) and not pending:
+            break
+        await asyncio.sleep(0.01)
+    assert all(pipe.is_closing() for pipe in pipes)
+    assert not pending
 
 
 @pytest.mark.asyncio

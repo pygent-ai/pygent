@@ -118,7 +118,7 @@ grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=10
 
 | 工具 | ToolSideEffect / 幂等 | 权限 | 关键边界 |
 |---|---|---|---|
-| `bash` | `EXTERNAL / NOT_IDEMPOTENT` | `shell:execute` | 默认限制 cwd 在 workspace；进程超时不超过 600 秒；取消或超时会终止前台命令的完整进程树；超时返回 `unknown` 且副作用提交状态未知；输出最多投影 512 KiB |
+| `bash` | `EXTERNAL / NOT_IDEMPOTENT` | `shell:execute` | 默认限制 cwd 在 workspace；执行及输出读取默认超时 30 秒，最多 600 秒；取消或超时共用最多 2 秒的进程树清理预算；超时返回 `unknown` 且副作用提交状态未知；输出最多投影 512 KiB |
 | `read`, `glob`, `grep`, `read_lints` | `READ / INHERENT` | `filesystem:read` | 默认拒绝 workspace 外路径；glob pattern、匹配结果和符号链接目标都重新验证；读取与搜索有界 |
 | `write` | `WRITE / INHERENT` | `filesystem:write` | 完整 UTF-8 原子替换；同一 FileTools 实例内的同路径变更串行；相同输入可重复得到相同文件内容 |
 | `edit`, `edit_notebook` | `WRITE / NOT_IDEMPOTENT` | `filesystem:write` | 同一实例内串行 read-modify-write 并原子提交；取消在所属写线程退出后返回；不确定失败不谎报未提交 |
@@ -129,6 +129,8 @@ grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=10
 所有标准工具的 `sandbox_profile` 为 `workspace`（Web 工具除外，它们通过 URL/DNS 边界限制访问）。该字段只是隔离需求，不是标准工具或 Runtime 已经实施宿主机沙箱的证明。在 managed/durable 部署中，应用必须为精确工具版本注册实际支持 `workspace` 的 sandbox-aware executor，Runtime 据此派生并验证 capability；应用不得通过重复 ToolSpec 声明或手工添加 capability 绕过该验证。Direct 模式不会因为工具名是“标准工具”而自动获得沙箱、授权或跨 Root 容量治理。
 
 `bash(is_background=True)` 是显式外部进程启动：返回 PID 后，该进程不再属于当前同步 ToolTask，调用方负责自己的进程监督与关闭策略。需要 Runtime 管理的独立生命周期时，应使用授权决定选择的 managed detach/Job，而不是把后台进程误当作 durable ToolTask。
+
+前台 Bash 的截止时间覆盖启动、进程退出和输出管道 EOF；父进程退出并不代表输出已经结束。超时、取消和失败由同一资源所有者收尾，重复取消不会重置清理预算。收尾到期会关闭本地输出管道并保留已捕获内容，不再等待后代关闭继承的 stdout。Windows 使用 `taskkill /T /F`，POSIX 使用进程组信号；若无法确认清理完成（例如 Windows 父进程已退出或后代脱离进程组），超时结果明确标注 `process cleanup incomplete`，不保证所有后代均已退出。尚未完成的启动保留关闭标记，稍后交付的 transport 会立即关闭。
 
 默认 `web_fetch` 不使用环境 HTTP 代理，因为代理会使实际连接目标脱离本地 DNS 校验。部署方注入的 `web_fetcher` 属于受信 adapter，必须自行提供等价的目标解析、实际 peer 约束、逐跳重定向校验、响应大小和连接清理保证。
 
