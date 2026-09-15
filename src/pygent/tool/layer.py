@@ -209,7 +209,8 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                     thaw_json(cast(FrozenJsonObject, spec.definition.parameters)),
                 )
             ).validate(thaw_json(cast(FrozenJsonObject, call.arguments)))
-        except ValidationError as exc:
+            spec.resolve_wait_timeout(cast(FrozenJsonObject, call.arguments))
+        except (ValidationError, ValueError) as exc:
             await self.emit(
                 kind="tool.rejected",
                 data={"call_id": call.call_id, "reason_code": "invalid_arguments"},
@@ -218,7 +219,7 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                 call_id=call.call_id,
                 name=call.name,
                 status="rejected",
-                error=exc.message,
+                error=exc.message if isinstance(exc, ValidationError) else str(exc),
                 error_kind="validation_error",
                 error_code="invalid_arguments",
                 retryable=False,
@@ -517,7 +518,8 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
         if spec.wait_timeout is not None:
             if manager is None:
                 raise RuntimeError("admitted tool task has no task manager")
-            timeout = 0.0 if cast(FrozenJsonObject, call.arguments).get("is_background") is True else spec.wait_timeout
+            timeout = spec.resolve_wait_timeout(cast(FrozenJsonObject, call.arguments))
+            assert timeout is not None
             if infrastructure.managed_execution_id is not None:
                 final = await infrastructure.wait_tool_task(task.task_id, timeout)
             else:

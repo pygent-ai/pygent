@@ -75,6 +75,7 @@ class _ToolDeclaration:
     description: str | None
     timeout: float | None
     wait_timeout: float | None
+    wait_timeout_parameter: str | None
     resource_key: str | None
     sandbox_profile: str | None
     required_permissions: tuple[str, ...]
@@ -123,6 +124,7 @@ def tool(
     idempotency: IdempotencyPolicy | None = None,
     timeout: float | None = None,
     wait_timeout: float | None = None,
+    wait_timeout_parameter: str | None = None,
     resource_key: str | None = None,
     sandbox_profile: str | None = None,
     required_permissions: tuple[str, ...] = (),
@@ -166,6 +168,7 @@ def tool(
         description=description.strip() if description is not None else None,
         timeout=timeout,
         wait_timeout=wait_timeout,
+        wait_timeout_parameter=wait_timeout_parameter,
         resource_key=resource_key,
         sandbox_profile=sandbox_profile,
         required_permissions=tuple(required_permissions),
@@ -478,6 +481,7 @@ def _compile_tool(handler: Callable[..., object]) -> _CompiledTool:
         idempotency=declaration.idempotency,
         timeout=declaration.timeout,
         wait_timeout=declaration.wait_timeout,
+        wait_timeout_parameter=declaration.wait_timeout_parameter,
         resource_key=declaration.resource_key,
         sandbox_profile=declaration.sandbox_profile,
         required_permissions=declaration.required_permissions,

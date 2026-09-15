@@ -131,7 +131,7 @@ Bash 与文件工具的 `sandbox_profile` 为 `workspace`；Web 工具通过 URL
 
 ### Bash 的有限等待与任务控制
 
-`BashTools(workspace_root=..., timeout=600, task_manager=None)` 的 `timeout` 单位为秒，只控制独立任务的前台等待时长。`standard.shell.bash@3.0.0` 声明 `wait_timeout=600`，没有执行硬超时；模型参数中没有 `timeout`。`bash(command, working_directory=None, description=None, is_background=False)` 只提交一次命令。期限内完成返回结果；等待到期或 `is_background=True` 返回同一任务的引用，进程与输出捕获继续由任务管理器持有。
+`BashTools(workspace_root=..., timeout=600, task_manager=None)` 的 `timeout` 单位为秒，只控制独立任务的前台等待时长。`standard.shell.bash@3.1.0` 声明 `wait_timeout=600`，没有执行硬超时；模型可传 `timeout` 覆盖本次等待时长，单位同为秒；省略或传 `None` 时使用装配配置。`bash(command, working_directory=None, description=None, is_background=False, timeout=None)` 只提交一次命令。期限内完成返回结果；等待到期或 `is_background=True` 返回同一任务的引用，进程与输出捕获继续由任务管理器持有。
 
 Python 原生调用返回 `str | ToolTaskHandle`。handle 提供稳定 `task_id`、`snapshot()`、`wait(timeout=None)`、`result()` 和 `cancel()`；`wait()` 到期返回 `None`，取消观察不会取消任务。未传管理器时，BashTools 自动创建并持有本地 `InMemoryToolTaskManager`，应用用异步上下文或 `await tools.aclose()`（也可 `await tools.close()`）关闭。传入的管理器仍由原所有者关闭；已接纳任务不因装配对象关闭而失去执行 owner。
 
@@ -585,3 +585,5 @@ async with bound_tools.stream(ai_message, context) as stream:
 如果首个目标行本身超过预算，会返回该行的 UTF-8 完整字符前缀，并明确提示
 行偏移不能读取该行余下内容，需要使用支持字节范围的工具。显式 `limit` 已满足或
 文件已读完时不追加大小截断提示。PDF 仍使用 `pages` 参数选择页码。
+
+Bash 的等待优先级为：调用 `timeout` > 装配配置 > 默认 600 秒。`timeout=0` 立即返回任务引用，`is_background=True` 同样立即返回；负数、非有限数和非数字被拒绝。覆盖值不修改装配配置，direct 和 managed 共用同一解析规则；该值不授予 detach 权限，也不延长 Runtime 的执行预算。`ToolSpec.wait_timeout_parameter="timeout"` 显式声明覆盖来源，不改变其他工具同名参数的含义。

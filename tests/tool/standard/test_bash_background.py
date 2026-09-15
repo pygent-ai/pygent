@@ -15,6 +15,36 @@ class PythonTools(BashTools):
 
 
 @pytest.mark.asyncio
+async def test_call_timeout_overrides_default_without_changing_next_call(tmp_path):
+    from pygent.tool import ToolTaskHandle
+
+    async with PythonTools(workspace_root=tmp_path, timeout=0) as tools:
+        result = await tools.bash("print('done')", timeout=5)
+        assert isinstance(result, str) and "done" in result
+        handle = await tools.bash("print('next')")
+        assert isinstance(handle, ToolTaskHandle)
+        assert (await handle.result()).status == "succeeded"
+        immediate = await tools.bash("print('zero')", timeout=0)
+        assert isinstance(immediate, ToolTaskHandle)
+        assert (await immediate.result()).status == "succeeded"
+        background = await tools.bash("print('background')", timeout=5, is_background=True)
+        assert isinstance(background, ToolTaskHandle)
+        assert (await background.result()).status == "succeeded"
+        fallback = await tools.bash("print('fallback')", timeout=None)
+        assert isinstance(fallback, ToolTaskHandle)
+        assert (await fallback.result()).status == "succeeded"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [-1, True, float("nan"), float("inf"), "2"])
+async def test_invalid_call_timeout_rejected_before_process_start(tmp_path, timeout):
+    async with PythonTools(workspace_root=tmp_path) as tools:
+        with pytest.raises(ValueError):
+            await tools.bash("open('started', 'w').close()", timeout=timeout)
+        assert not (tmp_path / "started").exists()
+
+
+@pytest.mark.asyncio
 async def test_native_timeout_keeps_one_process_and_captured_output(tmp_path):
     tools = PythonTools(workspace_root=tmp_path, timeout=0.15)
     try:

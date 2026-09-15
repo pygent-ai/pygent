@@ -872,12 +872,13 @@ async def test_bash_st_npm_commands_match_real_bash(tmp_path, command):
 def test_bash_publishes_explicit_02_external_policy(tmp_path):
     spec = ToolKit(BashTools(workspace_root=tmp_path).bash).specs[0]
 
-    assert (spec.tool_id, spec.version) == ("standard.shell.bash", "3.0.0")
+    assert (spec.tool_id, spec.version) == ("standard.shell.bash", "3.1.0")
     assert spec.side_effect is ToolSideEffect.EXTERNAL
     assert spec.idempotency is IdempotencyPolicy.NOT_IDEMPOTENT
     assert spec.timeout is None
     assert spec.wait_timeout == 600
-    assert "timeout" not in spec.definition.parameters["properties"]
+    assert "timeout" in spec.definition.parameters["properties"]
+    assert spec.wait_timeout_parameter == "timeout"
     assert spec.resource_key == "shell"
     assert spec.sandbox_profile == "workspace"
     assert spec.required_permissions == ("shell:execute",)

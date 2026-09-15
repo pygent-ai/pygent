@@ -151,8 +151,8 @@ tool_task_get 立即返回当前任务快照和已保存输出，或已有最终
 
 ## 8. 实现 API 对照
 
-- `BashTools(workspace_root=..., timeout=600, task_manager=None)`；`timeout` 为秒，有限等待到期继续执行。`standard.shell.bash@3.0.0` 声明 `wait_timeout=600`、`timeout=None`，模型没有逐次 timeout 参数。
-- `bash(command, working_directory=None, description=None, is_background=False) -> str | ToolTaskHandle`。`ToolTaskHandle` 提供 `task_id`、`snapshot()`、`wait(timeout=None)`、`result()` 和 `cancel()`；模型边界只输出 JSON。
+- `BashTools(workspace_root=..., timeout=600, task_manager=None)`；`timeout` 为秒，有限等待到期继续执行。`standard.shell.bash@3.1.0` 声明 `wait_timeout=600`、`timeout=None`，模型可传 `timeout` 覆盖本次等待时长，省略或传 null 时沿用装配配置；两者单位均为秒。
+- `bash(command, working_directory=None, description=None, is_background=False, timeout=None) -> str | ToolTaskHandle`。`ToolTaskHandle` 提供 `task_id`、`snapshot()`、`wait(timeout=None)`、`result()` 和 `cancel()`；模型边界只输出 JSON。
 - `.toolkit` 包含 Bash 和 `tool_task_get`、`tool_task_stop`；`StandardTools(bash_timeout=600, task_manager=None, ...)` 共装配十二个工具。装配对象提供异步上下文、`aclose()` 与异步 `close()`，只关闭自己创建的设施。
 - `@tool(wait_timeout=...)` 或 `ToolKit(..., wait_timeouts={"bash": seconds})` 提供装配等待策略；模型调用还须显式 detach 授权。同步授权保持同步执行，显式后台参数不能提升授权。
 - 运行中输出通过 `ToolExecutionContext.publish_output` 写入任务设施；公共读取为 manager `get_output` 和 Runtime `get_tool_output`。控制工具是受信 `task_control` adapter，不争用被目标任务占用的工具 permit，仍受 Execution 容量和授权约束。
@@ -164,3 +164,9 @@ tool_task_get 立即返回当前任务快照和已保存输出，或已有最终
 - `mypy src/pygent --follow-imports=silent`：89 个源文件通过；源代码及新增、相关测试 Ruff 检查通过。
 - 真实子进程覆盖有限等待、持续输出、停止、关闭清理和历史库重开查询；任务设施回归覆盖观察取消隔离、owner 租约、并发启动及输出 schema。
 - 本地 Windows 验证；本次没有重新执行跨平台 CI。重启只查询已保存记录，自动内存设施不提供重启查询。
+
+## 10. 调用级等待覆盖
+
+已确认恢复 Bash 的可选 `timeout` 入参：调用参数优先于装配配置，未配置时默认 600 秒；统一控制前台等待，到期继续后台运行。零值或 `is_background=True` 立即返回；负数、非有限值和非数字在启动前拒绝。direct 与 managed 共用解析函数，覆盖值不修改下一次调用的默认配置。通过 `wait_timeout_parameter` 显式声明参数映射，不重解释其他工具的 timeout，也不改变 detach 授权和执行预算。
+
+调用级覆盖验证：本地全量测试 1327 项通过；Ruff 与 mypy 通过。覆盖 direct/managed、默认回退、零值、非法参数及编解码；调用级覆盖纳入 0.3.15 发布。

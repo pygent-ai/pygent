@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from pygent.core import Message
+from pygent.core import JsonValue, Message
 from pygent.core._tool_values import (
     IdempotencyPolicy,
     ToolCall,
@@ -19,6 +20,8 @@ from pygent.core._tool_values import (
     _non_empty,
 )
 from pygent.core.values import _MESSAGE_SUBCLASS_TOKEN
+
+from ._waiting import resolve_wait_timeout
 
 ToolLifecycle = Literal["sync", "detach"]
 
@@ -34,6 +37,7 @@ class ToolSpec:
     idempotency: IdempotencyPolicy = IdempotencyPolicy.INHERENT
     timeout: float | None = None
     wait_timeout: float | None = None
+    wait_timeout_parameter: str | None = None
     resource_key: str | None = None
     sandbox_profile: str | None = None
     required_permissions: tuple[str, ...] = ()
@@ -57,10 +61,12 @@ class ToolSpec:
             or self.timeout <= 0
         ):
             raise ValueError("tool timeout must be finite and greater than zero")
-        for name in ("resource_key", "sandbox_profile"):
+        for name in ("resource_key", "sandbox_profile", "wait_timeout_parameter"):
             value = getattr(self, name)
             if value is not None:
                 _non_empty(value, name)
+        if self.wait_timeout_parameter is not None and self.wait_timeout is None:
+            raise ValueError("wait_timeout_parameter requires a default wait_timeout")
         if self.wait_timeout is not None and (
             isinstance(self.wait_timeout, bool)
             or not isinstance(self.wait_timeout, (int, float))
@@ -74,6 +80,18 @@ class ToolSpec:
         if len(permissions) != len(set(permissions)):
             raise ValueError("required_permissions contains duplicates")
         object.__setattr__(self, "required_permissions", permissions)
+
+    def resolve_wait_timeout(self, arguments: Mapping[str, JsonValue]) -> float | None:
+        override = (
+            arguments.get(self.wait_timeout_parameter)
+            if self.wait_timeout_parameter is not None
+            else None
+        )
+        return resolve_wait_timeout(
+            self.wait_timeout,
+            override,
+            is_background=arguments.get("is_background") is True,
+        )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

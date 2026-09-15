@@ -7,6 +7,24 @@ from pygent.runtime.codec import _tool_spec_from_dict, _tool_spec_to_dict
 from pygent.tool import ToolCall, ToolKit, ToolSideEffect, tool
 
 
+def test_call_wait_override_is_explicit_and_survives_codec(tmp_path):
+    from dataclasses import replace
+
+    from pygent.tool import BashTools
+
+    bash = BashTools(workspace_root=tmp_path, timeout=25)
+    spec = _tool_spec_from_dict(_tool_spec_to_dict(bash.toolkit.specs[0]))
+    assert spec.wait_timeout_parameter == "timeout"
+    assert spec.resolve_wait_timeout({}) == 25
+    assert spec.resolve_wait_timeout({"timeout": None}) == 25
+    assert spec.resolve_wait_timeout({"timeout": 1.5}) == 1.5
+    assert spec.resolve_wait_timeout({"timeout": 0}) == 0
+    assert spec.resolve_wait_timeout({"timeout": 50, "is_background": True}) == 0
+    # Other tools' same-named parameters retain their executor meaning.
+    ordinary = replace(spec, wait_timeout_parameter=None)
+    assert ordinary.resolve_wait_timeout({"timeout": 1}) == 25
+
+
 @pytest.mark.asyncio
 async def test_native_handle_is_projected_before_output_schema_and_effect_serialization():
     from pygent.core import thaw_json
@@ -204,7 +222,7 @@ async def test_managed_bash_controls_work_when_shell_capacity_is_full(tmp_path):
     class WorkspaceExecutor(LocalToolExecutor):
         sandbox_support = SandboxExecutorSupport(profiles=("workspace",))
 
-    bash = BashTools(workspace_root=tmp_path, timeout=0.05)
+    bash = BashTools(workspace_root=tmp_path, timeout=600)
     runtime = LocalRuntime()
     kit = bash.toolkit
     registry = kit.build_registry()
@@ -248,7 +266,12 @@ async def test_managed_bash_controls_work_when_shell_capacity_is_full(tmp_path):
         return message.results[0]
 
     try:
-        result = await invoke("bash", {"command": "printf ready; sleep 30"})
+        for invalid in (-1, True, "2"):
+            rejected = await invoke("bash", {"command": "touch should-not-exist", "timeout": invalid})
+            assert rejected.status == "rejected"
+            assert rejected.task is None
+        assert not (tmp_path / "should-not-exist").exists()
+        result = await invoke("bash", {"command": "printf ready; sleep 30", "timeout": 0.05})
         assert result.status == "detached", result
         assert result.task is not None
         task_id = result.task.task_id

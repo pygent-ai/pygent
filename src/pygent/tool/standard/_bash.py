@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import locale
-import math
 import os
 import shutil
 import signal
@@ -13,8 +12,10 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Annotated, Any, cast
 from uuid import uuid4
+
+from pydantic import Field
 
 from pygent.core import (
     JsonValue,
@@ -23,6 +24,7 @@ from pygent.core import (
     thaw_json,
 )
 from pygent.core._tool_values import ToolCall, ToolResult, ToolTask
+from pygent.tool._waiting import resolve_wait_timeout
 from pygent.tool.executors import ToolExecutionError, ToolTaskManager
 from pygent.tool.functional import tool
 from pygent.tool.task_handle import ToolTaskHandle
@@ -435,9 +437,10 @@ class BashTools:
         timeout: float = 600,
         task_manager: ToolTaskManager | None = None,
     ) -> None:
-        if isinstance(timeout, bool) or not math.isfinite(timeout) or timeout < 0:
-            raise ValueError("timeout must be finite and non-negative")
-        self.timeout = timeout
+        configured_timeout = resolve_wait_timeout(timeout)
+        if configured_timeout is None:
+            raise ValueError("configured timeout must be a number of seconds")
+        self.timeout = configured_timeout
         self._task_manager = task_manager
         self._owns_task_manager = task_manager is None
         self._closed = False
@@ -450,10 +453,11 @@ class BashTools:
 
     @tool(
         tool_id="standard.shell.bash",
-        version="3.0.0",
+        version="3.1.0",
         side_effect=ToolSideEffect.EXTERNAL,
         idempotency=IdempotencyPolicy.NOT_IDEMPOTENT,
         wait_timeout=600,
+        wait_timeout_parameter="timeout",
         resource_key="shell",
         sandbox_profile="workspace",
         required_permissions=("shell:execute",),
@@ -464,6 +468,7 @@ class BashTools:
         working_directory: str | None = None,
         description: str | None = None,
         is_background: bool = False,
+        timeout: Annotated[float | None, Field(ge=0, allow_inf_nan=False)] = None,
     ) -> str | ToolTaskHandle:
         """Run one bash command in the configured workspace.
 
@@ -472,11 +477,16 @@ class BashTools:
             working_directory: Directory resolved from workspace_root.
             description: Optional caller-facing description; not executed.
             is_background: Immediately return a reference to the managed task.
+            timeout: Foreground wait in seconds; overrides the configured default.
+                Expiry returns a background task reference without killing the command.
         """
 
         from pygent.tool.executors import current_tool_execution
 
         del description
+        wait_timeout = resolve_wait_timeout(
+            self.timeout, timeout, is_background=is_background
+        )
         cwd = self._resolve_working_directory(working_directory)
         context = current_tool_execution()
         if context is not None:
@@ -501,7 +511,7 @@ class BashTools:
         handle = ToolTaskHandle(self.task_manager, task.task_id)
         if is_background:
             return handle
-        result = await handle.wait(self.timeout)
+        result = await handle.wait(wait_timeout)
         if result is None:
             return handle
         if result.status != "succeeded":
