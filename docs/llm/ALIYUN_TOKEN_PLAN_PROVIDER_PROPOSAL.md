@@ -138,16 +138,21 @@ Realtime 模型的 reasoning 为 false。其他两条音频记录的 tools、str
 选择 `qwen3.8-max` 的 OpenAI 接口后，保存结果形如：
 
 ```yaml
+connections:
+  aliyun_token_plan:
+    provider: aliyun_token_plan
+    credential:
+      env: ALIYUN_TOKEN_PLAN_OPENAI_API_KEY
+    verify_ssl: true
+    protocols:
+      openai_chat_completions:
+        base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+
 models:
   aliyun_qwen_primary:
-    provider: aliyun_token_plan
+    connection: aliyun_token_plan
     model_id: qwen3.8-max
     protocol: openai_chat_completions
-    connection:
-      base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-      credential:
-        env: ALIYUN_TOKEN_PLAN_OPENAI_API_KEY
-      verify_ssl: true
     provider_options: {}
     capabilities:
       modalities:
@@ -174,7 +179,7 @@ model_groups:
     models: [aliyun_qwen_primary]
 ```
 
-同一个 Model ID 使用 Anthropic Messages 时保存为另一个本地模型条目，使用 Anthropic Base URL、credential 引用及该 protocol 对应的完整 capabilities。Pygent 不自动切换协议。
+同一个 Model ID 使用 Anthropic Messages 时，在 Connection 中增加 `anthropic_messages` endpoint，并保存为选择该 protocol 的另一个 Model 条目；该条目使用对应的完整 capabilities。Pygent 不自动切换协议。
 
 目录 ID、能力模板名和 override 不进入用户配置。用户可以逐项修改 UI 展开的值；保存结果始终是完整 capabilities。目录升级只影响之后新建或重新编辑的条目，不修改已经保存或正在使用的 `ModelSpec`。
 
@@ -204,7 +209,7 @@ ModelContinuation(
 )
 ```
 
-流式与非流式调用采用同一规则：字段不存在时不产生 continuation；字段存在时必须是字符串，否则按非法 Provider 响应拒绝。Continuation 的 `provider` 与 `model_id` 来自当前 `ModelSpec`，后续工具调用只在 Provider、model ID 与 protocol 同时匹配时回传。逻辑不依赖 Provider 白名单，也不跨 Provider、模型或 protocol 转换。现有 DeepSeek continuation 自然落入同一条协议规则，行为保持不变。
+流式与非流式调用采用同一规则：字段不存在时不产生 continuation；字段存在时必须是字符串，否则按非法 Provider 响应拒绝。Continuation 的 model key、`provider` 与 `model_id` 来自当前请求和 `ModelSpec`，后续工具调用只在 model key、Provider、model ID 与 protocol 同时匹配时回传。逻辑不依赖 Provider 白名单，也不跨 Provider、模型或 protocol 转换。现有 DeepSeek continuation 自然落入同一条协议规则，行为保持不变。
 
 ## Invoker 与能力警告
 

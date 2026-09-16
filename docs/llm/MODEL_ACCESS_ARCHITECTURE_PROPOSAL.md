@@ -10,29 +10,64 @@ Pygent 面向三类相互独立的参与者：
 
 模型服务商、Agent 开发者和 Agent 使用者之间不需要直接沟通。Pygent 在三方之间提供统一的模型配置契约。
 
-## 2. 用户配置一个真实可调用的模型
+## 2. 用户按 Connection、Model、ModelGroup 配置
 
-用户输入中的每个模型条目把以下信息放在一起：
+公开配置固定为三层：
 
-- 实际 Provider；
-- 该 Provider 使用的 Model ID；
-- 调用该模型使用的 protocol；
-- 连接配置；
-- Provider 私有选项；
-- 该模型在这个 Provider 上的完整 capabilities。
+- Connection 表示一份服务账号，使用用户可修改的 alias 标识；它保存 Provider、credential 引用、TLS/代理策略和一个或多个 protocol endpoint；
+- Model 表示通过某个 Connection 启用的模型，使用独立 alias 标识；它选择该 Connection 已配置的一个 protocol，并保存服务端实际接受的 Model ID、Provider 私有选项和完整 capabilities；
+- ModelGroup 引用一个或多个 Model alias，有序列表就是普通调用的主模型与 fallback 顺序。
 
-即使底层是同一个基础模型，只要 Provider 不同，就分别配置模型条目，因为 Model ID、接口和实际能力可能不同。
+同一个 Connection 可以启用多个模型，也可以同时配置多个 protocol endpoint。相同 `(connection alias, protocol)` 的模型复用一个 client；同一 Connection 下的不同 protocol 使用各自 endpoint 和 Adapter。
 
-`ModelConfig.from_mapping()` 从这份用户配置产生两个投影：
+完整 Mapping 形状为：
 
-- 模型语义投影包含 Provider、Model ID、protocol、Provider 私有选项和 capabilities；使用模型组时还包含 `ModelSpec` 的排列顺序；
-- 部署资源投影包含 endpoint、credential 引用、TLS、代理以及构造 client 和 invoker 所需的配置。
+```yaml
+connections:
+  company_gateway:
+    provider: custom_gateway
+    credential:
+      env: MODEL_API_KEY
+    verify_ssl: true
+    protocols:
+      openai_chat_completions:
+        base_url: https://gateway.example.com/v1
+      openai_responses:
+        base_url: https://gateway.example.com/v1
+      anthropic_messages:
+        base_url: https://gateway.example.com/anthropic
 
-模型语义对象命名为 `ModelSpec`。它固定包含 `provider`、`model_id`、`protocol`、`provider_options` 和 `capabilities`。`ModelEntry` 把用户配置中的本地名称与一个 `ModelSpec` 组合起来；名称用于 fallback、资源绑定和诊断，不进入模型语义。`config.models[...]` 返回完整、不可变的 `ModelEntry`，`config.connections[...]` 返回同名的静态连接配置。模型语义进入 `ModelCallLayer`，部署资源配置交给现有 direct invoker 构造或 managed resource resolver。连接、凭据和活跃 client 不进入 `ModelSpec`。
+models:
+  fast:
+    connection: company_gateway
+    protocol: openai_chat_completions
+    model_id: service-fast-model
+    provider_options: {}
+    capabilities:
+      modalities: {input: [text], output: [text]}
+      streaming: {output: [text]}
+      tools: {call: true, choice: [none, auto, required, named], parallel: true}
+      structured_output: {json_object: true, json_schema: false}
+      reasoning: {supported: true, controllable: true}
+      limits: {context_tokens: 131072, max_output_tokens: 8192}
+
+model_groups:
+  assistant:
+    models: [fast]
+```
+
+`ModelConfig.from_mapping()` 从这三层配置产生两个责任分离的投影：
+
+- 模型语义投影使用 Connection 的 Provider，以及 Model 的 Model ID、protocol、Provider 私有选项和 capabilities，形成完整 `ModelSpec`；
+- 部署资源投影使用 Model 的 Connection 引用与 protocol 选择，解析出 endpoint、credential 引用、TLS 和代理策略。
+
+用户不在 Model 中重复填写 Provider，但内部 `ModelSpec.provider` 不删除。`ModelEntry` 把模型 alias 与完整 `ModelSpec` 组合起来；alias 用于 fallback、资源绑定和诊断，不进入底层模型语义。`config.connections[...]`、`config.models[...]` 和 `config.model_groups[...]` 对应三层公开配置，`config.connection_for(model_key)` 返回模型已选 protocol 的不可变 `ResolvedModelConnection`。模型到 Connection 的关联由 `ModelConfig` 内部保存，不形成第四段用户配置。
+
+模型语义进入 `ModelCallLayer`，解析后的部署资源交给 direct invoker 构造或 managed resource resolver。Connection alias、credential 和活跃 client 不进入 `ModelSpec`。
 
 第一版 credential 只使用一种对象形式，其中二选一：`credential: {env: DEEPSEEK_API_KEY}` 引用环境变量，`credential: {none: true}` 表示无需认证。解析后的 credential 属于部署资源投影，不进入 `ModelSpec`，Pygent 不把环境变量中的真实值写回配置、定义、事件或持久化数据。
 
-Provider 使用开放的稳定字符串标识，不使用封闭枚举。Pygent 维护一份内置 Provider preset 列表，每个 Provider 的 preset 按 protocol 提供官方 base URL、鉴权类型、建议的 API Key 环境变量名称和 Provider 私有选项 schema。用户选择 Provider 与 protocol 后，UI 把该组值填入配置；未收录的 Provider 仍可使用自定义标识，并由用户填写 protocol、base URL 和鉴权配置。真实 API Key 不由 Pygent 提供，也不直接保存在模型配置中，配置只保存 credential 引用。
+Provider 使用 Connection 上的开放稳定字符串标识，不使用封闭枚举。Pygent 维护一份内置 Provider preset 列表，每个 Provider 的 preset 按 protocol 提供官方 base URL、鉴权类型、建议的 API Key 环境变量名称和 Provider 私有选项 schema。用户选择 Provider 后，UI 把用户选择的 protocol endpoint 填入 Connection；未收录的 Provider 仍可使用自定义标识，并由用户填写 protocol、base URL 和鉴权配置。真实 API Key 不由 Pygent 提供，也不直接保存在模型配置中，配置只保存 credential 引用。
 
 Provider preset、模型能力目录和协议 Adapter 相互独立：
 
@@ -42,7 +77,7 @@ Provider preset、模型能力目录和协议 Adapter 相互独立：
 
 多个 Provider 可以使用同一个 protocol 和 Adapter。模型组、retry 和 fallback 不解释 Provider 协议；`ModelInvoker` 选中 `ModelSpec` 后，由对应 protocol 的 Adapter 完成实际调用。
 
-内置协议枚举提供 `openai_chat_completions` 与 `anthropic_messages` 两个精确 wire contract，但 `ModelSpec.protocol` 继续接受开放字符串。内置 Provider preset 包含 DeepSeek 官方与 Alibaba Cloud Token Plan 的两种协议入口，以及 Anthropic 官方 Messages 入口。同一 Provider 上的模型可以由用户显式选择其公开的协议，Pygent 不自动探测或切换。Token Plan 的图像、视频和音频目录使用开放的 `dashscope_*` protocol；第一版只提供目录记录，不提供这些协议的内置 Adapter。
+内置协议枚举提供 `openai_chat_completions`、`openai_responses`、`anthropic_messages` 与 `gemini_generate_content` 四个精确 wire contract，但 `ModelSpec.protocol` 继续接受开放字符串。同一 Provider 的 Connection 可以配置多个协议入口，Model 必须显式选择其中一个，Pygent 不自动探测或切换。Token Plan 的图像、视频和音频目录使用开放的 `dashscope_*` protocol；只有应用装配对应 Adapter 后才能执行这些协议。
 
 Provider preset 和模型能力目录使用两级发布：
 
@@ -89,9 +124,9 @@ capabilities:
 
 模态取值封闭为 `text`、`image`、`audio`、`video`，`streaming.output` 必须是输出模态的子集。两个 limits 在无法由官方资料确认时保存为 `null`。
 
-## 4. 多模型只组合 ModelSpec
+## 4. 模型组只组合已启用模型
 
-用户可以把一个或多个 `ModelSpec` 配成一个模型组：
+用户可以把一个或多个已启用的 Model alias 配成模型组：
 
 ```yaml
 model_groups:
@@ -101,7 +136,7 @@ model_groups:
       - qwen_backup
 ```
 
-`ModelSpec` 的排列顺序就是主模型和 fallback 顺序。
+解析后的 `ModelEntry` 排列顺序就是普通调用的主模型和 fallback 顺序。模型组不重复保存 Connection、protocol 或 capabilities。
 
 模型服务商负责服务端配额和限流。Pygent 提供整体模型并发控制：managed 模式使用 Binding 的模型容量，direct 模式由调用方控制并发；`ModelSpec` 和 `ModelGroup` 都不单独配置容量。
 
@@ -155,6 +190,7 @@ model_layer = ModelCallLayer(
 
 - `ModelConfig.from_mapping()` 只负责把一份 Mapping 转换为模型语义和部署资源两个投影；
 - `ModelConfig.from_mapping()` 不会自动把配置交给 Runtime；
+- `config.connection_for(model_key)` 是 direct invoker 与 managed resolver 取得已解析部署连接的唯一公开入口；
 - Binding 不重复接收同一份模型配置；
 - 完整、不可变的模型语义配置进入 `ModelCallLayer`；
 - 连接、凭据和活跃 client 继续由现有部署资源机制管理；

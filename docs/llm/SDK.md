@@ -2,6 +2,8 @@
 
 本文是 LLM 的第二级契约，必须服从 [LLM 第一原则](FEATURES.md)。
 
+本页先冻结 Connection、Model、ModelGroup 三层配置契约；`ConnectionConfig`、`ResolvedModelConnection`、`ModelConfig.connection_for()` 及对应 Mapping 解析尚待实现，当前不能据此宣称运行时已经接受该配置。
+
 ## 从 Mapping 加载
 
 Pygent 接收普通 Mapping，不绑定 YAML。YAML、JSON、数据库或 UI 表单由应用转换成 Mapping 后使用同一个入口：
@@ -13,7 +15,7 @@ config = ModelConfig.from_mapping(user_config)
 
 primary = config.models["deepseek_primary"]
 assistant = config.model_groups["assistant"]
-connection = config.connections["deepseek_primary"]
+connection = config.connection_for("deepseek_primary")
 
 assert BuiltinModelProtocol.OPENAI_CHAT_COMPLETIONS == "openai_chat_completions"
 assert BuiltinModelProtocol.OPENAI_RESPONSES == "openai_responses"
@@ -24,16 +26,25 @@ assert BuiltinModelProtocol.GEMINI_GENERATE_CONTENT == "gemini_generate_content"
 完整配置形状：
 
 ```yaml
+connections:
+  company_gateway:
+    provider: custom_gateway
+    credential:
+      env: MODEL_API_KEY
+    verify_ssl: true
+    protocols:
+      openai_chat_completions:
+        base_url: https://gateway.example.com/v1
+      openai_responses:
+        base_url: https://gateway.example.com/v1
+      anthropic_messages:
+        base_url: https://gateway.example.com/anthropic
+
 models:
   deepseek_primary:
-    provider: deepseek
+    connection: company_gateway
     model_id: deepseek-v4-flash
     protocol: openai_chat_completions
-    connection:
-      base_url: https://api.deepseek.com
-      credential:
-        env: DEEPSEEK_API_KEY
-      verify_ssl: true
     provider_options: {}
     capabilities:
       modalities: {input: [text], output: [text]}
@@ -51,7 +62,9 @@ model_groups:
     models: [deepseek_primary]
 ```
 
-解析严格拒绝未知字段、空名称、重复组条目、未知模型引用、不完整 capabilities、非法 URL、URL 内嵌凭据，以及同时设置 `credential.env` 和 `credential.none`。模态只能是 `text`、`image`、`audio`、`video`，`streaming.output` 必须属于输出模态；无法确认的 token limit 显式写 `null`。解析阶段不会读取 `DEEPSEEK_API_KEY`。
+`company_gateway` 是 Connection alias，`deepseek_primary` 是模型 alias，`assistant` 是模型组名称。Connection 的 `provider` 是开放字符串；内置 Provider 与自定义 Provider 使用相同结构。Model 的 `protocol` 必须引用所选 Connection 的 `protocols` 条目。解析器用 Connection 的 Provider 与 Model 的 model ID、protocol、options 和 capabilities 构造完整 `ModelSpec`，因此 Model 不重复保存 Provider。
+
+解析严格拒绝未知字段、空名称、重复组条目、未知 Connection/Model 引用、Connection 中不存在的 protocol、不完整 capabilities、非法 URL、URL 内嵌凭据，以及同时设置 `credential.env` 和 `credential.none`。模态只能是 `text`、`image`、`audio`、`video`，`streaming.output` 必须属于输出模态；无法确认的 token limit 显式写 `null`。解析阶段不会读取 `MODEL_API_KEY`。
 
 ## Direct：单模型
 
@@ -66,7 +79,7 @@ from pygent.llm import (
 )
 
 entry = config.models["deepseek_primary"]
-connection = config.connections[entry.name]
+connection = config.connection_for(entry.name)
 api_key = connection.credential.resolve()  # 部署边界才读取环境变量
 
 client = OpenAICompatibleClient(
@@ -87,7 +100,27 @@ model_layer = ModelCallLayer(
 )
 ```
 
-单模型会规范化成名称为 `entry.name` 的单条目模型组。调用方在结束时关闭 invoker；配置对象不持有 client。
+`connection_for()` 返回该模型已经选定 protocol 后的不可变 `ResolvedModelConnection`，包含 Connection alias、Provider、protocol、base URL、credential 引用、TLS 和代理策略。单模型会规范化成名称为 `entry.name` 的单条目模型组。调用方在结束时关闭 invoker；配置对象不持有 client。
+
+多个模型引用同一个 Connection 和 protocol 时，应用只创建一个 client，再按模型 alias 绑定给 Invoker：
+
+```python
+entries = (config.models["fast"], config.models["reasoner"])
+connection = config.connection_for(entries[0].name)
+assert all(config.connection_for(entry.name) == connection for entry in entries)
+
+shared_client = OpenAICompatibleClient(
+    base_url=connection.base_url,
+    api_key=connection.credential.resolve(),
+    verify_ssl=connection.verify_ssl,
+)
+invoker = DefaultModelInvoker(
+    adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
+    clients={entry.name: shared_client for entry in entries},
+)
+```
+
+共享单位是 `(connection alias, protocol)`。不同 protocol 使用各自 Adapter 和 endpoint，即使它们属于同一个 Connection。Invoker 关闭时对相同 client 实例去重。
 
 ## Direct：Anthropic Messages
 
@@ -97,7 +130,7 @@ Anthropic Messages 使用独立的 client 和 Adapter。该协议要求每次请
 from pygent.llm import AnthropicMessagesAdapter, AnthropicMessagesClient
 
 entry = config.models["anthropic_primary"]
-connection = config.connections[entry.name]
+connection = config.connection_for(entry.name)
 client = AnthropicMessagesClient(
     base_url=connection.base_url,
     api_key=connection.credential.resolve(),
@@ -115,7 +148,7 @@ model_layer = ModelCallLayer(
 )
 ```
 
-DeepSeek 官方和 Alibaba Cloud Token Plan 都可以使用同一 Adapter。用户必须在配置中显式选择对应 Provider preset 的 `anthropic_messages` endpoint；使用 OpenAI Chat Completions 时则选择该 Provider 的 `openai_chat_completions` endpoint。Pygent 不自动探测或切换协议。
+DeepSeek 官方和 Alibaba Cloud Token Plan 都可以使用同一 Adapter。用户先在 Connection 中启用对应 Provider preset 的 `anthropic_messages` endpoint，再由 Model 显式选择它；使用 OpenAI Chat Completions 时选择同一 Connection 中的 `openai_chat_completions` endpoint。Pygent 不自动探测或切换协议。
 
 ## Direct：多模型 fallback
 
@@ -191,7 +224,7 @@ token_plan_capabilities = ModelCapabilityCatalog.builtin().models[
 ]
 ```
 
-Token Plan 的 OpenAI preset 使用 `ALIYUN_TOKEN_PLAN_OPENAI_API_KEY` 和 `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`；Anthropic preset 使用 `ALIYUN_TOKEN_PLAN_ANTHROPIC_API_KEY` 和 `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic`。应用把所选 preset 与完整 capability 记录复制进普通 `ModelConfig` Mapping。目录同时展示图像、视频和音频模型；其五个 `dashscope_*` protocol 第一版没有内置 Adapter，应用应只在自行装配对应 Adapter 后标记为可执行。
+Token Plan 的 OpenAI preset 使用 `ALIYUN_TOKEN_PLAN_OPENAI_API_KEY` 和 `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`；Anthropic preset 使用 `ALIYUN_TOKEN_PLAN_ANTHROPIC_API_KEY` 和 `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic`。应用把所选 Provider preset 的协议入口填入 Connection，把完整 capability 记录填入引用该 Connection 的 Model。目录同时展示图像、视频和音频模型；其五个 `dashscope_*` protocol 第一版没有内置 Adapter，应用应只在自行装配对应 Adapter 后标记为可执行。
 
 自定义模型可以从模板展开；两个 limits 必须显式提供：
 
@@ -223,7 +256,7 @@ entry = ModelEntry(
 )
 ```
 
-`provider_options` 是冻结的模型语义。DeepSeek 校验依据 `ModelSpec.provider`，实际 Adapter 分派依据 `ModelSpec.protocol`。
+`provider_options` 是冻结的模型语义。通过 Mapping 加载时，`ModelSpec.provider` 来自 Model 引用的 Connection，`ModelSpec.protocol` 来自 Model 选择的 protocol；直接构造 `ModelSpec` 时仍显式提供完整语义。DeepSeek 校验依据 `ModelSpec.provider`，实际 Adapter 分派依据 `ModelSpec.protocol`。
 
 Alibaba Cloud Token Plan 的 OpenAI 扩展字段为 `enable_thinking`、`preserve_thinking`、`reasoning_effort`、`thinking`、`thinking_budget` 和 `tool_stream`。Adapter 对字段、类型和枚举做闭集校验；例如：
 

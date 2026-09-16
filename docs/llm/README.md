@@ -1,15 +1,20 @@
-# LLM 第一原则
+# LLM 配置与执行
+
+本页冻结下一版实现必须收敛的配置契约；当前实现状态以 [LLM SDK](SDK.md) 顶部说明为准。
 
 ## 配置边界
 
-Pygent 把模型信息分成两个不可混合的投影：
+Pygent 的公开配置固定分为 Connection、Model 和 ModelGroup 三层：
 
-- `ModelSpec` 是纯模型语义，包含 `provider`、`model_id`、`protocol`、`provider_options` 和完整 `capabilities`；
-- `ModelConnection` 是部署资源配置，包含 endpoint、credential 引用和 TLS 策略。
+- `ConnectionConfig` 表示一份服务账号配置，包含开放的 Provider 标识、credential 引用、TLS/代理策略，以及按 protocol 保存的 endpoint；
+- Model 表示一个已启用模型，引用 Connection alias 和其中一个 protocol，保存服务端实际接受的 model ID、Provider 私有选项和完整 capabilities；
+- `ModelGroup` 保存有序的已启用模型，顺序就是普通调用的 fallback 顺序。
+
+解析后，Model 的 `connection` 引用与所选 protocol endpoint 形成部署资源投影；Connection 的 Provider、Model 的 model ID 与 protocol、Provider 私有选项和 capabilities 形成完整 `ModelSpec`。因此用户不在 Model 中重复填写 Provider，但 `ModelSpec.provider` 仍是完整模型语义的一部分。
 
 `ModelEntry` 用本地配置名包装一个 `ModelSpec`。这个名称是 client 绑定、fallback、资源映射和诊断使用的稳定 `model_key`，不属于底层模型语义。`ModelGroup` 保存有序的 `ModelEntry`，顺序就是 fallback 顺序。
 
-`ModelConfig.from_mapping()` 一次产生两个不可变投影：`models`/`model_groups` 与 `connections`。解析不读取环境变量、不创建 client，也不注册 Runtime。真实 credential 只在部署资源装配时解析，不能进入定义摘要、事件、持久化数据或 `repr`。
+`ModelConfig.from_mapping()` 一次产生不可变的 `connections`、`models` 和 `model_groups`，并在内部保存模型到 Connection 的部署关联。`config.connection_for(model_key)` 是 direct invoker 和 managed resolver 查询已选 protocol endpoint 的唯一公开方法；内部关联不是第四段用户配置。解析不读取环境变量、不创建 client，也不注册 Runtime。真实 credential 只在部署资源装配时解析，不能进入定义摘要、事件、持久化数据或 `repr`。
 
 ## 能力是用户声明的事实
 
@@ -30,7 +35,7 @@ Capabilities 不用于自动选模型。调用与声明不一致时，框架发�
 
 ## Provider、protocol 与连接解耦
 
-Provider 是开放字符串。Provider preset 只提供 UI/配置默认值；Adapter 按 `protocol` 注册；client 按 `ModelEntry.name` 绑定。多个 Provider 可以共享同一个 protocol Adapter。
+Provider 是 Connection 上的开放字符串。Provider preset 只提供 UI/配置默认值；一个 Connection 可以保存多个 protocol endpoint，Model 必须从其 Connection 已配置的 protocol 中选择一个。Adapter 按 `protocol` 注册；client 按 `(connection alias, protocol)` 创建和复用，再按 `ModelEntry.name` 绑定给 Invoker。多个 Provider 可以共享同一个 protocol Adapter。
 
 内置协议使用 `BuiltinModelProtocol` 表达当前由 Pygent 实现的 wire contract：
 
@@ -39,7 +44,7 @@ Provider 是开放字符串。Provider preset 只提供 UI/配置默认值；Ada
 - `ANTHROPIC_MESSAGES`：`anthropic_messages`；
 - `GEMINI_GENERATE_CONTENT`：`gemini_generate_content`。
 
-`ModelSpec.protocol` 仍保存开放字符串，第三方 Adapter 可以定义自己的 protocol。内置 Provider 目录按 protocol 提供连接默认值，当前覆盖 DeepSeek、Anthropic、OpenAI、Google Gemini、Alibaba Cloud Model Studio、智谱、Moonshot、MiniMax、火山引擎和 xAI；Alibaba Cloud Token Plan 作为独立 Provider。一个 Provider 可以提供多个协议，例如 OpenAI 同时提供 Chat Completions 与 Responses，DeepSeek、Moonshot、MiniMax 和 Token Plan 同时提供 OpenAI Chat Completions 与 Anthropic Messages。目录只提供 base URL、credential 环境变量名和表单 schema，不提供或读取真实 API key。
+`ModelSpec.protocol` 仍保存开放字符串，第三方 Adapter 可以定义自己的 protocol。内置 Provider 目录按 protocol 提供 Connection 默认值，当前覆盖 DeepSeek、Anthropic、OpenAI、Google Gemini、Alibaba Cloud Model Studio、智谱、Moonshot、MiniMax、火山引擎和 xAI；Alibaba Cloud Token Plan 作为独立 Provider。一个 Provider 可以提供多个协议，例如 OpenAI 同时提供 Chat Completions 与 Responses，DeepSeek、Moonshot、MiniMax 和 Token Plan 同时提供 OpenAI Chat Completions 与 Anthropic Messages。UI 选择 Provider 时把需要的 protocol endpoint 填入 Connection；目录只提供 base URL、credential 环境变量名和表单 schema，不提供或读取真实 API key。
 
 内置能力目录按 `(provider, model_id, protocol)` 区分同一模型的不同服务与协议。目录中的模型身份和能力来自对应官方 Provider 资料；网关别名和外部搜索服务不进入生产目录。OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini Generate Content 由内置 Adapter 执行；仅进入目录但没有内置 Adapter 的媒体协议，需要应用自行装配对应 Adapter 后才能调用。
 

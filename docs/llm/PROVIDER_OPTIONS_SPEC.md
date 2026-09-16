@@ -34,7 +34,7 @@ ModelSpec(
 - streaming transport 开关；
 - `model`、消息、工具和框架生成的请求字段。
 
-连接信息使用 `ModelConnection`，streaming transport 使用 `ModelCapabilities.streaming.output`，retry 使用 Layer 的 `RetryPolicy`。
+连接信息使用顶层 `ConnectionConfig` 和其中按 protocol 保存的 endpoint；Model 通过 Connection alias 与 protocol 选择它。`ModelConfig.connection_for(model_key)` 返回解析后的 `ResolvedModelConnection`。streaming transport 使用 `ModelCapabilities.streaming.output`，retry 使用 Layer 的 `RetryPolicy`。
 
 ## 校验职责
 
@@ -72,4 +72,4 @@ Alibaba Cloud Token Plan 严格接受 `enable_thinking`、`preserve_thinking`、
 
 Anthropic Messages 的 `GenerationConfig.max_output_tokens` 是必填正整数。它是 Provider-neutral 生成参数，不放入 `provider_options`。结构化输出由 Pygent 的 response schema 投影到 `output_config.format`，用户不能通过 Provider options 覆盖该保留字段。
 
-Anthropic 官方 thinking block 必须带非空 signature。使用相同 Messages wire contract 的其他 Provider 可以省略 signature；Adapter 在 continuation 中保留实际收到的形状，并只在 Provider、model ID 与 protocol 同时匹配时回传。兼容规则不允许放宽 Anthropic 官方响应校验。
+Anthropic 官方 thinking block 必须带非空 signature。使用相同 Messages wire contract 的其他 Provider 可以省略 signature；Adapter 在 continuation 中保留实际收到的形状，并只在 model key、Provider、model ID 与 protocol 同时匹配时回传。兼容规则不允许放宽 Anthropic 官方响应校验。

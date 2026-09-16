@@ -4,9 +4,9 @@
 
 Pygent 增加原生 `anthropic_messages` 协议支持，并让同一个 Provider 可以通过不同协议访问模型。实现保持 Provider、协议、模型语义和连接资源彼此分离：
 
-- `ModelSpec.provider` 表示模型服务来源；
+- Connection 的 `provider` 表示模型服务来源，并在解析时进入 `ModelSpec.provider`；
 - `ModelSpec.protocol` 决定请求格式和 Adapter；
-- `ModelConnection` 决定端点、凭据引用和 TLS；
+- `ConnectionConfig` 保存凭据、TLS 与多个 protocol endpoint，Model 显式选择其中一个；
 - client 继续按 `ModelEntry.name` 绑定；
 - `ModelCallLayer`、Invoker、Runtime、fallback、Binding 和资源生命周期继续使用现有语义。
 
@@ -22,7 +22,7 @@ Pygent 增加原生 `anthropic_messages` 协议支持，并让同一个 Provider
 | `deepseek` | `openai_chat_completions` | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
 | `deepseek` | `anthropic_messages` | `https://api.deepseek.com/anthropic` | `DEEPSEEK_API_KEY` |
 
-协议不根据 URL、模型名或 Provider 自动猜测。`ModelConfig` 为同一个配置键产生语义侧的完整 `ModelEntry` 和资源侧的 `ModelConnection`；其中 protocol 与 connection 必须成对配置。同一模型通过不同协议访问时是两个独立条目，可以进入同一个 `ModelGroup`，顺序仍然表示 fallback 顺序。
+协议不根据 URL、模型名或 Provider 自动猜测。一个 Connection 可以保存同一 Provider 的多个 protocol endpoint；每个 Model 通过 Connection alias 与 protocol 显式选择其中一个。`ModelConfig` 由 Connection 的 Provider 与 Model 的其余语义产生完整 `ModelEntry`，并通过 `connection_for(model_key)` 提供解析后的 `ResolvedModelConnection`。同一模型通过不同协议访问时是两个独立 Model 条目，可以进入同一个 `ModelGroup`，顺序仍然表示 fallback 顺序。
 
 `ModelContinuation` 不跨协议转换。进行中的 thinking/tool loop 应继续使用产生该 continuation 的 Provider 和协议；协议不同的后续调用不会携带该 continuation。
 
@@ -41,10 +41,12 @@ Pygent 为已经内置 Adapter 的协议提供便利枚举：
 ```python
 class BuiltinModelProtocol(StrEnum):
     OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
+    OPENAI_RESPONSES = "openai_responses"
     ANTHROPIC_MESSAGES = "anthropic_messages"
+    GEMINI_GENERATE_CONTENT = "gemini_generate_content"
 ```
 
-`ModelSpec.protocol` 仍然是开放字符串语义，也接受 `BuiltinModelProtocol`，构造时统一保存为普通字符串。第三方 Adapter 可以使用自定义 protocol，不需要修改该枚举。Provider catalog、Mapping 和持久化格式始终保存规范字符串。未来增加内置 Responses Adapter 时，再同时增加 `BuiltinModelProtocol.OPENAI_RESPONSES`。
+`ModelSpec.protocol` 仍然是开放字符串语义，也接受 `BuiltinModelProtocol`，构造时统一保存为普通字符串。第三方 Adapter 可以使用自定义 protocol，不需要修改该枚举。Provider catalog、Mapping 和持久化格式始终保存规范字符串。
 
 现有 `openai_compatible` protocol 标识统一迁移为 `openai_chat_completions`。当前代码、目录、文档、测试和持久化 schema 一次性使用新名称；不保留字符串别名、旧 snapshot reader 或双协议注册。
 
@@ -69,7 +71,7 @@ ProviderProtocolPreset(
 
 旧目录中 Provider 级的 `base_url`、`authentication`、`api_key_env` 和 `provider_options_schema` 删除，目录解析不接受两种结构。`default_protocol` 必须引用 `protocols` 中的一个键；每个 `ProviderProtocolPreset.protocol` 与所在 Mapping 键相同。
 
-Provider catalog 是 Pygent 维护的离线基础数据。普通 Agent 开发者和用户不需要编写它；构建模型配置 UI 或加载外部目录的应用开发者通过 `ProviderCatalog.builtin()` 或 `ProviderCatalog.from_mapping()` 使用它。UI 根据用户选择的 Provider、protocol 和 model 展开默认值，最终保存的仍是现有扁平 `ModelConfig`。Runtime、Agent 和 `ModelCallLayer` 不读取 Provider catalog。
+Provider catalog 是 Pygent 维护的离线基础数据。普通 Agent 开发者和用户不需要编写它；构建模型配置 UI 或加载外部目录的应用开发者通过 `ProviderCatalog.builtin()` 或 `ProviderCatalog.from_mapping()` 使用它。UI 根据用户选择的 Provider 填充 Connection 的 protocol endpoint，再根据用户选择的模型填充 Model ID、protocol 和完整 capabilities。Runtime、Agent 和 `ModelCallLayer` 不读取 Provider catalog。
 
 ## Client 与 Transport
 
@@ -197,7 +199,7 @@ ModelContinuation(
 )
 ```
 
-后续工具调用请求只在 Provider、model ID 与 protocol 同时匹配时将 `reasoning_content` 放回对应 assistant message。Adapter 不维护 Provider 白名单；字段不存在时不生成 continuation，字段存在但不是字符串时拒绝响应。
+后续工具调用请求只在 model key、Provider、model ID 与 protocol 同时匹配时将 `reasoning_content` 放回对应 assistant message。Adapter 不维护 Provider 白名单；字段不存在时不生成 continuation，字段存在但不是字符串时拒绝响应。
 
 ## 有状态流解码
 
