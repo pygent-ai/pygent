@@ -20,15 +20,17 @@ _CAPABILITY_FIELDS = frozenset(
 )
 _MODEL_FIELDS = frozenset(
     {
-        "provider",
+        "connection",
         "model_id",
         "protocol",
-        "connection",
         "provider_options",
         "capabilities",
     }
 )
-_CONNECTION_FIELDS = frozenset({"base_url", "credential", "verify_ssl", "proxy"})
+_CONNECTION_FIELDS = frozenset(
+    {"provider", "credential", "protocols", "verify_ssl", "proxy"}
+)
+_PROTOCOL_ENDPOINT_FIELDS = frozenset({"base_url"})
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TOOL_CHOICES = frozenset({"none", "auto", "required", "named"})
 _MODEL_INPUT_MODALITIES = frozenset({"text", "image", "audio", "video"})
@@ -442,13 +444,72 @@ def _validated_url(value: object, label: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class ModelConnection:
+class ConnectionConfig:
+    provider: str
+    credential: CredentialRef
+    protocols: Mapping[str, str]
+    verify_ssl: bool = True
+    proxy: str | None = None
+
+    def __post_init__(self) -> None:
+        _non_empty(self.provider, "provider")
+        if not isinstance(self.credential, CredentialRef):
+            raise TypeError("credential must be CredentialRef")
+        if not isinstance(self.protocols, Mapping):
+            raise TypeError("protocols must be a mapping")
+        protocols: dict[str, str] = {}
+        for protocol, base_url in self.protocols.items():
+            protocol = _non_empty(protocol, "protocol")
+            protocols[protocol] = _validated_url(base_url, "base_url")
+        if not protocols:
+            raise ValueError("protocols must be non-empty")
+        if not isinstance(self.verify_ssl, bool):
+            raise TypeError("verify_ssl must be a bool")
+        if self.proxy is not None:
+            object.__setattr__(self, "proxy", _validated_url(self.proxy, "proxy"))
+        object.__setattr__(self, "protocols", MappingProxyType(protocols))
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> ConnectionConfig:
+        unknown = set(value) - _CONNECTION_FIELDS
+        if unknown:
+            raise ValueError("unknown connection fields: " + ", ".join(sorted(unknown)))
+        missing = {"provider", "credential", "protocols"} - set(value)
+        if missing:
+            raise ValueError("missing connection fields: " + ", ".join(sorted(missing)))
+        raw_protocols = _object(value["protocols"], "protocols")
+        protocols: dict[str, str] = {}
+        for protocol, item in raw_protocols.items():
+            protocol = _non_empty(protocol, "protocol")
+            endpoint = _object(item, f"protocol endpoint {protocol!r}")
+            _exact_fields(
+                endpoint,
+                _PROTOCOL_ENDPOINT_FIELDS,
+                "protocol endpoint",
+            )
+            protocols[protocol] = _validated_url(endpoint["base_url"], "base_url")
+        return cls(
+            provider=_non_empty(value["provider"], "provider"),
+            credential=CredentialRef.from_mapping(_object(value["credential"], "credential")),
+            protocols=protocols,
+            verify_ssl=_bool(value.get("verify_ssl", True), "verify_ssl"),
+            proxy=(None if value.get("proxy") is None else cast(str, value["proxy"])),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedModelConnection:
+    name: str
+    provider: str
+    protocol: str
     base_url: str
     credential: CredentialRef
     verify_ssl: bool = True
     proxy: str | None = None
 
     def __post_init__(self) -> None:
+        for field_name in ("name", "provider", "protocol"):
+            _non_empty(getattr(self, field_name), field_name)
         object.__setattr__(self, "base_url", _validated_url(self.base_url, "base_url"))
         if not isinstance(self.credential, CredentialRef):
             raise TypeError("credential must be CredentialRef")
@@ -457,88 +518,69 @@ class ModelConnection:
         if self.proxy is not None:
             object.__setattr__(self, "proxy", _validated_url(self.proxy, "proxy"))
 
-    @classmethod
-    def from_mapping(cls, value: Mapping[str, object]) -> ModelConnection:
-        unknown = set(value) - _CONNECTION_FIELDS
-        if unknown:
-            raise ValueError("unknown connection fields: " + ", ".join(sorted(unknown)))
-        missing = {"base_url", "credential"} - set(value)
-        if missing:
-            raise ValueError("missing connection fields: " + ", ".join(sorted(missing)))
-        return cls(
-            base_url=cast(str, value["base_url"]),
-            credential=CredentialRef.from_mapping(_object(value["credential"], "credential")),
-            verify_ssl=_bool(value.get("verify_ssl", True), "verify_ssl"),
-            proxy=(None if value.get("proxy") is None else cast(str, value["proxy"])),
-        )
 
-
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class ModelConfig:
+    connections: Mapping[str, ConnectionConfig]
     models: Mapping[str, ModelEntry]
     model_groups: Mapping[str, ModelGroup]
-    connections: Mapping[str, ModelConnection]
+    _model_connections: Mapping[str, str] = field(repr=False)
 
-    def __post_init__(self) -> None:
-        for name, value in (
-            ("models", self.models),
-            ("model_groups", self.model_groups),
-            ("connections", self.connections),
-        ):
-            if not isinstance(value, Mapping):
-                raise TypeError(f"{name} must be a mapping")
-        models = dict(self.models)
-        groups = dict(self.model_groups)
-        connections = dict(self.connections)
-        if not models:
-            raise ValueError("models must be non-empty")
-        for key, entry in models.items():
-            _non_empty(key, "model key")
-            if not isinstance(entry, ModelEntry):
-                raise TypeError("models must contain ModelEntry values")
-            if entry.name != key:
-                raise ValueError("model entry name must match its configuration key")
-        if set(connections) != set(models):
-            raise ValueError("connections must contain exactly the configured model keys")
-        if any(not isinstance(item, ModelConnection) for item in connections.values()):
-            raise TypeError("connections must contain ModelConnection values")
-        for key, group in groups.items():
-            _non_empty(key, "model group key")
-            if not isinstance(group, ModelGroup):
-                raise TypeError("model_groups must contain ModelGroup values")
-            if group.name != key:
-                raise ValueError("model group name must match its configuration key")
-            for entry in group.models:
-                if models.get(entry.name) != entry:
-                    raise ValueError("model group entries must reference configured models")
-        object.__setattr__(self, "models", MappingProxyType(models))
-        object.__setattr__(self, "model_groups", MappingProxyType(groups))
-        object.__setattr__(self, "connections", MappingProxyType(connections))
+    def __init__(self) -> None:
+        raise TypeError("ModelConfig must be created with from_mapping()")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelConfig:
         raw = _object(value, "model config")
-        unknown = set(raw) - {"models", "model_groups"}
+        unknown = set(raw) - {"connections", "models", "model_groups"}
         if unknown:
-            raise ValueError("unknown model config fields: " + ", ".join(sorted(unknown)))
+            raise ValueError(
+                "unknown model config fields: " + ", ".join(sorted(unknown))
+            )
+        missing = {"connections", "models"} - set(raw)
+        if missing:
+            raise ValueError(
+                "missing model config fields: " + ", ".join(sorted(missing))
+            )
+        connections_value = _object(raw["connections"], "connections")
+        if not connections_value:
+            raise ValueError("connections must be non-empty")
+        connections: dict[str, ConnectionConfig] = {}
+        for name, item in connections_value.items():
+            _non_empty(name, "connection name")
+            connections[name] = ConnectionConfig.from_mapping(
+                _object(item, f"connection {name!r}")
+            )
         models_value = _object(raw.get("models"), "models")
         if not models_value:
             raise ValueError("models must be non-empty")
         entries: dict[str, ModelEntry] = {}
-        connections: dict[str, ModelConnection] = {}
+        model_connections: dict[str, str] = {}
         for name, item in models_value.items():
             _non_empty(name, "model name")
             model = _object(item, f"model {name!r}")
             unknown_model = set(model) - _MODEL_FIELDS
             if unknown_model:
                 raise ValueError("unknown model fields: " + ", ".join(sorted(unknown_model)))
-            missing = {"provider", "model_id", "protocol", "connection", "capabilities"} - set(model)
+            missing = {"connection", "model_id", "protocol", "capabilities"} - set(model)
             if missing:
                 raise ValueError("missing model fields: " + ", ".join(sorted(missing)))
+            connection_name = _non_empty(model["connection"], "connection")
+            try:
+                connection = connections[connection_name]
+            except KeyError:
+                raise ValueError(
+                    f"model {name!r} references unknown connection {connection_name!r}"
+                ) from None
+            protocol = _non_empty(model["protocol"], "protocol")
+            if protocol not in connection.protocols:
+                raise ValueError(
+                    f"connection {connection_name!r} does not provide protocol {protocol!r}"
+                )
             spec = ModelSpec(
-                provider=_non_empty(model["provider"], "provider"),
+                provider=connection.provider,
                 model_id=_non_empty(model["model_id"], "model_id"),
-                protocol=_non_empty(model["protocol"], "protocol"),
+                protocol=protocol,
                 provider_options=cast(JsonObjectInput, model.get("provider_options", {})),
                 capabilities=ModelCapabilities.from_mapping(
                     _object(model["capabilities"], "capabilities")
@@ -546,9 +588,7 @@ class ModelConfig:
             )
             entry = ModelEntry(name=name, spec=spec)
             entries[name] = entry
-            connections[name] = ModelConnection.from_mapping(
-                _object(model["connection"], "connection")
-            )
+            model_connections[name] = connection_name
         groups_value = _object(raw.get("model_groups", {}), "model_groups")
         groups: dict[str, ModelGroup] = {}
         for name, item in groups_value.items():
@@ -571,14 +611,38 @@ class ModelConfig:
             groups[name] = ModelGroup(
                 name=name, models=tuple(entries[model_name] for model_name in model_names)
             )
-        return cls(models=entries, model_groups=groups, connections=connections)
+        result = cls.__new__(cls)
+        object.__setattr__(result, "connections", MappingProxyType(connections))
+        object.__setattr__(result, "models", MappingProxyType(entries))
+        object.__setattr__(result, "model_groups", MappingProxyType(groups))
+        object.__setattr__(
+            result,
+            "_model_connections",
+            MappingProxyType(model_connections),
+        )
+        return result
+
+    def connection_for(self, model_key: str) -> ResolvedModelConnection:
+        entry = self.models[model_key]
+        connection_name = self._model_connections[model_key]
+        connection = self.connections[connection_name]
+        protocol = entry.spec.protocol
+        return ResolvedModelConnection(
+            name=connection_name,
+            provider=connection.provider,
+            protocol=protocol,
+            base_url=connection.protocols[protocol],
+            credential=connection.credential,
+            verify_ssl=connection.verify_ssl,
+            proxy=connection.proxy,
+        )
 
 
 __all__ = [
+    "ConnectionConfig",
     "CredentialRef",
     "ModelCapabilities",
     "ModelConfig",
-    "ModelConnection",
     "ModelEntry",
     "ModelGroup",
     "ModelLimits",
@@ -588,4 +652,5 @@ __all__ = [
     "ModelStreamingCapabilities",
     "ModelStructuredOutputCapabilities",
     "ModelToolCapabilities",
+    "ResolvedModelConnection",
 ]

@@ -6,6 +6,7 @@ import pytest
 
 from pygent.llm import (
     BuiltinModelProtocol,
+    ConnectionConfig,
     CredentialRef,
     ModelCapabilities,
     ModelConfig,
@@ -19,6 +20,7 @@ from pygent.llm import (
     ModelStreamingCapabilities,
     ModelStructuredOutputCapabilities,
     ModelToolCapabilities,
+    ResolvedModelConnection,
 )
 
 
@@ -41,16 +43,26 @@ def _capabilities(**overrides: object) -> dict[str, object]:
 
 def _mapping() -> dict[str, object]:
     return {
+        "connections": {
+            "deepseek_official": {
+                "provider": "deepseek",
+                "credential": {"env": "DEEPSEEK_API_KEY"},
+                "verify_ssl": True,
+                "protocols": {
+                    "openai_chat_completions": {
+                        "base_url": "https://api.deepseek.com"
+                    },
+                    "anthropic_messages": {
+                        "base_url": "https://api.deepseek.com/anthropic"
+                    },
+                },
+            }
+        },
         "models": {
             "deepseek_primary": {
-                "provider": "deepseek",
+                "connection": "deepseek_official",
                 "model_id": "deepseek-v4-flash",
                 "protocol": "openai_chat_completions",
-                "connection": {
-                    "base_url": "https://api.deepseek.com",
-                    "credential": {"env": "DEEPSEEK_API_KEY"},
-                    "verify_ssl": True,
-                },
                 "provider_options": {"thinking": {"type": "disabled"}},
                 "capabilities": _capabilities(),
             }
@@ -92,8 +104,24 @@ def test_model_config_parses_named_semantics_and_connection_projection() -> None
     assert config.model_groups["assistant"] == ModelGroup(
         name="assistant", models=(entry,)
     )
-    connection = config.connections["deepseek_primary"]
-    assert connection.base_url == "https://api.deepseek.com"
+    configured = config.connections["deepseek_official"]
+    assert configured == ConnectionConfig(
+        provider="deepseek",
+        credential=CredentialRef.environment("DEEPSEEK_API_KEY"),
+        protocols={
+            "openai_chat_completions": "https://api.deepseek.com",
+            "anthropic_messages": "https://api.deepseek.com/anthropic",
+        },
+    )
+    connection = config.connection_for("deepseek_primary")
+    assert connection == ResolvedModelConnection(
+        name="deepseek_official",
+        provider="deepseek",
+        protocol="openai_chat_completions",
+        base_url="https://api.deepseek.com",
+        credential=CredentialRef.environment("DEEPSEEK_API_KEY"),
+        verify_ssl=True,
+    )
     assert connection.credential == CredentialRef.environment("DEEPSEEK_API_KEY")
     assert connection.verify_ssl is True
     assert connection.proxy is None
@@ -112,42 +140,76 @@ def test_model_config_parses_named_semantics_and_connection_projection() -> None
         config.models["other"] = entry  # type: ignore[index]
 
 
-def test_direct_model_config_construction_enforces_complete_projection() -> None:
-    parsed = ModelConfig.from_mapping(_mapping())
-    entry = parsed.models["deepseek_primary"]
-    connection = parsed.connections["deepseek_primary"]
+def test_models_share_connection_and_resolve_protocol_independently() -> None:
+    value = _mapping()
+    models = value["models"]
+    assert isinstance(models, dict)
+    models["deepseek_anthropic"] = {
+        "connection": "deepseek_official",
+        "model_id": "deepseek-v4-pro",
+        "protocol": "anthropic_messages",
+        "provider_options": {},
+        "capabilities": _capabilities(),
+    }
 
-    with pytest.raises(ValueError, match="models must be non-empty"):
-        ModelConfig(models={}, model_groups={}, connections={})
-    with pytest.raises(ValueError, match="entry name"):
-        ModelConfig(
-            models={"other": entry},
-            model_groups={},
-            connections={"other": connection},
-        )
-    with pytest.raises(ValueError, match="exactly the configured model keys"):
-        ModelConfig(models={entry.name: entry}, model_groups={}, connections={})
-    with pytest.raises(ValueError, match="reference configured models"):
-        ModelConfig(
-            models={entry.name: entry},
-            model_groups={
-                "assistant": ModelGroup(
-                    "assistant",
-                    (
-                        ModelEntry(
-                            entry.name,
-                            ModelSpec(
-                                provider="deepseek",
-                                model_id="different-model",
-                                protocol=entry.spec.protocol,
-                                capabilities=entry.spec.capabilities,
-                            ),
-                        ),
-                    ),
-                )
-            },
-            connections={entry.name: connection},
-        )
+    config = ModelConfig.from_mapping(value)
+
+    primary = config.connection_for("deepseek_primary")
+    anthropic = config.connection_for("deepseek_anthropic")
+    assert primary.name == anthropic.name == "deepseek_official"
+    assert primary.provider == anthropic.provider == "deepseek"
+    assert primary.protocol == "openai_chat_completions"
+    assert anthropic.protocol == "anthropic_messages"
+    assert anthropic.base_url == "https://api.deepseek.com/anthropic"
+
+
+def test_models_on_same_connection_and_protocol_have_equal_resolution() -> None:
+    value = _mapping()
+    models = value["models"]
+    assert isinstance(models, dict)
+    models["deepseek_reasoner"] = {
+        **models["deepseek_primary"],  # type: ignore[dict-item]
+        "model_id": "deepseek-v4-pro",
+    }
+
+    config = ModelConfig.from_mapping(value)
+
+    assert config.connection_for("deepseek_primary") == config.connection_for(
+        "deepseek_reasoner"
+    )
+    with pytest.raises(KeyError):
+        config.connection_for("missing")
+
+
+def test_model_groups_are_optional_for_direct_single_model_use() -> None:
+    value = _mapping()
+    del value["model_groups"]
+
+    config = ModelConfig.from_mapping(value)
+
+    assert config.model_groups == {}
+    with pytest.raises(TypeError, match="from_mapping"):
+        ModelConfig()
+
+
+def test_connection_projection_is_immutable_and_detached_from_input() -> None:
+    value = _mapping()
+    config = ModelConfig.from_mapping(value)
+    configured = config.connections["deepseek_official"]
+
+    connections = value["connections"]
+    assert isinstance(connections, dict)
+    raw_connection = connections["deepseek_official"]
+    assert isinstance(raw_connection, dict)
+    protocols = raw_connection["protocols"]
+    assert isinstance(protocols, dict)
+    endpoint = protocols["openai_chat_completions"]
+    assert isinstance(endpoint, dict)
+    endpoint["base_url"] = "https://changed.example"
+
+    assert configured.protocols["openai_chat_completions"] == "https://api.deepseek.com"
+    with pytest.raises(TypeError):
+        configured.protocols["openai_chat_completions"] = "https://changed.example"  # type: ignore[index]
 
 
 def test_credential_resolution_is_explicit_and_secret_free() -> None:
@@ -164,16 +226,24 @@ def test_credential_resolution_is_explicit_and_secret_free() -> None:
     [
         (lambda value: value.update({"unknown": True}), "unknown model config fields"),
         (
+            lambda value: value["connections"]["deepseek_official"].update(  # type: ignore[index,union-attr]
+                {"unknown": True}
+            ),
+            "unknown connection fields",
+        ),
+        (
             lambda value: value["models"]["deepseek_primary"].update(  # type: ignore[index,union-attr]
                 {"unknown": True}
             ),
             "unknown model fields",
         ),
         (
-            lambda value: value["models"]["deepseek_primary"]["connection"].update(  # type: ignore[index,union-attr]
+            lambda value: value["connections"]["deepseek_official"]["protocols"][  # type: ignore[index]
+                "openai_chat_completions"
+            ].update(  # type: ignore[union-attr]
                 {"unknown": True}
             ),
-            "unknown connection fields",
+            "unknown protocol endpoint fields",
         ),
         (
             lambda value: value["models"]["deepseek_primary"].update(  # type: ignore[index,union-attr]
@@ -194,16 +264,40 @@ def test_credential_resolution_is_explicit_and_secret_free() -> None:
             "duplicate models",
         ),
         (
-            lambda value: value["models"]["deepseek_primary"]["connection"].update(  # type: ignore[index,union-attr]
-                {"base_url": "https://user:password@example.com"}
-            ),
+            lambda value: value["connections"]["deepseek_official"]["protocols"][  # type: ignore[index]
+                "openai_chat_completions"
+            ].update({"base_url": "https://user:password@example.com"}),  # type: ignore[union-attr]
             "embedded credentials",
         ),
         (
-            lambda value: value["models"]["deepseek_primary"]["connection"].update(  # type: ignore[index,union-attr]
+            lambda value: value["connections"]["deepseek_official"].update(  # type: ignore[index,union-attr]
                 {"credential": {"env": "DEEPSEEK_API_KEY", "none": True}}
             ),
             "exactly one",
+        ),
+        (
+            lambda value: value["models"]["deepseek_primary"].update(  # type: ignore[index,union-attr]
+                {"connection": "missing"}
+            ),
+            "unknown connection",
+        ),
+        (
+            lambda value: value["models"]["deepseek_primary"].update(  # type: ignore[index,union-attr]
+                {"protocol": "openai_responses"}
+            ),
+            "does not provide protocol",
+        ),
+        (
+            lambda value: value["models"]["deepseek_primary"].update(  # type: ignore[index,union-attr]
+                {"provider": "deepseek"}
+            ),
+            "unknown model fields",
+        ),
+        (
+            lambda value: value["models"]["deepseek_primary"].update(  # type: ignore[index,union-attr]
+                {"connection": {"base_url": "https://api.deepseek.com"}}
+            ),
+            "connection must be a non-empty string",
         ),
     ],
 )

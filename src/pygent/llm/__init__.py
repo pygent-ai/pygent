@@ -28,10 +28,10 @@ from .catalogs import (
     ProviderProtocolPreset,
 )
 from .configuration import (
+    ConnectionConfig,
     CredentialRef,
     ModelCapabilities,
     ModelConfig,
-    ModelConnection,
     ModelEntry,
     ModelGroup,
     ModelLimits,
@@ -41,6 +41,7 @@ from .configuration import (
     ModelStreamingCapabilities,
     ModelStructuredOutputCapabilities,
     ModelToolCapabilities,
+    ResolvedModelConnection,
 )
 from .gemini_generate_content import (
     GeminiGenerateContentAdapter,
@@ -90,6 +91,7 @@ __all__ = [
     "BuiltinModelProtocol",
     "CapabilityPreset",
     "CapabilityPresetCatalog",
+    "ConnectionConfig",
     "CredentialRef",
     "DefaultModelInvoker",
     "EventSink",
@@ -106,7 +108,6 @@ __all__ = [
     "ModelCapabilityCatalog",
     "ModelCatalog",
     "ModelConfig",
-    "ModelConnection",
     "ModelDeploymentConflictError",
     "ModelDeploymentUnavailableError",
     "ModelEntry",
@@ -150,6 +151,7 @@ __all__ = [
     "ProviderCatalog",
     "ProviderPreset",
     "ProviderProtocolPreset",
+    "ResolvedModelConnection",
     "RetryPolicy",
     "anthropic_messages_adapters",
     "gemini_generate_content_adapters",

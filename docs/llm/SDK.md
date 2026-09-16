@@ -2,7 +2,7 @@
 
 本文是 LLM 的第二级契约，必须服从 [LLM 第一原则](FEATURES.md)。
 
-本页先冻结 Connection、Model、ModelGroup 三层配置契约；`ConnectionConfig`、`ResolvedModelConnection`、`ModelConfig.connection_for()` 及对应 Mapping 解析尚待实现，当前不能据此宣称运行时已经接受该配置。
+Connection、Model、ModelGroup 使用统一的三层配置契约。`ModelConfig.from_mapping()` 解析普通 Mapping，`ModelConfig.connection_for()` 在部署装配边界返回模型已经选定 protocol 后的连接投影。
 
 ## 从 Mapping 加载
 
