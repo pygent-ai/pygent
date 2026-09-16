@@ -38,7 +38,7 @@ def anthropic_entry(
 ) -> ModelEntry:
     source = model_entry("main", provider, "claude-opus-5")
     return ModelEntry(
-        source.name,
+        source.key,
         replace(
             source.spec,
             protocol="anthropic_messages",
@@ -57,7 +57,7 @@ def request(
 ) -> ModelProviderRequest:
     value = entry or anthropic_entry()
     return ModelProviderRequest(
-        model_key=value.name,
+        model_key=value.key,
         model=value.spec,
         message=message or UserMessage(content="question"),
         context=context or Context(),
@@ -519,7 +519,7 @@ async def test_anthropic_http_stream_reaches_common_invoker_reducer() -> None:
     client = AnthropicMessagesClient(base_url="https://api.anthropic.com", client=http)
     invoker = DefaultModelInvoker(
         adapters={entry.spec.protocol: AnthropicMessagesAdapter()},
-        clients={entry.name: client},
+        clients={entry.key: client},
     )
     execution = invoker.execute(
         model_group=ModelGroup("assistant", (entry,)),

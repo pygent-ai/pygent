@@ -50,7 +50,7 @@ def model_group(
     order: tuple[str, ...] | None = None,
 ) -> ModelGroup:
     if order is not None:
-        by_name = {model.name: model for model in models}
+        by_name = {model.key: model for model in models}
         models = tuple(by_name[key] for key in order)
     return ModelGroup(name, models)
 
@@ -83,13 +83,13 @@ class _ConfiguredInvoker:
         group = kwargs["model_group"]
         models = []
         for entry in group.models:
-            client = self._clients.get(entry.name) or self._clients.get(
+            client = self._clients.get(entry.key) or self._clients.get(
                 entry.spec.provider
             )
             if client is not None:
-                self._invoker._clients[entry.name] = client
+                self._invoker._clients[entry.key] = client
             mode = self._capabilities.get(
-                entry.name, self._capabilities.get(entry.spec.provider)
+                entry.key, self._capabilities.get(entry.spec.provider)
             )
             if mode is not None:
                 capabilities = replace(

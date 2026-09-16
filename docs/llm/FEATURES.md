@@ -3,7 +3,7 @@
 本文从属于 [Pygent 0.3 第一原则](../FEATURES.md)。只能澄清，不能与其冲突。
 
 1. **模型调用即 Module**：ModelCallLayer 使用统一的 Message、Context、`forward()`、直接执行、绑定和托管执行协议。
-2. **定义与运行分离**：用户配置只包含 Connection、Model 和 ModelGroup 三层；Connection 可以声明同一 Provider 的多个 protocol endpoint，Model 通过 Connection alias 和 protocol 选择一个入口，解析后形成完整且不携带连接资源的模型语义。完整模型语义、有序模型组、重试策略和生成默认行为是不可变声明；托管 Runtime 可以在 admission 时从已声明模型组中选择一个经过验证的不可变 profile snapshot。允许的调用级生成参数覆盖是本次 Execution 的不可变输入，不修改 Module 或其默认配置。ModelInvoker 拥有有序模型尝试、retry 与 fallback，ModelProviderAdapter 拥有 protocol 转换和错误归一。direct execution 使用显式配置的本地 adapter，连接生命周期和 Root 并发由调用方负责；managed Runtime 只治理选择、client 生命周期、资源、deadline、取消和调度，不解释 Provider 逻辑。
+2. **定义与运行分离**：用户配置只包含 Connection、Model 和 ModelGroup 三层；Connection 可以声明同一 Provider 的多个 protocol endpoint，Model 通过 `connection_key` 和 protocol 选择一个入口，并用用户定义的 `model_key` 与服务商 `model_id` 明确区分本地引用和远端标识。解析后形成完整且不携带连接资源的模型语义。完整模型语义、有序模型组、重试策略和生成默认行为是不可变声明；托管 Runtime 可以在 admission 时从已声明模型组中选择一个经过验证的不可变 profile snapshot。允许的调用级生成参数覆盖是本次 Execution 的不可变输入，不修改 Module 或其默认配置。ModelInvoker 拥有有序模型尝试、retry 与 fallback，ModelProviderAdapter 拥有 protocol 转换和错误归一。direct execution 使用显式配置的本地 adapter，连接生命周期和 Root 并发由调用方负责；managed Runtime 只治理选择、client 生命周期、资源、deadline、取消和调度，不解释 Provider 逻辑。
 3. **Context 只读**：模型层返回携带规范化成功 usage 的完整 AIMessage 和原 Context，不隐式提交历史；“原 Context”包括具体 AgentContext 类型和全部用户字段，Provider 只消费基础模型投影，历史 AIMessage 的 usage 不进入模型请求。
 4. **预算统一**：整体 Execution deadline 不可被流式进展延长；attempt idle timeout 只限制 Provider 无进展时间，并在每个有效流数据帧后重新计时。重试、fallback、deadline、idle timeout、attempt 与取消清理必须处于同一有界执行。只有上一 attempt 已确认结束后才能启动下一 attempt；若取消清理无法确认，结果为 `OUTCOME_UNKNOWN`，必须 fail closed，不得 retry 或 fallback。
 5. **容量责任按模式划分**：direct execution 不提供跨调用的框架容量治理；managed execution 中，多个 Layer 指向同一资源时共享 Runtime 容量所有者。

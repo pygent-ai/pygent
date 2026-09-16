@@ -79,7 +79,7 @@ Snapshot 中的模型组只包含：
 
 ## Worker 与 resolver
 
-Worker 从相同 snapshot 重建同一 `ModelGroup`，并按 `ModelSpec.protocol` 选择 Adapter、按 `ModelEntry.name` 绑定 client。含非空 Provider options 的调用要求 Worker 声明 `model.provider-options.v1`。
+Worker 从相同 snapshot 重建同一 `ModelGroup`，并按 `ModelSpec.protocol` 选择 Adapter、按 `ModelEntry.key` 绑定 client。含非空 Provider options 的调用要求 Worker 声明 `model.provider-options.v1`。
 
 历史 `AIMessage` 携带的 Provider continuation 作为 Message 值随 Worker 和 durable effect 传输。只有 profile 中实际进入且 model key、Provider、model ID 与 protocol 同时匹配的模型可以回传该状态；不匹配时 Adapter 必须忽略它。
 

@@ -81,7 +81,7 @@ def _validate_deployment_invoker(
         except Exception:  # noqa: BLE001 - deployment SPI boundary
             raise ModelDeploymentUnavailableError(
                 "current model adapter no longer supports pinned options for model "
-                f"{model.name!r}"
+                f"{model.key!r}"
             ) from None
 
 

@@ -7,7 +7,7 @@ Pygent 增加原生 `anthropic_messages` 协议支持，并让同一个 Provider
 - Connection 的 `provider` 表示模型服务来源，并在解析时进入 `ModelSpec.provider`；
 - `ModelSpec.protocol` 决定请求格式和 Adapter；
 - `ConnectionConfig` 保存凭据、TLS 与多个 protocol endpoint，Model 显式选择其中一个；
-- client 继续按 `ModelEntry.name` 绑定；
+- client 继续按 `ModelEntry.key` 绑定；
 - `ModelCallLayer`、Invoker、Runtime、fallback、Binding 和资源生命周期继续使用现有语义。
 
 第一版直接支持 Anthropic 官方 Messages API，并让 DeepSeek 官方 Provider 可以选择 `openai_chat_completions` 或 `anthropic_messages`。实现不引入 Anthropic Python SDK，不增加 Provider registry、自动协议探测、能力路由或新的容量系统。
@@ -22,7 +22,7 @@ Pygent 增加原生 `anthropic_messages` 协议支持，并让同一个 Provider
 | `deepseek` | `openai_chat_completions` | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
 | `deepseek` | `anthropic_messages` | `https://api.deepseek.com/anthropic` | `DEEPSEEK_API_KEY` |
 
-协议不根据 URL、模型名或 Provider 自动猜测。一个 Connection 可以保存同一 Provider 的多个 protocol endpoint；每个 Model 通过 Connection alias 与 protocol 显式选择其中一个。`ModelConfig` 由 Connection 的 Provider 与 Model 的其余语义产生完整 `ModelEntry`，并通过 `connection_for(model_key)` 提供解析后的 `ResolvedModelConnection`。同一模型通过不同协议访问时是两个独立 Model 条目，可以进入同一个 `ModelGroup`，顺序仍然表示 fallback 顺序。
+协议不根据 URL、`model_id` 或 Provider 自动猜测。一个 Connection 可以保存同一 Provider 的多个 protocol endpoint；每个 Model 通过 `connection_key` 与 protocol 显式选择其中一个。`ModelConfig` 由 Connection 的 Provider 与 Model 的其余语义产生完整 `ModelEntry`，并通过 `connection_for(model_key)` 提供解析后的 `ResolvedModelConnection`。同一模型通过不同协议访问时是两个独立 Model 条目，可以进入同一个 `ModelGroup`，顺序仍然表示 fallback 顺序。
 
 `ModelContinuation` 不跨协议转换。进行中的 thinking/tool loop 应继续使用产生该 continuation 的 Provider 和协议；协议不同的后续调用不会携带该 continuation。
 

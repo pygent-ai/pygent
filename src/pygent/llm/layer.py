@@ -75,7 +75,7 @@ class ModelCallLayer(Module[Message, AIMessage]):
         if model is not None:
             if not isinstance(model, ModelEntry):
                 raise TypeError("model must be a ModelEntry")
-            model_group = ModelGroup(name=model.name, models=(model,))
+            model_group = ModelGroup(name=model.key, models=(model,))
         if not isinstance(model_group, ModelGroup):
             raise TypeError("model_group must be a ModelGroup")
         declared_tools = tuple(tools)

@@ -210,7 +210,7 @@ class ModelResourceBundle:
     ) -> ModelResourceBundle:
         return cls(
             resolver_id=ref.resolver_id,
-            model_resources=tuple((model.name, ref) for model in models),
+            model_resources=tuple((model.key, ref) for model in models),
             capacity_owner_id=ref.capacity_owner_id,
             coordinator_domain=ref.coordinator_domain,
         )

@@ -7,7 +7,7 @@
 Pygent 的公开配置固定分为 Connection、Model 和 ModelGroup 三层：
 
 - `ConnectionConfig` 表示一份服务账号配置，包含开放的 Provider 标识、credential 引用、TLS/代理策略，以及按 protocol 保存的 endpoint；
-- Model 表示一个已启用模型，引用 Connection alias 和其中一个 protocol，保存服务端实际接受的 model ID、Provider 私有选项和完整 capabilities；
+- Model 表示一个已启用模型，以用户定义的 `model_key` 标识，引用 `connection_key` 和其中一个 protocol，保存服务端实际接受的 `model_id`、Provider 私有选项和完整 capabilities；
 - `ModelGroup` 保存有序的已启用模型，顺序就是普通调用的 fallback 顺序。
 
 解析后，Model 的 `connection` 引用与所选 protocol endpoint 形成部署资源投影；Connection 的 Provider、Model 的 model ID 与 protocol、Provider 私有选项和 capabilities 形成完整 `ModelSpec`。因此用户不在 Model 中重复填写 Provider，但 `ModelSpec.provider` 仍是完整模型语义的一部分。
@@ -35,7 +35,7 @@ Capabilities 不用于自动选模型。调用与声明不一致时，框架发�
 
 ## Provider、protocol 与连接解耦
 
-Provider 是 Connection 上的开放字符串。Provider preset 只提供 UI/配置默认值；一个 Connection 可以保存多个 protocol endpoint，Model 必须从其 Connection 已配置的 protocol 中选择一个。Adapter 按 `protocol` 注册；client 按 `(connection alias, protocol)` 创建和复用，再按 `ModelEntry.name` 绑定给 Invoker。多个 Provider 可以共享同一个 protocol Adapter。
+Provider 是 Connection 上的开放字符串。Provider preset 只提供 UI/配置默认值；一个 Connection 可以保存多个 protocol endpoint，Model 必须从其 Connection 已配置的 protocol 中选择一个。Adapter 按 `protocol` 注册；client 按 `(connection_key, protocol)` 创建和复用，再按 `ModelEntry.key` 绑定给 Invoker。多个 Provider 可以共享同一个 protocol Adapter。
 
 内置协议使用 `BuiltinModelProtocol` 表达当前由 Pygent 实现的 wire contract：
 

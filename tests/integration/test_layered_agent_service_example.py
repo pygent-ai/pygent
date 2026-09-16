@@ -32,7 +32,7 @@ def test_example_builds_a_user_authored_module_graph():
     assert isinstance(agent.react.tools, ToolCallLayer)
     assert agent.react.model.model_group.name == "assistant"
     assert tuple(
-        model.name for model in agent.react.model.model_group.models
+        model.key for model in agent.react.model.model_group.models
     ) == (
         "assistant-primary",
         "assistant-fallback",

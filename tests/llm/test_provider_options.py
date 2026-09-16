@@ -35,7 +35,7 @@ def _request(
     entry: ModelEntry, generation: GenerationConfig | None = None
 ) -> ModelProviderRequest:
     return ModelProviderRequest(
-        model_key=entry.name,
+        model_key=entry.key,
         model=entry.spec,
         message=UserMessage(content="hello"),
         context=Context(),

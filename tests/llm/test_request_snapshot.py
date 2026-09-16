@@ -30,7 +30,7 @@ from tests.support.model_specs import model_entry
 def request(*, content: str = "question") -> ModelProviderRequest:
     entry = model_entry("primary", "openai", "model-1")
     return ModelProviderRequest(
-        model_key=entry.name,
+        model_key=entry.key,
         model=entry.spec,
         message=UserMessage(content=content),
         context=Context(

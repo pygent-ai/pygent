@@ -8,10 +8,12 @@ from pygent.llm import (
     BuiltinModelProtocol,
     ConnectionConfig,
     CredentialRef,
+    EnabledModelConfig,
     ModelCapabilities,
     ModelConfig,
     ModelEntry,
     ModelGroup,
+    ModelGroupConfig,
     ModelGroupResolution,
     ModelLimits,
     ModelModalities,
@@ -93,7 +95,7 @@ def test_model_config_parses_named_semantics_and_connection_projection() -> None
 
     entry = config.models["deepseek_primary"]
     assert isinstance(entry, ModelEntry)
-    assert entry.name == "deepseek_primary"
+    assert entry.key == "deepseek_primary"
     assert entry.spec == ModelSpec(
         provider="deepseek",
         model_id="deepseek-v4-flash",
@@ -115,7 +117,7 @@ def test_model_config_parses_named_semantics_and_connection_projection() -> None
     )
     connection = config.connection_for("deepseek_primary")
     assert connection == ResolvedModelConnection(
-        name="deepseek_official",
+        connection_key="deepseek_official",
         provider="deepseek",
         protocol="openai_chat_completions",
         base_url="https://api.deepseek.com",
@@ -156,7 +158,11 @@ def test_models_share_connection_and_resolve_protocol_independently() -> None:
 
     primary = config.connection_for("deepseek_primary")
     anthropic = config.connection_for("deepseek_anthropic")
-    assert primary.name == anthropic.name == "deepseek_official"
+    assert (
+        primary.connection_key
+        == anthropic.connection_key
+        == "deepseek_official"
+    )
     assert primary.provider == anthropic.provider == "deepseek"
     assert primary.protocol == "openai_chat_completions"
     assert anthropic.protocol == "anthropic_messages"
@@ -179,6 +185,49 @@ def test_models_on_same_connection_and_protocol_have_equal_resolution() -> None:
     )
     with pytest.raises(KeyError):
         config.connection_for("missing")
+
+
+def test_each_configuration_layer_can_be_parsed_before_final_assembly() -> None:
+    raw = _mapping()
+    raw_connections = raw["connections"]
+    raw_models = raw["models"]
+    raw_groups = raw["model_groups"]
+    assert isinstance(raw_connections, Mapping)
+    assert isinstance(raw_models, Mapping)
+    assert isinstance(raw_groups, Mapping)
+
+    connection = ConnectionConfig.from_mapping(
+        raw_connections["deepseek_official"]  # type: ignore[arg-type]
+    )
+    model = EnabledModelConfig.from_mapping(
+        raw_models["deepseek_primary"]  # type: ignore[arg-type]
+    )
+    group = ModelGroupConfig.from_mapping(
+        raw_groups["assistant"]  # type: ignore[arg-type]
+    )
+
+    assert connection.provider == "deepseek"
+    assert model.connection_key == "deepseek_official"
+    assert model.model_id == "deepseek-v4-flash"
+    assert model.protocol == "openai_chat_completions"
+    assert model.capabilities == ModelCapabilities.from_mapping(_capabilities())
+    assert group.model_keys == ("deepseek_primary",)
+
+
+def test_standalone_layer_parsers_do_not_require_referenced_records() -> None:
+    model = EnabledModelConfig.from_mapping(
+        {
+            "connection": "saved_later",
+            "model_id": "provider-model-id",
+            "protocol": "custom_protocol",
+            "provider_options": {},
+            "capabilities": _capabilities(),
+        }
+    )
+    group = ModelGroupConfig.from_mapping({"models": ["saved_later"]})
+
+    assert model.connection_key == "saved_later"
+    assert group.model_keys == ("saved_later",)
 
 
 def test_model_groups_are_optional_for_direct_single_model_use() -> None:

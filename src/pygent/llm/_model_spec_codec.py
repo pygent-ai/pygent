@@ -12,7 +12,7 @@ from .configuration import ModelCapabilities, ModelEntry, ModelSpec
 _SPEC_FIELDS = frozenset(
     {"provider", "model_id", "protocol", "provider_options", "capabilities"}
 )
-_ENTRY_FIELDS = frozenset({"name", "spec"})
+_ENTRY_FIELDS = frozenset({"key", "spec"})
 
 
 def model_spec_value(model: ModelSpec) -> dict[str, object]:
@@ -44,14 +44,14 @@ def model_spec_from_value(value: Mapping[str, object]) -> ModelSpec:
 
 
 def model_entry_value(entry: ModelEntry) -> dict[str, object]:
-    return {"name": entry.name, "spec": model_spec_value(entry.spec)}
+    return {"key": entry.key, "spec": model_spec_value(entry.spec)}
 
 
 def model_entry_from_value(value: Mapping[str, object]) -> ModelEntry:
     if set(value) != _ENTRY_FIELDS or not isinstance(value["spec"], Mapping):
         raise ValueError("stored model entry fields do not match the current schema")
     return ModelEntry(
-        name=cast(str, value["name"]),
+        key=cast(str, value["key"]),
         spec=model_spec_from_value(cast(Mapping[str, object], value["spec"])),
     )
 

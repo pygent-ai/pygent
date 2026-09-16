@@ -801,7 +801,7 @@ def build_snapshot(
         models=models,
     )
     if resources is not None:
-        model_keys = {model.name for model in models}
+        model_keys = {model.key for model in models}
         resource_keys = {model_key for model_key, _ in resources.model_resources}
         if model_keys != resource_keys:
             raise ValueError("resource bundle must map every model exactly once")

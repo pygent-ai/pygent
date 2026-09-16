@@ -34,7 +34,7 @@ ModelSpec(
 - streaming transport 开关；
 - `model`、消息、工具和框架生成的请求字段。
 
-连接信息使用顶层 `ConnectionConfig` 和其中按 protocol 保存的 endpoint；Model 通过 Connection alias 与 protocol 选择它。`ModelConfig.connection_for(model_key)` 返回解析后的 `ResolvedModelConnection`。streaming transport 使用 `ModelCapabilities.streaming.output`，retry 使用 Layer 的 `RetryPolicy`。
+连接信息使用顶层 `ConnectionConfig` 和其中按 protocol 保存的 endpoint；Model 通过 `connection_key` 与 protocol 选择它。`ModelConfig.connection_for(model_key)` 返回解析后的 `ResolvedModelConnection`。streaming transport 使用 `ModelCapabilities.streaming.output`，retry 使用 Layer 的 `RetryPolicy`。
 
 ## 校验职责
 

@@ -45,7 +45,7 @@ def _request(
         provider_options=options or {},
     )
     return ModelProviderRequest(
-        model_key=entry.name,
+        model_key=entry.key,
         model=spec,
         message=message or UserMessage(content="question"),
         context=context or Context(),

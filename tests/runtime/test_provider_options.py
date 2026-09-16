@@ -27,7 +27,7 @@ from pygent.llm import (
     ModelResourceRef,
     ModelStreamingCapabilities,
 )
-from pygent.llm._model_spec_codec import model_entry_value
+from pygent.llm._model_spec_codec import model_entry_from_value, model_entry_value
 from pygent.llm.layer import _model_effect_request
 from pygent.runtime import (
     LocalRuntime,
@@ -70,7 +70,7 @@ class _ValidatingInvoker:
     def validate_model(self, model: ModelEntry) -> None:
         self.validations += 1
         if not self.supported:
-            raise ValueError(f"unsupported model {model.name}")
+            raise ValueError(f"unsupported model {model.key}")
 
 
 def test_provider_options_change_definition_and_effect_identity_but_empty_does_not() -> None:
@@ -95,7 +95,7 @@ def test_provider_options_change_definition_and_effect_identity_but_empty_does_n
     )
     assert (
         compile_execution_plan(empty_layer).modules[0].config_ref
-        == "sha256:41fa15a5d99b3ccee4b645e3e02cfea35593a28a11a294efcb1b003248e39480"
+        == "sha256:b246e5ab651108cc78adb2cda63e9fc07d579f0a8b227163681e7698d640e720"
     )
     assert (
         compile_execution_plan(empty_layer).modules[0].config_ref
@@ -142,7 +142,14 @@ def test_provider_options_change_definition_and_effect_identity_but_empty_does_n
 def test_model_entry_codec_emits_the_current_complete_shape() -> None:
     model = model_entry("primary", "openai", "gpt-5")
 
-    assert model_entry_value(model)["spec"]["provider_options"] == {}  # type: ignore[index]
+    value = model_entry_value(model)
+    assert value["key"] == "primary"
+    assert "name" not in value
+    assert value["spec"]["provider_options"] == {}  # type: ignore[index]
+
+    value["name"] = value.pop("key")
+    with pytest.raises(ValueError, match="current schema"):
+        model_entry_from_value(value)
 
 
 @pytest.mark.asyncio

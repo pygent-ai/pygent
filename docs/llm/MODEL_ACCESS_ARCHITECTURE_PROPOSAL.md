@@ -16,9 +16,9 @@ Pygent 面向三类相互独立的参与者：
 
 - Connection 表示一份服务账号，使用用户可修改的 alias 标识；它保存 Provider、credential 引用、TLS/代理策略和一个或多个 protocol endpoint；
 - Model 表示通过某个 Connection 启用的模型，使用独立 alias 标识；它选择该 Connection 已配置的一个 protocol，并保存服务端实际接受的 Model ID、Provider 私有选项和完整 capabilities；
-- ModelGroup 引用一个或多个 Model alias，有序列表就是普通调用的主模型与 fallback 顺序。
+- ModelGroup 引用一个或多个 `model_key`，有序列表就是普通调用的主模型与 fallback 顺序。
 
-同一个 Connection 可以启用多个模型，也可以同时配置多个 protocol endpoint。相同 `(connection alias, protocol)` 的模型复用一个 client；同一 Connection 下的不同 protocol 使用各自 endpoint 和 Adapter。
+同一个 Connection 可以启用多个模型，也可以同时配置多个 protocol endpoint。相同 `(connection_key, protocol)` 的模型复用一个 client；同一 Connection 下的不同 protocol 使用各自 endpoint 和 Adapter。
 
 完整 Mapping 形状为：
 
@@ -61,9 +61,9 @@ model_groups:
 - 模型语义投影使用 Connection 的 Provider，以及 Model 的 Model ID、protocol、Provider 私有选项和 capabilities，形成完整 `ModelSpec`；
 - 部署资源投影使用 Model 的 Connection 引用与 protocol 选择，解析出 endpoint、credential 引用、TLS 和代理策略。
 
-用户不在 Model 中重复填写 Provider，但内部 `ModelSpec.provider` 不删除。`ModelEntry` 把模型 alias 与完整 `ModelSpec` 组合起来；alias 用于 fallback、资源绑定和诊断，不进入底层模型语义。`config.connections[...]`、`config.models[...]` 和 `config.model_groups[...]` 对应三层公开配置，`config.connection_for(model_key)` 返回模型已选 protocol 的不可变 `ResolvedModelConnection`。模型到 Connection 的关联由 `ModelConfig` 内部保存，不形成第四段用户配置。
+用户不在 Model 中重复填写 Provider，但内部 `ModelSpec.provider` 不删除。`ModelEntry` 把用户定义的 `model_key` 与完整 `ModelSpec` 组合起来；`model_key` 用于 fallback、资源绑定和诊断，不进入底层模型语义，也不与服务商的 `model_id` 混用。`config.connections[...]`、`config.models[...]` 和 `config.model_groups[...]` 对应三层公开配置，`config.connection_for(model_key)` 返回模型已选 protocol 的不可变 `ResolvedModelConnection`。模型到 Connection 的关联由 `ModelConfig` 内部保存，不形成第四段用户配置。
 
-模型语义进入 `ModelCallLayer`，解析后的部署资源交给 direct invoker 构造或 managed resource resolver。Connection alias、credential 和活跃 client 不进入 `ModelSpec`。
+模型语义进入 `ModelCallLayer`，解析后的部署资源交给 direct invoker 构造或 managed resource resolver。`connection_key`、credential 和活跃 client 不进入 `ModelSpec`。
 
 第一版 credential 只使用一种对象形式，其中二选一：`credential: {env: DEEPSEEK_API_KEY}` 引用环境变量，`credential: {none: true}` 表示无需认证。解析后的 credential 属于部署资源投影，不进入 `ModelSpec`，Pygent 不把环境变量中的真实值写回配置、定义、事件或持久化数据。
 
@@ -126,7 +126,7 @@ capabilities:
 
 ## 4. 模型组只组合已启用模型
 
-用户可以把一个或多个已启用的 Model alias 配成模型组：
+用户可以把一个或多个已启用的 `model_key` 配成模型组：
 
 ```yaml
 model_groups:

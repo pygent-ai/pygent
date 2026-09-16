@@ -70,7 +70,7 @@ def _model_attempt_plans(
             for entry in model_group.models
             if continuation_matches(
                 pending.continuation,
-                model_key=entry.name,
+                model_key=entry.key,
                 model=entry.spec,
             )
         ),
@@ -80,7 +80,7 @@ def _model_attempt_plans(
         yield producer, context
     neutral_context = None
     for entry in model_group.models:
-        if producer is not None and entry.name == producer.name:
+        if producer is not None and entry.key == producer.key:
             continue
         if neutral_context is None:
             neutral_context = neutral_tool_context(context, pending)
@@ -118,16 +118,16 @@ class DefaultModelInvoker:
 
         model = entry.spec
         adapter = self._adapters.get(model.protocol)
-        client = self._clients.get(entry.name)
+        client = self._clients.get(entry.key)
         if adapter is None or client is None:
             raise ModelGroupConfigurationError(
-                f"model {entry.name!r} has no local protocol/client binding"
+                f"model {entry.key!r} has no local protocol/client binding"
             )
         if not model.provider_options:
             return
         if not isinstance(adapter, ModelProviderSpecValidator):
             raise ModelGroupConfigurationError(
-                f"protocol adapter for model {entry.name!r} does not validate provider options"
+                f"protocol adapter for model {entry.key!r} does not validate provider options"
             )
         try:
             adapter.validate_model(model)
@@ -328,7 +328,7 @@ class DefaultModelInvoker:
         last_kind = ModelErrorKind.UNKNOWN
         model_plans = _model_attempt_plans(model_group, message, context)
         for model_index, (entry, model_context) in enumerate(model_plans):
-            model_key = entry.name
+            model_key = entry.key
             model = entry.spec
             adapter, client = self._resolve(entry)
             _validate_model_for_request(adapter, model)
@@ -638,10 +638,10 @@ class DefaultModelInvoker:
         self, entry: ModelEntry
     ) -> tuple[ModelProviderAdapter, ModelProviderClient]:
         adapter = self._adapters.get(entry.spec.protocol)
-        client = self._clients.get(entry.name)
+        client = self._clients.get(entry.key)
         if adapter is None or client is None:
             raise ModelCallError(
-                f"model {entry.name!r} has no local protocol/client binding",
+                f"model {entry.key!r} has no local protocol/client binding",
                 kind=ModelErrorKind.INVALID_REQUEST,
             )
         return adapter, client

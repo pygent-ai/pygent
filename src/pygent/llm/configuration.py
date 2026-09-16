@@ -345,14 +345,91 @@ class ModelSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class EnabledModelConfig:
+    connection_key: str
+    model_id: str
+    protocol: str
+    capabilities: ModelCapabilities
+    provider_options: JsonObjectInput = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        for value, label in (
+            (self.connection_key, "connection"),
+            (self.model_id, "model_id"),
+            (self.protocol, "protocol"),
+        ):
+            _non_empty(value, label)
+        if not isinstance(self.capabilities, ModelCapabilities):
+            raise TypeError("capabilities must be ModelCapabilities")
+        if not isinstance(self.provider_options, Mapping):
+            raise TypeError("provider_options must be an object")
+        if not isinstance(self.provider_options, FrozenJsonObject):
+            object.__setattr__(
+                self,
+                "provider_options",
+                freeze_json_object(cast(JsonObjectInput, self.provider_options)),
+            )
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> EnabledModelConfig:
+        unknown = set(value) - _MODEL_FIELDS
+        if unknown:
+            raise ValueError("unknown model fields: " + ", ".join(sorted(unknown)))
+        missing = {"connection", "model_id", "protocol", "capabilities"} - set(value)
+        if missing:
+            raise ValueError("missing model fields: " + ", ".join(sorted(missing)))
+        return cls(
+            connection_key=_non_empty(value["connection"], "connection"),
+            model_id=_non_empty(value["model_id"], "model_id"),
+            protocol=_non_empty(value["protocol"], "protocol"),
+            provider_options=cast(
+                JsonObjectInput,
+                _object(value.get("provider_options", {}), "provider_options"),
+            ),
+            capabilities=ModelCapabilities.from_mapping(
+                _object(value["capabilities"], "capabilities")
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ModelEntry:
-    name: str
+    key: str
     spec: ModelSpec
 
     def __post_init__(self) -> None:
-        _non_empty(self.name, "model entry name")
+        _non_empty(self.key, "model entry key")
         if not isinstance(self.spec, ModelSpec):
             raise TypeError("model entry spec must be ModelSpec")
+
+
+@dataclass(frozen=True, slots=True)
+class ModelGroupConfig:
+    model_keys: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.model_keys, (list, tuple))
+            and all(isinstance(item, str) for item in self.model_keys)
+            and len(self.model_keys) != len(set(self.model_keys))
+        ):
+            raise ValueError("model group contains duplicate models")
+        model_keys = _string_tuple(self.model_keys, "model group models")
+        if not model_keys:
+            raise ValueError("model group models must be non-empty")
+        object.__setattr__(self, "model_keys", model_keys)
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> ModelGroupConfig:
+        _exact_fields(value, frozenset({"models"}), "model group")
+        raw_model_keys = value["models"]
+        if (
+            isinstance(raw_model_keys, (list, tuple))
+            and all(isinstance(item, str) for item in raw_model_keys)
+            and len(raw_model_keys) != len(set(raw_model_keys))
+        ):
+            raise ValueError("model group contains duplicate models")
+        return cls(model_keys=_string_tuple(raw_model_keys, "model group models"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,8 +445,8 @@ class ModelGroup:
         models = tuple(self.models)
         if any(not isinstance(model, ModelEntry) for model in models):
             raise TypeError("model group models must contain ModelEntry values")
-        names = tuple(model.name for model in models)
-        if len(names) != len(set(names)):
+        keys = tuple(model.key for model in models)
+        if len(keys) != len(set(keys)):
             raise ValueError("model group contains duplicate models")
         if self.resolution is ModelGroupResolution.CONCRETE and not models:
             raise ValueError("concrete model group models must be non-empty")
@@ -499,7 +576,7 @@ class ConnectionConfig:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedModelConnection:
-    name: str
+    connection_key: str
     provider: str
     protocol: str
     base_url: str
@@ -508,7 +585,7 @@ class ResolvedModelConnection:
     proxy: str | None = None
 
     def __post_init__(self) -> None:
-        for field_name in ("name", "provider", "protocol"):
+        for field_name in ("connection_key", "provider", "protocol"):
             _non_empty(getattr(self, field_name), field_name)
         object.__setattr__(self, "base_url", _validated_url(self.base_url, "base_url"))
         if not isinstance(self.credential, CredentialRef):
@@ -557,36 +634,29 @@ class ModelConfig:
         entries: dict[str, ModelEntry] = {}
         model_connections: dict[str, str] = {}
         for name, item in models_value.items():
-            _non_empty(name, "model name")
+            _non_empty(name, "model key")
             model = _object(item, f"model {name!r}")
-            unknown_model = set(model) - _MODEL_FIELDS
-            if unknown_model:
-                raise ValueError("unknown model fields: " + ", ".join(sorted(unknown_model)))
-            missing = {"connection", "model_id", "protocol", "capabilities"} - set(model)
-            if missing:
-                raise ValueError("missing model fields: " + ", ".join(sorted(missing)))
-            connection_name = _non_empty(model["connection"], "connection")
+            configured_model = EnabledModelConfig.from_mapping(model)
+            connection_name = configured_model.connection_key
             try:
                 connection = connections[connection_name]
             except KeyError:
                 raise ValueError(
                     f"model {name!r} references unknown connection {connection_name!r}"
                 ) from None
-            protocol = _non_empty(model["protocol"], "protocol")
+            protocol = configured_model.protocol
             if protocol not in connection.protocols:
                 raise ValueError(
                     f"connection {connection_name!r} does not provide protocol {protocol!r}"
                 )
             spec = ModelSpec(
                 provider=connection.provider,
-                model_id=_non_empty(model["model_id"], "model_id"),
+                model_id=configured_model.model_id,
                 protocol=protocol,
-                provider_options=cast(JsonObjectInput, model.get("provider_options", {})),
-                capabilities=ModelCapabilities.from_mapping(
-                    _object(model["capabilities"], "capabilities")
-                ),
+                provider_options=cast(JsonObjectInput, configured_model.provider_options),
+                capabilities=configured_model.capabilities,
             )
-            entry = ModelEntry(name=name, spec=spec)
+            entry = ModelEntry(key=name, spec=spec)
             entries[name] = entry
             model_connections[name] = connection_name
         groups_value = _object(raw.get("model_groups", {}), "model_groups")
@@ -594,14 +664,8 @@ class ModelConfig:
         for name, item in groups_value.items():
             _non_empty(name, "model group name")
             group = _object(item, f"model group {name!r}")
-            _exact_fields(group, frozenset({"models"}), "model group")
-            raw_model_names = group["models"]
-            if (
-                isinstance(raw_model_names, (list, tuple))
-                and len(raw_model_names) != len(set(raw_model_names))
-            ):
-                raise ValueError("model group contains duplicate models")
-            model_names = _string_tuple(raw_model_names, "model group models")
+            configured_group = ModelGroupConfig.from_mapping(group)
+            model_names = configured_group.model_keys
             unknown_models = set(model_names) - set(entries)
             if unknown_models:
                 raise ValueError(
@@ -628,7 +692,7 @@ class ModelConfig:
         connection = self.connections[connection_name]
         protocol = entry.spec.protocol
         return ResolvedModelConnection(
-            name=connection_name,
+            connection_key=connection_name,
             provider=connection.provider,
             protocol=protocol,
             base_url=connection.protocols[protocol],
@@ -641,10 +705,12 @@ class ModelConfig:
 __all__ = [
     "ConnectionConfig",
     "CredentialRef",
+    "EnabledModelConfig",
     "ModelCapabilities",
     "ModelConfig",
     "ModelEntry",
     "ModelGroup",
+    "ModelGroupConfig",
     "ModelLimits",
     "ModelModalities",
     "ModelReasoningCapabilities",

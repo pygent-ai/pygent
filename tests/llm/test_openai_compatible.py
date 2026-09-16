@@ -42,7 +42,7 @@ def provider_request(
     tools=(),
 ) -> ModelProviderRequest:
     return ModelProviderRequest(
-        model_key=entry.name,
+        model_key=entry.key,
         model=entry.spec,
         message=message,
         context=context,

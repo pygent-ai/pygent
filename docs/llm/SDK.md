@@ -62,9 +62,23 @@ model_groups:
     models: [deepseek_primary]
 ```
 
-`company_gateway` 是 Connection alias，`deepseek_primary` 是模型 alias，`assistant` 是模型组名称。Connection 的 `provider` 是开放字符串；内置 Provider 与自定义 Provider 使用相同结构。Model 的 `protocol` 必须引用所选 Connection 的 `protocols` 条目。解析器用 Connection 的 Provider 与 Model 的 model ID、protocol、options 和 capabilities 构造完整 `ModelSpec`，因此 Model 不重复保存 Provider。
+`company_gateway` 是 `connection_key`，`deepseek_primary` 是用户定义的 `model_key`（UI 可显示为“模型别名”），`assistant` 是模型组名称。`model_id` 是服务商提供的真实模型 ID，与 `model_key` 含义不同。Connection 的 `provider` 是开放字符串；内置 Provider 与自定义 Provider 使用相同结构。Model 的 `protocol` 必须引用所选 Connection 的 `protocols` 条目。解析器用 Connection 的 Provider 与 Model 的 model ID、protocol、options 和 capabilities 构造完整 `ModelSpec`，因此 Model 不重复保存 Provider。
 
 解析严格拒绝未知字段、空名称、重复组条目、未知 Connection/Model 引用、Connection 中不存在的 protocol、不完整 capabilities、非法 URL、URL 内嵌凭据，以及同时设置 `credential.env` 和 `credential.none`。模态只能是 `text`、`image`、`audio`、`video`，`streaming.output` 必须属于输出模态；无法确认的 token limit 显式写 `null`。解析阶段不会读取 `MODEL_API_KEY`。
+
+## 逐级校验和保存
+
+应用可以按三层分别校验并保存配置，不需要先填写完整 `ModelConfig`：
+
+```python
+from pygent import ConnectionConfig, EnabledModelConfig, ModelGroupConfig
+
+connection = ConnectionConfig.from_mapping(connection_value)
+model = EnabledModelConfig.from_mapping(model_value)
+model_group = ModelGroupConfig.from_mapping(model_group_value)
+```
+
+这三个值只校验各自层级的结构。`EnabledModelConfig` 保存 `connection_key`，但不要求解析时 Connection 已存在；`ModelGroupConfig` 保存有序 `model_keys`，但不要求解析时 Model 已存在。应用可以把每一层写入 YAML、JSON 或数据库。执行前把已经保存的三层 Mapping 交给 `ModelConfig.from_mapping()`，统一完成 Connection、protocol 和 Model 引用检查，并产生运行时 `ModelEntry`、`ModelGroup` 与连接投影。Pygent 不规定应用的存储后端或草稿格式。
 
 ## Direct：单模型
 
@@ -79,7 +93,7 @@ from pygent.llm import (
 )
 
 entry = config.models["deepseek_primary"]
-connection = config.connection_for(entry.name)
+connection = config.connection_for(entry.key)
 api_key = connection.credential.resolve()  # 部署边界才读取环境变量
 
 client = OpenAICompatibleClient(
@@ -89,7 +103,7 @@ client = OpenAICompatibleClient(
 )
 invoker = DefaultModelInvoker(
     adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
-    clients={entry.name: client},
+    clients={entry.key: client},
 )
 
 model_layer = ModelCallLayer(
@@ -100,14 +114,14 @@ model_layer = ModelCallLayer(
 )
 ```
 
-`connection_for()` 返回该模型已经选定 protocol 后的不可变 `ResolvedModelConnection`，包含 Connection alias、Provider、protocol、base URL、credential 引用、TLS 和代理策略。单模型会规范化成名称为 `entry.name` 的单条目模型组。调用方在结束时关闭 invoker；配置对象不持有 client。
+`connection_for()` 返回该模型已经选定 protocol 后的不可变 `ResolvedModelConnection`，包含 `connection_key`、Provider、protocol、base URL、credential 引用、TLS 和代理策略。单模型会规范化成名称为 `entry.key` 的单条目模型组。调用方在结束时关闭 invoker；配置对象不持有 client。
 
-多个模型引用同一个 Connection 和 protocol 时，应用只创建一个 client，再按模型 alias 绑定给 Invoker：
+多个模型引用同一个 Connection 和 protocol 时，应用只创建一个 client，再按 `model_key` 绑定给 Invoker：
 
 ```python
 entries = (config.models["fast"], config.models["reasoner"])
-connection = config.connection_for(entries[0].name)
-assert all(config.connection_for(entry.name) == connection for entry in entries)
+connection = config.connection_for(entries[0].key)
+assert all(config.connection_for(entry.key) == connection for entry in entries)
 
 shared_client = OpenAICompatibleClient(
     base_url=connection.base_url,
@@ -116,11 +130,11 @@ shared_client = OpenAICompatibleClient(
 )
 invoker = DefaultModelInvoker(
     adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
-    clients={entry.name: shared_client for entry in entries},
+    clients={entry.key: shared_client for entry in entries},
 )
 ```
 
-共享单位是 `(connection alias, protocol)`。不同 protocol 使用各自 Adapter 和 endpoint，即使它们属于同一个 Connection。Invoker 关闭时对相同 client 实例去重。
+共享单位是 `(connection_key, protocol)`。不同 protocol 使用各自 Adapter 和 endpoint，即使它们属于同一个 Connection。Invoker 关闭时对相同 client 实例去重。
 
 ## Direct：Anthropic Messages
 
@@ -130,7 +144,7 @@ Anthropic Messages 使用独立的 client 和 Adapter。该协议要求每次请
 from pygent.llm import AnthropicMessagesAdapter, AnthropicMessagesClient
 
 entry = config.models["anthropic_primary"]
-connection = config.connection_for(entry.name)
+connection = config.connection_for(entry.key)
 client = AnthropicMessagesClient(
     base_url=connection.base_url,
     api_key=connection.credential.resolve(),
@@ -138,7 +152,7 @@ client = AnthropicMessagesClient(
 )
 invoker = DefaultModelInvoker(
     adapters={"anthropic_messages": AnthropicMessagesAdapter()},
-    clients={entry.name: client},
+    clients={entry.key: client},
 )
 model_layer = ModelCallLayer(
     model=entry,
@@ -161,7 +175,7 @@ model_layer = ModelCallLayer(
 )
 ```
 
-`ModelGroup.models` 的顺序就是 fallback 顺序。Invoker 的 `clients` 必须按每个 `ModelEntry.name` 绑定，`adapters` 必须按每个 `ModelSpec.protocol` 绑定。Provider 名称不用于选择 client 或 Adapter。
+`ModelGroup.models` 的顺序就是 fallback 顺序。Invoker 的 `clients` 必须按每个 `ModelEntry.key` 绑定，`adapters` 必须按每个 `ModelSpec.protocol` 绑定。Provider 名称不用于选择 client 或 Adapter。
 
 ## Managed：固定单模型或模型组
 
@@ -245,8 +259,8 @@ capabilities = CapabilityPresetCatalog.builtin().presets["text_tools"].materiali
 from pygent import ModelEntry, ModelSpec
 
 entry = ModelEntry(
-    "deepseek_primary",
-    ModelSpec(
+    key="deepseek_primary",
+    spec=ModelSpec(
         provider="deepseek",
         model_id="deepseek-v4-flash",
         protocol="openai_chat_completions",

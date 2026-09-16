@@ -43,7 +43,7 @@ class OfflineModelInvoker:
         async def operation(emit: object) -> ModelProviderResponse:
             self.calls += 1
             model_group = cast(ModelGroup, kwargs["model_group"])
-            model_key = model_group.models[0].name
+            model_key = model_group.models[0].key
             attempt = 1
 
             async def publish(kind: str, data: dict[str, object]) -> None:
