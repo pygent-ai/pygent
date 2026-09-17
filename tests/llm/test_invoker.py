@@ -4,6 +4,7 @@ import asyncio
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -12,10 +13,12 @@ import pytest
 from pygent import (
     AIMessage,
     Context,
+    MediaSource,
     ModelContinuation,
     ToolCall,
     ToolMessage,
     ToolResult,
+    ToolResultMedia,
     UserMessage,
 )
 from pygent.core import FrozenJsonObject, freeze_json_object
@@ -31,6 +34,7 @@ from pygent.llm import (
     ModelProviderStreamPart,
     OpenAICompatibleAdapter,
     RetryPolicy,
+    ToolResultContentCapabilities,
 )
 from pygent.llm import invoker as invoker_module
 from tests.support.model_specs import (
@@ -63,6 +67,16 @@ class FakeClient:
 
     async def aclose(self):
         return None
+
+
+class RecordingClient(FakeClient):
+    def __init__(self, outcomes):
+        super().__init__(outcomes)
+        self.payloads = []
+
+    async def invoke(self, route, payload):
+        self.payloads.append(payload)
+        return await super().invoke(route, payload)
 
 
 class CancellationSwallowingClient:
@@ -154,6 +168,184 @@ def group():
         ),
         order=("primary", "fallback"),
     )
+
+
+def media_message(media_type: str = "image") -> ToolMessage:
+    if media_type == "image":
+        mime_type = "image/png"
+        data = b"\x89PNG\r\n\x1a\nfixture"
+    else:
+        mime_type = "video/mp4"
+        data = b"\x00\x00\x00\x18ftypmp42fixture"
+    return ToolMessage(
+        results=(
+            ToolResult(
+                call_id="read-1",
+                name="read",
+                status="succeeded",
+                output={"file_path": f"fixture.{media_type}"},
+                content=(
+                    ToolResultMedia(
+                        media_type=media_type,
+                        mime_type=mime_type,
+                        source=MediaSource.inline(data),
+                    ),
+                ),
+            ),
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_media_result_skips_incompatible_model_before_provider_io() -> None:
+    primary_entry = model_entry(
+        "primary", "openai", "text-only", streaming=False
+    )
+    fallback_entry = model_entry(
+        "fallback", "openai", "vision", streaming=False
+    )
+    fallback_entry = replace(
+        fallback_entry,
+        spec=replace(
+            fallback_entry.spec,
+            capabilities=replace(
+                fallback_entry.spec.capabilities,
+                modalities=replace(
+                    fallback_entry.spec.capabilities.modalities,
+                    input=("text", "image"),
+                ),
+            ),
+        ),
+    )
+    primary = RecordingClient([completion("unused")])
+    fallback = RecordingClient([completion("saw image")])
+    adapter = OpenAICompatibleAdapter(
+        tool_result_content=ToolResultContentCapabilities(
+            enabled=True, modalities=("image",)
+        )
+    )
+    invoker = DefaultModelInvoker(
+        adapters={"openai_chat_completions": adapter},
+        clients={"primary": primary, "fallback": fallback},
+    )
+    execution = invoker.execute(
+        model_group=make_model_group(
+            "assistant", (primary_entry, fallback_entry)
+        ),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=media_message(),
+        context=Context(),
+    )
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+    result = await execution.result()
+
+    assert result.message.content == "saw image"
+    assert primary.calls == 0
+    assert fallback.calls == 1
+    skipped = next(event for event in events if event.kind == "model.route.skipped")
+    assert skipped.data["model_key"] == "primary"
+    assert skipped.data["missing_capabilities"] == ("modalities.input.image",)
+    prepared = next(
+        event for event in events if event.kind == "model.request.prepared"
+    )
+    assert prepared.data["model_key"] == "fallback"
+    traced_media = prepared.data["request"]["current_message"]["results"][0][
+        "content"
+    ][0]
+    assert traced_media["type"] == "media"
+    assert fallback.payloads[0]["messages"][0]["tool_call_id"] == "read-1"
+
+
+@pytest.mark.asyncio
+async def test_media_result_projects_unavailable_when_no_model_can_consume_it() -> None:
+    message = media_message()
+    primary = RecordingClient([completion("cannot read image")])
+    fallback = RecordingClient([completion("unused")])
+    invoker = DefaultModelInvoker(
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
+        clients={"primary": primary, "fallback": fallback},
+    )
+    text_group = make_model_group(
+        "assistant",
+        (
+            model_entry("primary", "openai", "first", streaming=False),
+            model_entry("fallback", "openai", "second", streaming=False),
+        ),
+    )
+    execution = invoker.execute(
+        model_group=text_group,
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=message,
+        context=Context(),
+    )
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+    result = await execution.result()
+
+    assert result.message.content == "cannot read image"
+    assert primary.calls == 1
+    assert fallback.calls == 0
+    assert isinstance(message.results[0].content[0], ToolResultMedia)
+    wire_content = primary.payloads[0]["messages"][0]["content"]
+    assert isinstance(wire_content, str)
+    assert "The current model cannot read this image." in wire_content
+    prepared = next(
+        event for event in events if event.kind == "model.request.prepared"
+    )
+    traced_result = prepared.data["request"]["current_message"]["results"][0]
+    assert traced_result["content"] == ()
+    assert (
+        traced_result["output"]["model_visible_content"][0]["reason_code"]
+        == "model_input_modality_unsupported"
+    )
+    assert any(event.kind == "model.capability.warning" for event in events)
+    skipped = [event for event in events if event.kind == "model.route.skipped"]
+    assert [event.data["model_key"] for event in skipped] == ["fallback"]
+
+
+@pytest.mark.asyncio
+async def test_text_model_receives_unavailable_block_when_endpoint_supports_media() -> None:
+    message = media_message()
+    client = RecordingClient([completion("please switch models")])
+    adapter = OpenAICompatibleAdapter(
+        tool_result_content=ToolResultContentCapabilities(
+            enabled=True, modalities=("image",)
+        )
+    )
+    invoker = DefaultModelInvoker(
+        adapters={"openai_chat_completions": adapter},
+        clients={"text": client},
+    )
+    execution = invoker.execute(
+        model_group=make_model_group(
+            "assistant",
+            (model_entry("text", "openai", "text-only", streaming=False),),
+        ),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=message,
+        context=Context(),
+    )
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+    await execution.result()
+
+    content = client.payloads[0]["messages"][0]["content"]
+    assert isinstance(content, tuple)
+    assert content[0]["type"] == "text"
+    assert "model_input_modality_unsupported" in content[0]["text"]
+    prepared = next(
+        event for event in events if event.kind == "model.request.prepared"
+    )
+    traced = prepared.data["request"]["current_message"]["results"][0][
+        "content"
+    ][0]
+    assert traced["type"] == "text"
+    assert "model_input_modality_unsupported" in traced["text"]
+    assert isinstance(message.results[0].content[0], ToolResultMedia)
 
 
 def test_invoker_rejects_adapter_registered_under_another_protocol() -> None:

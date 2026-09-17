@@ -41,6 +41,10 @@ message, context = await Echo().invoke(UserMessage(content="hello"), Context())
 
 Direct `invoke()`, `stream()`, and `start()` need no Runtime. Bind a Module to `LocalRuntime` when its call contract is supported and the application needs bounded concurrency, cancellation, deadlines, remote placement, durable history, or advanced Execution control. This standard recurrent example returns `(message, context)`; ordinary Module inputs and results are user-defined. See the [Execution contract](docs/EXECUTION.md).
 
+Install `pygent-ai[video]` to enable PyAV-backed video inspection and normalization
+in the standard `read` tool. The base package does not install PyAV; an independently
+installed `av` package or system `ffmpeg`/`ffprobe` is detected automatically.
+
 ## Documentation
 
 - [渐进式 Agent 开发教程](docs/agent/TUTORIAL.md) — 从零密钥离线示例到工具、流式、Runtime 与动态模型配置

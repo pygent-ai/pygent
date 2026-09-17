@@ -33,7 +33,7 @@ Pygent 的公开配置固定分为 Connection、Model 和 ModelGroup 三层：
 
 Pygent 提供 `ProviderCatalog`、`ModelCapabilityCatalog` 和 `CapabilityPresetCatalog` 三份不可变目录。它们只提供配置数据，不持有 client，不参与调用路由，也不联网更新。UI 可以选择内置条目后把完整值写入用户配置；用户也可以逐项修改或通过 `from_mapping()` 加载外部目录。
 
-Capabilities 不用于自动选模型。调用与声明不一致时，框架发出 `model.capability.warning`，但仍调用用户指定的模型。第一版检查文本输入/输出、工具调用、显式 `tool_choice`、JSON Schema 和输出 token 上限。匹配路径不构造警告事件；retry 不重复警告，fallback 只在实际进入对应模型时检查。
+Capabilities 通常不用于自动选模型。调用与声明不一致时，框架发出 `model.capability.warning`，但仍调用用户指定的模型。唯一的路由例外是已经存在于待发送 ToolResult 中的图片或视频：Invoker 必须保证目标模型及 endpoint 能消费该结果，因此按 ModelGroup 原顺序跳过不兼容候选并发出 `model.route.skipped`。第一版一般检查文本输入/输出、工具调用、显式 `tool_choice`、JSON Schema 和输出 token 上限；媒体 ToolResult 额外检查输入模态和 endpoint tool-message 能力。匹配路径不构造警告事件；retry 不重复警告。
 
 模态使用 `text`、`image`、`audio`、`video` 四个封闭值，`streaming.output` 必须是 `modalities.output` 的子集。`limits` 中无法由官方资料确认的值保存为 `null`。当前文本调用检查 `"text" in capabilities.streaming.output` 来决定 streaming 或 non-streaming transport，不存在第二份 transport capability 配置。
 

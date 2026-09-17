@@ -36,6 +36,11 @@ from ._continuation import (
     neutral_tool_context,
     pending_tool_continuation,
 )
+from ._media_routing import (
+    media_delivery_gaps,
+    pending_tool_result_media,
+    project_request_for_model,
+)
 from ._model_execution import ModelExecution, _ProviderStreamOwner
 from ._request_snapshot import prepared_request_event
 from ._stream_accumulator import ModelStreamAccumulator
@@ -58,12 +63,31 @@ def _model_attempt_plans(
     model_group: ModelGroup,
     message: Message,
     context: Context,
+    *,
+    allowed_keys: frozenset[str] | None = None,
 ) -> Iterator[tuple[ModelEntry, Context]]:
     pending = pending_tool_continuation(message, context)
-    if pending is None:
-        yield from ((entry, context) for entry in model_group.models)
-        return
+    entries = _model_attempt_entries(model_group, message, context)
+    neutral_context = None
+    for entry, retains_continuation in entries:
+        if allowed_keys is not None and entry.key not in allowed_keys:
+            continue
+        if pending is None or retains_continuation:
+            yield entry, context
+            continue
+        if neutral_context is None:  # created only if this fallback is reached
+            neutral_context = neutral_tool_context(context, pending)
+        yield entry, neutral_context
 
+
+def _model_attempt_entries(
+    model_group: ModelGroup,
+    message: Message,
+    context: Context,
+) -> tuple[tuple[ModelEntry, bool], ...]:
+    pending = pending_tool_continuation(message, context)
+    if pending is None:
+        return tuple((entry, True) for entry in model_group.models)
     producer = next(
         (
             entry
@@ -76,15 +100,14 @@ def _model_attempt_plans(
         ),
         None,
     )
-    if producer is not None:
-        yield producer, context
-    neutral_context = None
-    for entry in model_group.models:
-        if producer is not None and entry.key == producer.key:
-            continue
-        if neutral_context is None:
-            neutral_context = neutral_tool_context(context, pending)
-        yield entry, neutral_context
+    return tuple(
+        (entry, producer is not None and entry.key == producer.key)
+        for entry in (
+            model_group.models
+            if producer is None
+            else (producer, *(item for item in model_group.models if item.key != producer.key))
+        )
+    )
 
 
 class DefaultModelInvoker:
@@ -326,8 +349,98 @@ class DefaultModelInvoker:
         _validate_deadline(deadline)
         attempts: list[ModelAttempt] = []
         last_kind = ModelErrorKind.UNKNOWN
-        model_plans = _model_attempt_plans(model_group, message, context)
-        for model_index, (entry, model_context) in enumerate(model_plans):
+        media = pending_tool_result_media(message, context)
+        if not media:
+            attempt_plans: Iterator[tuple[ModelEntry, Message, Context]] = (
+                (entry, message, item)
+                for entry, item in _model_attempt_plans(model_group, message, context)
+            )
+            attempt_plan_count = len(model_group.models)
+        else:
+            assessed: list[tuple[ModelEntry, tuple[str, ...]]] = []
+            for entry, _retains_continuation in _model_attempt_entries(
+                model_group, message, context
+            ):
+                adapter, _client = self._resolve(entry)
+                assessed.append(
+                    (
+                        entry,
+                        media_delivery_gaps(
+                            media, model=entry.spec, adapter=adapter
+                        ),
+                    )
+                )
+            compatible = tuple(item for item in assessed if not item[1])
+            if compatible:
+                compatible_keys = frozenset(entry.key for entry, _gaps in compatible)
+                attempt_plans = (
+                    (entry, message, item)
+                    for entry, item in _model_attempt_plans(
+                        model_group,
+                        message,
+                        context,
+                        allowed_keys=compatible_keys,
+                    )
+                )
+                attempt_plan_count = len(compatible)
+                for entry, gaps in assessed:
+                    if not gaps:
+                        continue
+                    await _emit(
+                        event_sink,
+                        ModelEventKind.ROUTE_SKIPPED,
+                        {
+                            "model_key": entry.key,
+                            "provider": entry.spec.provider,
+                            "model_id": entry.spec.model_id,
+                            "missing_capabilities": gaps,
+                        },
+                    )
+            else:
+                selected_entry, selected_gaps = assessed[0]
+                _entry, selected_context = next(
+                    _model_attempt_plans(
+                        model_group,
+                        message,
+                        context,
+                        allowed_keys=frozenset({selected_entry.key}),
+                    )
+                )
+                selected_adapter, _client = self._resolve(selected_entry)
+                projected_message, projected_context = project_request_for_model(
+                    message,
+                    selected_context,
+                    model=selected_entry.spec,
+                    adapter=selected_adapter,
+                )
+                attempt_plans = iter(
+                    ((selected_entry, projected_message, projected_context),)
+                )
+                attempt_plan_count = 1
+                await _emit(
+                    event_sink,
+                    ModelEventKind.CAPABILITY_WARNING,
+                    {
+                        "model_key": selected_entry.key,
+                        "provider": selected_entry.spec.provider,
+                        "model_id": selected_entry.spec.model_id,
+                        "missing_capabilities": selected_gaps,
+                    },
+                )
+                for entry, gaps in assessed[1:]:
+                    await _emit(
+                        event_sink,
+                        ModelEventKind.ROUTE_SKIPPED,
+                        {
+                            "model_key": entry.key,
+                            "provider": entry.spec.provider,
+                            "model_id": entry.spec.model_id,
+                            "missing_capabilities": gaps,
+                        },
+                    )
+        for model_index, (entry, request_message, model_context) in enumerate(
+            attempt_plans
+        ):
             model_key = entry.key
             model = entry.spec
             adapter, client = self._resolve(entry)
@@ -351,7 +464,7 @@ class DefaultModelInvoker:
             request = ModelProviderRequest(
                 model_key=model_key,
                 model=model,
-                message=message,
+                message=request_message,
                 context=model_context,
                 generation=generation,
                 tools=tuple(tools),
@@ -466,7 +579,7 @@ class DefaultModelInvoker:
                         and number < retry_policy.max_attempts_per_model
                     )
                     can_fallback = (
-                        has_budget and model_index + 1 < len(model_group.models)
+                        has_budget and model_index + 1 < attempt_plan_count
                     )
                     retryable_partial = (
                         emitted

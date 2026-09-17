@@ -89,6 +89,7 @@ class ModelEventKind(str, Enum):
 
     STARTED = "model.started"
     CAPABILITY_WARNING = "model.capability.warning"
+    ROUTE_SKIPPED = "model.route.skipped"
     ATTEMPT_STARTED = "model.attempt.started"
     REQUEST_PREPARED = "model.request.prepared"
     OUTPUT_RESET = "model.output.reset"
@@ -403,6 +404,12 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
             "model_id",
             "missing_capabilities",
         },
+        ModelEventKind.ROUTE_SKIPPED: {
+            "model_key",
+            "provider",
+            "model_id",
+            "missing_capabilities",
+        },
         ModelEventKind.ATTEMPT_STARTED: common_attempt,
         ModelEventKind.REQUEST_PREPARED: common_attempt
         | {"request_id", "request_digest", "request"},
@@ -451,7 +458,7 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
             if not isinstance(data["partial_output"], bool):
                 raise ValueError("partial_output must be a bool")
         return
-    if kind is ModelEventKind.CAPABILITY_WARNING:
+    if kind in (ModelEventKind.CAPABILITY_WARNING, ModelEventKind.ROUTE_SKIPPED):
         for key in ("model_key", "provider", "model_id"):
             _require_string(data, key)
         missing = data["missing_capabilities"]

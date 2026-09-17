@@ -6,7 +6,7 @@
 2. **受约束扩展**：用户 Context 子类必须声明稳定 schema 和版本，保持 frozen、slots 与值语义；全部实例字段必须可由严格、有限、递归冻结的 JSON 数据编码。继承不会开放任意 Python 对象旁路。
 3. **不可变值**：任何状态或历史演进都产生同一具体 Context 类型的新值，旧值永不改变；`replace()`、消息追加、Child 调用和最终结果不得静默降级为基础 Context。用户可以重载 `+`/`+=` 的值转换，但只能返回新的同类型 portable 值，不得原地修改、执行隐藏 I/O 或改变基础 Message/slot 契约。
 4. **数据而非服务**：Context 不持有连接、锁、Store、handler、manager、provider client 或运行资源。
-5. **模型投影明确**：模型层只读取基础 Context 的 `system_prompt`、`messages`、`tools` 与 `metadata`；用户字段不会因继承自动暴露给模型。模型与工具 Layer 必须原样传回具体 Context 类型，除非其公开契约明确返回该类型的新值。
+5. **模型投影明确**：模型层只读取基础 Context 的 `system_prompt`、`messages`、`tools` 与 `metadata`；用户字段不会因继承自动暴露给模型。模型与工具 Layer 必须原样传回具体 Context 类型，除非其公开契约明确返回该类型的新值。LLM 可以为一次明确的目标模型 attempt 派生不持久化的传输投影，例如把该模型无法消费的媒体块表示为同一 ToolCall 的不可用说明；这种投影不得修改或冒充返回的 Context，实际请求必须进入 prepared-request trace。
 6. **写入可见**：当前 Message 不会自动进入模型历史或用户状态，调用者明确决定追加和状态更新时机。
 7. **持久化外置**：`projection_revision` 只用于当前模型投影的乐观并发判断，不是业务会话 revision。加载、提交、历史版本、审计和业务冲突处理仍属于框架外部的业务服务。
 8. **显式槽位更新**：无槽位 Message 正常追加；带稳定 `slot` 的 Message 替换旧的同槽位值，使基础模型投影保留该槽位当前有效内容。

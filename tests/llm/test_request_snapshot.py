@@ -155,7 +155,7 @@ def test_prepared_request_records_media_identity_without_base64() -> None:
             results=(
                 ToolResult(
                     call_id="read-1",
-                    name="read_image",
+                    name="read",
                     status="succeeded",
                     content=(
                         ToolResultMedia(

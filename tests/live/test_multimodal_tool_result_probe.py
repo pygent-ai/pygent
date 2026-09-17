@@ -28,7 +28,7 @@ async def test_probe_read_tools_return_correlated_media_content(modality: str) -
     expected_path = "blue-square.png" if modality == "image" else "red-then-blue.mp4"
     assert call.arguments.to_dict() == {"file_path": expected_path}
     assert result.call_id == call.call_id
-    assert result.name == f"read_{modality}"
+    assert result.name == "read"
     assert result.status == "succeeded"
     assert isinstance(result.content[0], ToolResultText)
     media = result.content[1]

@@ -794,7 +794,7 @@ def test_structured_tool_result_encodes_image_json_and_text_blocks() -> None:
             results=(
                 ToolResult(
                     call_id="read-1",
-                    name="read_image",
+                    name="read",
                     status="succeeded",
                     output={"private": "retained"},
                     content=(
@@ -847,7 +847,7 @@ def test_structured_tool_result_resolves_video_resource() -> None:
             results=(
                 ToolResult(
                     call_id="video-1",
-                    name="read_video",
+                    name="read",
                     status="succeeded",
                     content=(
                         ToolResultMedia(
@@ -882,7 +882,7 @@ def test_structured_tool_result_requires_explicit_endpoint_capability() -> None:
             results=(
                 ToolResult(
                     call_id="read-1",
-                    name="read_image",
+                    name="read",
                     status="succeeded",
                     content=(ToolResultText("image"),),
                 ),
@@ -905,7 +905,7 @@ def test_tool_media_checks_model_modality_separately() -> None:
             results=(
                 ToolResult(
                     call_id="read-1",
-                    name="read_image",
+                    name="read",
                     status="succeeded",
                     content=(
                         ToolResultMedia(
@@ -939,7 +939,7 @@ def test_tool_media_rejects_resource_integrity_mismatch() -> None:
             results=(
                 ToolResult(
                     call_id="read-1",
-                    name="read_image",
+                    name="read",
                     status="succeeded",
                     content=(
                         ToolResultMedia(

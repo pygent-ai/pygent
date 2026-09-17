@@ -5,16 +5,18 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from pygent.tool.types import ToolOutput
+
 
 @dataclass(frozen=True, slots=True)
 class FileIOService:
-    read_backend: Callable[[str, int | None, int | None, str | None], str]
+    read_backend: Callable[[str, int | None, int | None, str | None], ToolOutput]
     write_backend: Callable[[str, str], str]
     edit_backend: Callable[[str, str, str, bool], str]
 
     def read(
         self, file_path: str, limit: int | None, offset: int | None, pages: str | None
-    ) -> str:
+    ) -> ToolOutput:
         return self.read_backend(file_path, limit, offset, pages)
 
     def write(self, file_path: str, content: str) -> str:

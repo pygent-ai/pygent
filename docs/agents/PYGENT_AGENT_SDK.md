@@ -332,6 +332,10 @@ async with handle.subscribe() as events:
 provider-neutral request。Request 包含 provider/model、System Prompt、历史消息、current、
 effective tools、有效 generation settings 和 projection revision。
 
+模型组因 ToolResult 媒体能力不足而跳过候选时，只发布 `model.route.skipped`，不产生虚假
+attempt 或 request snapshot。全部候选都不兼容而使用请求级不可用投影时，snapshot 记录
+投影后的 ToolResult，这与实际发送内容一致；Agent Context 中原始媒体保持不变。
+
 快照不包含 Context metadata、client、credential、endpoint、headers、Provider 原始响应
 或内部异常。用户消息正文和 Tool Definition 是实际请求内容，不会被改写；审计服务必须
 自行实施访问控制。

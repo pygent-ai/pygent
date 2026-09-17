@@ -96,8 +96,6 @@ from pygent.tool import FileTools
 files = FileTools(workspace_root="./workspace")
 read_only_tools = ToolKit(
     files.read,
-    files.read_image,
-    files.read_video,
     files.glob,
     files.grep,
     files.read_lints,
@@ -127,7 +125,7 @@ grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=10
 |---|---|---|---|
 | `bash` | `EXTERNAL / NOT_IDEMPOTENT` | `shell:execute` | 默认限制 cwd 在 workspace；独立任务默认前台等待 600 秒，到期返回任务引用并继续执行；显式停止和治理取消使用最多 2 秒的进程树清理预算；输出最多投影 512 KiB |
 | `tool_task_get`, `tool_task_stop` | `READ / INHERENT`、`WRITE / INHERENT` | 由应用授权 | 查询同一管理器中的任务、输出和结果，或请求取消；停止请求不证明副作用未发生 |
-| `read`, `read_image`, `read_video`, `glob`, `grep`, `read_lints` | `READ / INHERENT` | `filesystem:read` | 默认拒绝 workspace 外路径；媒体读取返回结构化内联内容；glob pattern、匹配结果和符号链接目标都重新验证；读取与搜索有界 |
+| `read`, `glob`, `grep`, `read_lints` | `READ / INHERENT` | `filesystem:read` | 默认拒绝 workspace 外路径；`read` 按文件类型返回文本、PDF 文本或指定页渲染图、结构化图片/视频或二进制描述；图片按交付字节、长边和像素预算归一化；视频在 PyAV 或系统 FFmpeg 可用时按时长、交付字节、长边和帧率预算探测及归一化，否则只透传无需压缩的小文件；glob pattern、匹配结果和符号链接目标都重新验证；读取与搜索有界 |
 | `write` | `WRITE / INHERENT` | `filesystem:write` | 完整 UTF-8 原子替换；同一 FileTools 实例内的同路径变更串行；相同输入可重复得到相同文件内容 |
 | `edit`, `edit_notebook` | `WRITE / NOT_IDEMPOTENT` | `filesystem:write` | 同一实例内串行 read-modify-write 并原子提交；取消在所属写线程退出后返回；不确定失败不谎报未提交 |
 | `web_search`, `web_fetch` | `READ / INHERENT` | `web:search`, `web:fetch` | 公开 HTTP(S)；限制响应大小；默认 fetcher 连接已验证 IP、保留 Host/SNI，并逐跳重新验证重定向 |
@@ -169,7 +167,7 @@ async def main():
 asyncio.run(main())
 ```
 
-`tools.toolkit` 包含 Bash、`tool_task_get(task_id)` 和 `tool_task_stop(task_id)`，并投影实例等待配置。`StandardTools(..., bash_timeout=600, max_media_bytes=20 * 1024 * 1024, task_manager=None)` 提供相同装配和关闭接口，共十四个工具。也可用 `ToolKit(tools.bash, tools.tool_task_get, tools.tool_task_stop, wait_timeouts={"bash": 2.0})` 按模型可见工具名覆盖等待时长。`@tool(wait_timeout=...)` 与 `ToolSpec.wait_timeout` 是可移植的装配策略；普通 `ToolSpec.timeout` 的执行截止语义仍适用于其他工具。
+`tools.toolkit` 包含 Bash、`tool_task_get(task_id)` 和 `tool_task_stop(task_id)`，并投影实例等待配置。`StandardTools(..., bash_timeout=600, max_media_bytes=20 * 1024 * 1024, max_image_output_bytes=3_500_000, max_image_edge=2048, max_image_pixels=40_000_000, max_video_output_bytes=12_000_000, max_video_duration_seconds=120, max_video_edge=1280, max_video_fps=15, task_manager=None)` 提供相同装配和关闭接口，共十二个工具。也可用 `ToolKit(tools.bash, tools.tool_task_get, tools.tool_task_stop, wait_timeouts={"bash": 2.0})` 按模型可见工具名覆盖等待时长。`@tool(wait_timeout=...)` 与 `ToolSpec.wait_timeout` 是可移植的装配策略；普通 `ToolSpec.timeout` 的执行截止语义仍适用于其他工具。
 
 模型调用必须由应用授权选择 `lifecycle="detach"`，才会 admission 独立任务并应用有限等待；`is_background=True` 只请求立即返回，不授予权限。`lifecycle="sync"` 保持当前执行内同步等待；显式后台参数与同步授权冲突时拒绝调用。未配置 `wait_timeout` 的 detach 默认立即返回。有限等待释放并恢复 Parent runnable lease，实际工具执行仍占用其工具资源。Parent 的截止限制观察等待，不作为新任务的命令截止时间。
 
@@ -467,31 +465,53 @@ final_result = await runtime.get_tool_result(task.task_id)
 
 ## 多模态工具结果
 
-标准 `FileTools` 已提供文件路径工具：
+标准 `FileTools` 使用一个文件读取入口：
 
 ```python
 from pygent import ToolKit
 from pygent.tool import FileTools
 
-files = FileTools(workspace_root="./workspace", max_media_bytes=20 * 1024 * 1024)
-media_tools = ToolKit(files.read_image, files.read_video)
+files = FileTools(
+    workspace_root="./workspace",
+    max_media_bytes=20 * 1024 * 1024,
+    max_image_output_bytes=3_500_000,
+    max_image_edge=2048,
+    max_image_pixels=40_000_000,
+    max_video_output_bytes=12_000_000,
+    max_video_duration_seconds=120,
+    max_video_edge=1280,
+    max_video_fps=15,
+)
+read_tools = ToolKit(files.read)
 ```
 
-两个工具的模型入参都只有 `file_path: string`。相对路径从 `workspace_root` 解析，默认拒绝
-workspace 外路径。`read_image` 支持 PNG、JPEG、GIF 和 WebP；`read_video` 支持 MP4。
-工具读取有界文件字节，使用 `MediaSource.inline(bytes)` 规范化为 Base64，并返回文本块和
-`ToolResultMedia`。Base64 位于结构化 `content`，不会复制到业务 `output` 或日志；
-OpenAI-compatible Adapter 最终生成 `data:<mime>;base64,...`。空文件、格式不匹配、超限、
-不支持的扩展名和读取失败都会返回明确的工具错误。
+`read(file_path, limit=None, offset=None, pages=None)` 根据解析后的文件类型选择读取策略。
+相对路径从 `workspace_root` 解析，默认拒绝 workspace 外路径。文本支持 `limit`/`offset`，
+PDF 未传 `pages` 时提取文本；显式传入单页或连续页范围（如 `2` 或 `2-5`）时，将所选
+页面渲染成 PNG，按页码顺序直接交给视觉模型。PNG、JPEG、GIF、WebP 和 MP4 同样成为
+模型可见媒体；媒体读取拒绝文本范围参数。图片先验证实际格式、尺寸、像素数和动画状态。
+满足模型输出边界的小图保持原字节；超出 2048 px 长边、3,500,000 字节输出预算或带 EXIF
+方向的图片会纠正方向、等比缩放并受控重编码。动态 GIF 被明确拒绝。PDF 渲染页复用同一
+图片管线。读取器使用 `MediaSource.inline(bytes)` 把有界媒体字节规范化为 Base64，并返回
+文本块和 `ToolResultMedia`。Base64 位于结构化 `content`，不会复制到业务 `output` 或
+日志；OpenAI-compatible Adapter 最终生成 `data:<mime>;base64,...`。空媒体、格式不匹配、
+解码像素、渲染像素或媒体总字节超限以及读取失败都会返回明确的工具错误。业务 `output`
+记录原始/交付尺寸和大小、最终 MIME 及转换步骤；未知二进制文件返回有界元数据描述。
+
+MP4 的模型交付预算默认为 120 秒、12,000,000 字节、1280 px 长边和 15 FPS。部署环境的
+安装 `pygent-ai[video]` 后，读取器通过 PyAV 验证真实容器流、时长、尺寸、帧率和编码，
+并在需要时输出 H.264/yuv420p 视频及 AAC 单声道音频；环境中已独立安装的 `av` 也会被
+自动使用，不要求它必须来自该 extra。没有 PyAV 时，读取器继续探测 `PATH` 中成对存在的
+`ffmpeg` 与 `ffprobe`。两种后端都未找到时，小于交付字节预算且具有 MP4 签名的文件以
+`processing="passthrough_unverified"` 原样返回；必须压缩的文件明确失败为
+`video_processing_unavailable`，不会假装已经验证时长或编码。视频预算属于部署配置，
+不会增加 `read` 的模型可见参数。降级成功的模型可见文本和业务 metadata 都附带安装
+`pygent-ai[video]` 或完整 FFmpeg 可改善校验与归一化效果的提示。基础安装不会拉取 PyAV。
 
 模型调用示例：
 
 ```json
-{"name": "read_image", "arguments": {"file_path": "screenshots/result.png"}}
-```
-
-```json
-{"name": "read_video", "arguments": {"file_path": "recordings/flow.mp4"}}
+{"name": "read", "arguments": {"file_path": "screenshots/result.png"}}
 ```
 
 返回普通字符串、对象、Pydantic model 或其他严格 JSON 值的工具保持原行为。工具需要把
@@ -510,11 +530,11 @@ from pygent import (
 
 
 @tool(
-    tool_id="media.read_image",
+    tool_id="media.load_image",
     version="1.0.0",
     side_effect=ToolSideEffect.READ,
 )
-def read_image(resource_uri: str) -> ToolOutput:
+def load_image(resource_uri: str) -> ToolOutput:
     return ToolOutput(
         output={"resource_uri": resource_uri, "width": 640, "height": 480},
         content=(
@@ -546,10 +566,13 @@ def read_image(resource_uri: str) -> ToolOutput:
 内容块连同 `call_id`、MIME、资源引用和顺序进入 Message/effect/durable codec。只有
 `status="succeeded"` 的 ToolResult 可以携带 `content`；direct、managed 和 detached
 任务使用同一结果类型。prepared-request 事件只记录媒体身份、摘要和大小，不复制内联
-Base64。目标模型或 endpoint 不支持该能力、资源无法解析、摘要不符或媒体超限时，模型
-调用在 Provider I/O 前明确失败。
+Base64。模型组按声明顺序跳过无法消费媒体结果的模型或 endpoint，并发布
+`model.route.skipped`；存在兼容候选时由其接收原媒体。全部候选都不兼容时，Invoker 为
+首个候选生成一次不持久化的模型请求投影，把媒体表示为保持原 `call_id` 的不可用说明，
+让模型可以继续回复。原 ToolResult 与 Context 不变。资源无法解析、摘要不符或媒体超限且
+无法通过候选能力筛选处理时，模型调用仍在 Provider I/O 前明确失败。
 
-仓库提供 opt-in live probe，使用标准 `FileTools.read_image` / `read_video` 验证完整链路，
+仓库提供 opt-in live probe，使用标准 `FileTools.read` 验证图片与视频完整链路，
 并只输出脱敏结果。下面的命令仅测试 `.env` 中 AZ endpoint 的指定模型：
 
 ```powershell
@@ -682,6 +705,7 @@ async with bound_tools.stream(ai_message, context) as stream:
 达到字节预算时优先保留完整行，并在结果中提示 `continue with offset=N`。
 如果首个目标行本身超过预算，会返回该行的 UTF-8 完整字符前缀，并明确提示
 行偏移不能读取该行余下内容，需要使用支持字节范围的工具。显式 `limit` 已满足或
-文件已读完时不追加大小截断提示。PDF 仍使用 `pages` 参数选择页码。
+文件已读完时不追加大小截断提示。PDF 不传 `pages` 时提取文本；传入 `pages` 时返回所选
+页面的渲染图片，而不是文本。
 
 Bash 的等待优先级为：调用 `timeout` > 装配配置 > 默认 600 秒。`timeout=0` 立即返回任务引用，`is_background=True` 同样立即返回；负数、非有限数和非数字被拒绝。覆盖值不修改装配配置，direct 和 managed 共用同一解析规则；该值不授予 detach 权限，也不延长 Runtime 的执行预算。`ToolSpec.wait_timeout_parameter="timeout"` 显式声明覆盖来源，不改变其他工具同名参数的含义。

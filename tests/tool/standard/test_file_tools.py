@@ -4,12 +4,19 @@ import asyncio
 import base64
 import json
 import os
+import random
+import shutil
+import struct
+import subprocess
 import sys
 import threading
 import time
+import zlib
+from io import BytesIO
 from pathlib import Path
 
 import pytest
+from PIL import Image
 from pypdf import PdfWriter
 
 from pygent import (
@@ -37,12 +44,91 @@ def _parameters(handler) -> dict:
     return ToolKit(handler).definitions[0].parameters.to_dict()
 
 
-def test_pdf_reader_uses_current_pypdf_backend(tmp_path) -> None:
-    path = tmp_path / "blank.pdf"
+def _encode_test_image(
+    image: Image.Image,
+    image_format: str,
+    **options: object,
+) -> bytes:
+    buffer = BytesIO()
+    image.save(buffer, format=image_format, **options)
+    return buffer.getvalue()
+
+
+def _oversized_png_header(width: int, height: int) -> bytes:
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        checksum = zlib.crc32(kind + payload) & 0xFFFFFFFF
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", checksum)
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IEND", b"")
+
+
+def _write_blank_pdf(
+    path: Path,
+    page_count: int = 1,
+    *,
+    width: float = 72,
+    height: float = 72,
+) -> None:
     writer = PdfWriter()
-    writer.add_blank_page(width=72, height=72)
+    for _ in range(page_count):
+        writer.add_blank_page(width=width, height=height)
     with path.open("wb") as stream:
         writer.write(stream)
+
+
+def _write_test_video(
+    path: Path,
+    *,
+    size: str = "320x180",
+    fps: int = 10,
+    duration: float = 1,
+    with_audio: bool = False,
+) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        pytest.skip("ffmpeg is not installed")
+    command = [
+        ffmpeg,
+        "-nostdin",
+        "-y",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc2=size={size}:rate={fps}",
+    ]
+    if with_audio:
+        command.extend(("-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000"))
+    command.extend(
+        (
+            "-t",
+            str(duration),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+        )
+    )
+    if with_audio:
+        command.extend(("-c:a", "aac", "-ac", "2"))
+    else:
+        command.append("-an")
+    command.append(str(path))
+    result = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        pytest.skip("ffmpeg does not provide the libx264 test encoder")
+
+
+def test_pdf_reader_uses_current_pypdf_backend(tmp_path) -> None:
+    path = tmp_path / "blank.pdf"
+    _write_blank_pdf(path)
     assert file_module._read_pdf_text(path, "1") == "--- page 1 ---"
 
 
@@ -68,9 +154,7 @@ def test_file_toolkit_exposes_only_lowercase_tool_names(tmp_path):
         "glob",
         "grep",
         "read",
-        "read_image",
         "read_lints",
-        "read_video",
         "write",
     ]
     assert not {
@@ -84,32 +168,185 @@ def test_file_toolkit_exposes_only_lowercase_tool_names(tmp_path):
     }.intersection(item.name for item in definitions)
 
 
-def test_media_file_tool_schemas_accept_only_a_file_path(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "option",
+    [
+        {"max_read_bytes": 0},
+        {"max_media_bytes": 0},
+        {"max_image_output_bytes": 0},
+        {"max_image_edge": 0},
+        {"max_image_pixels": 0},
+        {"max_video_output_bytes": 0},
+        {"max_video_duration_seconds": 0},
+        {"max_video_edge": 0},
+        {"max_video_fps": 0},
+        {"max_search_files": 0},
+    ],
+)
+def test_file_tools_require_positive_resource_limits(tmp_path, option) -> None:
+    with pytest.raises(ValueError, match="limits must be positive"):
+        FileTools(workspace_root=tmp_path, **option)
+
+
+def test_read_schema_covers_text_pdf_and_media_options(tmp_path) -> None:
     tools = FileTools(workspace_root=tmp_path)
 
-    for handler in (tools.read_image, tools.read_video):
-        schema = _parameters(handler)
-        assert schema["required"] == ["file_path"]
-        assert schema["additionalProperties"] is False
-        assert set(schema["properties"]) == {"file_path"}
-        assert schema["properties"]["file_path"]["type"] == "string"
+    definition = ToolKit(tools.read).definitions[0]
+    schema = _parameters(tools.read)
+
+    assert "rendered as images" in definition.description
+    assert schema["required"] == ["file_path"]
+    assert schema["additionalProperties"] is False
+    assert set(schema["properties"]) == {"file_path", "limit", "offset", "pages"}
+    assert schema["properties"]["file_path"]["type"] == "string"
+    assert "rendered as images" in schema["properties"]["pages"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_read_renders_requested_pdf_pages_as_inline_images(tmp_path) -> None:
+    _write_blank_pdf(tmp_path / "document.pdf", page_count=3)
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(
+        tools.read,
+        {"file_path": "document.pdf", "pages": "2-3"},
+    )
+
+    assert result.status == "succeeded", (result.error_code, result.error)
+    assert result.output["file_path"] == "document.pdf"
+    assert result.output["mime_type"] == "application/pdf"
+    assert [page["page"] for page in result.output["rendered_pages"]] == [2, 3]
+    assert result.output["total_size_bytes"] == sum(
+        page["size_bytes"] for page in result.output["rendered_pages"]
+    )
+    assert len(result.content) == 4
+    for content_index, page_number in ((0, 2), (2, 3)):
+        label = result.content[content_index]
+        media = result.content[content_index + 1]
+        assert isinstance(label, ToolResultText)
+        assert f"page {page_number}" in label.text
+        assert isinstance(media, ToolResultMedia)
+        assert media.media_type == "image"
+        assert media.mime_type == "image/png"
+        assert media.detail == "high"
+        assert base64.b64decode(media.source.base64_data or "").startswith(
+            b"\x89PNG\r\n\x1a\n"
+        )
+
+
+@pytest.mark.asyncio
+async def test_rendered_pdf_pages_use_image_normalization_limits(tmp_path) -> None:
+    _write_blank_pdf(tmp_path / "document.pdf", width=300, height=100)
+    tools = FileTools(workspace_root=tmp_path, max_image_edge=128)
+
+    result = await invoke_tool(
+        tools.read,
+        {"file_path": "document.pdf", "pages": "1"},
+    )
+
+    assert result.status == "succeeded"
+    page = result.output["rendered_pages"][0]
+    assert page["original_dimensions"] == (600, 200)
+    assert page["delivered_dimensions"] == (128, 42)
+    assert page["transformed"] is True
+    assert page["transformations"] == ("resize", "reencode")
+
+
+@pytest.mark.asyncio
+async def test_read_pdf_without_pages_still_extracts_text(tmp_path) -> None:
+    _write_blank_pdf(tmp_path / "document.pdf")
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(tools.read, {"file_path": "document.pdf"})
+
+    assert result.status == "succeeded"
+    assert result.output == "--- page 1 ---"
+    assert result.content == (ToolResultText("--- page 1 ---"),)
+
+
+@pytest.mark.asyncio
+async def test_rendered_pdf_pages_share_media_byte_limit(tmp_path) -> None:
+    _write_blank_pdf(tmp_path / "document.pdf", page_count=2)
+    tools = FileTools(workspace_root=tmp_path, max_media_bytes=8)
+
+    result = await invoke_tool(
+        tools.read,
+        {"file_path": "document.pdf", "pages": "1-2"},
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "media_too_large"
+
+
+@pytest.mark.asyncio
+async def test_rendered_pdf_page_rejects_excessive_pixel_dimensions(tmp_path) -> None:
+    _write_blank_pdf(
+        tmp_path / "document.pdf",
+        width=100_000,
+        height=100_000,
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(
+        tools.read,
+        {"file_path": "document.pdf", "pages": "1"},
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "pdf_page_too_large"
+
+
+@pytest.mark.asyncio
+async def test_rendered_pdf_pages_reject_empty_page_selection(tmp_path) -> None:
+    _write_blank_pdf(tmp_path / "document.pdf")
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(
+        tools.read,
+        {"file_path": "document.pdf", "pages": ""},
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "invalid_page_range"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("option", [{"limit": 1}, {"offset": 1}])
+async def test_rendered_pdf_pages_reject_text_range_options(tmp_path, option) -> None:
+    _write_blank_pdf(tmp_path / "document.pdf")
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(
+        tools.read,
+        {"file_path": "document.pdf", "pages": "1", **option},
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "invalid_read_options"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("name", "data", "handler_name", "media_type", "mime_type"),
+    ("name", "media_type", "mime_type"),
     [
-        ("shape.png", b"\x89PNG\r\n\x1a\nfixture", "read_image", "image", "image/png"),
-        ("clip.mp4", b"\x00\x00\x00\x18ftypmp42fixture", "read_video", "video", "video/mp4"),
+        ("shape.png", "image", "image/png"),
+        ("clip.mp4", "video", "video/mp4"),
     ],
 )
-async def test_media_file_tools_return_inline_structured_content(
-    tmp_path, name, data, handler_name, media_type, mime_type
+async def test_read_returns_inline_structured_media_content(
+    tmp_path, monkeypatch, name, media_type, mime_type
 ) -> None:
+    if media_type == "image":
+        image = Image.new("RGB", (32, 24), "blue")
+        data = _encode_test_image(image, "PNG")
+        image.close()
+    else:
+        monkeypatch.setattr(file_module, "_load_video_backend", lambda: None)
+        data = b"\x00\x00\x00\x18ftypmp42fixture"
     (tmp_path / name).write_bytes(data)
     tools = FileTools(workspace_root=tmp_path)
 
-    result = await invoke_tool(getattr(tools, handler_name), {"file_path": name})
+    result = await invoke_tool(tools.read, {"file_path": name})
 
     assert result.status == "succeeded"
     assert result.output["file_path"] == name
@@ -122,25 +359,267 @@ async def test_media_file_tools_return_inline_structured_content(
     assert media.mime_type == mime_type
     assert media.source.kind == "inline"
     assert base64.b64decode(media.source.base64_data or "") == data
+    if media_type == "image":
+        assert result.output["original_dimensions"] == (32, 24)
+        assert result.output["delivered_dimensions"] == (32, 24)
+        assert result.output["transformed"] is False
+        assert result.output["transformations"] == ()
+    else:
+        assert result.output["processing"] == "passthrough_unverified"
+        assert result.output["original_video"] is None
+        assert result.output["delivered_video"] is None
+        assert "pygent-ai[video]" in result.output["processing_hint"]
+        assert "ffprobe" in result.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_read_video_without_ffmpeg_fails_only_when_normalization_is_required(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(file_module, "_load_video_backend", lambda: None)
+    data = b"\x00\x00\x00\x18ftypmp42" + b"x" * 128
+    (tmp_path / "large.mp4").write_bytes(data)
+    tools = FileTools(
+        workspace_root=tmp_path,
+        max_media_bytes=256,
+        max_video_output_bytes=64,
+    )
+
+    result = await invoke_tool(tools.read, {"file_path": "large.mp4"})
+
+    assert result.status == "failed"
+    assert result.error_code == "video_processing_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_read_inspects_safe_video_without_changing_bytes(tmp_path) -> None:
+    path = tmp_path / "safe.mp4"
+    _write_test_video(path)
+    original = path.read_bytes()
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(tools.read, {"file_path": "safe.mp4"})
+
+    assert result.status == "succeeded"
+    assert result.output["processing"] == "passthrough"
+    assert result.output["transformed"] is False
+    assert result.output["original_video"]["dimensions"] == (320, 180)
+    assert result.output["original_video"]["fps"] == 10
+    assert result.output["delivered_video"] == result.output["original_video"]
+    assert base64.b64decode(result.content[1].source.base64_data or "") == original
+
+
+@pytest.mark.asyncio
+async def test_read_normalizes_video_for_model_delivery(tmp_path) -> None:
+    path = tmp_path / "source.mp4"
+    _write_test_video(path, size="640x360", fps=30)
+    tools = FileTools(
+        workspace_root=tmp_path,
+        max_video_edge=160,
+        max_video_fps=8,
+    )
+
+    result = await invoke_tool(tools.read, {"file_path": "source.mp4"})
+
+    assert result.status == "succeeded", (result.error_code, result.error)
+    assert result.output["processing"] == "normalized"
+    assert result.output["transformed"] is True
+    assert result.output["transformations"] == ("resize", "frame_rate", "reencode")
+    assert max(result.output["delivered_video"]["dimensions"]) <= 160
+    assert result.output["delivered_video"]["fps"] <= 8
+    assert result.output["delivered_video"]["video_codec"] == "h264"
+    assert result.output["delivered_video"]["pixel_format"] == "yuv420p"
+    assert result.output["size_bytes"] <= 12_000_000
+
+
+@pytest.mark.asyncio
+async def test_read_rejects_video_over_duration_limit(tmp_path) -> None:
+    path = tmp_path / "long.mp4"
+    _write_test_video(path, duration=1)
+    tools = FileTools(workspace_root=tmp_path, max_video_duration_seconds=0.2)
+
+    result = await invoke_tool(tools.read, {"file_path": "long.mp4"})
+
+    assert result.status == "failed"
+    assert result.error_code == "video_too_long"
+
+
+@pytest.mark.asyncio
+async def test_read_normalizes_video_audio_to_aac_mono(tmp_path) -> None:
+    path = tmp_path / "stereo.mp4"
+    _write_test_video(path, fps=20, with_audio=True)
+    tools = FileTools(workspace_root=tmp_path, max_video_fps=10)
+
+    result = await invoke_tool(tools.read, {"file_path": "stereo.mp4"})
+
+    assert result.status == "succeeded", (result.error_code, result.error)
+    assert result.output["processing"] == "normalized"
+    assert "audio_codec" in result.output["transformations"]
+    assert result.output["delivered_video"]["audio_codec"] == "aac"
+    assert result.output["delivered_video"]["audio_channels"] == 1
+
+
+@pytest.mark.asyncio
+async def test_read_rejects_invalid_mp4_when_ffprobe_is_available(tmp_path) -> None:
+    if file_module._load_video_backend() is None:
+        pytest.skip("ffmpeg and ffprobe are not installed")
+    (tmp_path / "broken.mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42not-a-real-video"
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(tools.read, {"file_path": "broken.mp4"})
+
+    assert result.status == "failed"
+    assert result.error_code == "video_decode_failed"
+
+
+@pytest.mark.asyncio
+async def test_read_normalizes_large_image_for_model_delivery(tmp_path) -> None:
+    image = Image.new("RGB", (3000, 1200), "navy")
+    data = _encode_test_image(image, "JPEG", quality=95)
+    image.close()
+    (tmp_path / "large.jpg").write_bytes(data)
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(tools.read, {"file_path": "large.jpg"})
+
+    assert result.status == "succeeded"
+    assert result.output["original_dimensions"] == (3000, 1200)
+    assert result.output["delivered_dimensions"] == (2048, 819)
+    assert result.output["transformed"] is True
+    assert result.output["transformations"] == ("resize", "reencode")
+    assert result.output["size_bytes"] <= 3_500_000
+    delivered = base64.b64decode(result.content[1].source.base64_data or "")
+    with Image.open(BytesIO(delivered)) as normalized:
+        assert normalized.size == (2048, 819)
+
+
+@pytest.mark.asyncio
+async def test_read_reencodes_image_until_output_fits_byte_limit(tmp_path) -> None:
+    random_bytes = random.Random(0).randbytes(512 * 512 * 3)
+    image = Image.frombytes("RGB", (512, 512), random_bytes)
+    data = _encode_test_image(image, "PNG")
+    image.close()
+    (tmp_path / "noise.png").write_bytes(data)
+    tools = FileTools(
+        workspace_root=tmp_path,
+        max_image_output_bytes=20_000,
+    )
+
+    result = await invoke_tool(tools.read, {"file_path": "noise.png"})
+
+    assert result.status == "succeeded"
+    assert result.output["size_bytes"] <= 20_000
+    assert result.output["transformed"] is True
+    assert "resize" in result.output["transformations"]
+    assert "reencode" in result.output["transformations"]
+
+
+@pytest.mark.asyncio
+async def test_read_fails_when_image_cannot_fit_output_limit(tmp_path) -> None:
+    image = Image.new("RGB", (8, 8), "black")
+    data = _encode_test_image(image, "PNG")
+    image.close()
+    (tmp_path / "tiny.png").write_bytes(data)
+    tools = FileTools(workspace_root=tmp_path, max_image_output_bytes=1)
+
+    result = await invoke_tool(tools.read, {"file_path": "tiny.png"})
+
+    assert result.status == "failed"
+    assert result.error_code == "image_output_too_large"
+
+
+@pytest.mark.asyncio
+async def test_read_applies_exif_orientation(tmp_path) -> None:
+    image = Image.new("RGB", (10, 20), "red")
+    exif = Image.Exif()
+    exif[274] = 6
+    data = _encode_test_image(image, "JPEG", exif=exif)
+    image.close()
+    (tmp_path / "rotated.jpg").write_bytes(data)
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(tools.read, {"file_path": "rotated.jpg"})
+
+    assert result.status == "succeeded"
+    assert result.output["original_dimensions"] == (10, 20)
+    assert result.output["delivered_dimensions"] == (20, 10)
+    assert result.output["transformations"] == ("exif_orientation", "reencode")
+    delivered = base64.b64decode(result.content[1].source.base64_data or "")
+    with Image.open(BytesIO(delivered)) as normalized:
+        assert normalized.getexif().get(274) is None
+
+
+@pytest.mark.asyncio
+async def test_read_preserves_transparency_when_resizing_png(tmp_path) -> None:
+    image = Image.new("RGBA", (600, 300), (0, 128, 255, 64))
+    data = _encode_test_image(image, "PNG")
+    image.close()
+    (tmp_path / "transparent.png").write_bytes(data)
+    tools = FileTools(workspace_root=tmp_path, max_image_edge=256)
+
+    result = await invoke_tool(tools.read, {"file_path": "transparent.png"})
+
+    assert result.status == "succeeded"
+    assert result.output["delivered_dimensions"] == (256, 128)
+    delivered = base64.b64decode(result.content[1].source.base64_data or "")
+    with Image.open(BytesIO(delivered)) as normalized:
+        assert normalized.mode == "RGBA"
+        assert normalized.getpixel((0, 0))[3] == 64
+
+
+@pytest.mark.asyncio
+async def test_read_rejects_image_pixel_bomb_before_decode(tmp_path) -> None:
+    (tmp_path / "bomb.png").write_bytes(_oversized_png_header(10_000, 5_000))
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(tools.read, {"file_path": "bomb.png"})
+
+    assert result.status == "failed"
+    assert result.error_code == "image_too_many_pixels"
+
+
+@pytest.mark.asyncio
+async def test_read_rejects_animated_gif(tmp_path) -> None:
+    first = Image.new("RGB", (16, 16), "red")
+    second = Image.new("RGB", (16, 16), "blue")
+    data = _encode_test_image(
+        first,
+        "GIF",
+        save_all=True,
+        append_images=[second],
+        duration=100,
+        loop=0,
+    )
+    first.close()
+    second.close()
+    (tmp_path / "animated.gif").write_bytes(data)
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(tools.read, {"file_path": "animated.gif"})
+
+    assert result.status == "failed"
+    assert result.error_code == "animated_image_unsupported"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("handler_name", "name", "data", "error_code"),
+    ("name", "data", "error_code"),
     [
-        ("read_image", "shape.bmp", b"BMfixture", "unsupported_media_type"),
-        ("read_video", "clip.mov", b"fixture", "unsupported_media_type"),
-        ("read_image", "empty.png", b"", "empty_media"),
-        ("read_image", "wrong.png", b"not a png", "media_mime_mismatch"),
+        ("empty.png", b"", "empty_media"),
+        ("wrong.png", b"not a png", "media_mime_mismatch"),
+        ("truncated.png", b"\x89PNG\r\n\x1a\ntruncated", "image_decode_failed"),
+        ("wrong.mp4", b"not an mp4", "media_mime_mismatch"),
     ],
 )
-async def test_media_file_tools_fail_clearly_for_invalid_media(
-    tmp_path, handler_name, name, data, error_code
+async def test_read_fails_clearly_for_invalid_media(
+    tmp_path, name, data, error_code
 ) -> None:
     (tmp_path / name).write_bytes(data)
     tools = FileTools(workspace_root=tmp_path)
 
-    result = await invoke_tool(getattr(tools, handler_name), {"file_path": name})
+    result = await invoke_tool(tools.read, {"file_path": name})
 
     assert result.status == "failed"
     assert result.error_code == error_code
@@ -152,27 +631,46 @@ async def test_media_file_tool_enforces_configured_byte_limit(tmp_path) -> None:
     (tmp_path / "shape.png").write_bytes(b"\x89PNG\r\n\x1a\nfixture")
     tools = FileTools(workspace_root=tmp_path, max_media_bytes=8)
 
-    result = await invoke_tool(tools.read_image, {"file_path": "shape.png"})
+    result = await invoke_tool(tools.read, {"file_path": "shape.png"})
 
     assert result.status == "failed"
     assert result.error_code == "media_too_large"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("handler_name", ["read_image", "read_video"])
-async def test_media_file_tools_reject_paths_outside_workspace(
-    tmp_path, handler_name
-) -> None:
-    outside = tmp_path.parent / "outside-media.png"
-    outside.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+@pytest.mark.parametrize(
+    ("name", "data"),
+    [
+        ("outside-media.png", b"\x89PNG\r\n\x1a\nfixture"),
+        ("outside-media.mp4", b"\x00\x00\x00\x18ftypmp42fixture"),
+    ],
+)
+async def test_read_rejects_media_paths_outside_workspace(tmp_path, name, data) -> None:
+    outside = tmp_path.parent / name
+    outside.write_bytes(data)
     tools = FileTools(workspace_root=tmp_path)
 
     result = await invoke_tool(
-        getattr(tools, handler_name), {"file_path": str(outside)}
+        tools.read, {"file_path": str(outside)}
     )
 
     assert result.status == "failed"
     assert result.error_code == "path_outside_workspace"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("option", [{"limit": 1}, {"offset": 1}])
+async def test_read_rejects_text_ranges_for_media(tmp_path, option) -> None:
+    (tmp_path / "shape.png").write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(
+        tools.read,
+        {"file_path": "shape.png", **option},
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "invalid_read_options"
 
 
 @pytest.mark.asyncio
@@ -861,13 +1359,11 @@ async def test_file_tool_errors_are_non_throwing_tool_results(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_read_describes_binary_and_image_files(tmp_path):
+async def test_read_describes_unknown_binary_files(tmp_path):
     tools = FileTools(workspace_root=tmp_path)
     (tmp_path / "blob.bin").write_bytes(b"\x00\x01\x02")
-    (tmp_path / "pixel.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00")
 
     assert "blob.bin" in await succeeded(tools.read, file_path="blob.bin")
-    assert "pixel.png" in await succeeded(tools.read, file_path="pixel.png")
 
 
 @pytest.mark.asyncio

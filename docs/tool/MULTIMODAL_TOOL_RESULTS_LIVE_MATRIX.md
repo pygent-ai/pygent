@@ -8,7 +8,7 @@
 
 ## 标准文件路径工具复测
 
-标准 `FileTools.read_image(file_path)` 与 `FileTools.read_video(file_path)` 接入后，重新执行
+媒体感知的标准 `FileTools.read(file_path)` 接入后，重新执行
 能力目录中的全部 91 个模型/模态场景：56 个正确理解媒体，33 个返回 Provider 错误，2 个
 请求成功但没有给出预期答案；其中图片通过 46 个、视频通过 10 个。另行指定
 `glm-5.3-flash` 的图片与视频场景也都通过。复测确认模型参数是本地 `file_path`，文件字节

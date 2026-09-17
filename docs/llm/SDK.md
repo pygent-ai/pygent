@@ -252,6 +252,13 @@ model_layer = ModelCallLayer(
 
 `ModelGroup.models` 的顺序就是 fallback 顺序。Invoker 的 `clients` 必须按每个 `ModelEntry.key` 绑定，`adapters` 必须按每个 `ModelSpec.protocol` 绑定。Provider 名称不用于选择 client 或 Adapter。
 
+待发送的 ToolResult 含图片或视频时，Invoker 在发出 I/O 前按这个顺序检查模型输入模态、
+endpoint 的结构化 tool-result 能力、source kind 与已知大小限制。不兼容候选产生
+`model.route.skipped`，但不产生 attempt、prepared request 或费用；剩余兼容候选仍按原
+顺序 retry/fallback。若没有任何兼容候选，首个候选收到请求级不可用投影：assistant 的
+ToolCall 与 `call_id` 不变，ToolResult 中无法发送的媒体成为结构化文字说明。这个投影只
+属于本次 `ModelProviderRequest`，不会覆盖 Context 中的真实媒体。
+
 ## Managed：固定单模型或模型组
 
 固定 Layer 可以省略 `invoker`，由 Runtime 使用组名注册现有 invoker：
@@ -386,7 +393,7 @@ provider_options={
 }
 ```
 
-所有 attempt、prepared request、usage、reset 和 completion 事件也使用 `model_key`。`model.output.reset` 到达时，消费者按 `(model_key, attempt)` 撤销暂存输出。
+所有 attempt、prepared request、usage、reset 和 completion 事件也使用 `model_key`。`model.output.reset` 到达时，消费者按 `(model_key, attempt)` 撤销暂存输出。`model.route.skipped` 包含候选模型身份和稳定 `missing_capabilities`；因为没有真实 Provider attempt，它不会配对 `model.attempt.started`。
 
 ## 可选 AZ 一致性验证
 

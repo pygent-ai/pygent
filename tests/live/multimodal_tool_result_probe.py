@@ -178,11 +178,10 @@ async def _tool_message(modality: str):
             data = Path(override).read_bytes() if override else SEQUENCE_MP4_BYTES
         (root / filename).write_bytes(data)
         files = FileTools(workspace_root=root, max_media_bytes=4 * 1024 * 1024)
-        handler = files.read_image if modality == "image" else files.read_video
-        toolkit = ToolKit(handler)
+        toolkit = ToolKit(files.read)
         call = ToolCall(
             call_id=f"call-read-{modality}",
-            name=f"read_{modality}",
+            name="read",
             arguments={"file_path": filename},
         )
         layer = toolkit.local_layer(authorization_adapter=_authorize)
@@ -197,11 +196,11 @@ async def _tool_message(modality: str):
 def _prompt(modality: str) -> str:
     if modality == "image":
         return (
-            "Use the read_image tool result. Identify the central shape and its "
+            "Use the read tool result. Identify the central shape and its "
             "color. Reply with exactly BLUE SQUARE if that is what you see."
         )
     return (
-        "Use the read_video tool result. Identify the order of the two solid "
+        "Use the read tool result. Identify the order of the two solid "
         "colors. Reply with exactly RED THEN BLUE if red appears before blue."
     )
 

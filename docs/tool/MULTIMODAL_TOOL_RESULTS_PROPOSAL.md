@@ -1,6 +1,6 @@
 # 多模态工具结果设计
 
-> 状态：公开契约与标准 `FileTools.read_image`、`read_video` 已实现；文件路径工具通过
+> 状态：公开契约与媒体感知的标准 `FileTools.read` 已实现；文件路径工具通过
 > synthetic 与 `glm-5.3-flash` live-provider 验收。
 >
 > 本文服从 [Pygent 第一原则](../FEATURES.md)、[Tool 第一原则](FEATURES.md)、
@@ -24,9 +24,23 @@ ToolResult 保留原 `call_id`，ReAct 仍把它作为 ToolMessage 加入模型�
 - 模型输入模态与协议 tool-message 能力的独立检查；
 - 无效、失效、不兼容和超限媒体的明确失败。
 
-音频、媒体输出生成、自动转码、抽帧、OCR 和字幕提取不属于首期。标准
-`read_image(file_path)` 支持 PNG、JPEG、GIF、WebP，`read_video(file_path)` 支持 MP4；
-两者按 workspace 路径规则读取有界字节并产生 inline 媒体内容块。
+音频、媒体输出生成、抽帧、OCR 和字幕提取不属于首期。标准
+`read(file_path, limit=None, offset=None, pages=None)` 对 PNG、JPEG、GIF、WebP 和 MP4
+按 workspace 路径规则读取有界字节并产生 inline 媒体内容块；同一个入口继续处理文本、
+PDF 和未知二进制描述。PDF 默认提取文本；显式传入 `pages` 时，将指定页面渲染成按页码
+排列的 PNG 媒体内容块，供视觉模型直接检查。静态图片和 PDF 渲染页统一经过尺寸、像素、
+动画和解码校验；超出模型交付边界时自动纠正 EXIF 方向、等比缩放并受控重编码，业务输出
+保留转换前后的尺寸、字节数、最终 MIME 和转换步骤。
+
+MP4 交付额外实施部署侧归一化：默认限制 120 秒、12,000,000 字节、1280 px 长边和
+15 FPS。读取器优先使用环境中可导入的 PyAV；`pygent-ai[video]` 提供该可选依赖，预先
+独立安装的 `av` 同样会被自动使用。若 PyAV 不存在，则探测系统 `PATH` 中的
+`ffmpeg`/`ffprobe`。后端可用时读取器验证真实媒体元数据，并在超出边界或编码不兼容时
+转为 H.264/yuv420p + AAC mono；基础安装不拉取 PyAV。两种后端均缺失时仅透传无需压缩
+的小 MP4，并把处理状态标为 `passthrough_unverified`。必须压缩时
+返回 `video_processing_unavailable`，不对未探测的时长、尺寸或编码作虚假承诺。降级
+结果在模型可见文本和业务 metadata 中提示安装 `pygent-ai[video]` 或完整 FFmpeg 可启用
+更好的处理能力。
 
 ## 与现有原则的关系
 
@@ -172,8 +186,16 @@ OpenAI Compatible 不是 capability。框架不能根据 Provider 名、模型�
 响应推断所有兼容接口都支持多模态 tool content。第三方接口由应用或 Provider preset
 显式声明，内置声明必须有对应的文档或测试证据。
 
-能力不足属于当前调用的非重试 invalid-request 失败。它不触发协议自动探测，不把媒体
-改写成 user message，也不为了寻找支持媒体的模型而改变 ModelGroup 顺序或静默路由。
+能力筛选属于 ModelInvoker 的显式有序路由，不触发协议自动探测，不把媒体改写成 user
+message，也不改变 ModelGroup 顺序。Invoker 在 Provider I/O 前依次检查候选模型和对应
+endpoint；不兼容候选发布 `model.route.skipped`，不创建真实 attempt。存在兼容候选时，
+只让这些候选按原顺序参与 retry/fallback，并向其发送原媒体。
+
+全部候选均不兼容时，Invoker 为首个有序候选派生一次 request-local 投影：原 assistant
+ToolCall 与 `call_id` 保持不变，无法消费的媒体块在模型可见 ToolResult 中变为结构化
+`unavailable` 说明。该投影不写回 Context、不覆盖原 ToolResult、不丢失媒体，也不增加
+`projection_revision`；`model.request.prepared` 必须记录实际发送的投影。以后选择兼容
+模型时仍发送 Context 中的真实媒体。
 
 ## OpenAI Compatible 编码
 
@@ -271,13 +293,13 @@ Worker 没有 resolver capability 时明确失败。框架不能丢弃该块、�
 - 多块顺序、多 ToolResult 顺序和 `ToolMessage.content` 追加文本保持稳定；
 - direct、managed、Worker、effect replay 和 durable restore 往返保持内容块与资源身份；
 - 恢复后资源仍有效时可以再次请求，失效或摘要不匹配时返回上述明确错误；
-- 模型支持媒体但 endpoint 不支持 tool media，以及反向情况，都在 I/O 前分别失败；
-- 不支持的 Adapter 不降级为字符串或 user message；
+- 模型支持媒体但 endpoint 不支持 tool media，以及反向情况，都在 I/O 前被路由检查识别；
+- 有兼容候选时不兼容 Adapter 不参与 attempt；全部不兼容时只产生可追踪的 request-local ToolResult 不可用投影，不改写为 user message；
 - 既有纯文本、JSON、拒绝和失败 ToolResult 的构造与 wire 输出保持兼容；
 - 日志、事件和公开错误中不重复写入大段 Base64。
 
-第三方 `glm-5.3-flash` Chat Completions endpoint 已使用标准 `FileTools.read_image` 与
-`read_video` 文件路径工具通过图片和视频验收：图片返回 `BLUE SQUARE`，256×256 的红→蓝
+第三方 `glm-5.3-flash` Chat Completions endpoint 已使用标准 `FileTools.read` 文件路径
+工具通过图片和视频验收：图片返回 `BLUE SQUARE`，256×256 的红→蓝
 短视频返回 `RED THEN BLUE`。这只证明被测 endpoint；同一网关上的 `glm-5.3` 对两种
 tool-media 都返回 invalid request。音频不进入首期通过条件。
 扩展到 64 个模型、95 个模型×模态场景的结果见
@@ -287,5 +309,6 @@ tool-media 都返回 invalid request。音频不进入首期通过条件。
 
 首期已交付内容块、MediaSource、ToolOutput、严格 codec、effect/durable 往返、
 MediaResolver、两层 capability preflight、OpenAI Compatible 编码、prepared-request
-脱敏投影和 synthetic tests。标准 `read_image`/`read_video` 与可重复的图片、视频
-fixture 位于 `tests/live/multimodal_tool_result_probe.py`；标准工具可在后续按应用需求提供。
+脱敏投影和 synthetic tests。标准 `read` 与可重复的图片、视频 fixture 位于
+`tests/live/multimodal_tool_result_probe.py`；统一文件路径工具已经随 `FileTools` 和
+`StandardTools.toolkit` 提供。
