@@ -45,6 +45,7 @@ from .types import (
     ToolAuthorizationDecision,
     ToolAuthorizationRequest,
     ToolDefinition,
+    ToolOutput,
     ToolSideEffect,
     ToolSpec,
 )
@@ -106,6 +107,8 @@ class _CompiledTool:
         from .task_handle import ToolTaskHandle
 
         if type(value) is ToolTaskHandle:
+            return value
+        if type(value) is ToolOutput:
             return value
         if self.return_adapter is None:
             return value
@@ -464,8 +467,9 @@ def _compile_tool(handler: Callable[..., object]) -> _CompiledTool:
                 return_annotation = (
                     reduce(operator.or_, arguments) if arguments else Any
                 )
-        return_adapter = TypeAdapter(_pydantic_annotation(return_annotation))
-        output_schema = return_adapter.json_schema(mode="serialization")
+        if return_annotation is not ToolOutput:
+            return_adapter = TypeAdapter(_pydantic_annotation(return_annotation))
+            output_schema = return_adapter.json_schema(mode="serialization")
 
     definition = ToolDefinition(
         name=visible_name,

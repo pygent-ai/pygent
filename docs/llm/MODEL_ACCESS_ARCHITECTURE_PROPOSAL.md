@@ -56,7 +56,7 @@ model_groups:
     models: [fast]
 ```
 
-`ModelConfig.from_mapping()` 从这三层配置产生两个责任分离的投影：
+Connection、Model 和 ModelGroup 各自提供严格的 `from_mapping()` 与可往返的 `to_mapping()`。Pygent 只负责配置值与普通 Mapping 之间的转换；YAML、JSON、数据库或配置中心由应用选择和管理。`ModelConfig.from_mapping()` 解析三层 Mapping 后委托给 `ModelConfig.from_components()`，两条入口通过同一组装逻辑产生两个责任分离的投影：
 
 - 模型语义投影使用 Connection 的 Provider，以及 Model 的 Model ID、protocol、Provider 私有选项和 capabilities，形成完整 `ModelSpec`；
 - 部署资源投影使用 Model 的 Connection 引用与 protocol 选择，解析出 endpoint、credential 引用、TLS 和代理策略。
@@ -188,7 +188,8 @@ model_layer = ModelCallLayer(
 
 ## 6. 配置只传一次
 
-- `ModelConfig.from_mapping()` 只负责把一份 Mapping 转换为模型语义和部署资源两个投影；
+- 三层配置值可以独立解析并转换回普通 Mapping，Pygent 不提供配置存储后端；
+- `ModelConfig.from_mapping()` 负责解析 Mapping，`ModelConfig.from_components()` 负责统一的跨层引用校验与投影组装；
 - `ModelConfig.from_mapping()` 不会自动把配置交给 Runtime；
 - `config.connection_for(model_key)` 是 direct invoker 与 managed resolver 取得已解析部署连接的唯一公开入口；
 - Binding 不重复接收同一份模型配置；

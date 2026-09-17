@@ -21,6 +21,7 @@ from pygent.core import (
     UserMessage,
     thaw_json,
 )
+from pygent.core._tool_values import _tool_result_content_to_value
 from pygent.tool import ToolDefinition
 
 from .react import ReActLayer
@@ -392,6 +393,9 @@ def _message_projection(message: Message) -> dict[str, object]:
                 "name": result.name,
                 "status": result.status,
                 "output": thaw_json(result.output),
+                "content": [
+                    _tool_result_content_to_value(item) for item in result.content
+                ],
                 "error": result.error,
             }
             for result in message.results

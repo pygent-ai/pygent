@@ -16,6 +16,7 @@ from pygent import (
     ToolDefinition,
     ToolMessage,
     ToolResult,
+    ToolResultText,
     UserMessage,
 )
 from pygent.core import freeze_json_object
@@ -108,6 +109,30 @@ def test_gemini_request_projects_roles_tools_results_schema_and_thinking() -> No
         "includeThoughts": True,
         "thinkingBudget": 64,
     }
+
+
+def test_gemini_rejects_structured_tool_result_content_explicitly() -> None:
+    with pytest.raises(ModelProviderError) as raised:
+        GeminiGenerateContentAdapter().build_request(
+            _request(
+                message=ToolMessage(
+                    results=(
+                        ToolResult(
+                            call_id="call-1",
+                            name="lookup",
+                            status="succeeded",
+                            content=(ToolResultText("result"),),
+                        ),
+                    )
+                )
+            )
+        )
+
+    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
+    assert (
+        raised.value.reason_code
+        is ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED
+    )
 
 
 def test_gemini_parse_preserves_thought_signature_and_function_call() -> None:

@@ -153,7 +153,7 @@ tool_task_get 立即返回当前任务快照和已保存输出，或已有最终
 
 - `BashTools(workspace_root=..., timeout=600, task_manager=None)`；`timeout` 为秒，有限等待到期继续执行。`standard.shell.bash@3.1.0` 声明 `wait_timeout=600`、`timeout=None`，模型可传 `timeout` 覆盖本次等待时长，省略或传 null 时沿用装配配置；两者单位均为秒。
 - `bash(command, working_directory=None, description=None, is_background=False, timeout=None) -> str | ToolTaskHandle`。`ToolTaskHandle` 提供 `task_id`、`snapshot()`、`wait(timeout=None)`、`result()` 和 `cancel()`；模型边界只输出 JSON。
-- `.toolkit` 包含 Bash 和 `tool_task_get`、`tool_task_stop`；`StandardTools(bash_timeout=600, task_manager=None, ...)` 共装配十二个工具。装配对象提供异步上下文、`aclose()` 与异步 `close()`，只关闭自己创建的设施。
+- `.toolkit` 包含 Bash 和 `tool_task_get`、`tool_task_stop`；加入标准媒体文件读取后，`StandardTools(bash_timeout=600, task_manager=None, ...)` 共装配十四个工具。装配对象提供异步上下文、`aclose()` 与异步 `close()`，只关闭自己创建的设施。
 - `@tool(wait_timeout=...)` 或 `ToolKit(..., wait_timeouts={"bash": seconds})` 提供装配等待策略；模型调用还须显式 detach 授权。同步授权保持同步执行，显式后台参数不能提升授权。
 - 运行中输出通过 `ToolExecutionContext.publish_output` 写入任务设施；公共读取为 manager `get_output` 和 Runtime `get_tool_output`。控制工具是受信 `task_control` adapter，不争用被目标任务占用的工具 permit，仍受 Execution 容量和授权约束。
 - `DurableToolTaskManager` 使用现有 SQLite history 持久化普通任务观察记录。重启后查询不会重放或接管 Bash；当前 owner 租约约 30 秒，失效后未确认终态的任务为 unknown，并保留已提交输出。durable Job 执行恢复仍走已有独立契约。

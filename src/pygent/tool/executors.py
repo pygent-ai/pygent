@@ -580,6 +580,7 @@ class ToolRunner:
             )
             return result
         from .task_handle import ToolTaskHandle
+        from .types import ToolOutput
 
         if isinstance(value, ToolTaskHandle):
             return ToolResult(
@@ -589,7 +590,12 @@ class ToolRunner:
                 tool_id=spec.tool_id, tool_version=spec.version,
             )
         try:
-            output = freeze_json(value)
+            if type(value) is ToolOutput:
+                output = value.output
+                content = value.content
+            else:
+                output = freeze_json(value)
+                content = ()
             if spec.definition.output_schema is not None:
                 validate(
                     thaw_json(output),
@@ -611,6 +617,7 @@ class ToolRunner:
             status="succeeded",
             task=task,
             output=output,
+            content=content,
             side_effect_committed=True,
             tool_id=spec.tool_id,
             tool_version=spec.version,
@@ -767,22 +774,16 @@ class InMemoryToolTaskManager:
                 self._outputs[snapshot.task_id] = freeze_json(value)
 
         try:
-            value = await _execute_with_timeout(
+            completed = await _execute_with_timeout(
                 self._registry,
                 spec,
                 call,
                 execution=execution,
                 context=ToolExecutionContext(task_id=snapshot.task_id, publish_output=publish_output),
             )
-            result = ToolResult(
-                call_id=call.call_id,
-                name=call.name,
-                status="succeeded",
+            result = replace(
+                completed,
                 task=replace(snapshot, state=ToolTaskState.SUCCEEDED),
-                output=freeze_json(value),
-                side_effect_committed=True,
-                tool_id=spec.tool_id,
-                tool_version=spec.version,
             )
             state = ToolTaskState.SUCCEEDED
         except asyncio.CancelledError:
@@ -917,7 +918,7 @@ async def _execute_with_timeout(
     *,
     execution: ToolTaskExecution | None = None,
     context: ToolExecutionContext | None = None,
-) -> object:
+) -> ToolResult:
     result = await ToolRunner().execute(
         spec,
         call,
@@ -926,7 +927,7 @@ async def _execute_with_timeout(
         operation=execution,
     ).result()
     if result.status == "succeeded":
-        return thaw_json(result.output)
+        return result
     raise ToolExecutionError(
         result.error or "tool executor failed",
         kind=result.error_kind or "executor_error",

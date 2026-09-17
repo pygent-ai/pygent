@@ -10,8 +10,12 @@ from pygent.tool import (
     ExecutorRegistry,
     IdempotencyPolicy,
     LocalToolExecutor,
+    MediaSource,
     ToolCall,
     ToolDefinition,
+    ToolOutput,
+    ToolResultMedia,
+    ToolResultText,
     ToolSideEffect,
     ToolSpec,
     ToolTaskState,
@@ -47,7 +51,23 @@ async def test_durable_tool_task_persists_admission_and_terminal_result(tmp_path
     registry.register(
         spec.tool_id,
         spec.version,
-        LocalToolExecutor(lambda arguments: {"echo": arguments["value"]}),
+        LocalToolExecutor(
+            lambda arguments: ToolOutput(
+                output={"echo": arguments["value"]},
+                content=(
+                    ToolResultText("image restored"),
+                    ToolResultMedia(
+                        media_type="image",
+                        mime_type="image/png",
+                        source=MediaSource.resource(
+                            "media://image-1",
+                            sha256="0" * 64,
+                            size_bytes=8,
+                        ),
+                    ),
+                ),
+            )
+        ),
     )
     path = tmp_path / "history.sqlite3"
     async with SQLiteHistoryStore(path) as history:
@@ -58,6 +78,7 @@ async def test_durable_tool_task_persists_admission_and_terminal_result(tmp_path
         result = await runtime.get_tool_result(snapshot.task_id, wait=True)
         assert result is not None and result.status == "succeeded"
         assert result.output["echo"] == 1
+        assert result.content[0] == ToolResultText("image restored")
         assert await runtime.get_tool_task(snapshot.task_id) is not None
         await runtime.close()
 
@@ -67,6 +88,8 @@ async def test_durable_tool_task_persists_admission_and_terminal_result(tmp_path
         result = await manager.get_result(snapshot.task_id)
         assert snapshot is not None and snapshot.state is ToolTaskState.SUCCEEDED
         assert result is not None and result.output["echo"] == 1
+        assert result.content[0] == ToolResultText("image restored")
+        assert result.content[1].source.uri == "media://image-1"
 
 
 @pytest.mark.asyncio

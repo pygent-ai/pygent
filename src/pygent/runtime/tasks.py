@@ -293,24 +293,18 @@ class DurableToolTaskManager:
             observation_owner=self._owner_id
         )
         try:
-            output = await _execute_with_timeout(
+            completed = await _execute_with_timeout(
                 self.registry, spec, call, execution=execution,
                 context=ToolExecutionContext(
                     task_id=stored.task_id, recovery=recovery,
                     publish_output=lambda value: self._publish_output(stored.task_id, value),
                 ),
             )
-            result = ToolResult(
-                call_id=call.call_id,
-                name=call.name,
-                status="succeeded",
+            result = replace(
+                completed,
                 task=self._job_task(
                     stored, spec, call, state=ToolTaskState.SUCCEEDED
                 ),
-                output=freeze_json(output),
-                side_effect_committed=True,
-                tool_id=spec.tool_id,
-                tool_version=spec.version,
             )
         except asyncio.CancelledError:
             result = _cancelled_task_result(
@@ -375,7 +369,7 @@ class DurableToolTaskManager:
             request=_request_to_dict(spec, call),
         )
         try:
-            output = await _execute_with_timeout(
+            completed = await _execute_with_timeout(
                 self.registry,
                 spec,
                 call,
@@ -388,15 +382,9 @@ class DurableToolTaskManager:
             snapshot = self._snapshot(
                 task_id, spec, call, ToolTaskState.SUCCEEDED
             )
-            result = ToolResult(
-                call_id=call.call_id,
-                name=call.name,
-                status="succeeded",
+            result = replace(
+                completed,
                 task=snapshot,
-                output=freeze_json(output),
-                side_effect_committed=True,
-                tool_id=spec.tool_id,
-                tool_version=spec.version,
             )
         except asyncio.CancelledError:
             result = _cancelled_task_result(

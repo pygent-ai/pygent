@@ -2,6 +2,10 @@
 
 本页冻结下一版实现必须收敛的配置契约；当前实现状态以 [LLM SDK](SDK.md) 顶部说明为准。
 
+工具结果中的图片和视频如何独立检查模型模态与协议 tool-message 能力，以及如何编码到
+Provider wire，见[多模态工具结果 Proposal](../tool/MULTIMODAL_TOOL_RESULTS_PROPOSAL.md)。
+当前 OpenAI Chat Completions compatible Adapter 的显式装配方式见 [LLM SDK](SDK.md#多模态工具消息)。
+
 ## 配置边界
 
 Pygent 的公开配置固定分为 Connection、Model 和 ModelGroup 三层：
@@ -14,7 +18,7 @@ Pygent 的公开配置固定分为 Connection、Model 和 ModelGroup 三层：
 
 `ModelEntry` 用本地配置名包装一个 `ModelSpec`。这个名称是 client 绑定、fallback、资源映射和诊断使用的稳定 `model_key`，不属于底层模型语义。`ModelGroup` 保存有序的 `ModelEntry`，顺序就是 fallback 顺序。
 
-`ModelConfig.from_mapping()` 一次产生不可变的 `connections`、`models` 和 `model_groups`，并在内部保存模型到 Connection 的部署关联。`config.connection_for(model_key)` 是 direct invoker 和 managed resolver 查询已选 protocol endpoint 的唯一公开方法；内部关联不是第四段用户配置。解析不读取环境变量、不创建 client，也不注册 Runtime。真实 credential 只在部署资源装配时解析，不能进入定义摘要、事件、持久化数据或 `repr`。
+三层配置值分别提供严格的 `from_mapping()` 与可往返的 `to_mapping()`，应用负责把普通 Mapping 保存到自己的 YAML、JSON、数据库或配置中心。Pygent 不提供配置存储后端。`ModelConfig.from_mapping()` 解析三层 Mapping 后委托给 `ModelConfig.from_components()`；应用已经持有解析值时可以直接使用后者。两条入口产生相同的不可变 `connections`、`models` 和 `model_groups`，并在内部保存模型到 Connection 的部署关联。`config.connection_for(model_key)` 是 direct invoker 和 managed resolver 查询已选 protocol endpoint 的唯一公开方法；内部关联不是第四段用户配置。解析不读取环境变量、不创建 client，也不注册 Runtime。真实 credential 只在部署资源装配时解析，不能进入定义摘要、事件、持久化数据或 `repr`。
 
 ## 能力是用户声明的事实
 

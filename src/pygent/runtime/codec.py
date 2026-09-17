@@ -19,6 +19,10 @@ from pygent.core import (
     freeze_json_object,
     thaw_json,
 )
+from pygent.core._tool_values import (
+    _tool_result_content_from_value,
+    _tool_result_content_to_value,
+)
 from pygent.tool import (
     IdempotencyPolicy,
     ToolAuthorizationDecision,
@@ -297,6 +301,10 @@ def _tool_result_to_dict(
         "status": value.status,
         "task": _tool_task_to_dict(value.task, project),
         "output": project(value.output),
+        "content": [
+            project(freeze_json_object(_tool_result_content_to_value(item)))
+            for item in value.content
+        ],
         "error": value.error,
         "error_kind": value.error_kind,
         "error_code": value.error_code,
@@ -311,7 +319,7 @@ def _tool_result_to_dict(
 def _tool_result_from_dict(value: object) -> ToolResult:
     data = _object(value, "ToolResult")
     fields = {
-        "call_id", "name", "status", "task", "output", "error", "error_kind",
+        "call_id", "name", "status", "task", "output", "content", "error", "error_kind",
         "error_code", "retryable", "side_effect_committed", "tool_id", "tool_version",
         "missing_capabilities",
     }
@@ -323,6 +331,10 @@ def _tool_result_from_dict(value: object) -> ToolResult:
             status=data["status"],
             task=_tool_task_from_dict(data.get("task")),
             output=data.get("output"),
+            content=tuple(
+                _tool_result_content_from_value(item)
+                for item in data.get("content", ())
+            ),
             error=data.get("error"),
             error_kind=data.get("error_kind"),
             error_code=data.get("error_code"),

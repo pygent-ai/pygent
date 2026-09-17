@@ -34,6 +34,10 @@ from pygent.core import (
     independent_execution,
     thaw_json,
 )
+from pygent.core._tool_values import (
+    _tool_result_content_from_value,
+    _tool_result_content_to_value,
+)
 
 from .executors import (
     ExecutorRegistry,
@@ -391,6 +395,10 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                             "outcome": "succeeded",
                             "task_id": task.task_id,
                             "output": tool_result.output,
+                            "content": [
+                                _tool_result_content_to_value(item)
+                                for item in tool_result.content
+                            ],
                         }
                     )
                 except asyncio.CancelledError:
@@ -582,6 +590,9 @@ def _result_effect_value(result: ToolResult) -> dict[str, object]:
         "side_effect_committed": result.side_effect_committed,
         "missing_capabilities": list(result.missing_capabilities),
         "output": result.output,
+        "content": [
+            _tool_result_content_to_value(item) for item in result.content
+        ],
         "task": None if result.task is None else {
             "task_id": result.task.task_id,
             "call_id": result.task.call_id,
@@ -611,6 +622,10 @@ def _result_from_replayed_effect(
     if effect.get("outcome") != "succeeded":
         raise TypeError("replayed tool effect has an invalid outcome")
     output = freeze_json(effect.get("output"))
+    raw_content = effect.get("content", ())
+    if not isinstance(raw_content, (list, tuple)):
+        raise TypeError("replayed tool content must be an array")
+    content = tuple(_tool_result_content_from_value(item) for item in raw_content)
     if spec.definition.output_schema is not None:
         Draft202012Validator(
             cast(
@@ -624,6 +639,7 @@ def _result_from_replayed_effect(
         status="succeeded",
         task=replace(task, state=ToolTaskState.SUCCEEDED),
         output=freeze_json(output),
+        content=content,
         side_effect_committed=True,
         tool_id=spec.tool_id,
         tool_version=spec.version,

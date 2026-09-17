@@ -1,5 +1,6 @@
 from ._adapter_contracts import (
     EventSink,
+    MediaResolver,
     ModelEventKind,
     ModelInvoker,
     ModelProviderAdapter,
@@ -11,6 +12,7 @@ from ._adapter_contracts import (
     ModelProviderStreamKind,
     ModelProviderStreamPart,
     ModelStreamEvent,
+    ToolResultContentCapabilities,
 )
 from ._model_execution import ModelExecution
 from .anthropic_messages import (
@@ -102,6 +104,7 @@ __all__ = [
     "GeminiGenerateContentAdapter",
     "GeminiGenerateContentClient",
     "GenerationConfig",
+    "MediaResolver",
     "ModelAttempt",
     "ModelCallError",
     "ModelCallLayer",
@@ -157,6 +160,7 @@ __all__ = [
     "ProviderProtocolPreset",
     "ResolvedModelConnection",
     "RetryPolicy",
+    "ToolResultContentCapabilities",
     "anthropic_messages_adapters",
     "gemini_generate_content_adapters",
     "openai_compatible_adapters",

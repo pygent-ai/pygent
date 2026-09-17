@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -11,7 +12,13 @@ from pathlib import Path
 import pytest
 from pypdf import PdfWriter
 
-from pygent import IdempotencyPolicy, ToolKit, ToolSideEffect
+from pygent import (
+    IdempotencyPolicy,
+    ToolKit,
+    ToolResultMedia,
+    ToolResultText,
+    ToolSideEffect,
+)
 from pygent.tool.standard import _files as file_module
 from pygent.tool.standard._files import FileTools
 from pygent.tool.standard._paths import normalize_desktop_path, normalize_tool_path
@@ -61,7 +68,9 @@ def test_file_toolkit_exposes_only_lowercase_tool_names(tmp_path):
         "glob",
         "grep",
         "read",
+        "read_image",
         "read_lints",
+        "read_video",
         "write",
     ]
     assert not {
@@ -73,6 +82,97 @@ def test_file_toolkit_exposes_only_lowercase_tool_names(tmp_path):
         "read_file",
         "search_replace",
     }.intersection(item.name for item in definitions)
+
+
+def test_media_file_tool_schemas_accept_only_a_file_path(tmp_path) -> None:
+    tools = FileTools(workspace_root=tmp_path)
+
+    for handler in (tools.read_image, tools.read_video):
+        schema = _parameters(handler)
+        assert schema["required"] == ["file_path"]
+        assert schema["additionalProperties"] is False
+        assert set(schema["properties"]) == {"file_path"}
+        assert schema["properties"]["file_path"]["type"] == "string"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "data", "handler_name", "media_type", "mime_type"),
+    [
+        ("shape.png", b"\x89PNG\r\n\x1a\nfixture", "read_image", "image", "image/png"),
+        ("clip.mp4", b"\x00\x00\x00\x18ftypmp42fixture", "read_video", "video", "video/mp4"),
+    ],
+)
+async def test_media_file_tools_return_inline_structured_content(
+    tmp_path, name, data, handler_name, media_type, mime_type
+) -> None:
+    (tmp_path / name).write_bytes(data)
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(getattr(tools, handler_name), {"file_path": name})
+
+    assert result.status == "succeeded"
+    assert result.output["file_path"] == name
+    assert result.output["mime_type"] == mime_type
+    assert result.output["size_bytes"] == len(data)
+    assert isinstance(result.content[0], ToolResultText)
+    media = result.content[1]
+    assert isinstance(media, ToolResultMedia)
+    assert media.media_type == media_type
+    assert media.mime_type == mime_type
+    assert media.source.kind == "inline"
+    assert base64.b64decode(media.source.base64_data or "") == data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler_name", "name", "data", "error_code"),
+    [
+        ("read_image", "shape.bmp", b"BMfixture", "unsupported_media_type"),
+        ("read_video", "clip.mov", b"fixture", "unsupported_media_type"),
+        ("read_image", "empty.png", b"", "empty_media"),
+        ("read_image", "wrong.png", b"not a png", "media_mime_mismatch"),
+    ],
+)
+async def test_media_file_tools_fail_clearly_for_invalid_media(
+    tmp_path, handler_name, name, data, error_code
+) -> None:
+    (tmp_path / name).write_bytes(data)
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(getattr(tools, handler_name), {"file_path": name})
+
+    assert result.status == "failed"
+    assert result.error_code == error_code
+    assert result.side_effect_committed is False
+
+
+@pytest.mark.asyncio
+async def test_media_file_tool_enforces_configured_byte_limit(tmp_path) -> None:
+    (tmp_path / "shape.png").write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+    tools = FileTools(workspace_root=tmp_path, max_media_bytes=8)
+
+    result = await invoke_tool(tools.read_image, {"file_path": "shape.png"})
+
+    assert result.status == "failed"
+    assert result.error_code == "media_too_large"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handler_name", ["read_image", "read_video"])
+async def test_media_file_tools_reject_paths_outside_workspace(
+    tmp_path, handler_name
+) -> None:
+    outside = tmp_path.parent / "outside-media.png"
+    outside.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(
+        getattr(tools, handler_name), {"file_path": str(outside)}
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "path_outside_workspace"
 
 
 @pytest.mark.asyncio

@@ -214,6 +214,81 @@ def test_each_configuration_layer_can_be_parsed_before_final_assembly() -> None:
     assert group.model_keys == ("deepseek_primary",)
 
 
+def test_configuration_layers_round_trip_and_compose_as_typed_values() -> None:
+    raw = _mapping()
+    raw_connections = raw["connections"]
+    raw_models = raw["models"]
+    raw_groups = raw["model_groups"]
+    assert isinstance(raw_connections, Mapping)
+    assert isinstance(raw_models, Mapping)
+    assert isinstance(raw_groups, Mapping)
+
+    connection = ConnectionConfig.from_mapping(
+        raw_connections["deepseek_official"]  # type: ignore[arg-type]
+    )
+    model = EnabledModelConfig.from_mapping(
+        raw_models["deepseek_primary"]  # type: ignore[arg-type]
+    )
+    group = ModelGroupConfig.from_mapping(
+        raw_groups["assistant"]  # type: ignore[arg-type]
+    )
+
+    assert ConnectionConfig.from_mapping(connection.to_mapping()) == connection
+    assert EnabledModelConfig.from_mapping(model.to_mapping()) == model
+    assert ModelGroupConfig.from_mapping(group.to_mapping()) == group
+
+    composed = ModelConfig.from_components(
+        connections={"deepseek_official": connection},
+        models={"deepseek_primary": model},
+        model_groups={"assistant": group},
+    )
+    parsed = ModelConfig.from_mapping(raw)
+
+    assert composed == parsed
+    assert composed.models["deepseek_primary"].key == "deepseek_primary"
+    assert composed.model_groups["assistant"].models == (
+        composed.models["deepseek_primary"],
+    )
+
+
+def test_typed_composition_copies_inputs_and_checks_cross_layer_references() -> None:
+    raw = _mapping()
+    raw_connections = raw["connections"]
+    raw_models = raw["models"]
+    assert isinstance(raw_connections, Mapping)
+    assert isinstance(raw_models, Mapping)
+    connection = ConnectionConfig.from_mapping(
+        raw_connections["deepseek_official"]  # type: ignore[arg-type]
+    )
+    model = EnabledModelConfig.from_mapping(
+        raw_models["deepseek_primary"]  # type: ignore[arg-type]
+    )
+    connections = {"deepseek_official": connection}
+    models = {"deepseek_primary": model}
+
+    config = ModelConfig.from_components(connections=connections, models=models)
+    connections.clear()
+    models.clear()
+
+    assert tuple(config.connections) == ("deepseek_official",)
+    assert tuple(config.models) == ("deepseek_primary",)
+    assert config.model_groups == {}
+
+    with pytest.raises(ValueError, match="unknown connection"):
+        ModelConfig.from_components(
+            connections={"deepseek_official": connection},
+            models={
+                "deepseek_primary": EnabledModelConfig(
+                    connection_key="missing",
+                    model_id=model.model_id,
+                    protocol=model.protocol,
+                    provider_options=model.provider_options,
+                    capabilities=model.capabilities,
+                )
+            },
+        )
+
+
 def test_standalone_layer_parsers_do_not_require_referenced_records() -> None:
     model = EnabledModelConfig.from_mapping(
         {
@@ -268,6 +343,8 @@ def test_credential_resolution_is_explicit_and_secret_free() -> None:
     with pytest.raises(LookupError, match="DEEPSEEK_API_KEY"):
         credential.resolve({})
     assert CredentialRef.none().resolve({}) is None
+    assert credential.to_mapping() == {"env": "DEEPSEEK_API_KEY"}
+    assert CredentialRef.none().to_mapping() == {"none": True}
 
 
 @pytest.mark.parametrize(

@@ -26,6 +26,7 @@ from pygent.tool import (
     IdempotencyPolicy,
     InMemoryToolTaskManager,
     LocalToolExecutor,
+    MediaSource,
     ToolAuthorizationDecision,
     ToolAuthorizationRequest,
     ToolCall,
@@ -33,6 +34,9 @@ from pygent.tool import (
     ToolDefinition,
     ToolExecutionContext,
     ToolExecutionError,
+    ToolOutput,
+    ToolResultMedia,
+    ToolResultText,
     ToolSideEffect,
     ToolSpec,
 )
@@ -341,6 +345,46 @@ async def test_explicit_detach_returns_queryable_task() -> None:
     assert final is not None
     assert final.status == "succeeded"
     assert final.output == 4
+
+
+@pytest.mark.asyncio
+async def test_explicit_detach_preserves_structured_tool_result_content() -> None:
+    tool = spec()
+    registry = ExecutorRegistry()
+    media = ToolResultMedia(
+        media_type="image",
+        mime_type="image/png",
+        source=MediaSource.inline(b"\x89PNG\r\n\x1a\ncontent"),
+    )
+    registry.register(
+        tool.tool_id,
+        tool.version,
+        LocalToolExecutor(
+            lambda _arguments: ToolOutput(
+                output=4,
+                content=(ToolResultText("read image"), media),
+            )
+        ),
+    )
+    manager = InMemoryToolTaskManager(registry)
+    message, _ = await ToolCallLayer(
+        tools=(tool,),
+        authorization=Authorization(detach=True),
+        task_manager=manager,
+    ).invoke(
+        AIMessage(
+            tool_calls=(ToolCall(call_id="x", name="double", arguments={"value": 2}),)
+        ),
+        context(tool),
+    )
+
+    detached = message.results[0]
+    assert detached.task is not None
+    final = await manager.get_result(detached.task.task_id, wait=True)
+    assert final is not None
+    assert final.status == "succeeded"
+    assert final.output == 4
+    assert final.content == (ToolResultText("read image"), media)
 
 
 @pytest.mark.asyncio

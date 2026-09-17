@@ -6,6 +6,10 @@
 2. [SDK 使用](SDK.md)
 3. 本文的详细契约
 
+多模态 ToolResult 的内容块、资源解析、能力检查和恢复语义见
+[多模态工具结果设计](MULTIMODAL_TOOL_RESULTS_PROPOSAL.md)，当前用法见 [Tool SDK](SDK.md#多模态工具结果)。
+真实 endpoint 的扩展模型结果见[多模态 ToolResult Live 模型矩阵](MULTIMODAL_TOOL_RESULTS_LIVE_MATRIX.md)。
+
 Tool 域的公开数据模型固定为三层：模型可见的 ToolDefinition、可移植执行声明 ToolSpec，以及表示执行实例与结果的 ToolTask/ToolResult。ToolCallLayer 是编排这三层的 Module，不是第四层工具值。用户开发的自定义授权 Module 或受信执行适配器负责授权决策；Runtime 只负责资源获取、调度、取消与关闭。
 
 ## 输入与输出

@@ -14,14 +14,20 @@ from contextlib import suppress
 from io import TextIOWrapper
 from itertools import islice
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any, Never, TextIO
+from typing import Annotated, Any, Literal, Never, TextIO
 
 from pydantic import Field
 from pypdf import PdfReader
 
+from pygent.core import freeze_json_object
+from pygent.core._tool_values import MediaSource, ToolResultMedia, ToolResultText
 from pygent.tool.executors import ToolExecutionError
 from pygent.tool.functional import tool
-from pygent.tool.types import IdempotencyPolicy, ToolSideEffect
+from pygent.tool.types import (
+    IdempotencyPolicy,
+    ToolOutput,
+    ToolSideEffect,
+)
 
 from ._file_services import (
     FileDiagnosticsService,
@@ -38,6 +44,15 @@ from ._paths import (
 )
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
+_IMAGE_MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+_VIDEO_MIME_TYPES = {".mp4": "video/mp4"}
+_DEFAULT_MAX_MEDIA_BYTES = 20 * 1024 * 1024
 _SEARCH_MAX_BYTES = 50 * 1024
 _GREP_MAX_LINE_LENGTH = 500
 _WRITE_TOOL_DESCRIPTION = (
@@ -95,6 +110,20 @@ def _fail(
         retryable=retryable,
         side_effect_committed=committed,
     )
+
+
+def _media_signature_matches(data: bytes, mime_type: str) -> bool:
+    if mime_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if mime_type == "image/gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
+    if mime_type == "image/webp":
+        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    if mime_type == "video/mp4":
+        return len(data) >= 12 and data[4:8] == b"ftyp"
+    return False
 
 
 def _read_text_range(
@@ -462,15 +491,17 @@ class FileTools:
         workspace_root: str | Path,
         restrict_to_workspace: bool = True,
         max_read_bytes: int = 1024 * 1024,
+        max_media_bytes: int = _DEFAULT_MAX_MEDIA_BYTES,
         max_search_files: int = 10_000,
     ) -> None:
-        if max_read_bytes <= 0 or max_search_files <= 0:
+        if max_read_bytes <= 0 or max_media_bytes <= 0 or max_search_files <= 0:
             raise ValueError("file tool limits must be positive")
         self.path_context = ToolPathContext.from_workspace_root(
             workspace_root, restrict_to_workspace=restrict_to_workspace
         )
         self.workspace_root = self.path_context.workspace_root
         self.max_read_bytes = max_read_bytes
+        self.max_media_bytes = max_media_bytes
         self.max_search_files = max_search_files
         self._mutation_locks = tuple(threading.Lock() for _ in range(64))
         self._io_service = FileIOService(
@@ -493,7 +524,7 @@ class FileTools:
 
     @property
     def handlers(self) -> tuple[Any, ...]:
-        """Return handlers in the stable model-visible order used by 0.1.15."""
+        """Return handlers in their stable model-visible order."""
 
         return (
             self.edit,
@@ -501,7 +532,9 @@ class FileTools:
             self.glob,
             self.grep,
             self.read,
+            self.read_image,
             self.read_lints,
+            self.read_video,
             self.write,
         )
 
@@ -566,6 +599,112 @@ class FileTools:
             ) from exc
         label = "image" if path.suffix.lower() in _IMAGE_SUFFIXES else "binary"
         return f"[{label} file {path.name}, size {path.stat().st_size} bytes]"
+
+    @tool(
+        tool_id="standard.files.read_image",
+        version="1.0.0",
+        side_effect=ToolSideEffect.READ,
+        timeout=30,
+        resource_key="filesystem",
+        sandbox_profile="workspace",
+        required_permissions=("filesystem:read",),
+    )
+    async def read_image(
+        self,
+        file_path: Annotated[
+            str,
+            Field(
+                description="Image file path resolved from workspace_root and restricted to it by default."
+            ),
+        ],
+    ) -> ToolOutput:
+        """Read a local PNG, JPEG, GIF or WebP file for direct model vision input."""
+
+        return await _run_owned_thread(self._read_media, file_path, "image")
+
+    @tool(
+        tool_id="standard.files.read_video",
+        version="1.0.0",
+        side_effect=ToolSideEffect.READ,
+        timeout=30,
+        resource_key="filesystem",
+        sandbox_profile="workspace",
+        required_permissions=("filesystem:read",),
+    )
+    async def read_video(
+        self,
+        file_path: Annotated[
+            str,
+            Field(
+                description="MP4 file path resolved from workspace_root and restricted to it by default."
+            ),
+        ],
+    ) -> ToolOutput:
+        """Read a local MP4 file for direct model video input."""
+
+        return await _run_owned_thread(self._read_media, file_path, "video")
+
+    def _read_media(
+        self, file_path: str, media_type: Literal["image", "video"]
+    ) -> ToolOutput:
+        path = resolve_file_path(file_path, self.path_context)
+        if not path.exists():
+            _fail(f"file does not exist: {path}", "file_not_found")
+        if not path.is_file():
+            _fail(f"path is not a file: {path}", "not_a_file")
+        mime_types = _IMAGE_MIME_TYPES if media_type == "image" else _VIDEO_MIME_TYPES
+        mime_type = mime_types.get(path.suffix.lower())
+        if mime_type is None:
+            supported = ", ".join(sorted(mime_types))
+            _fail(
+                f"unsupported {media_type} file extension {path.suffix or '<none>'}; "
+                f"supported extensions: {supported}",
+                "unsupported_media_type",
+            )
+        try:
+            with path.open("rb") as stream:
+                data = stream.read(self.max_media_bytes + 1)
+        except OSError as exc:
+            raise ToolExecutionError(
+                f"could not read media file: {path}",
+                kind="filesystem_error",
+                code="read_failed",
+                retryable=True,
+                side_effect_committed=False,
+            ) from exc
+        if not data:
+            _fail(f"media file is empty: {path}", "empty_media")
+        if len(data) > self.max_media_bytes:
+            _fail(
+                f"media file exceeds the {self.max_media_bytes}-byte limit: {path}",
+                "media_too_large",
+            )
+        if not _media_signature_matches(data, mime_type):
+            _fail(
+                f"media content does not match {mime_type}: {path}",
+                "media_mime_mismatch",
+            )
+        source = MediaSource.inline(data)
+        if source.sha256 is None:  # pragma: no cover - inline sources always hash bytes
+            raise AssertionError("inline media source is missing its digest")
+        return ToolOutput(
+            output=freeze_json_object(
+                {
+                    "file_path": file_path,
+                    "mime_type": mime_type,
+                    "size_bytes": len(data),
+                    "sha256": source.sha256,
+                }
+            ),
+            content=(
+                ToolResultText(f"Read {media_type} file {path.name}."),
+                ToolResultMedia(
+                    media_type=media_type,
+                    mime_type=mime_type,
+                    source=source,
+                ),
+            ),
+        )
 
     @tool(
         tool_id="standard.files.write",

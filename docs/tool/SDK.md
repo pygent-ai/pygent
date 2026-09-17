@@ -94,7 +94,14 @@ from pygent import ToolKit
 from pygent.tool import FileTools
 
 files = FileTools(workspace_root="./workspace")
-read_only_tools = ToolKit(files.read, files.glob, files.grep, files.read_lints)
+read_only_tools = ToolKit(
+    files.read,
+    files.read_image,
+    files.read_video,
+    files.glob,
+    files.grep,
+    files.read_lints,
+)
 ```
 
 `glob` 与 `grep` 保留 Pygent 的工具名，并采用 Pi coding agent 的精简模型接口：
@@ -120,7 +127,7 @@ grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=10
 |---|---|---|---|
 | `bash` | `EXTERNAL / NOT_IDEMPOTENT` | `shell:execute` | 默认限制 cwd 在 workspace；独立任务默认前台等待 600 秒，到期返回任务引用并继续执行；显式停止和治理取消使用最多 2 秒的进程树清理预算；输出最多投影 512 KiB |
 | `tool_task_get`, `tool_task_stop` | `READ / INHERENT`、`WRITE / INHERENT` | 由应用授权 | 查询同一管理器中的任务、输出和结果，或请求取消；停止请求不证明副作用未发生 |
-| `read`, `glob`, `grep`, `read_lints` | `READ / INHERENT` | `filesystem:read` | 默认拒绝 workspace 外路径；glob pattern、匹配结果和符号链接目标都重新验证；读取与搜索有界 |
+| `read`, `read_image`, `read_video`, `glob`, `grep`, `read_lints` | `READ / INHERENT` | `filesystem:read` | 默认拒绝 workspace 外路径；媒体读取返回结构化内联内容；glob pattern、匹配结果和符号链接目标都重新验证；读取与搜索有界 |
 | `write` | `WRITE / INHERENT` | `filesystem:write` | 完整 UTF-8 原子替换；同一 FileTools 实例内的同路径变更串行；相同输入可重复得到相同文件内容 |
 | `edit`, `edit_notebook` | `WRITE / NOT_IDEMPOTENT` | `filesystem:write` | 同一实例内串行 read-modify-write 并原子提交；取消在所属写线程退出后返回；不确定失败不谎报未提交 |
 | `web_search`, `web_fetch` | `READ / INHERENT` | `web:search`, `web:fetch` | 公开 HTTP(S)；限制响应大小；默认 fetcher 连接已验证 IP、保留 Host/SNI，并逐跳重新验证重定向 |
@@ -162,7 +169,7 @@ async def main():
 asyncio.run(main())
 ```
 
-`tools.toolkit` 包含 Bash、`tool_task_get(task_id)` 和 `tool_task_stop(task_id)`，并投影实例等待配置。`StandardTools(..., bash_timeout=600, task_manager=None)` 提供相同装配和关闭接口，共十二个工具。也可用 `ToolKit(tools.bash, tools.tool_task_get, tools.tool_task_stop, wait_timeouts={"bash": 2.0})` 按模型可见工具名覆盖等待时长。`@tool(wait_timeout=...)` 与 `ToolSpec.wait_timeout` 是可移植的装配策略；普通 `ToolSpec.timeout` 的执行截止语义仍适用于其他工具。
+`tools.toolkit` 包含 Bash、`tool_task_get(task_id)` 和 `tool_task_stop(task_id)`，并投影实例等待配置。`StandardTools(..., bash_timeout=600, max_media_bytes=20 * 1024 * 1024, task_manager=None)` 提供相同装配和关闭接口，共十四个工具。也可用 `ToolKit(tools.bash, tools.tool_task_get, tools.tool_task_stop, wait_timeouts={"bash": 2.0})` 按模型可见工具名覆盖等待时长。`@tool(wait_timeout=...)` 与 `ToolSpec.wait_timeout` 是可移植的装配策略；普通 `ToolSpec.timeout` 的执行截止语义仍适用于其他工具。
 
 模型调用必须由应用授权选择 `lifecycle="detach"`，才会 admission 独立任务并应用有限等待；`is_background=True` 只请求立即返回，不授予权限。`lifecycle="sync"` 保持当前执行内同步等待；显式后台参数与同步授权冲突时拒绝调用。未配置 `wait_timeout` 的 detach 默认立即返回。有限等待释放并恢复 Parent runnable lease，实际工具执行仍占用其工具资源。Parent 的截止限制观察等待，不作为新任务的命令截止时间。
 
@@ -457,6 +464,97 @@ final_result = await runtime.get_tool_result(task.task_id)
 ```
 
 `ToolTask` 是不可变 JSON 快照，不携带 Runtime 对象或活 handler。查询、取消和取结果都使用稳定 `task_id`。
+
+## 多模态工具结果
+
+标准 `FileTools` 已提供文件路径工具：
+
+```python
+from pygent import ToolKit
+from pygent.tool import FileTools
+
+files = FileTools(workspace_root="./workspace", max_media_bytes=20 * 1024 * 1024)
+media_tools = ToolKit(files.read_image, files.read_video)
+```
+
+两个工具的模型入参都只有 `file_path: string`。相对路径从 `workspace_root` 解析，默认拒绝
+workspace 外路径。`read_image` 支持 PNG、JPEG、GIF 和 WebP；`read_video` 支持 MP4。
+工具读取有界文件字节，使用 `MediaSource.inline(bytes)` 规范化为 Base64，并返回文本块和
+`ToolResultMedia`。Base64 位于结构化 `content`，不会复制到业务 `output` 或日志；
+OpenAI-compatible Adapter 最终生成 `data:<mime>;base64,...`。空文件、格式不匹配、超限、
+不支持的扩展名和读取失败都会返回明确的工具错误。
+
+模型调用示例：
+
+```json
+{"name": "read_image", "arguments": {"file_path": "screenshots/result.png"}}
+```
+
+```json
+{"name": "read_video", "arguments": {"file_path": "recordings/flow.mp4"}}
+```
+
+返回普通字符串、对象、Pydantic model 或其他严格 JSON 值的工具保持原行为。工具需要把
+文本、JSON、图片或视频作为模型可见的有序内容块返回时，显式返回 `ToolOutput`：
+
+```python
+from pygent import (
+    MediaSource,
+    ToolOutput,
+    ToolResultJson,
+    ToolResultMedia,
+    ToolResultText,
+    ToolSideEffect,
+    tool,
+)
+
+
+@tool(
+    tool_id="media.read_image",
+    version="1.0.0",
+    side_effect=ToolSideEffect.READ,
+)
+def read_image(resource_uri: str) -> ToolOutput:
+    return ToolOutput(
+        output={"resource_uri": resource_uri, "width": 640, "height": 480},
+        content=(
+            ToolResultText("工具读取到的图片。"),
+            ToolResultJson({"width": 640, "height": 480}),
+            ToolResultMedia(
+                media_type="image",
+                mime_type="image/png",
+                source=MediaSource.resource(
+                    resource_uri,
+                    sha256="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    size_bytes=12345,
+                ),
+            ),
+        ),
+    )
+```
+
+`output` 是任务查询和业务持久化使用的严格 JSON；`content` 是模型可见投影。两者不会
+互相隐式复制。`ToolResultJson` 在没有原生 JSON 内容块的协议上编码为独立文本块。
+图片和视频分别使用 `media_type="image"` 与 `media_type="video"`，MIME 必须与类型匹配。
+
+`MediaSource.inline(data)` 接受有界 `bytes` 并规范化为 Base64；
+`MediaSource.remote_url(url)` 保存 Provider 可访问的公开 HTTP(S) URL；
+`MediaSource.resource(uri, sha256=..., size_bytes=...)` 保存稳定资源引用，由部署边界的
+`MediaResolver` 解析。文件句柄、任意本地路径和 Provider 请求结构不能进入内容块。
+需要跨进程恢复时应使用稳定 resource，并保存摘要与大小。
+
+内容块连同 `call_id`、MIME、资源引用和顺序进入 Message/effect/durable codec。只有
+`status="succeeded"` 的 ToolResult 可以携带 `content`；direct、managed 和 detached
+任务使用同一结果类型。prepared-request 事件只记录媒体身份、摘要和大小，不复制内联
+Base64。目标模型或 endpoint 不支持该能力、资源无法解析、摘要不符或媒体超限时，模型
+调用在 Provider I/O 前明确失败。
+
+仓库提供 opt-in live probe，使用标准 `FileTools.read_image` / `read_video` 验证完整链路，
+并只输出脱敏结果。下面的命令仅测试 `.env` 中 AZ endpoint 的指定模型：
+
+```powershell
+uv run python -m tests.live.multimodal_tool_result_probe --az-only --az-model glm-5.3-flash
+```
 
 进程内独立任务设施可以使用
 `InMemoryToolTaskManager(registry, max_retained_tasks=1024)`。该上限只保留最近完成的

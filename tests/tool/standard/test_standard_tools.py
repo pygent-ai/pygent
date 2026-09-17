@@ -21,7 +21,9 @@ STANDARD_TOOL_NAMES = [
     "glob",
     "grep",
     "read",
+    "read_image",
     "read_lints",
+    "read_video",
     "web_fetch",
     "web_search",
     "write",
@@ -63,6 +65,10 @@ def _prepare_files(tmp_path) -> None:
     (tmp_path / "docs" / "grep.txt").write_text(
         "one\nneedle\nthree\n", encoding="utf-8"
     )
+    (tmp_path / "docs" / "shape.png").write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+    (tmp_path / "docs" / "clip.mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42fixture"
+    )
     (tmp_path / "nb.ipynb").write_text(
         json.dumps(
             {
@@ -99,14 +105,16 @@ def _arguments(name: str) -> dict[str, object]:
         "glob": {"pattern": "**/*.py", "path": "docs"},
         "grep": {"pattern": "needle", "path": "docs"},
         "read": {"file_path": "docs/read.txt", "offset": 2, "limit": 1},
+        "read_image": {"file_path": "docs/shape.png"},
         "read_lints": {"paths": ["docs/glob_a.py"]},
+        "read_video": {"file_path": "docs/clip.mp4"},
         "web_fetch": {"url": "https://example.com/tool"},
         "web_search": {"search_term": "pygent", "description": "integration"},
         "write": {"file_path": "docs/write.txt", "content": "strict write\n"},
     }[name]
 
 
-def test_standard_tools_explicitly_assemble_all_twelve_model_definitions(tmp_path):
+def test_standard_tools_explicitly_assemble_all_fourteen_model_definitions(tmp_path):
     suite = _suite(tmp_path)
 
     assert [item.name for item in suite.toolkit.definitions] == STANDARD_TOOL_NAMES

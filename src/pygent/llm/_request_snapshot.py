@@ -15,6 +15,12 @@ from pygent.core import (
     ToolMessage,
     thaw_json,
 )
+from pygent.tool import (
+    ToolResultContent,
+    ToolResultJson,
+    ToolResultMedia,
+    ToolResultText,
+)
 
 from ._adapter_contracts import ModelProviderRequest
 
@@ -103,6 +109,7 @@ def _message_projection(message: Message) -> dict[str, object]:
                 "name": result.name,
                 "status": result.status,
                 "output": thaw_json(result.output),
+                "content": [_content_projection(item) for item in result.content],
                 "error": result.error,
                 "error_kind": result.error_kind,
                 "error_code": result.error_code,
@@ -114,6 +121,29 @@ def _message_projection(message: Message) -> dict[str, object]:
             for result in message.results
         ]
     return value
+
+
+def _content_projection(value: ToolResultContent) -> dict[str, object]:
+    if type(value) is ToolResultText:
+        return {"type": "text", "text": value.text}
+    if type(value) is ToolResultJson:
+        return {"type": "json", "value": thaw_json(value.value)}
+    if type(value) is ToolResultMedia:
+        source = value.source
+        return {
+            "type": "media",
+            "media_type": value.media_type,
+            "mime_type": value.mime_type,
+            "detail": value.detail,
+            "source": {
+                "kind": source.kind,
+                "uri": source.uri,
+                "url": source.url,
+                "sha256": source.sha256,
+                "size_bytes": source.size_bytes,
+            },
+        }
+    raise TypeError("unsupported ToolResult content subtype")
 
 
 def _continuation_digest(continuation: ModelContinuation | None) -> str | None:

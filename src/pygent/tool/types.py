@@ -10,10 +10,15 @@ from typing import Literal
 from pygent.core import JsonValue, Message
 from pygent.core._tool_values import (
     IdempotencyPolicy,
+    MediaSource,
     ToolCall,
     ToolDefinition,
     ToolResult,
+    ToolResultContent,
+    ToolResultJson,
+    ToolResultMedia,
     ToolResultStatus,
+    ToolResultText,
     ToolSideEffect,
     ToolTask,
     ToolTaskState,
@@ -24,6 +29,31 @@ from pygent.core.values import _MESSAGE_SUBCLASS_TOKEN
 from ._waiting import resolve_wait_timeout
 
 ToolLifecycle = Literal["sync", "detach"]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolOutput:
+    """Explicit business output and model-visible structured Tool content."""
+
+    output: JsonValue = None
+    content: tuple[ToolResultContent, ...] = ()
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        raise TypeError("ToolOutput cannot be subclassed")
+
+    def __post_init__(self) -> None:
+        from pygent.core import freeze_json
+
+        content = tuple(self.content)
+        if not content:
+            raise ValueError("ToolOutput content must be non-empty")
+        if any(
+            type(value) not in (ToolResultText, ToolResultJson, ToolResultMedia)
+            for value in content
+        ):
+            raise TypeError("ToolOutput content contains an unsupported value")
+        object.__setattr__(self, "output", freeze_json(self.output))
+        object.__setattr__(self, "content", content)
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,13 +171,19 @@ class ToolAuthorizationDecision(
 
 __all__ = [
     "IdempotencyPolicy",
+    "MediaSource",
     "ToolAuthorizationDecision",
     "ToolAuthorizationRequest",
     "ToolCall",
     "ToolDefinition",
     "ToolLifecycle",
+    "ToolOutput",
     "ToolResult",
+    "ToolResultContent",
+    "ToolResultJson",
+    "ToolResultMedia",
     "ToolResultStatus",
+    "ToolResultText",
     "ToolSideEffect",
     "ToolSpec",
     "ToolTask",

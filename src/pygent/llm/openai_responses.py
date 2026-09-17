@@ -25,6 +25,7 @@ from ._adapter_contracts import (
     ModelProviderRequest,
     ModelProviderResponse,
     ModelProviderStreamPart,
+    ToolResultContentCapabilities,
     _canonical_usage,
 )
 from ._continuation import continuation_matches
@@ -139,6 +140,7 @@ class OpenAIResponsesAdapter:
     """Strict codec for the OpenAI Responses wire protocol."""
 
     protocol = _PROTOCOL
+    tool_result_content = ToolResultContentCapabilities()
 
     def validate_model(self, model: ModelSpec) -> None:
         options = cast(FrozenJsonObject, model.provider_options)
@@ -430,6 +432,12 @@ def _continuation_items(continuation: ModelContinuation) -> list[dict[str, objec
 
 
 def _tool_result_value(result: ToolResult) -> dict[str, object]:
+    if result.content:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "OpenAI Responses does not support Pygent structured tool-result content",
+            reason_code=ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED,
+        )
     output = result.output if result.status == "succeeded" else result.error
     if not isinstance(output, str):
         output = json.dumps(thaw_json(output), ensure_ascii=False, separators=(",", ":"))

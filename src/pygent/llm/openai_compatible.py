@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import math
 import re
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from functools import lru_cache
 from typing import Self, cast
 
@@ -23,13 +24,24 @@ from pygent.core import (
     freeze_json_object,
     thaw_json,
 )
-from pygent.tool import ToolCall, ToolDefinition, ToolResult
+from pygent.tool import (
+    MediaSource,
+    ToolCall,
+    ToolDefinition,
+    ToolResult,
+    ToolResultContent,
+    ToolResultJson,
+    ToolResultMedia,
+    ToolResultText,
+)
 
 from ._adapter_contracts import (
+    MediaResolver,
     ModelProviderRequest,
     ModelProviderResponse,
     ModelProviderStreamKind,
     ModelProviderStreamPart,
+    ToolResultContentCapabilities,
     _canonical_usage,
     _normalized_finish_reason,
 )
@@ -353,6 +365,22 @@ class OpenAICompatibleAdapter:
 
     protocol = "openai_chat_completions"
 
+    def __init__(
+        self,
+        *,
+        tool_result_content: ToolResultContentCapabilities | None = None,
+        media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None = None,
+    ) -> None:
+        capabilities = tool_result_content or ToolResultContentCapabilities()
+        if not isinstance(capabilities, ToolResultContentCapabilities):
+            raise TypeError("tool_result_content must be ToolResultContentCapabilities")
+        if media_resolver is not None and not (
+            isinstance(media_resolver, MediaResolver) or callable(media_resolver)
+        ):
+            raise TypeError("media_resolver must provide resolve() or be callable")
+        self.tool_result_content = capabilities
+        self.media_resolver = media_resolver
+
     def validate_model(self, model: ModelSpec) -> None:
         """Validate portable provider options without performing provider I/O."""
 
@@ -376,6 +404,8 @@ class OpenAICompatibleAdapter:
                     wire_names,
                     model=request.model,
                     model_key=request.model_key,
+                    tool_result_content=self.tool_result_content,
+                    media_resolver=self.media_resolver,
                 )
             )
         messages.extend(
@@ -384,6 +414,8 @@ class OpenAICompatibleAdapter:
                 wire_names,
                 model=request.model,
                 model_key=request.model_key,
+                tool_result_content=self.tool_result_content,
+                media_resolver=self.media_resolver,
             )
         )
         body: dict[str, object] = {
@@ -866,6 +898,8 @@ def _encode_messages(
     *,
     model: ModelSpec | None = None,
     model_key: str | None = None,
+    tool_result_content: ToolResultContentCapabilities | None = None,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None = None,
 ) -> list[dict[str, object]]:
     if isinstance(message, ToolMessage) and message.results:
         encoded_results: list[dict[str, object]] = [
@@ -873,13 +907,23 @@ def _encode_messages(
                 "role": "tool",
                 "tool_call_id": result.call_id,
                 "name": (wire_names or {}).get(result.name, result.name),
-                "content": _encode_tool_result_content(result),
+                "content": _encode_tool_result_content(
+                    result,
+                    model=model,
+                    capabilities=tool_result_content or ToolResultContentCapabilities(),
+                    media_resolver=media_resolver,
+                ),
             }
             for result in message.results
         ]
         if message.content:
-            prior = cast(str, encoded_results[-1]["content"])
-            encoded_results[-1]["content"] = f"{prior}\n{message.content}"
+            prior = encoded_results[-1]["content"]
+            if isinstance(prior, str):
+                encoded_results[-1]["content"] = f"{prior}\n{message.content}"
+            else:
+                cast(list[dict[str, object]], prior).append(
+                    {"type": "text", "text": message.content}
+                )
         return encoded_results
     encoded: dict[str, object] = {"role": message.role, "content": message.content}
     if isinstance(message, AIMessage) and model is not None:
@@ -924,7 +968,29 @@ def _encode_messages(
     return [encoded]
 
 
-def _encode_tool_result_content(result: ToolResult) -> str:
+def _encode_tool_result_content(
+    result: ToolResult,
+    *,
+    model: ModelSpec | None,
+    capabilities: ToolResultContentCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
+) -> str | list[dict[str, object]]:
+    if result.content:
+        if not capabilities.enabled:
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_REQUEST,
+                "endpoint does not support structured tool-result content",
+                reason_code=ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED,
+            )
+        return [
+            _encode_tool_result_block(
+                item,
+                model=model,
+                capabilities=capabilities,
+                media_resolver=media_resolver,
+            )
+            for item in result.content
+        ]
     content: dict[str, object] = {
         "status": result.status,
         "output": thaw_json(result.output),
@@ -935,6 +1001,148 @@ def _encode_tool_result_content(result: ToolResult) -> str:
     if result.error_code is not None:
         content["error_code"] = result.error_code
     return json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+
+
+def _encode_tool_result_block(
+    block: ToolResultContent,
+    *,
+    model: ModelSpec | None,
+    capabilities: ToolResultContentCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
+) -> dict[str, object]:
+    if type(block) is ToolResultText:
+        return {"type": "text", "text": block.text}
+    if type(block) is ToolResultJson:
+        return {
+            "type": "text",
+            "text": json.dumps(
+                thaw_json(block.value), ensure_ascii=False, separators=(",", ":")
+            ),
+        }
+    if type(block) is not ToolResultMedia:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "tool-result content block is invalid",
+            reason_code=ModelFailureReason.MEDIA_CONTENT_INVALID,
+        )
+    if model is None or block.media_type not in model.capabilities.modalities.input:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            f"model does not support {block.media_type} input",
+            reason_code=ModelFailureReason.MODEL_INPUT_MODALITY_UNSUPPORTED,
+        )
+    if block.media_type not in capabilities.modalities:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            f"endpoint does not support {block.media_type} in tool messages",
+            reason_code=ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED,
+        )
+    source = block.source
+    if source.kind not in capabilities.source_kinds:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            f"endpoint does not support {source.kind} media sources",
+            reason_code=ModelFailureReason.MEDIA_SOURCE_UNSUPPORTED,
+        )
+    if (
+        capabilities.max_media_bytes is not None
+        and source.size_bytes is not None
+        and source.size_bytes > capabilities.max_media_bytes
+    ):
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "media exceeds the configured endpoint limit",
+            reason_code=ModelFailureReason.MEDIA_TOO_LARGE,
+        )
+    url = _media_url(
+        block,
+        capabilities=capabilities,
+        media_resolver=media_resolver,
+    )
+    field = f"{block.media_type}_url"
+    value: dict[str, object] = {"url": url}
+    if block.detail is not None:
+        value["detail"] = block.detail
+    return {"type": field, field: value}
+
+
+def _media_url(
+    block: ToolResultMedia,
+    *,
+    capabilities: ToolResultContentCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
+) -> str:
+    source = block.source
+    if source.kind == "url":
+        return cast(str, source.url)
+    if source.kind == "inline":
+        encoded = cast(str, source.base64_data)
+        data = base64.b64decode(encoded, validate=True)
+    else:
+        if media_resolver is None:
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_REQUEST,
+                "media resource cannot be resolved",
+                reason_code=ModelFailureReason.MEDIA_SOURCE_UNRESOLVABLE,
+            )
+        try:
+            if callable(media_resolver):
+                resolved = media_resolver(source)
+            else:
+                resolved = media_resolver.resolve(source)
+        except Exception:  # noqa: BLE001 - deployment resolver boundary
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_REQUEST,
+                "media resource cannot be resolved",
+                reason_code=ModelFailureReason.MEDIA_SOURCE_UNRESOLVABLE,
+            ) from None
+        if not isinstance(resolved, bytes) or not resolved:
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_REQUEST,
+                "media resolver returned invalid content",
+                reason_code=ModelFailureReason.MEDIA_CONTENT_INVALID,
+            )
+        data = resolved
+        encoded = base64.b64encode(data).decode("ascii")
+    if capabilities.max_media_bytes is not None and len(data) > capabilities.max_media_bytes:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "media exceeds the configured endpoint limit",
+            reason_code=ModelFailureReason.MEDIA_TOO_LARGE,
+        )
+    if source.size_bytes is not None and source.size_bytes != len(data):
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "media size does not match its descriptor",
+            reason_code=ModelFailureReason.MEDIA_INTEGRITY_MISMATCH,
+        )
+    if source.sha256 is not None and hashlib.sha256(data).hexdigest() != source.sha256:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "media digest does not match its descriptor",
+            reason_code=ModelFailureReason.MEDIA_INTEGRITY_MISMATCH,
+        )
+    if not _media_signature_matches(data, block.mime_type):
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "media content does not match its MIME type",
+            reason_code=ModelFailureReason.MEDIA_MIME_TYPE_INVALID,
+        )
+    return f"data:{block.mime_type};base64,{encoded}"
+
+
+def _media_signature_matches(data: bytes, mime_type: str) -> bool:
+    if mime_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if mime_type == "image/gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
+    if mime_type == "image/webp":
+        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    if mime_type == "video/mp4":
+        return len(data) >= 12 and data[4:8] == b"ftyp"
+    return True
 
 
 def _decode_text_content(value: object) -> str:

@@ -22,11 +22,15 @@ from pygent.runtime.codec import (
 )
 from pygent.tool import (
     IdempotencyPolicy,
+    MediaSource,
     ToolAuthorizationDecision,
     ToolAuthorizationRequest,
     ToolCall,
     ToolDefinition,
     ToolResult,
+    ToolResultJson,
+    ToolResultMedia,
+    ToolResultText,
     ToolSideEffect,
     ToolSpec,
     ToolTask,
@@ -76,6 +80,19 @@ def test_message_and_context_wire_round_trip_all_public_variants():
                     status="succeeded",
                     task=task,
                     output={"value": 2},
+                    content=(
+                        ToolResultText("image"),
+                        ToolResultJson({"value": 2}),
+                        ToolResultMedia(
+                            media_type="image",
+                            mime_type="image/png",
+                            source=MediaSource.resource(
+                                "media://image-1",
+                                sha256="0" * 64,
+                                size_bytes=12,
+                            ),
+                        ),
+                    ),
                 ),
             )
         ),

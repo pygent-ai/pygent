@@ -28,6 +28,7 @@ from pygent.core import (
     freeze_json,
     thaw_json,
 )
+from pygent.core._tool_values import _tool_result_content_to_value
 from pygent.tool import ToolCall, ToolDefinition
 
 from ._adapter_contracts import ModelInvoker
@@ -273,6 +274,9 @@ def _message_effect_value(message: Message) -> dict[str, object]:
                 "name": result.name,
                 "status": result.status,
                 "output": thaw_json(result.output),
+                "content": [
+                    _tool_result_content_to_value(item) for item in result.content
+                ],
                 "error": result.error,
                 "error_kind": result.error_kind,
                 "error_code": result.error_code,

@@ -8,8 +8,12 @@ from pygent import (
     AIMessage,
     Context,
     GenerationConfig,
+    MediaSource,
     ModelContinuation,
     ToolDefinition,
+    ToolMessage,
+    ToolResult,
+    ToolResultMedia,
     UserMessage,
     freeze_json_object,
 )
@@ -140,6 +144,39 @@ def test_prepared_request_preserves_content_above_one_mib() -> None:
     prepared = prepared_request_event(request(content=content), attempt=1)
     event = ModelStreamEvent("model.request.prepared", prepared)
     assert event.data["request"]["current_message"]["content"] == content
+
+
+def test_prepared_request_records_media_identity_without_base64() -> None:
+    source = MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture")
+    original = request()
+    value = replace(
+        original,
+        message=ToolMessage(
+            results=(
+                ToolResult(
+                    call_id="read-1",
+                    name="read_image",
+                    status="succeeded",
+                    content=(
+                        ToolResultMedia(
+                            media_type="image",
+                            mime_type="image/png",
+                            source=source,
+                        ),
+                    ),
+                ),
+            )
+        ),
+    )
+
+    prepared = prepared_request_event(value, attempt=1)
+    result = prepared["request"]["current_message"]["results"][0]
+    media = result["content"][0]
+
+    assert media["source"]["sha256"] == source.sha256
+    assert media["source"]["size_bytes"] == source.size_bytes
+    assert "base64_data" not in media["source"]
+    assert source.base64_data not in repr(prepared)
 
 
 def test_continuation_producer_changes_request_digest() -> None:

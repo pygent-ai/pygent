@@ -44,7 +44,17 @@ def test_core_has_no_runtime_dependency_on_tool_or_runtime() -> None:
 
 
 def test_production_does_not_import_removed_tool_value_definitions() -> None:
-    core_values = {"ToolCall", "ToolDefinition", "ToolResult", "ToolTask"}
+    core_values = {
+        "MediaSource",
+        "ToolCall",
+        "ToolDefinition",
+        "ToolResult",
+        "ToolResultContent",
+        "ToolResultJson",
+        "ToolResultMedia",
+        "ToolResultText",
+        "ToolTask",
+    }
     violations: list[str] = []
     for path in SOURCE_ROOT.rglob("*.py"):
         if path == SOURCE_ROOT / "tool" / "types.py":

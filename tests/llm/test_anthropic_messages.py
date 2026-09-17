@@ -15,6 +15,7 @@ from pygent import (
     ToolDefinition,
     ToolMessage,
     ToolResult,
+    ToolResultText,
     UserMessage,
 )
 from pygent.core import freeze_json_object
@@ -166,6 +167,30 @@ def test_anthropic_request_projects_assistant_and_tool_results() -> None:
     assert result["type"] == "tool_result"
     assert result["tool_use_id"] == "call-1"
     assert result["is_error"] is True
+
+
+def test_anthropic_rejects_structured_tool_result_content_explicitly() -> None:
+    with pytest.raises(ModelProviderError) as raised:
+        AnthropicMessagesAdapter().build_request(
+            request(
+                message=ToolMessage(
+                    results=(
+                        ToolResult(
+                            call_id="call-1",
+                            name="lookup",
+                            status="succeeded",
+                            content=(ToolResultText("result"),),
+                        ),
+                    )
+                )
+            )
+        )
+
+    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
+    assert (
+        raised.value.reason_code
+        is ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED
+    )
 
 
 def test_anthropic_non_stream_response_decodes_blocks_usage_and_continuation() -> None:

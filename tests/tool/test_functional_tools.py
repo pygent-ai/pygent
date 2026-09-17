@@ -10,11 +10,16 @@ from pygent import (
     AIMessage,
     Context,
     IdempotencyPolicy,
+    MediaSource,
     ToolAuthorizationDecision,
     ToolCall,
     ToolCallLayer,
     ToolDefinition,
     ToolKit,
+    ToolOutput,
+    ToolResultJson,
+    ToolResultMedia,
+    ToolResultText,
     ToolSideEffect,
     tool,
 )
@@ -117,6 +122,39 @@ async def test_local_layer_executes_async_function_and_serializes_model() -> Non
     assert message.results[0].status == "succeeded"
     assert message.results[0].output.to_dict() == {"value": 5, "unit": "c"}
     assert returned_context is context
+
+
+@pytest.mark.asyncio
+async def test_local_layer_preserves_structured_tool_output() -> None:
+    @tool(tool_id="media.read", version="1", side_effect=ToolSideEffect.READ)
+    def read_media() -> ToolOutput:
+        """Read one media value."""
+
+        return ToolOutput(
+            output={"width": 1},
+            content=(
+                ToolResultText("image"),
+                ToolResultJson({"width": 1}),
+                ToolResultMedia(
+                    media_type="image",
+                    mime_type="image/png",
+                    source=MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture"),
+                ),
+            ),
+        )
+
+    toolkit = ToolKit(read_media)
+    assert toolkit.definitions[0].output_schema is None
+    message, _ = await toolkit.local_layer(authorization_adapter=allow).invoke(
+        AIMessage(tool_calls=(ToolCall("media-1", "read_media", {}),)),
+        toolkit.make_visible_in(Context()),
+    )
+
+    result = message.results[0]
+    assert result.status == "succeeded"
+    assert result.output["width"] == 1
+    assert result.content[0] == ToolResultText("image")
+    assert isinstance(result.content[2], ToolResultMedia)
 
 
 @pytest.mark.asyncio

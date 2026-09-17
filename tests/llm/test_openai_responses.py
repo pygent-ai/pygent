@@ -16,6 +16,7 @@ from pygent import (
     ToolDefinition,
     ToolMessage,
     ToolResult,
+    ToolResultText,
     UserMessage,
 )
 from pygent.core import freeze_json_object
@@ -99,6 +100,30 @@ def test_responses_request_projects_input_tools_schema_and_reasoning() -> None:
     assert payload["tool_choice"] == {"type": "function", "name": "lookup"}
     assert payload["text"]["format"]["type"] == "json_schema"
     assert payload["reasoning"] == {"effort": "low", "summary": "auto"}
+
+
+def test_responses_rejects_structured_tool_result_content_explicitly() -> None:
+    with pytest.raises(ModelProviderError) as raised:
+        OpenAIResponsesAdapter().build_request(
+            _request(
+                message=ToolMessage(
+                    results=(
+                        ToolResult(
+                            call_id="call-1",
+                            name="lookup",
+                            status="succeeded",
+                            content=(ToolResultText("result"),),
+                        ),
+                    )
+                )
+            )
+        )
+
+    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
+    assert (
+        raised.value.reason_code
+        is ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED
+    )
 
 
 @pytest.mark.parametrize("field", ["api_key", "headers", "base_url"])

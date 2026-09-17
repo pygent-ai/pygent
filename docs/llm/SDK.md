@@ -71,14 +71,44 @@ model_groups:
 应用可以按三层分别校验并保存配置，不需要先填写完整 `ModelConfig`：
 
 ```python
-from pygent import ConnectionConfig, EnabledModelConfig, ModelGroupConfig
+from pygent import (
+    ConnectionConfig,
+    EnabledModelConfig,
+    ModelConfig,
+    ModelGroupConfig,
+)
 
 connection = ConnectionConfig.from_mapping(connection_value)
 model = EnabledModelConfig.from_mapping(model_value)
 model_group = ModelGroupConfig.from_mapping(model_group_value)
+
+# 以下 Mapping 代表应用自己的数据库记录、JSON 文档或配置文件内容。
+saved_connections = {"company_gateway": connection.to_mapping()}
+saved_models = {"deepseek_primary": model.to_mapping()}
+saved_model_groups = {"assistant": model_group.to_mapping()}
+
+config = ModelConfig.from_mapping(
+    {
+        "connections": saved_connections,
+        "models": saved_models,
+        "model_groups": saved_model_groups,
+    }
+)
 ```
 
-这三个值只校验各自层级的结构。`EnabledModelConfig` 保存 `connection_key`，但不要求解析时 Connection 已存在；`ModelGroupConfig` 保存有序 `model_keys`，但不要求解析时 Model 已存在。应用可以把每一层写入 YAML、JSON 或数据库。执行前把已经保存的三层 Mapping 交给 `ModelConfig.from_mapping()`，统一完成 Connection、protocol 和 Model 引用检查，并产生运行时 `ModelEntry`、`ModelGroup` 与连接投影。Pygent 不规定应用的存储后端或草稿格式。
+这三个值只校验各自层级的结构。`EnabledModelConfig` 保存 `connection_key`，但不要求解析时 Connection 已存在；`ModelGroupConfig` 保存有序 `model_keys`，但不要求解析时 Model 已存在。每个 `to_mapping()` 都返回与对应 `from_mapping()` 可往返的普通 Mapping，供应用写入 YAML、JSON、数据库或配置中心；Pygent 不提供 `save_connection()`，也不规定存储后端或草稿格式。
+
+应用已经持有解析后的配置值时，可以跳过再次解析 Mapping：
+
+```python
+config = ModelConfig.from_components(
+    connections={"company_gateway": connection},
+    models={"deepseek_primary": model},
+    model_groups={"assistant": model_group},
+)
+```
+
+`ModelConfig.from_mapping()` 先解析三层 Mapping，再进入同一个 `from_components()` 组装路径。最终组装统一检查 Connection、protocol 和 Model 引用，并产生运行时 `ModelEntry`、`ModelGroup` 与连接投影。
 
 ## Direct：单模型
 
@@ -135,6 +165,51 @@ invoker = DefaultModelInvoker(
 ```
 
 共享单位是 `(connection_key, protocol)`。不同 protocol 使用各自 Adapter 和 endpoint，即使它们属于同一个 Connection。Invoker 关闭时对相同 client 实例去重。
+
+## 多模态工具消息
+
+OpenAI Chat Completions compatible endpoint 只有经过应用明确声明后，才会接收
+ToolResult 中的结构化内容块。模型本身还必须在 `ModelCapabilities.modalities.input`
+中声明对应的 `image` 或 `video` 输入能力。这两个条件独立检查：
+
+```python
+from pygent.llm import (
+    OpenAICompatibleAdapter,
+    ToolResultContentCapabilities,
+)
+
+
+class AppMediaResolver:
+    def resolve(self, source):
+        # 在部署边界按稳定 URI 读取有界 bytes，并实施权限与生命周期策略。
+        return media_store.read(source.uri)
+
+
+adapter = OpenAICompatibleAdapter(
+    tool_result_content=ToolResultContentCapabilities(
+        enabled=True,
+        modalities=("image", "video"),
+        source_kinds=("resource", "url", "inline"),
+        max_media_bytes=20 * 1024 * 1024,
+    ),
+    media_resolver=AppMediaResolver(),
+)
+invoker = DefaultModelInvoker(
+    adapters={"openai_chat_completions": adapter},
+    clients={entry.key: client},
+)
+```
+
+默认 `ToolResultContentCapabilities()` 为禁用状态，框架不会因为协议名、Provider 名或模型
+名推断 endpoint 支持该扩展。启用后，文本与 JSON 块分别编码为 `text`，图片与视频分别
+编码为 `image_url` 和 `video_url`，每个 `role: tool` 消息继续携带原
+`tool_call_id`。URL source 直接传递；inline 和 resource source 生成 data URI。资源读取、
+大小、SHA-256 和基本媒体签名在发起 Provider 请求前校验。
+
+当前 Anthropic Messages、Gemini generateContent 和 OpenAI Responses Adapter 尚未声明
+这种 Pygent tool-result content wire，收到非空内容块会返回
+`tool_result_content_unsupported`，不会转成普通字符串或用户消息。应用确认某一协议的
+等价结构后，应在对应 Adapter 中实现并声明能力。
 
 ## Direct：Anthropic Messages
 

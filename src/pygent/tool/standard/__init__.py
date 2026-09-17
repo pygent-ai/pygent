@@ -26,6 +26,7 @@ class StandardTools:
         *,
         workspace_root: str | Path,
         restrict_to_workspace: bool = True,
+        max_media_bytes: int = 20 * 1024 * 1024,
         bash_executable: str | None = None,
         bash_timeout: float = 600,
         task_manager: ToolTaskManager | None = None,
@@ -43,6 +44,7 @@ class StandardTools:
         self.files = FileTools(
             workspace_root=workspace_root,
             restrict_to_workspace=restrict_to_workspace,
+            max_media_bytes=max_media_bytes,
         )
         self.web_fetch = WebFetchTools(
             fetcher=web_fetcher,
@@ -58,7 +60,9 @@ class StandardTools:
             self.files.glob,
             self.files.grep,
             self.files.read,
+            self.files.read_image,
             self.files.read_lints,
+            self.files.read_video,
             self.web_fetch.web_fetch,
             self.web_search.web_search,
             self.files.write,

@@ -23,7 +23,12 @@ from pygent.core import (
     current_infrastructure,
     thaw_json,
 )
-from pygent.core._tool_values import ToolCall, ToolResult, ToolTask
+from pygent.core._tool_values import (
+    ToolCall,
+    ToolResult,
+    ToolTask,
+    _tool_result_content_to_value,
+)
 from pygent.tool._waiting import resolve_wait_timeout
 from pygent.tool.executors import ToolExecutionError, ToolTaskManager
 from pygent.tool.functional import tool
@@ -739,6 +744,9 @@ def _result_json(result: ToolResult | None) -> dict[str, Any] | None:
         "status": result.status,
         "task": _task_json(result.task),
         "output": thaw_json(result.output),
+        "content": [
+            _tool_result_content_to_value(item) for item in result.content
+        ],
         "error": result.error,
         "error_kind": result.error_kind,
         "error_code": result.error_code,

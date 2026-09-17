@@ -6,6 +6,7 @@ capacity lifecycles but must not interpret provider wire payloads.
 
 from ._adapter_contracts import (
     EventSink,
+    MediaResolver,
     ModelEventKind,
     ModelInvoker,
     ModelProviderAdapter,
@@ -16,6 +17,7 @@ from ._adapter_contracts import (
     ModelProviderStreamKind,
     ModelProviderStreamPart,
     ModelStreamEvent,
+    ToolResultContentCapabilities,
 )
 from ._model_execution import ModelExecution
 from .catalog import ModelCatalog
@@ -23,6 +25,7 @@ from .types import ModelErrorKind, ModelProviderError
 
 __all__ = [
     "EventSink",
+    "MediaResolver",
     "ModelCatalog",
     "ModelErrorKind",
     "ModelEventKind",
@@ -37,4 +40,5 @@ __all__ = [
     "ModelProviderStreamKind",
     "ModelProviderStreamPart",
     "ModelStreamEvent",
+    "ToolResultContentCapabilities",
 ]

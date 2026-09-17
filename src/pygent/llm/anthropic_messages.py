@@ -27,6 +27,7 @@ from ._adapter_contracts import (
     ModelProviderRequest,
     ModelProviderResponse,
     ModelProviderStreamPart,
+    ToolResultContentCapabilities,
 )
 from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
@@ -205,6 +206,7 @@ class AnthropicMessagesAdapter:
     """Strict codec for Anthropic Messages-compatible providers."""
 
     protocol = _PROTOCOL
+    tool_result_content = ToolResultContentCapabilities()
 
     def validate_model(self, model: ModelSpec) -> None:
         _validate_provider_options(model.provider_options)
@@ -789,6 +791,12 @@ def _assistant_blocks(
 
 
 def _tool_result_value(result: ToolResult) -> dict[str, object]:
+    if result.content:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "Anthropic Messages does not support Pygent structured tool-result content",
+            reason_code=ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED,
+        )
     content = result.output if result.status == "succeeded" else result.error
     if not isinstance(content, str):
         content = json.dumps(thaw_json(content), ensure_ascii=False, separators=(",", ":"))

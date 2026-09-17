@@ -16,7 +16,7 @@ from pygent.core import (
     Message,
     freeze_json_object,
 )
-from pygent.tool import ToolDefinition
+from pygent.tool import MediaSource, ToolDefinition
 
 from .configuration import ModelGroup, ModelSpec
 from .types import (
@@ -42,6 +42,47 @@ _CANONICAL_USAGE_FIELDS = (
     "cached_input_tokens",
     "reasoning_tokens",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ToolResultContentCapabilities:
+    """Endpoint support for structured content inside tool-result messages."""
+
+    enabled: bool = False
+    modalities: tuple[str, ...] = ()
+    source_kinds: tuple[str, ...] = ("resource", "url", "inline")
+    max_media_bytes: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise TypeError("tool-result content enabled must be a bool")
+        modalities = tuple(self.modalities)
+        if any(value not in ("image", "video") for value in modalities):
+            raise ValueError("tool-result modalities must contain only image or video")
+        if len(modalities) != len(set(modalities)):
+            raise ValueError("tool-result modalities must not contain duplicates")
+        source_kinds = tuple(self.source_kinds)
+        if any(value not in ("resource", "url", "inline") for value in source_kinds):
+            raise ValueError("tool-result source_kinds contains an unsupported value")
+        if len(source_kinds) != len(set(source_kinds)):
+            raise ValueError("tool-result source_kinds must not contain duplicates")
+        if modalities and not self.enabled:
+            raise ValueError("tool-result media modalities require structured content")
+        if self.max_media_bytes is not None and (
+            not isinstance(self.max_media_bytes, int)
+            or isinstance(self.max_media_bytes, bool)
+            or self.max_media_bytes <= 0
+        ):
+            raise ValueError("max_media_bytes must be a positive integer")
+        object.__setattr__(self, "modalities", modalities)
+        object.__setattr__(self, "source_kinds", source_kinds)
+
+
+@runtime_checkable
+class MediaResolver(Protocol):
+    """Deployment-local resolver for one portable media resource reference."""
+
+    def resolve(self, source: MediaSource) -> bytes: ...
 
 class ModelEventKind(str, Enum):
     """Closed public event vocabulary for one model execution."""
@@ -206,6 +247,7 @@ class ModelProviderAdapter(Protocol):
     """Provider wire conversion and error normalization boundary."""
 
     protocol: str
+    tool_result_content: ToolResultContentCapabilities
 
     def build_request(self, request: ModelProviderRequest) -> FrozenJsonObject: ...
 

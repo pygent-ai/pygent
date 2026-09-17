@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import cast
 from urllib.parse import urlsplit
 
-from pygent.core import FrozenJsonObject, JsonObjectInput, freeze_json_object
+from pygent.core import FrozenJsonObject, JsonObjectInput, freeze_json_object, thaw_json
 
 from .protocols import BuiltinModelProtocol
 from .types import ModelGroupResolution
@@ -66,6 +66,17 @@ def _string_tuple(value: object, label: str) -> tuple[str, ...]:
         raise ValueError(f"{label} must contain non-empty strings")
     if len(items) != len(set(items)):
         raise ValueError(f"{label} must not contain duplicates")
+    return cast(tuple[str, ...], items)
+
+
+def _model_key_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise TypeError("model group models must be an array")
+    items = tuple(value)
+    if any(not isinstance(item, str) or not item for item in items):
+        raise ValueError("model group models must contain non-empty strings")
+    if len(items) != len(set(items)):
+        raise ValueError("model group contains duplicate models")
     return cast(tuple[str, ...], items)
 
 
@@ -391,6 +402,17 @@ class EnabledModelConfig:
             ),
         )
 
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "connection": self.connection_key,
+            "model_id": self.model_id,
+            "protocol": self.protocol,
+            "provider_options": thaw_json(
+                cast(FrozenJsonObject, self.provider_options)
+            ),
+            "capabilities": self.capabilities.to_mapping(),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class ModelEntry:
@@ -408,13 +430,7 @@ class ModelGroupConfig:
     model_keys: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        if (
-            isinstance(self.model_keys, (list, tuple))
-            and all(isinstance(item, str) for item in self.model_keys)
-            and len(self.model_keys) != len(set(self.model_keys))
-        ):
-            raise ValueError("model group contains duplicate models")
-        model_keys = _string_tuple(self.model_keys, "model group models")
+        model_keys = _model_key_tuple(self.model_keys)
         if not model_keys:
             raise ValueError("model group models must be non-empty")
         object.__setattr__(self, "model_keys", model_keys)
@@ -422,14 +438,10 @@ class ModelGroupConfig:
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelGroupConfig:
         _exact_fields(value, frozenset({"models"}), "model group")
-        raw_model_keys = value["models"]
-        if (
-            isinstance(raw_model_keys, (list, tuple))
-            and all(isinstance(item, str) for item in raw_model_keys)
-            and len(raw_model_keys) != len(set(raw_model_keys))
-        ):
-            raise ValueError("model group contains duplicate models")
-        return cls(model_keys=_string_tuple(raw_model_keys, "model group models"))
+        return cls(model_keys=_model_key_tuple(value["models"]))
+
+    def to_mapping(self) -> dict[str, object]:
+        return {"models": list(self.model_keys)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -507,6 +519,12 @@ class CredentialRef:
                 f"credential environment variable {self._environment_variable!r} is not set"
             ) from None
 
+    def to_mapping(self) -> dict[str, object]:
+        if self._without_authentication:
+            return {"none": True}
+        assert self._environment_variable is not None
+        return {"env": self._environment_variable}
+
 
 def _validated_url(value: object, label: str) -> str:
     url = _non_empty(value, label)
@@ -573,6 +591,20 @@ class ConnectionConfig:
             proxy=(None if value.get("proxy") is None else cast(str, value["proxy"])),
         )
 
+    def to_mapping(self) -> dict[str, object]:
+        value: dict[str, object] = {
+            "provider": self.provider,
+            "credential": self.credential.to_mapping(),
+            "protocols": {
+                protocol: {"base_url": base_url}
+                for protocol, base_url in self.protocols.items()
+            },
+            "verify_ssl": self.verify_ssl,
+        }
+        if self.proxy is not None:
+            value["proxy"] = self.proxy
+        return value
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedModelConnection:
@@ -604,7 +636,9 @@ class ModelConfig:
     _model_connections: Mapping[str, str] = field(repr=False)
 
     def __init__(self) -> None:
-        raise TypeError("ModelConfig must be created with from_mapping()")
+        raise TypeError(
+            "ModelConfig must be created with from_mapping() or from_components()"
+        )
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelConfig:
@@ -631,18 +665,62 @@ class ModelConfig:
         models_value = _object(raw.get("models"), "models")
         if not models_value:
             raise ValueError("models must be non-empty")
-        entries: dict[str, ModelEntry] = {}
-        model_connections: dict[str, str] = {}
+        models: dict[str, EnabledModelConfig] = {}
         for name, item in models_value.items():
             _non_empty(name, "model key")
-            model = _object(item, f"model {name!r}")
-            configured_model = EnabledModelConfig.from_mapping(model)
+            models[name] = EnabledModelConfig.from_mapping(
+                _object(item, f"model {name!r}")
+            )
+        groups_value = _object(raw.get("model_groups", {}), "model_groups")
+        groups: dict[str, ModelGroupConfig] = {}
+        for name, item in groups_value.items():
+            _non_empty(name, "model group name")
+            groups[name] = ModelGroupConfig.from_mapping(
+                _object(item, f"model group {name!r}")
+            )
+        return cls.from_components(
+            connections=connections,
+            models=models,
+            model_groups=groups,
+        )
+
+    @classmethod
+    def from_components(
+        cls,
+        *,
+        connections: Mapping[str, ConnectionConfig],
+        models: Mapping[str, EnabledModelConfig],
+        model_groups: Mapping[str, ModelGroupConfig] | None = None,
+    ) -> ModelConfig:
+        if not isinstance(connections, Mapping):
+            raise TypeError("connections must be a mapping")
+        if not isinstance(models, Mapping):
+            raise TypeError("models must be a mapping")
+        if model_groups is not None and not isinstance(model_groups, Mapping):
+            raise TypeError("model_groups must be a mapping")
+        configured_connections = dict(connections)
+        configured_models = dict(models)
+        configured_groups = dict(model_groups or {})
+        if not configured_connections:
+            raise ValueError("connections must be non-empty")
+        if not configured_models:
+            raise ValueError("models must be non-empty")
+        for key, connection in configured_connections.items():
+            _non_empty(key, "connection name")
+            if not isinstance(connection, ConnectionConfig):
+                raise TypeError("connections must contain ConnectionConfig values")
+        entries: dict[str, ModelEntry] = {}
+        model_connections: dict[str, str] = {}
+        for key, configured_model in configured_models.items():
+            _non_empty(key, "model key")
+            if not isinstance(configured_model, EnabledModelConfig):
+                raise TypeError("models must contain EnabledModelConfig values")
             connection_name = configured_model.connection_key
             try:
-                connection = connections[connection_name]
+                connection = configured_connections[connection_name]
             except KeyError:
                 raise ValueError(
-                    f"model {name!r} references unknown connection {connection_name!r}"
+                    f"model {key!r} references unknown connection {connection_name!r}"
                 ) from None
             protocol = configured_model.protocol
             if protocol not in connection.protocols:
@@ -656,15 +734,14 @@ class ModelConfig:
                 provider_options=cast(JsonObjectInput, configured_model.provider_options),
                 capabilities=configured_model.capabilities,
             )
-            entry = ModelEntry(key=name, spec=spec)
-            entries[name] = entry
-            model_connections[name] = connection_name
-        groups_value = _object(raw.get("model_groups", {}), "model_groups")
+            entry = ModelEntry(key=key, spec=spec)
+            entries[key] = entry
+            model_connections[key] = connection_name
         groups: dict[str, ModelGroup] = {}
-        for name, item in groups_value.items():
-            _non_empty(name, "model group name")
-            group = _object(item, f"model group {name!r}")
-            configured_group = ModelGroupConfig.from_mapping(group)
+        for key, configured_group in configured_groups.items():
+            _non_empty(key, "model group name")
+            if not isinstance(configured_group, ModelGroupConfig):
+                raise TypeError("model_groups must contain ModelGroupConfig values")
             model_names = configured_group.model_keys
             unknown_models = set(model_names) - set(entries)
             if unknown_models:
@@ -672,11 +749,15 @@ class ModelConfig:
                     "model group references an unknown model: "
                     + ", ".join(sorted(unknown_models))
                 )
-            groups[name] = ModelGroup(
-                name=name, models=tuple(entries[model_name] for model_name in model_names)
+            groups[key] = ModelGroup(
+                name=key, models=tuple(entries[model_name] for model_name in model_names)
             )
         result = cls.__new__(cls)
-        object.__setattr__(result, "connections", MappingProxyType(connections))
+        object.__setattr__(
+            result,
+            "connections",
+            MappingProxyType(configured_connections),
+        )
         object.__setattr__(result, "models", MappingProxyType(entries))
         object.__setattr__(result, "model_groups", MappingProxyType(groups))
         object.__setattr__(

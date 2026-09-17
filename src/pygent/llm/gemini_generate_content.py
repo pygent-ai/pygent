@@ -26,6 +26,7 @@ from ._adapter_contracts import (
     ModelProviderRequest,
     ModelProviderResponse,
     ModelProviderStreamPart,
+    ToolResultContentCapabilities,
 )
 from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
@@ -130,6 +131,7 @@ class GeminiGenerateContentAdapter:
     """Strict codec for Google's Gemini generateContent contract."""
 
     protocol = _PROTOCOL
+    tool_result_content = ToolResultContentCapabilities()
 
     def validate_model(self, model: ModelSpec) -> None:
         options = cast(FrozenJsonObject, model.provider_options)
@@ -436,6 +438,12 @@ def _continuation_parts(continuation: ModelContinuation) -> list[dict[str, objec
 
 
 def _function_response(result: ToolResult) -> dict[str, object]:
+    if result.content:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "Gemini generateContent does not support Pygent structured tool-result content",
+            reason_code=ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED,
+        )
     value = result.output if result.status == "succeeded" else {"error": result.error}
     if isinstance(value, FrozenJsonObject):
         response: object = value.to_dict()
