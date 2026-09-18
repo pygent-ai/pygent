@@ -623,11 +623,223 @@ class BashTools:
             "stdout": output,
             "stderr": subprocess.STDOUT,
         }
+        # Inject system proxy environment so subprocess networking follows host settings
+        # without overriding explicit user-provided variables.
+        try:
+            env = os.environ.copy()
+            proxy_env = getattr(self, "_system_proxy_env", None)
+            if proxy_env is None:
+                proxy_env = self._detect_system_proxy_env(env)
+                self._system_proxy_env = proxy_env
+            if proxy_env:
+                existing = {k.lower() for k in env.keys()}
+                for k, v in proxy_env.items():
+                    if k.lower() not in existing and v:
+                        env[k] = v
+                # Mirror case variants for broader tool compatibility
+                def _mirror(key: str) -> None:
+                    if key.upper() in env and key.lower() not in env:
+                        env[key.lower()] = env[key.upper()]
+                    if key.lower() in env and key.upper() not in env:
+                        env[key.upper()] = env[key.lower()]
+                for k in ("http_proxy", "https_proxy", "all_proxy", "no_proxy"):
+                    _mirror(k)
+            kwargs["env"] = env
+        except Exception:
+            kwargs["env"] = os.environ.copy()
         if self._is_windows:
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
             kwargs["start_new_session"] = True
         return kwargs
+
+    def _detect_system_proxy_env(self, base_env: dict[str, str]) -> dict[str, str]:
+        result: dict[str, str] = {}
+        try:
+            if sys.platform == "win32":
+                # WinINET user-level proxy
+                try:
+                    import winreg  # type: ignore
+
+                    with winreg.OpenKey(
+                        winreg.HKEY_CURRENT_USER,
+                        r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+                    ) as key:
+                        try:
+                            proxy_enable, _ = winreg.QueryValueEx(key, "ProxyEnable")
+                        except FileNotFoundError:
+                            proxy_enable = 0
+                        try:
+                            proxy_server, _ = winreg.QueryValueEx(key, "ProxyServer")
+                        except FileNotFoundError:
+                            proxy_server = ""
+                        try:
+                            proxy_override, _ = winreg.QueryValueEx(key, "ProxyOverride")
+                        except FileNotFoundError:
+                            proxy_override = ""
+                    if proxy_enable and proxy_server:
+                        mapping: dict[str, str] = {}
+                        parts = [p.strip() for p in proxy_server.split(";") if p.strip()]
+                        kv: dict[str, str] = {}
+                        bare: str | None = None
+                        for p in parts:
+                            if "=" in p:
+                                k, v = p.split("=", 1)
+                                kv[k.strip().lower()] = v.strip()
+                            else:
+                                bare = p.strip()
+                        if bare:
+                            mapping["http"] = bare
+                            mapping["https"] = bare
+                        mapping.update(kv)
+                        http = mapping.get("http")
+                        https = mapping.get("https")
+                        socks = mapping.get("socks") or mapping.get("socks5") or mapping.get("socks4")
+                        if http:
+                            result["HTTP_PROXY"] = f"http://{http}"
+                        if https:
+                            result["HTTPS_PROXY"] = f"http://{https}"
+                        if socks:
+                            result["ALL_PROXY"] = f"socks5://{socks}" if not socks.startswith("socks") else socks
+                        if proxy_override:
+                            no_proxy = ",".join([h.strip() for h in proxy_override.split(";") if h.strip()])
+                            if no_proxy:
+                                result["NO_PROXY"] = no_proxy
+                except Exception:
+                    pass
+                # WinHTTP fallback
+                try:
+                    proc = subprocess.run(
+                        ["netsh", "winhttp", "show", "proxy"],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                        timeout=1.5,
+                        check=False,
+                    )
+                    out = proc.stdout or ""
+                    if "Direct access" not in out and out.strip():
+                        for line in out.splitlines():
+                            s = line.strip()
+                            if s.lower().startswith("proxy server") and ":" in s:
+                                rhs = s.split(":", 1)[1]
+                                parts = [p.strip() for p in rhs.split(";") if p.strip()]
+                                for p in parts:
+                                    if "=" in p:
+                                        k, v = p.split("=", 1)
+                                        k = k.strip().lower(); v = v.strip()
+                                        if k == "http" and "HTTP_PROXY" not in result:
+                                            result["HTTP_PROXY"] = f"http://{v}"
+                                        if k == "https" and "HTTPS_PROXY" not in result:
+                                            result["HTTPS_PROXY"] = f"http://{v}"
+                                        if k.startswith("socks") and "ALL_PROXY" not in result:
+                                            result["ALL_PROXY"] = f"socks5://{v}"
+                            if s.lower().startswith("bypass list") and ":" in s and "NO_PROXY" not in result:
+                                rhs = s.split(":", 1)[1]
+                                items = [i.strip() for i in rhs.split(",") if i.strip()]
+                                if items:
+                                    result["NO_PROXY"] = ",".join(items)
+                except Exception:
+                    pass
+            elif sys.platform == "darwin":
+                try:
+                    proc = subprocess.run(
+                        ["scutil", "--proxy"],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                        timeout=1.5,
+                        check=False,
+                    )
+                    out = proc.stdout or ""
+                    if out:
+                        def get_val(name: str) -> str | None:
+                            for line in out.splitlines():
+                                line = line.strip()
+                                if line.startswith(name + " :"):
+                                    return line.split(":", 1)[1].strip()
+                            return None
+                        def enabled(name: str) -> bool:
+                            return get_val(name) in {"1", "true", "TRUE"}
+                        if enabled("HTTPEnable"):
+                            host = get_val("HTTPProxy"); port = get_val("HTTPPort")
+                            if host and port:
+                                result["HTTP_PROXY"] = f"http://{host}:{port}"
+                        if enabled("HTTPSEnable"):
+                            host = get_val("HTTPSProxy"); port = get_val("HTTPSPort")
+                            if host and port:
+                                result["HTTPS_PROXY"] = f"http://{host}:{port}"
+                        if enabled("SOCKSEnable"):
+                            host = get_val("SOCKSProxy"); port = get_val("SOCKSPort")
+                            if host and port:
+                                result["ALL_PROXY"] = f"socks5://{host}:{port}"
+                        if "ExceptionsList" in out and "NO_PROXY" not in result:
+                            items: list[str] = []
+                            capture = False
+                            for line in out.splitlines():
+                                s = line.strip()
+                                if s.startswith("ExceptionsList") and s.endswith("("):
+                                    capture = True; continue
+                                if capture:
+                                    if s == ")":
+                                        break
+                                    s = s.strip('" ,')
+                                    if s:
+                                        items.append(s)
+                            if items:
+                                result["NO_PROXY"] = ",".join(items)
+                except Exception:
+                    pass
+            else:
+                # Linux: try GNOME gsettings if available
+                try:
+                    if shutil.which("gsettings"):
+                        mode_proc = subprocess.run(
+                            ["gsettings", "get", "org.gnome.system.proxy", "mode"],
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL,
+                            text=True,
+                            timeout=1.0,
+                            check=False,
+                        )
+                        mode = (mode_proc.stdout or "").strip().strip("'\"")
+                        if mode == "manual":
+                            def get_schema(schema: str, key: str) -> str | None:
+                                p = subprocess.run(
+                                    ["gsettings", "get", schema, key],
+                                    stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL,
+                                    text=True,
+                                    timeout=1.0,
+                                    check=False,
+                                )
+                                return (p.stdout or "").strip()
+                            http_host = get_schema("org.gnome.system.proxy.http", "host")
+                            http_port = get_schema("org.gnome.system.proxy.http", "port")
+                            https_host = get_schema("org.gnome.system.proxy.https", "host")
+                            https_port = get_schema("org.gnome.system.proxy.https", "port")
+                            socks_host = get_schema("org.gnome.system.proxy.socks", "host")
+                            socks_port = get_schema("org.gnome.system.proxy.socks", "port")
+                            if http_host and http_host != "''" and http_port and http_port.isdigit():
+                                result["HTTP_PROXY"] = f"http://{http_host.strip('\'\"')}:{http_port}"
+                            if https_host and https_host != "''" and https_port and https_port.isdigit():
+                                result["HTTPS_PROXY"] = f"http://{https_host.strip('\'\"')}:{https_port}"
+                            if socks_host and socks_host != "''" and socks_port and socks_port.isdigit():
+                                result["ALL_PROXY"] = f"socks5://{socks_host.strip('\'\"')}:{socks_port}"
+                            ignore = get_schema("org.gnome.system.proxy", "ignore-hosts")
+                            if ignore and ignore.startswith("["):
+                                items = [i.strip().strip("'\"") for i in ignore.strip("[]").split(",") if i.strip()]
+                                if items:
+                                    result["NO_PROXY"] = ",".join(items)
+                except Exception:
+                    pass
+        except Exception:
+            return {}
+        return result
 
     async def _run_process(self, command: str, cwd: str) -> str:
         from pygent.tool.executors import current_tool_execution
