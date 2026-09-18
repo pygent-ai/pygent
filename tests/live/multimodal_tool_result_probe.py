@@ -26,6 +26,7 @@ from pygent import (
 )
 from pygent.llm import (
     CapabilityPresetCatalog,
+    MediaTransportCapabilities,
     ModelEntry,
     ModelModalities,
     ModelProviderError,
@@ -33,7 +34,6 @@ from pygent.llm import (
     ModelSpec,
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
-    ToolResultContentCapabilities,
 )
 from pygent.tool import FileTools
 from tests.live.az_conformance.media_fixtures import (
@@ -104,9 +104,7 @@ def az_catalog_media_cases() -> tuple[tuple[str, str], ...]:
         )
     )["models"]
     routes = json.loads(
-        (root / "tests/live/az_conformance/manifest.json").read_text(
-            encoding="utf-8"
-        )
+        (root / "tests/live/az_conformance/manifest.json").read_text(encoding="utf-8")
     )["routes"]
     openai_routes = {
         route["route_id"]
@@ -137,9 +135,11 @@ def az_catalog_media_cases() -> tuple[tuple[str, str], ...]:
 
 
 def _entry(target: Target, modality: str) -> ModelEntry:
-    capabilities = CapabilityPresetCatalog.builtin().presets[
-        "text_tools_structured_reasoning"
-    ].materialize(context_tokens=131_072, max_output_tokens=4096)
+    capabilities = (
+        CapabilityPresetCatalog.builtin()
+        .presets["text_tools_structured_reasoning"]
+        .materialize(context_tokens=131_072, max_output_tokens=4096)
+    )
     capabilities = replace(
         capabilities,
         modalities=ModelModalities(
@@ -215,7 +215,7 @@ async def probe(target: Target, modality: str) -> dict[str, object]:
     call, tool_message = await _tool_message(modality)
     entry = _entry(target, modality)
     adapter = OpenAICompatibleAdapter(
-        tool_result_content=ToolResultContentCapabilities(
+        media_transport=MediaTransportCapabilities(
             enabled=True,
             modalities=(modality,),
             source_kinds=("inline",),
@@ -241,7 +241,10 @@ async def probe(target: Target, modality: str) -> dict[str, object]:
     try:
         payload = adapter.build_request(request)
         wire_message = payload["messages"][-1]
-        if wire_message["role"] != "tool" or wire_message["tool_call_id"] != call.call_id:
+        if (
+            wire_message["role"] != "tool"
+            or wire_message["tool_call_id"] != call.call_id
+        ):
             raise AssertionError("tool message lost its call association")
         response = await client.invoke(entry.spec, payload)
         answer = adapter.parse_response(request, response).message.content.strip()
@@ -307,10 +310,7 @@ async def run_az_catalog_media(
                 Target(f"az:{model_id}", base_url, api_key, model_id),
                 modality,
             )
-        progress = {
-            key: result[key]
-            for key in ("model", "modality", "result")
-        }
+        progress = {key: result[key] for key in ("model", "modality", "result")}
         print(json.dumps(progress, ensure_ascii=False), file=sys.stderr, flush=True)
         return result
 
@@ -360,9 +360,7 @@ def main() -> int:
     if not results:
         return 2
     return (
-        1
-        if args.strict and any(item["result"] != "passed" for item in results)
-        else 0
+        1 if args.strict and any(item["result"] != "passed" for item in results) else 0
     )
 
 

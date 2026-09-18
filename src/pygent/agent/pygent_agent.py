@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -22,7 +23,8 @@ from pygent.core import (
     thaw_json,
 )
 from pygent.core._tool_values import _tool_result_content_to_value
-from pygent.tool import ToolDefinition
+from pygent.llm._media_tokens import generic_media_input_tokens
+from pygent.tool import ToolDefinition, ToolResultContent, ToolResultMedia
 
 from .react import ReActLayer
 
@@ -36,6 +38,13 @@ _COORDINATOR_EXECUTION_REQUIREMENTS = ExecutionRequirements(
     recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
     effect_safety=EffectSafety.MANAGED_EFFECTS,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _RequestTokenEstimate:
+    text_units: int
+    media_tokens: int
+    total_tokens: int
 
 
 class ContextCompressionLimitExceeded(RuntimeError):
@@ -120,27 +129,29 @@ class _ContextCompressionLayer(Module[Message, AIMessage]):
     async def forward(
         self, message: Message, context: Context
     ) -> tuple[AIMessage, Context]:
-        current, prepared, raw_units = await self._compress_if_needed(message, context)
+        current, prepared, estimate = await self._compress_if_needed(message, context)
         answer, returned = await self.model(current, prepared)
         if not isinstance(returned, PygentAgentContext):
             raise TypeError("PygentAgent model must preserve PygentAgentContext")
         actual = answer.usage.get("input_tokens")
         if isinstance(actual, int) and not isinstance(actual, bool):
-            observed_ppm = _ceil_div(actual * _TOKEN_SCALE_BASE, raw_units)
-            calibrated_ppm = _ceil_div(observed_ppm * 11, 10)
+            updated_scale = returned.input_token_scale_ppm
+            if estimate.media_tokens == 0:
+                observed_ppm = _ceil_div(
+                    actual * _TOKEN_SCALE_BASE, estimate.text_units
+                )
+                calibrated_ppm = _ceil_div(observed_ppm * 11, 10)
+                updated_scale = max(updated_scale, calibrated_ppm)
             returned = replace(
                 returned,
-                input_token_scale_ppm=max(
-                    returned.input_token_scale_ppm,
-                    calibrated_ppm,
-                ),
+                input_token_scale_ppm=updated_scale,
                 last_input_tokens=actual,
             )
         return answer, returned
 
     async def _compress_if_needed(
         self, current: Message, context: Context
-    ) -> tuple[Message, PygentAgentContext, int]:
+    ) -> tuple[Message, PygentAgentContext, _RequestTokenEstimate]:
         if not isinstance(context, PygentAgentContext):
             raise TypeError("PygentAgent requires PygentAgentContext")
         resolve_tools = getattr(self.model, "effective_tools", None)
@@ -149,10 +160,12 @@ class _ContextCompressionLayer(Module[Message, AIMessage]):
             if callable(resolve_tools)
             else context.tools
         )
-        foreground_units = _request_token_units(current, context, effective_tools)
-        foreground_estimate = _scaled_token_estimate(
-            foreground_units,
+        foreground = await _request_token_estimate(
+            current,
+            context,
+            effective_tools,
             context.input_token_scale_ppm,
+            self.model,
         )
         foreground_trigger = int(
             self.context_window_tokens * self.compression_trigger_ratio
@@ -161,20 +174,22 @@ class _ContextCompressionLayer(Module[Message, AIMessage]):
             content=self.compression_prompt,
             kind="pygent.context.compression_request",
         )
-        compression_units = _request_token_units(compression_request, context, ())
-        compression_estimate = _scaled_token_estimate(
-            compression_units,
+        compression = await _request_token_estimate(
+            compression_request,
+            context,
+            (),
             _INITIAL_TOKEN_SCALE_PPM,
+            self.compressor,
         )
         compression_trigger = int(
             self.compression_context_window_tokens
             * self.compression_trigger_ratio
         )
         if (
-            foreground_estimate < foreground_trigger
-            and compression_estimate < compression_trigger
+            foreground.total_tokens < foreground_trigger
+            and compression.total_tokens < compression_trigger
         ):
-            return current, context, foreground_units
+            return current, context, foreground
         if context.compression_count >= self.max_compressions:
             raise ContextCompressionLimitExceeded(
                 "foreground context compression budget exhausted"
@@ -183,7 +198,7 @@ class _ContextCompressionLayer(Module[Message, AIMessage]):
             raise ContextCompressionUnavailable(
                 "oversized request has no projected history to compress"
             )
-        if compression_estimate >= self.compression_context_window_tokens:
+        if compression.total_tokens >= self.compression_context_window_tokens:
             raise ContextCompressionUnavailable(
                 "compression request exceeds the compression context window"
             )
@@ -217,16 +232,18 @@ class _ContextCompressionLayer(Module[Message, AIMessage]):
             compression_count=context.compression_count + 1,
             projection_revision=context.projection_revision + 1,
         )
-        compressed_units = _request_token_units(current, prepared, effective_tools)
-        compressed_estimate = _scaled_token_estimate(
-            compressed_units,
+        compressed = await _request_token_estimate(
+            current,
+            prepared,
+            effective_tools,
             prepared.input_token_scale_ppm,
+            self.model,
         )
-        if compressed_estimate >= foreground_trigger:
+        if compressed.total_tokens >= foreground_trigger:
             raise ContextCompressionUnavailable(
                 "compressed foreground request remains oversized"
             )
-        return current, prepared, compressed_units
+        return current, prepared, compressed
 
 
 class PygentAgent(Agent[UserMessage, AIMessage]):
@@ -362,6 +379,50 @@ def _request_token_units(
     return max(1, lexical_units + structural_units)
 
 
+async def _request_token_estimate(
+    current: Message,
+    context: Context,
+    tools: tuple[ToolDefinition, ...],
+    text_scale_ppm: int,
+    model: Module[Message, AIMessage],
+) -> _RequestTokenEstimate:
+    text_units = _request_token_units(current, context, tools)
+    media = _request_media(current, context)
+    estimate_media = getattr(model, "estimate_media_input_tokens", None)
+    if not media:
+        media_tokens = 0
+    elif callable(estimate_media):
+        estimated = estimate_media(current, context)
+        media_tokens = await estimated if inspect.isawaitable(estimated) else estimated
+        if (
+            isinstance(media_tokens, bool)
+            or not isinstance(media_tokens, int)
+            or media_tokens < 0
+        ):
+            raise TypeError("model media token estimate must be a non-negative integer")
+    else:
+        media_tokens = sum(generic_media_input_tokens(block) for block in media)
+    return _RequestTokenEstimate(
+        text_units=text_units,
+        media_tokens=media_tokens,
+        total_tokens=_scaled_token_estimate(text_units, text_scale_ppm)
+        + media_tokens,
+    )
+
+
+def _request_media(
+    current: Message, context: Context
+) -> tuple[ToolResultMedia, ...]:
+    return tuple(
+        block
+        for message in (*context.messages, current)
+        if isinstance(message, ToolMessage)
+        for result in message.results
+        for block in result.content
+        if type(block) is ToolResultMedia
+    )
+
+
 def _scaled_token_estimate(raw_units: int, scale_ppm: int) -> int:
     return _ceil_div(raw_units * scale_ppm, _TOKEN_SCALE_BASE)
 
@@ -393,14 +454,20 @@ def _message_projection(message: Message) -> dict[str, object]:
                 "name": result.name,
                 "status": result.status,
                 "output": thaw_json(result.output),
-                "content": [
-                    _tool_result_content_to_value(item) for item in result.content
-                ],
+                "content": [_estimated_content_value(item) for item in result.content],
                 "error": result.error,
             }
             for result in message.results
         ]
     return value
+
+
+def _estimated_content_value(value: ToolResultContent) -> dict[str, object]:
+    projected = _tool_result_content_to_value(value)
+    if type(value) is ToolResultMedia:
+        source = cast(dict[str, object], projected["source"])
+        source["base64_data"] = None
+    return projected
 
 
 __all__ = [

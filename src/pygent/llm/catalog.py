@@ -32,9 +32,7 @@ class ModelInfo:
 class ModelCatalog(Protocol):
     """Optional deployment capability for listing credential-visible models."""
 
-    async def list(
-        self, *, timeout: float | None = 10.0
-    ) -> tuple[ModelInfo, ...]: ...
+    async def list(self, *, timeout: float | None = 10.0) -> tuple[ModelInfo, ...]: ...
 
 
 __all__ = ["ModelCatalog", "ModelInfo"]

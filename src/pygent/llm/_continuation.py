@@ -18,7 +18,11 @@ class PendingToolContinuation:
 def pending_tool_continuation(
     message: Message, context: Context
 ) -> PendingToolContinuation | None:
-    if not isinstance(message, ToolMessage) or not message.results or not context.messages:
+    if (
+        not isinstance(message, ToolMessage)
+        or not message.results
+        or not context.messages
+    ):
         return None
     assistant_index = len(context.messages) - 1
     assistant = context.messages[assistant_index]
@@ -35,9 +39,7 @@ def pending_tool_continuation(
     return PendingToolContinuation(assistant_index, assistant.continuation)
 
 
-def neutral_tool_context(
-    context: Context, pending: PendingToolContinuation
-) -> Context:
+def neutral_tool_context(context: Context, pending: PendingToolContinuation) -> Context:
     messages = list(context.messages)
     assistant = messages[pending.assistant_index]
     if not isinstance(assistant, AIMessage):  # pragma: no cover - helper invariant

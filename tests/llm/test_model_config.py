@@ -15,13 +15,16 @@ from pygent.llm import (
     ModelGroup,
     ModelGroupConfig,
     ModelGroupResolution,
+    ModelImageInputCapabilities,
     ModelLimits,
+    ModelMediaInputCapabilities,
     ModelModalities,
     ModelReasoningCapabilities,
     ModelSpec,
     ModelStreamingCapabilities,
     ModelStructuredOutputCapabilities,
     ModelToolCapabilities,
+    ModelVideoInputCapabilities,
     ResolvedModelConnection,
 )
 
@@ -51,9 +54,7 @@ def _mapping() -> dict[str, object]:
                 "credential": {"env": "DEEPSEEK_API_KEY"},
                 "verify_ssl": True,
                 "protocols": {
-                    "openai_chat_completions": {
-                        "base_url": "https://api.deepseek.com"
-                    },
+                    "openai_chat_completions": {"base_url": "https://api.deepseek.com"},
                     "anthropic_messages": {
                         "base_url": "https://api.deepseek.com/anthropic"
                     },
@@ -75,8 +76,7 @@ def _mapping() -> dict[str, object]:
 
 def test_builtin_protocols_are_precise_and_model_spec_stores_plain_string() -> None:
     assert (
-        BuiltinModelProtocol.OPENAI_CHAT_COMPLETIONS.value
-        == "openai_chat_completions"
+        BuiltinModelProtocol.OPENAI_CHAT_COMPLETIONS.value == "openai_chat_completions"
     )
     assert BuiltinModelProtocol.ANTHROPIC_MESSAGES.value == "anthropic_messages"
     spec = ModelSpec(
@@ -87,6 +87,83 @@ def test_builtin_protocols_are_precise_and_model_spec_stores_plain_string() -> N
     )
     assert spec.protocol == "openai_chat_completions"
     assert type(spec.protocol) is str
+
+
+def test_model_media_input_capabilities_round_trip_without_changing_legacy_shape() -> (
+    None
+):
+    legacy = ModelCapabilities.from_mapping(_capabilities())
+    assert legacy.media_input == ModelMediaInputCapabilities()
+    assert "media_input" not in legacy.to_mapping()
+
+    value = _capabilities(
+        modalities={"input": ["text", "image", "video"], "output": ["text"]},
+        media_input={
+            "image": {
+                "mime_types": ["image/jpeg", "image/png"],
+                "max_bytes": 10_000_000,
+                "max_width": 4096,
+                "max_height": 4096,
+                "max_pixels": 16_000_000,
+                "resolution_modes": ["low", "high", "original"],
+                "animated": False,
+            },
+            "video": {
+                "native": True,
+                "mime_types": ["video/mp4"],
+                "max_bytes": 20_000_000,
+                "max_duration_seconds": 60.0,
+                "max_width": 1920,
+                "max_height": 1080,
+                "max_fps": 30.0,
+                "audio": True,
+            },
+        },
+    )
+    capabilities = ModelCapabilities.from_mapping(value)
+
+    assert capabilities.media_input == ModelMediaInputCapabilities(
+        image=ModelImageInputCapabilities(
+            mime_types=("image/jpeg", "image/png"),
+            max_bytes=10_000_000,
+            max_width=4096,
+            max_height=4096,
+            max_pixels=16_000_000,
+            resolution_modes=("low", "high", "original"),
+            animated=False,
+        ),
+        video=ModelVideoInputCapabilities(
+            native=True,
+            mime_types=("video/mp4",),
+            max_bytes=20_000_000,
+            max_duration_seconds=60.0,
+            max_width=1920,
+            max_height=1080,
+            max_fps=30.0,
+            audio=True,
+        ),
+    )
+    assert capabilities.to_mapping() == value
+
+
+def test_model_media_details_require_the_matching_input_modality() -> None:
+    value = _capabilities(
+        media_input={
+            "image": {
+                "mime_types": [],
+                "max_bytes": None,
+                "max_width": None,
+                "max_height": None,
+                "max_pixels": None,
+                "resolution_modes": [],
+                "animated": None,
+            },
+            "video": None,
+        }
+    )
+
+    with pytest.raises(ValueError, match="requires modalities.input image"):
+        ModelCapabilities.from_mapping(value)
 
 
 def test_model_config_parses_named_semantics_and_connection_projection() -> None:
@@ -158,11 +235,7 @@ def test_models_share_connection_and_resolve_protocol_independently() -> None:
 
     primary = config.connection_for("deepseek_primary")
     anthropic = config.connection_for("deepseek_anthropic")
-    assert (
-        primary.connection_key
-        == anthropic.connection_key
-        == "deepseek_official"
-    )
+    assert primary.connection_key == anthropic.connection_key == "deepseek_official"
     assert primary.provider == anthropic.provider == "deepseek"
     assert primary.protocol == "openai_chat_completions"
     assert anthropic.protocol == "anthropic_messages"
@@ -373,7 +446,11 @@ def test_credential_resolution_is_explicit_and_secret_free() -> None:
         ),
         (
             lambda value: value["models"]["deepseek_primary"].update(  # type: ignore[index,union-attr]
-                {"capabilities": {"modalities": {"input": ["text"], "output": ["text"]}}}
+                {
+                    "capabilities": {
+                        "modalities": {"input": ["text"], "output": ["text"]}
+                    }
+                }
             ),
             "capabilities fields",
         ),
@@ -492,9 +569,7 @@ def test_streaming_output_and_nullable_limits_round_trip() -> None:
         context_tokens=None,
         max_output_tokens=None,
     )
-    assert capabilities.to_mapping()["streaming"] == {
-        "output": ["text", "audio"]
-    }
+    assert capabilities.to_mapping()["streaming"] == {"output": ["text", "audio"]}
     assert capabilities.to_mapping()["limits"] == {
         "context_tokens": None,
         "max_output_tokens": None,

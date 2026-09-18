@@ -104,9 +104,7 @@ def test_openai_compatible_projects_deepseek_and_generic_options() -> None:
 
 @pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
 def test_openai_compatible_accepts_one_route_token_limit(field: str) -> None:
-    route = model_entry(
-        "main", "custom", "model", provider_options={field: 4096}
-    )
+    route = model_entry("main", "custom", "model", provider_options={field: 4096})
 
     payload = OpenAICompatibleAdapter().build_request(_request(route))
 

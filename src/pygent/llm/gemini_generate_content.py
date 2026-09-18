@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Self, cast
 from urllib.parse import quote
 
@@ -20,16 +20,27 @@ from pygent.core import (
     freeze_json_object,
     thaw_json,
 )
-from pygent.tool import ToolCall, ToolDefinition, ToolResult
+from pygent.tool import (
+    MediaSource,
+    ToolCall,
+    ToolDefinition,
+    ToolResult,
+    ToolResultJson,
+    ToolResultMedia,
+    ToolResultText,
+)
 
 from ._adapter_contracts import (
+    MediaResolver,
+    MediaTransportCapabilities,
     ModelProviderRequest,
     ModelProviderResponse,
     ModelProviderStreamPart,
-    ToolResultContentCapabilities,
 )
 from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
+from ._media_content import media_base64, validate_media_delivery
+from ._media_tokens import gemini_media_input_tokens
 from .configuration import ModelSpec
 from .types import (
     ModelErrorKind,
@@ -41,6 +52,7 @@ _PROTOCOL = "gemini_generate_content"
 _SAFETY_REASONS = frozenset(
     {"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "IMAGE_SAFETY"}
 )
+_GEMINI_FUNCTION_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 
 
 class GeminiGenerateContentClient:
@@ -131,7 +143,36 @@ class GeminiGenerateContentAdapter:
     """Strict codec for Google's Gemini generateContent contract."""
 
     protocol = _PROTOCOL
-    tool_result_content = ToolResultContentCapabilities()
+
+    def __init__(
+        self,
+        *,
+        media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None = None,
+    ) -> None:
+        if media_resolver is not None and not (
+            isinstance(media_resolver, MediaResolver) or callable(media_resolver)
+        ):
+            raise TypeError("media_resolver must provide resolve() or be callable")
+        source_kinds = ("inline", "resource") if media_resolver else ("inline",)
+        self.media_transport = MediaTransportCapabilities(
+            enabled=True,
+            modalities=("image",),
+            source_kinds=source_kinds,
+            image_mime_types=tuple(sorted(_GEMINI_FUNCTION_IMAGE_MIME_TYPES)),
+        )
+        self.media_resolver = media_resolver
+
+    def media_delivery_gaps(
+        self, block: ToolResultMedia, model: ModelSpec
+    ) -> tuple[str, ...]:
+        return _gemini_media_delivery_gaps(block, model)
+
+    def estimate_media_input_tokens(
+        self, block: ToolResultMedia, model: ModelSpec
+    ) -> int | None:
+        if model.provider != "google":
+            return None
+        return gemini_media_input_tokens(block)
 
     def validate_model(self, model: ModelSpec) -> None:
         options = cast(FrozenJsonObject, model.provider_options)
@@ -161,7 +202,13 @@ class GeminiGenerateContentAdapter:
             self.validate_model(request.model)
             body: dict[str, object] = {
                 "contents": [
-                    _content(message, request.model, request.model_key)
+                    _content(
+                        message,
+                        request.model,
+                        request.model_key,
+                        capabilities=self.media_transport,
+                        media_resolver=self.media_resolver,
+                    )
                     for message in (*request.context.messages, request.message)
                 ]
             }
@@ -192,7 +239,11 @@ class GeminiGenerateContentAdapter:
                 body["generationConfig"] = generation
             if request.tools:
                 body["tools"] = [
-                    {"functionDeclarations": [_tool_value(tool) for tool in request.tools]}
+                    {
+                        "functionDeclarations": [
+                            _tool_value(tool) for tool in request.tools
+                        ]
+                    }
                 ]
                 body["toolConfig"] = {
                     "functionCallingConfig": _tool_choice(
@@ -305,7 +356,9 @@ class _GeminiStreamDecoder:
                     if not isinstance(text, str):
                         raise TypeError
                     if text:
-                        parts.append(ModelProviderStreamPart("reasoning", {"text": text}))
+                        parts.append(
+                            ModelProviderStreamPart("reasoning", {"text": text})
+                        )
                 elif "text" in raw:
                     text = raw["text"]
                     if not isinstance(text, str):
@@ -317,7 +370,11 @@ class _GeminiStreamDecoder:
                     if not isinstance(call, Mapping):
                         raise TypeError
                     name, arguments = call.get("name"), call.get("args", {})
-                    if not isinstance(name, str) or not name or not isinstance(arguments, Mapping):
+                    if (
+                        not isinstance(name, str)
+                        or not name
+                        or not isinstance(arguments, Mapping)
+                    ):
                         raise TypeError
                     parts.append(
                         ModelProviderStreamPart(
@@ -382,13 +439,26 @@ class _GeminiStreamDecoder:
 
 
 def _content(
-    message: Message, model: ModelSpec, model_key: str
+    message: Message,
+    model: ModelSpec,
+    model_key: str,
+    *,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
 ) -> dict[str, object]:
     role = "model" if isinstance(message, AIMessage) else "user"
     if isinstance(message, ToolMessage):
         return {
             "role": "user",
-            "parts": [_function_response(result) for result in message.results],
+            "parts": [
+                _function_response(
+                    result,
+                    model=model,
+                    capabilities=capabilities,
+                    media_resolver=media_resolver,
+                )
+                for result in message.results
+            ],
         }
     parts: list[dict[str, object]] = []
     if isinstance(message, AIMessage):
@@ -429,29 +499,88 @@ def _continuation_parts(continuation: ModelContinuation) -> list[dict[str, objec
         raise TypeError("Gemini continuation parts must be an array")
     parts = [part.to_dict() for part in raw_parts if isinstance(part, FrozenJsonObject)]
     if len(parts) != len(raw_parts) or not any(
-        isinstance(part.get("thoughtSignature"), str)
-        and bool(part["thoughtSignature"])
+        isinstance(part.get("thoughtSignature"), str) and bool(part["thoughtSignature"])
         for part in parts
     ):
         raise ValueError("Gemini continuation must preserve signed response parts")
     return parts
 
 
-def _function_response(result: ToolResult) -> dict[str, object]:
+def _function_response(
+    result: ToolResult,
+    *,
+    model: ModelSpec,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
+) -> dict[str, object]:
+    parts: list[dict[str, object]] = []
     if result.content:
-        raise ModelProviderError(
-            ModelErrorKind.INVALID_REQUEST,
-            "Gemini generateContent does not support Pygent structured tool-result content",
-            reason_code=ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED,
-        )
-    value = result.output if result.status == "succeeded" else {"error": result.error}
-    if isinstance(value, FrozenJsonObject):
-        response: object = value.to_dict()
-    elif isinstance(value, Mapping):
-        response = dict(value)
+        values: list[object] = []
+        for index, block in enumerate(result.content):
+            if type(block) is ToolResultText:
+                values.append(block.text)
+            elif type(block) is ToolResultJson:
+                values.append(thaw_json(block.value))
+            elif type(block) is ToolResultMedia:
+                if _gemini_media_delivery_gaps(block, model):
+                    raise ModelProviderError(
+                        ModelErrorKind.INVALID_REQUEST,
+                        "model does not support multimodal function responses",
+                        reason_code=ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED,
+                    )
+                validate_media_delivery(
+                    block,
+                    model=model,
+                    capabilities=capabilities,
+                    allowed_mime_types=_GEMINI_FUNCTION_IMAGE_MIME_TYPES,
+                )
+                display_name = f"{result.call_id}-{index}"
+                values.append({"$ref": display_name})
+                parts.append(
+                    {
+                        "inlineData": {
+                            "mimeType": block.mime_type,
+                            "displayName": display_name,
+                            "data": media_base64(
+                                block,
+                                capabilities=capabilities,
+                                media_resolver=media_resolver,
+                            ),
+                        }
+                    }
+                )
+            else:
+                raise TypeError("tool-result content block is invalid")
+        response: object = {"content": values}
     else:
-        response = {"result": thaw_json(value)}
-    return {"functionResponse": {"name": result.name, "response": response}}
+        value = (
+            result.output if result.status == "succeeded" else {"error": result.error}
+        )
+        if isinstance(value, FrozenJsonObject):
+            response = value.to_dict()
+        elif isinstance(value, Mapping):
+            response = dict(value)
+        else:
+            response = {"result": thaw_json(value)}
+    function_response: dict[str, object] = {
+        "id": result.call_id,
+        "name": result.name,
+        "response": response,
+    }
+    if parts:
+        function_response["parts"] = parts
+    return {"functionResponse": function_response}
+
+
+def _gemini_media_delivery_gaps(
+    block: ToolResultMedia, model: ModelSpec
+) -> tuple[str, ...]:
+    gaps: list[str] = []
+    if not model.model_id.lower().startswith("gemini-3"):
+        gaps.append("media_transport.model")
+    if block.mime_type not in _GEMINI_FUNCTION_IMAGE_MIME_TYPES:
+        gaps.append("media_transport.mime_type")
+    return tuple(gaps)
 
 
 def _tool_value(tool: ToolDefinition) -> dict[str, object]:
@@ -514,7 +643,11 @@ def _decode_parts(
             if not isinstance(call, Mapping):
                 raise TypeError
             name, arguments = call.get("name"), call.get("args", {})
-            if not isinstance(name, str) or not name or not isinstance(arguments, Mapping):
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(arguments, Mapping)
+            ):
                 raise TypeError
             calls.append(
                 ToolCall(
@@ -529,9 +662,7 @@ def _decode_parts(
     return "".join(text), tuple(calls), continuation
 
 
-def _validate_structured_output(
-    request: ModelProviderRequest, content: str
-) -> str:
+def _validate_structured_output(request: ModelProviderRequest, content: str) -> str:
     schema = request.generation.response_schema
     if schema is None:
         return content

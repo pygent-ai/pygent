@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, NoReturn, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, NoReturn, Protocol, runtime_checkable
 
 from pygent.core import (
     AIMessage,
@@ -16,7 +16,7 @@ from pygent.core import (
     Message,
     freeze_json_object,
 )
-from pygent.tool import MediaSource, ToolDefinition
+from pygent.tool import MediaSource, ToolDefinition, ToolResultMedia
 
 from .configuration import ModelGroup, ModelSpec
 from .types import (
@@ -45,37 +45,169 @@ _CANONICAL_USAGE_FIELDS = (
 
 
 @dataclass(frozen=True, slots=True)
-class ToolResultContentCapabilities:
-    """Endpoint support for structured content inside tool-result messages."""
+class MediaTransportCapabilities:
+    """Endpoint wire support for delivering media to a model."""
 
     enabled: bool = False
     modalities: tuple[str, ...] = ()
     source_kinds: tuple[str, ...] = ("resource", "url", "inline")
     max_media_bytes: int | None = None
+    image_mime_types: tuple[str, ...] = ()
+    video_mime_types: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
-            raise TypeError("tool-result content enabled must be a bool")
+            raise TypeError("media transport enabled must be a bool")
         modalities = tuple(self.modalities)
         if any(value not in ("image", "video") for value in modalities):
-            raise ValueError("tool-result modalities must contain only image or video")
+            raise ValueError(
+                "media transport modalities must contain only image or video"
+            )
         if len(modalities) != len(set(modalities)):
-            raise ValueError("tool-result modalities must not contain duplicates")
+            raise ValueError("media transport modalities must not contain duplicates")
         source_kinds = tuple(self.source_kinds)
         if any(value not in ("resource", "url", "inline") for value in source_kinds):
-            raise ValueError("tool-result source_kinds contains an unsupported value")
+            raise ValueError(
+                "media transport source_kinds contains an unsupported value"
+            )
         if len(source_kinds) != len(set(source_kinds)):
-            raise ValueError("tool-result source_kinds must not contain duplicates")
+            raise ValueError("media transport source_kinds must not contain duplicates")
         if modalities and not self.enabled:
-            raise ValueError("tool-result media modalities require structured content")
+            raise ValueError("media transport modalities require enabled transport")
         if self.max_media_bytes is not None and (
             not isinstance(self.max_media_bytes, int)
             or isinstance(self.max_media_bytes, bool)
             or self.max_media_bytes <= 0
         ):
             raise ValueError("max_media_bytes must be a positive integer")
+        for media_type, values in (
+            ("image", self.image_mime_types),
+            ("video", self.video_mime_types),
+        ):
+            normalized = tuple(values)
+            if any(
+                not isinstance(value, str)
+                or not value.startswith(f"{media_type}/")
+                or "/" not in value
+                for value in normalized
+            ):
+                raise ValueError(
+                    f"media transport {media_type} MIME types contain an invalid value"
+                )
+            if len(normalized) != len(set(normalized)):
+                raise ValueError(
+                    f"media transport {media_type} MIME types must not contain duplicates"
+                )
+            object.__setattr__(self, f"{media_type}_mime_types", normalized)
         object.__setattr__(self, "modalities", modalities)
         object.__setattr__(self, "source_kinds", source_kinds)
+
+
+@dataclass(frozen=True, slots=True)
+class MediaProjectionPlan:
+    """Provider-neutral target representation selected by the invoker."""
+
+    target_source_kind: str
+    target_mime_type: str
+    target_detail: Literal["auto", "low", "high"] | None = None
+    passthrough: bool = False
+    transform_bytes: bool = False
+    max_bytes: int | None = None
+    max_width: int | None = None
+    max_height: int | None = None
+    max_pixels: int | None = None
+    max_duration_seconds: float | None = None
+    max_fps: float | None = None
+    animated: bool | None = None
+    audio: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.target_source_kind not in ("inline", "resource", "url"):
+            raise ValueError("unsupported projected media source kind")
+        if (
+            not isinstance(self.target_mime_type, str)
+            or "/" not in self.target_mime_type
+        ):
+            raise ValueError("projected media MIME type is invalid")
+        if self.target_detail not in (None, "auto", "low", "high"):
+            raise ValueError("projected media detail is invalid")
+        if not isinstance(self.passthrough, bool):
+            raise TypeError("media projection passthrough must be a bool")
+        if not isinstance(self.transform_bytes, bool):
+            raise TypeError("media projection transform_bytes must be a bool")
+        if self.passthrough and self.transform_bytes:
+            raise ValueError("passthrough media projection cannot transform bytes")
+        for name in ("max_bytes", "max_width", "max_height", "max_pixels"):
+            value = getattr(self, name)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value <= 0
+            ):
+                raise ValueError(f"media projection {name} must be a positive integer")
+        for name in ("max_duration_seconds", "max_fps"):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or value <= 0
+            ):
+                raise ValueError(f"media projection {name} must be positive")
+        for name in ("animated", "audio"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(f"media projection {name} must be a bool or None")
+
+
+@dataclass(frozen=True, slots=True)
+class MediaProjectionTrace:
+    """Portable identity facts for one request-local media projection."""
+
+    call_id: str
+    media_type: str
+    canonical_reference: str
+    canonical_sha256: str | None
+    projected_reference: str
+    projected_sha256: str | None
+    projected_size_bytes: int | None
+    mime_type: str
+    width: int | None = None
+    height: int | None = None
+    duration_seconds: float | None = None
+    fps: float | None = None
+    has_audio: bool | None = None
+    transformations: tuple[str, ...] = ()
+    projector_version: str = "pygent.media_projection.v1"
+
+    def __post_init__(self) -> None:
+        for name in (
+            "call_id",
+            "media_type",
+            "canonical_reference",
+            "projected_reference",
+            "mime_type",
+            "projector_version",
+        ):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ValueError(f"media projection {name} must be a non-empty string")
+        transformations = tuple(self.transformations)
+        if any(not isinstance(item, str) or not item for item in transformations):
+            raise ValueError(
+                "media projection transformations must be non-empty strings"
+            )
+        object.__setattr__(self, "transformations", transformations)
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectedMedia:
+    """One request-local media block and its provider-neutral trace."""
+
+    media: ToolResultMedia
+    trace: MediaProjectionTrace
+
+    def __post_init__(self) -> None:
+        if type(self.media) is not ToolResultMedia:
+            raise TypeError("projected media must be a ToolResultMedia")
+        if not isinstance(self.trace, MediaProjectionTrace):
+            raise TypeError("projected media trace must be a MediaProjectionTrace")
 
 
 @runtime_checkable
@@ -83,6 +215,28 @@ class MediaResolver(Protocol):
     """Deployment-local resolver for one portable media resource reference."""
 
     def resolve(self, source: MediaSource) -> bytes: ...
+
+
+@runtime_checkable
+class MediaProjector(Protocol):
+    """Request-local media transformation service selected by the invoker."""
+
+    def plan(
+        self,
+        block: ToolResultMedia,
+        *,
+        model: ModelSpec,
+        endpoint: MediaTransportCapabilities,
+    ) -> MediaProjectionPlan | None: ...
+
+    def project(
+        self,
+        block: ToolResultMedia,
+        *,
+        call_id: str,
+        plan: MediaProjectionPlan,
+    ) -> ProjectedMedia: ...
+
 
 class ModelEventKind(str, Enum):
     """Closed public event vocabulary for one model execution."""
@@ -128,6 +282,15 @@ class ModelProviderRequest:
     context: Context
     generation: GenerationConfig
     tools: tuple[ToolDefinition, ...] = ()
+    media_projections: tuple[MediaProjectionTrace, ...] = ()
+
+    def __post_init__(self) -> None:
+        projections = tuple(self.media_projections)
+        if any(not isinstance(item, MediaProjectionTrace) for item in projections):
+            raise TypeError(
+                "media_projections must contain MediaProjectionTrace values"
+            )
+        object.__setattr__(self, "media_projections", projections)
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,9 +333,7 @@ class ModelStreamEvent:
         object.__setattr__(self, "data", data)
 
 
-def _trusted_model_stream_event(
-    kind: str, data: FrozenJsonObject
-) -> ModelStreamEvent:
+def _trusted_model_stream_event(kind: str, data: FrozenJsonObject) -> ModelStreamEvent:
     """Construct one event already normalized by the built-in invoker."""
 
     event = object.__new__(ModelStreamEvent)
@@ -248,7 +409,7 @@ class ModelProviderAdapter(Protocol):
     """Provider wire conversion and error normalization boundary."""
 
     protocol: str
-    tool_result_content: ToolResultContentCapabilities
+    media_transport: MediaTransportCapabilities
 
     def build_request(self, request: ModelProviderRequest) -> FrozenJsonObject: ...
 
@@ -268,6 +429,37 @@ class ModelProviderSpecValidator(Protocol):
     """Optional protocol-owned validation for non-empty model options."""
 
     def validate_model(self, model: ModelSpec) -> None: ...
+
+
+@runtime_checkable
+class ModelProviderMediaTokenEstimator(Protocol):
+    """Optional provider-owned deterministic media token accounting."""
+
+    def estimate_media_input_tokens(
+        self, block: ToolResultMedia, model: ModelSpec
+    ) -> int | None: ...
+
+
+@runtime_checkable
+class ModelProviderMediaDeliveryValidator(Protocol):
+    """Optional model-aware restrictions beyond static protocol capabilities."""
+
+    def media_delivery_gaps(
+        self, block: ToolResultMedia, model: ModelSpec
+    ) -> tuple[str, ...]: ...
+
+
+@runtime_checkable
+class ModelRequestMediaTokenEstimator(Protocol):
+    """Optional invoker media estimate aligned with its real request routing."""
+
+    def estimate_media_input_tokens(
+        self,
+        *,
+        model_group: ModelGroup,
+        message: Message,
+        context: Context,
+    ) -> int: ...
 
 
 class ModelInvoker(Protocol):
@@ -494,9 +686,36 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
             "tools",
             "generation",
             "projection_revision",
+            "media_projections",
         }
         if set(request) != expected_request_fields:
             raise ValueError("prepared request fields do not match the contract")
+        projections = request["media_projections"]
+        if not isinstance(projections, tuple):
+            raise ValueError("prepared request media_projections must be an array")
+        projection_fields = {
+            "call_id",
+            "media_type",
+            "canonical_reference",
+            "canonical_sha256",
+            "projected_reference",
+            "projected_sha256",
+            "projected_size_bytes",
+            "mime_type",
+            "width",
+            "height",
+            "duration_seconds",
+            "fps",
+            "has_audio",
+            "transformations",
+            "projector_version",
+        }
+        for projection in projections:
+            if (
+                not isinstance(projection, Mapping)
+                or set(projection) != projection_fields
+            ):
+                raise ValueError("prepared request media projection is invalid")
         for key in ("provider", "model", "system_prompt"):
             value = request[key]
             if not isinstance(value, str) or (key != "system_prompt" and not value):
@@ -591,7 +810,9 @@ async def _raise_invalid_model_response(
         await _emit(
             sink,
             ModelEventKind.USAGE,
-            _usage_event_payload(usage, model_key=model_key, attempt=attempt, final=True),
+            _usage_event_payload(
+                usage, model_key=model_key, attempt=attempt, final=True
+            ),
         )
         await _emit(
             sink,

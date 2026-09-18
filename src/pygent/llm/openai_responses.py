@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Self, cast
 
 import httpx
@@ -19,17 +19,28 @@ from pygent.core import (
     freeze_json_object,
     thaw_json,
 )
-from pygent.tool import ToolCall, ToolDefinition, ToolResult
+from pygent.tool import (
+    MediaSource,
+    ToolCall,
+    ToolDefinition,
+    ToolResult,
+    ToolResultJson,
+    ToolResultMedia,
+    ToolResultText,
+)
 
 from ._adapter_contracts import (
+    MediaResolver,
+    MediaTransportCapabilities,
     ModelProviderRequest,
     ModelProviderResponse,
     ModelProviderStreamPart,
-    ToolResultContentCapabilities,
     _canonical_usage,
 )
 from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
+from ._media_content import media_data_url, validate_media_delivery
+from ._media_tokens import openai_media_input_tokens
 from .configuration import ModelSpec
 from .types import (
     ModelErrorKind,
@@ -140,7 +151,32 @@ class OpenAIResponsesAdapter:
     """Strict codec for the OpenAI Responses wire protocol."""
 
     protocol = _PROTOCOL
-    tool_result_content = ToolResultContentCapabilities()
+
+    def __init__(
+        self,
+        *,
+        media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None = None,
+    ) -> None:
+        if media_resolver is not None and not (
+            isinstance(media_resolver, MediaResolver) or callable(media_resolver)
+        ):
+            raise TypeError("media_resolver must provide resolve() or be callable")
+        source_kinds = (
+            ("inline", "url", "resource") if media_resolver else ("inline", "url")
+        )
+        self.media_transport = MediaTransportCapabilities(
+            enabled=True,
+            modalities=("image",),
+            source_kinds=source_kinds,
+        )
+        self.media_resolver = media_resolver
+
+    def estimate_media_input_tokens(
+        self, block: ToolResultMedia, model: ModelSpec
+    ) -> int | None:
+        if model.provider != "openai":
+            return None
+        return openai_media_input_tokens(block, model.model_id)
 
     def validate_model(self, model: ModelSpec) -> None:
         options = cast(FrozenJsonObject, model.provider_options)
@@ -185,7 +221,11 @@ class OpenAIResponsesAdapter:
                     item
                     for message in (*request.context.messages, request.message)
                     for item in _input_items(
-                        message, request.model, request.model_key
+                        message,
+                        request.model,
+                        request.model_key,
+                        capabilities=self.media_transport,
+                        media_resolver=self.media_resolver,
                     )
                 ],
             }
@@ -214,7 +254,9 @@ class OpenAIResponsesAdapter:
                         "strict": True,
                     }
                 }
-            body.update(cast(FrozenJsonObject, request.model.provider_options).to_dict())
+            body.update(
+                cast(FrozenJsonObject, request.model.provider_options).to_dict()
+            )
             return freeze_json_object(body)
         except ModelProviderError:
             raise
@@ -258,11 +300,7 @@ class OpenAIResponsesAdapter:
             else None
         )
         finish_reason = (
-            "tool_calls"
-            if calls
-            else "length"
-            if status == "incomplete"
-            else "stop"
+            "tool_calls" if calls else "length" if status == "incomplete" else "stop"
         )
         return ModelProviderResponse(
             message=AIMessage(
@@ -327,7 +365,10 @@ class _OpenAIResponsesStreamDecoder:
                 )
             if kind == "response.completed":
                 response = event.get("response")
-                if not isinstance(response, Mapping) or response.get("status") != "completed":
+                if (
+                    not isinstance(response, Mapping)
+                    or response.get("status") != "completed"
+                ):
                     raise TypeError
                 parts: list[ModelProviderStreamPart] = []
                 usage = _canonical_usage(response.get("usage"))
@@ -386,10 +427,23 @@ class _OpenAIResponsesStreamDecoder:
 
 
 def _input_items(
-    message: Message, model: ModelSpec, model_key: str
+    message: Message,
+    model: ModelSpec,
+    model_key: str,
+    *,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
 ) -> list[dict[str, object]]:
     if isinstance(message, ToolMessage):
-        return [_tool_result_value(result) for result in message.results]
+        return [
+            _tool_result_value(
+                result,
+                model=model,
+                capabilities=capabilities,
+                media_resolver=media_resolver,
+            )
+            for result in message.results
+        ]
     items: list[dict[str, object]] = []
     if isinstance(message, AIMessage):
         continuation = message.continuation
@@ -426,26 +480,73 @@ def _continuation_items(continuation: ModelContinuation) -> list[dict[str, objec
     if not isinstance(raw_items, tuple):
         raise TypeError("Responses continuation items must be an array")
     items = [item.to_dict() for item in raw_items if isinstance(item, FrozenJsonObject)]
-    if len(items) != len(raw_items) or any(item.get("type") != "reasoning" for item in items):
+    if len(items) != len(raw_items) or any(
+        item.get("type") != "reasoning" for item in items
+    ):
         raise ValueError("Responses continuation contains an invalid item")
     return items
 
 
-def _tool_result_value(result: ToolResult) -> dict[str, object]:
+def _tool_result_value(
+    result: ToolResult,
+    *,
+    model: ModelSpec,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
+) -> dict[str, object]:
     if result.content:
-        raise ModelProviderError(
-            ModelErrorKind.INVALID_REQUEST,
-            "OpenAI Responses does not support Pygent structured tool-result content",
-            reason_code=ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED,
-        )
-    output = result.output if result.status == "succeeded" else result.error
-    if not isinstance(output, str):
-        output = json.dumps(thaw_json(output), ensure_ascii=False, separators=(",", ":"))
+        output: object = [
+            _tool_result_content_block(
+                block,
+                model=model,
+                capabilities=capabilities,
+                media_resolver=media_resolver,
+            )
+            for block in result.content
+        ]
+    else:
+        output = result.output if result.status == "succeeded" else result.error
+        if not isinstance(output, str):
+            output = json.dumps(
+                thaw_json(output), ensure_ascii=False, separators=(",", ":")
+            )
     return {
         "type": "function_call_output",
         "call_id": result.call_id,
         "output": output or "",
     }
+
+
+def _tool_result_content_block(
+    block: ToolResultText | ToolResultJson | ToolResultMedia,
+    *,
+    model: ModelSpec,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
+) -> dict[str, object]:
+    if type(block) is ToolResultText:
+        return {"type": "input_text", "text": block.text}
+    if type(block) is ToolResultJson:
+        return {
+            "type": "input_text",
+            "text": json.dumps(
+                thaw_json(block.value), ensure_ascii=False, separators=(",", ":")
+            ),
+        }
+    if type(block) is not ToolResultMedia:
+        raise TypeError("tool-result content block is invalid")
+    validate_media_delivery(block, model=model, capabilities=capabilities)
+    value: dict[str, object] = {
+        "type": "input_image",
+        "image_url": media_data_url(
+            block,
+            capabilities=capabilities,
+            media_resolver=media_resolver,
+        ),
+    }
+    if block.detail is not None:
+        value["detail"] = block.detail
+    return value
 
 
 def _tool_value(tool: ToolDefinition) -> dict[str, object]:
@@ -457,9 +558,7 @@ def _tool_value(tool: ToolDefinition) -> dict[str, object]:
     }
 
 
-def _tool_choice(
-    choice: str | None, tools: tuple[ToolDefinition, ...]
-) -> object:
+def _tool_choice(choice: str | None, tools: tuple[ToolDefinition, ...]) -> object:
     if choice is None or choice == "auto":
         return "auto"
     if choice in {"required", "none"}:
@@ -522,9 +621,7 @@ def _decode_output(
     return "".join(text), tuple(calls), reasoning
 
 
-def _validate_structured_output(
-    request: ModelProviderRequest, content: str
-) -> str:
+def _validate_structured_output(request: ModelProviderRequest, content: str) -> str:
     schema = request.generation.response_schema
     if schema is None:
         return content
@@ -561,7 +658,12 @@ def _stream_call(
     item: Mapping[str, object], event: Mapping[str, object]
 ) -> ModelProviderStreamPart:
     call_id, name = item.get("call_id"), item.get("name")
-    if not isinstance(call_id, str) or not call_id or not isinstance(name, str) or not name:
+    if (
+        not isinstance(call_id, str)
+        or not call_id
+        or not isinstance(name, str)
+        or not name
+    ):
         raise TypeError
     return ModelProviderStreamPart(
         "tool_call",

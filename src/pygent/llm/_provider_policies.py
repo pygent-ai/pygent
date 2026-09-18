@@ -33,8 +33,7 @@ def _validate_aliyun_token_plan(options: FrozenJsonObject) -> None:
     unknown = set(options) - _ALIYUN_TOKEN_PLAN_FIELDS
     if unknown:
         raise ValueError(
-            "unknown Alibaba Token Plan provider options: "
-            + ", ".join(sorted(unknown))
+            "unknown Alibaba Token Plan provider options: " + ", ".join(sorted(unknown))
         )
     for key in ("enable_thinking", "preserve_thinking", "tool_stream"):
         if key in options and not isinstance(options[key], bool):

@@ -224,9 +224,24 @@ ReAct 将附加内容包装为 `<runtime-context>...</runtime-context>`，已规
 System Prompt + Context.messages + current + Context.tools
 ```
 
-ASCII 内容、非 ASCII 内容和消息/工具结构分别计入估算。第一次使用 10% 安全系数；
-后续成功请求使用真实 `AIMessage.usage.input_tokens` 单调提高估算系数，不因较低 usage
-降低已经观察到的高水位。
+ASCII 内容、非 ASCII 内容和消息/工具结构分别计入估算。类型化
+`ToolResultMedia` 的 Base64 是 Provider transport，不作为文本计费。图片和视频的尺寸、
+视频时长、帧率及音轨标志在媒体对象中归一化并随 wire value 持久化；inline 图片只需解码
+一次，标准文件工具直接提供规范化后的视频元数据。`ModelCallLayer` 先解析实际部署，Invoker
+再复用真实调用的媒体能力与 fallback 路由，只有会收到媒体的候选才参与估算；具体计费公式
+由对应 Provider adapter 通过统一 media estimator 提供。多个可用候选取最大值；未知
+Provider 的图片按 32px patch、视频按每秒 1,000 token 保守估算，缺失元数据时使用固定
+上限预算。若所有候选都会把媒体投影为 `not_viewed` 文本，媒体 token 计为 0。
+
+内置策略当前覆盖全部四种协议：OpenAI Chat/Responses 使用 OpenAI 图片规则，Anthropic
+使用 28px visual patch 并按模型分辨率档位缩放，Gemini 使用图片 tile 与静态视频速率；
+非原生 provider 或未识别的新模型自动回到统一保守策略。公式集中在独立媒体估算模块，
+协议只选择策略，因此后续官方计费更新不需要改压缩、路由或 Agent 逻辑。
+
+纯文本请求第一次使用 10% 安全系数；后续成功请求使用真实
+`AIMessage.usage.input_tokens` 单调提高文本估算系数，不因较低 usage 降低已经观察到的
+高水位。带媒体的请求仍记录 `last_input_tokens`，但不使用混合 usage 校准文本系数，避免
+把 Provider 媒体计费差异永久放大到后续文本请求。
 
 当前台请求或压缩请求达到各自
 `context_window_tokens × compression_trigger_ratio` 时：

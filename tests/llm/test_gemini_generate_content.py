@@ -25,9 +25,11 @@ from pygent.llm import (
     GeminiGenerateContentClient,
     ModelErrorKind,
     ModelFailureReason,
+    ModelModalities,
     ModelProviderError,
     ModelProviderRequest,
 )
+from pygent.tool import MediaSource, ToolResultMedia
 from tests.support.model_specs import model_entry
 
 
@@ -85,15 +87,14 @@ def test_gemini_request_projects_roles_tools_results_schema_and_thinking() -> No
             response_schema={"type": "object", "properties": {}},
         ),
         tools=(tool,),
-        options={
-            "thinking_config": {"include_thoughts": True, "thinking_budget": 64}
-        },
+        options={"thinking_config": {"include_thoughts": True, "thinking_budget": 64}},
     )
     payload = GeminiGenerateContentAdapter().build_request(request).to_dict()
     assert payload["systemInstruction"] == {"parts": [{"text": "system"}]}
     assert payload["contents"][0]["role"] == "model"
     assert payload["contents"][0]["parts"][1]["functionCall"]["name"] == "lookup"
     assert payload["contents"][1]["parts"][0]["functionResponse"] == {
+        "id": "gemini-call-0",
         "name": "lookup",
         "response": {"value": "ok"},
     }
@@ -111,28 +112,45 @@ def test_gemini_request_projects_roles_tools_results_schema_and_thinking() -> No
     }
 
 
-def test_gemini_rejects_structured_tool_result_content_explicitly() -> None:
-    with pytest.raises(ModelProviderError) as raised:
-        GeminiGenerateContentAdapter().build_request(
-            _request(
-                message=ToolMessage(
-                    results=(
-                        ToolResult(
-                            call_id="call-1",
-                            name="lookup",
-                            status="succeeded",
-                            content=(ToolResultText("result"),),
+def test_gemini_projects_multimodal_function_response_parts() -> None:
+    request = _request(
+        message=ToolMessage(
+            results=(
+                ToolResult(
+                    call_id="call-1",
+                    name="lookup",
+                    status="succeeded",
+                    content=(
+                        ToolResultText("result"),
+                        ToolResultMedia(
+                            media_type="image",
+                            mime_type="image/png",
+                            source=MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture"),
                         ),
-                    )
-                )
+                    ),
+                ),
             )
         )
-
-    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
-    assert (
-        raised.value.reason_code
-        is ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED
     )
+    request = replace(
+        request,
+        model=replace(
+            request.model,
+            capabilities=replace(
+                request.model.capabilities,
+                modalities=ModelModalities(input=("text", "image"), output=("text",)),
+            ),
+        ),
+    )
+    response = (
+        GeminiGenerateContentAdapter()
+        .build_request(request)
+        .to_dict()["contents"][0]["parts"][0]["functionResponse"]
+    )
+
+    assert response["id"] == "call-1"
+    assert response["response"]["content"] == ["result", {"$ref": "call-1-1"}]
+    assert response["parts"][0]["inlineData"]["displayName"] == "call-1-1"
 
 
 def test_gemini_parse_preserves_thought_signature_and_function_call() -> None:
@@ -270,13 +288,17 @@ def test_gemini_continuation_is_replayed_with_visible_assistant_text() -> None:
             ],
         },
     )
-    payload = GeminiGenerateContentAdapter().build_request(
-        _request(
-            context=Context(
-                messages=(AIMessage(content="answer", continuation=continuation),)
+    payload = (
+        GeminiGenerateContentAdapter()
+        .build_request(
+            _request(
+                context=Context(
+                    messages=(AIMessage(content="answer", continuation=continuation),)
+                )
             )
         )
-    ).to_dict()
+        .to_dict()
+    )
     assert payload["contents"][0]["parts"] == [
         {"thought": True, "thoughtSignature": "sig", "text": "reason"},
         {"text": "answer"},
@@ -311,9 +333,11 @@ def test_gemini_signed_function_call_is_replayed_exactly_once() -> None:
         continuation=continuation,
     )
 
-    payload = GeminiGenerateContentAdapter().build_request(
-        _request(context=Context(messages=(message,)))
-    ).to_dict()
+    payload = (
+        GeminiGenerateContentAdapter()
+        .build_request(_request(context=Context(messages=(message,))))
+        .to_dict()
+    )
 
     assert payload["contents"][0]["parts"] == [
         {
@@ -472,7 +496,9 @@ async def test_gemini_client_maps_status_and_propagates_cancellation() -> None:
         return httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(unavailable)) as http:
-        client = GeminiGenerateContentClient(base_url="https://api.example/v1beta", client=http)
+        client = GeminiGenerateContentClient(
+            base_url="https://api.example/v1beta", client=http
+        )
         with pytest.raises(ModelProviderError) as raised:
             await client.invoke(_request().model, freeze_json_object({}))
         assert raised.value.kind is ModelErrorKind.UNAVAILABLE
@@ -481,6 +507,8 @@ async def test_gemini_client_maps_status_and_propagates_cancellation() -> None:
         raise asyncio.CancelledError
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(cancelled)) as http:
-        client = GeminiGenerateContentClient(base_url="https://api.example/v1beta", client=http)
+        client = GeminiGenerateContentClient(
+            base_url="https://api.example/v1beta", client=http
+        )
         with pytest.raises(asyncio.CancelledError):
             await client.invoke(_request().model, freeze_json_object({}))

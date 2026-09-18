@@ -82,9 +82,7 @@ class _JsonSSETransport:
                 raise httpx.TransportError(str(exc)) from exc
             body_bytes = raw_body.encode("utf-8")
             if not 200 <= status < 300:
-                raise _HTTPResponseError(
-                    status, body_bytes[:_MAX_HTTP_ERROR_BYTES]
-                )
+                raise _HTTPResponseError(status, body_bytes[:_MAX_HTTP_ERROR_BYTES])
             raw: str | bytes = raw_body
         else:
             assert self._client is not None

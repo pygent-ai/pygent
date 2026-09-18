@@ -79,6 +79,26 @@ def _request_projection(request: ModelProviderRequest) -> dict[str, object]:
             "tool_choice": generation.tool_choice,
         },
         "projection_revision": request.context.projection_revision,
+        "media_projections": [
+            {
+                "call_id": item.call_id,
+                "media_type": item.media_type,
+                "canonical_reference": item.canonical_reference,
+                "canonical_sha256": item.canonical_sha256,
+                "projected_reference": item.projected_reference,
+                "projected_sha256": item.projected_sha256,
+                "projected_size_bytes": item.projected_size_bytes,
+                "mime_type": item.mime_type,
+                "width": item.width,
+                "height": item.height,
+                "duration_seconds": item.duration_seconds,
+                "fps": item.fps,
+                "has_audio": item.has_audio,
+                "transformations": list(item.transformations),
+                "projector_version": item.projector_version,
+            }
+            for item in request.media_projections
+        ],
     }
 
 
@@ -135,6 +155,11 @@ def _content_projection(value: ToolResultContent) -> dict[str, object]:
             "media_type": value.media_type,
             "mime_type": value.mime_type,
             "detail": value.detail,
+            "width": value.width,
+            "height": value.height,
+            "duration_seconds": value.duration_seconds,
+            "fps": value.fps,
+            "has_audio": value.has_audio,
             "source": {
                 "kind": source.kind,
                 "uri": source.uri,

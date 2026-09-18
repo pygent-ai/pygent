@@ -31,7 +31,9 @@ from pygent.core import (
 from pygent.core._tool_values import _tool_result_content_to_value
 from pygent.tool import ToolCall, ToolDefinition
 
-from ._adapter_contracts import ModelInvoker
+from ._adapter_contracts import ModelInvoker, ModelRequestMediaTokenEstimator
+from ._media_routing import pending_tool_result_media
+from ._media_tokens import generic_media_input_tokens
 from ._model_spec_codec import model_entry_value
 from .configuration import ModelEntry, ModelGroup
 from .types import (
@@ -101,6 +103,41 @@ class ModelCallLayer(Module[Message, AIMessage]):
 
         visible_names = {tool.name for tool in context.tools}
         return tuple(tool for tool in self.tools if tool.name in visible_names)
+
+    async def estimate_media_input_tokens(
+        self, message: Message, context: Context
+    ) -> int:
+        """Estimate against the resolved deployment and invoker routing policy."""
+
+        media = pending_tool_result_media(message, context)
+        if not media:
+            return 0
+        infrastructure = current_infrastructure()
+        model_group = self.model_group
+        deployment = None
+        if model_group.is_deferred:
+            deployment = infrastructure.resolve_model_deployment(model_group.name)
+            model_group = cast(Any, deployment).model_group
+
+        def estimate_with(invoker: ModelInvoker) -> int:
+            if isinstance(invoker, ModelRequestMediaTokenEstimator):
+                return invoker.estimate_media_input_tokens(
+                    model_group=model_group,
+                    message=message,
+                    context=context,
+                )
+            return sum(generic_media_input_tokens(block) for block in media)
+
+        if deployment is not None:
+            async with infrastructure.model_deployment_lease(deployment) as item:
+                return estimate_with(cast(ModelInvoker, item))
+        invoker = self.invoker
+        if invoker is None:
+            invoker = cast(
+                ModelInvoker,
+                infrastructure.resolve_model_invoker(model_group.name),
+            )
+        return estimate_with(invoker)
 
     async def forward(
         self, message: Message, context: Context
@@ -206,7 +243,9 @@ class ModelCallLayer(Module[Message, AIMessage]):
         async def invoke() -> JsonValue:
             async with infrastructure.model_permit():
                 if deployment is not None:
-                    async with infrastructure.model_deployment_lease(deployment) as item:
+                    async with infrastructure.model_deployment_lease(
+                        deployment
+                    ) as item:
                         return await execute_with(cast(ModelInvoker, item))
                 invoker = self.invoker
                 if invoker is None:
@@ -321,7 +360,9 @@ def _model_effect_request(
             {
                 "model_group": {
                     "name": model_group.name,
-                    "models": [model_entry_value(model) for model in model_group.models],
+                    "models": [
+                        model_entry_value(model) for model in model_group.models
+                    ],
                     "profile": getattr(deployment, "profile", None),
                     "snapshot_id": getattr(deployment, "snapshot_id", None),
                     "deployment_digest": getattr(deployment, "digest", None),

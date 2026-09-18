@@ -281,9 +281,7 @@ def test_builtin_openai_audio_and_realtime_capabilities_match_official_models() 
     catalog = ModelCapabilityCatalog.builtin()
 
     for model_id in ("gpt-audio", "gpt-audio-1.5"):
-        audio = catalog.models[
-            ("openai", model_id, "openai_chat_completions")
-        ]
+        audio = catalog.models[("openai", model_id, "openai_chat_completions")]
         assert audio.modalities.input == ("text", "audio")
         assert audio.modalities.output == ("text", "audio")
         assert audio.tools.call
@@ -365,9 +363,7 @@ def test_builtin_first_gpt_4o_snapshot_predates_json_schema_output() -> None:
     catalog = ModelCapabilityCatalog.builtin()
 
     for protocol in ("openai_chat_completions", "openai_responses"):
-        capabilities = catalog.models[
-            ("openai", "gpt-4o-2024-05-13", protocol)
-        ]
+        capabilities = catalog.models[("openai", "gpt-4o-2024-05-13", protocol)]
         assert capabilities.structured_output.json_object
         assert not capabilities.structured_output.json_schema
 
@@ -398,9 +394,7 @@ def test_builtin_token_plan_provider_has_two_executable_protocol_presets() -> No
     assert preset.protocols["openai_chat_completions"].api_key_env == (
         "ALIYUN_TOKEN_PLAN_OPENAI_API_KEY"
     )
-    openai_schema = preset.protocols[
-        "openai_chat_completions"
-    ].provider_options_schema
+    openai_schema = preset.protocols["openai_chat_completions"].provider_options_schema
     assert set(openai_schema["properties"]) == {
         "enable_thinking",
         "preserve_thinking",
@@ -453,9 +447,7 @@ def test_builtin_token_plan_catalog_has_all_18_models_and_27_records() -> None:
         ("glm-5.2", ("text",)),
     ],
 )
-@pytest.mark.parametrize(
-    "protocol", ["openai_chat_completions", "anthropic_messages"]
-)
+@pytest.mark.parametrize("protocol", ["openai_chat_completions", "anthropic_messages"])
 def test_builtin_token_plan_text_capability_record_is_complete(
     model_id: str,
     input_modalities: tuple[str, ...],
@@ -709,12 +701,8 @@ def test_builtin_deepseek_structured_output_is_protocol_specific(
 
 def test_builtin_minimax_capabilities_follow_official_protocol_boundaries() -> None:
     catalog = ModelCapabilityCatalog.builtin()
-    m2_anthropic = catalog.models[
-        ("minimax", "MiniMax-M2.7", "anthropic_messages")
-    ]
-    m2_openai = catalog.models[
-        ("minimax", "MiniMax-M2.7", "openai_chat_completions")
-    ]
+    m2_anthropic = catalog.models[("minimax", "MiniMax-M2.7", "anthropic_messages")]
+    m2_openai = catalog.models[("minimax", "MiniMax-M2.7", "openai_chat_completions")]
     m3 = catalog.models[("minimax", "MiniMax-M3", "openai_chat_completions")]
 
     assert m2_anthropic.tools.call and m2_openai.tools.call
@@ -737,9 +725,7 @@ def test_builtin_zhipu_capabilities_follow_official_protocol_boundaries() -> Non
     catalog = ModelCapabilityCatalog.builtin()
     openai = catalog.models[("zhipu", "glm-5.2", "openai_chat_completions")]
     anthropic = catalog.models[("zhipu", "glm-5.2", "anthropic_messages")]
-    vision = catalog.models[
-        ("zhipu", "glm-5v-turbo", "openai_chat_completions")
-    ]
+    vision = catalog.models[("zhipu", "glm-5v-turbo", "openai_chat_completions")]
 
     assert openai.tools.call
     assert openai.tools.choice == ("auto",)
@@ -754,16 +740,12 @@ def test_builtin_zhipu_capabilities_follow_official_protocol_boundaries() -> Non
 
 def test_builtin_moonshot_capabilities_follow_current_official_boundaries() -> None:
     catalog = ModelCapabilityCatalog.builtin()
-    k3_openai = catalog.models[
-        ("moonshot", "kimi-k3", "openai_chat_completions")
-    ]
+    k3_openai = catalog.models[("moonshot", "kimi-k3", "openai_chat_completions")]
     k3_anthropic = catalog.models[("moonshot", "kimi-k3", "anthropic_messages")]
     k27_openai = catalog.models[
         ("moonshot", "kimi-k2.7-code", "openai_chat_completions")
     ]
-    k26_openai = catalog.models[
-        ("moonshot", "kimi-k2.6", "openai_chat_completions")
-    ]
+    k26_openai = catalog.models[("moonshot", "kimi-k2.6", "openai_chat_completions")]
 
     assert k3_openai.modalities.input == ("text", "image", "video")
     assert k3_anthropic.modalities.input == ("text", "image")
@@ -841,8 +823,7 @@ def test_builtin_alibaba_structured_output_follows_official_model_boundaries() -
     records = {
         model_id: capabilities
         for (provider, model_id, protocol), capabilities in catalog.models.items()
-        if provider == "alibaba_cloud"
-        and protocol == "openai_chat_completions"
+        if provider == "alibaba_cloud" and protocol == "openai_chat_completions"
     }
 
     assert {
@@ -901,8 +882,7 @@ def test_builtin_alibaba_visual_inputs_follow_official_model_boundaries() -> Non
     records = {
         model_id: capabilities
         for (provider, model_id, protocol), capabilities in catalog.models.items()
-        if provider == "alibaba_cloud"
-        and protocol == "openai_chat_completions"
+        if provider == "alibaba_cloud" and protocol == "openai_chat_completions"
     }
     expected_video = {
         "qvq-max",
@@ -993,9 +973,7 @@ def test_capability_presets_expand_to_complete_capabilities(
     name: str, structured: bool, tools: bool, reasoning: bool
 ) -> None:
     preset = CapabilityPresetCatalog.builtin().presets[name]
-    capabilities = preset.materialize(
-        context_tokens=32_768, max_output_tokens=4_096
-    )
+    capabilities = preset.materialize(context_tokens=32_768, max_output_tokens=4_096)
 
     assert capabilities.modalities.input == ("text",)
     assert capabilities.modalities.output == ("text",)
@@ -1035,9 +1013,7 @@ def test_catalog_from_mapping_is_strict_and_immutable() -> None:
         }
     )
     assert (
-        catalog.providers["custom"]
-        .protocols["openai_chat_completions"]
-        .authentication
+        catalog.providers["custom"].protocols["openai_chat_completions"].authentication
         == "none"
     )
     with pytest.raises(TypeError):

@@ -135,12 +135,16 @@ class ProviderCatalog:
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ProviderCatalog:
         raw = _object(value, "provider catalog")
-        _exact_fields(raw, frozenset({"schema_version", "providers"}), "provider catalog")
+        _exact_fields(
+            raw, frozenset({"schema_version", "providers"}), "provider catalog"
+        )
         _schema_version(raw, "provider catalog")
         providers = _object(raw["providers"], "providers")
         return cls(
             {
-                name: ProviderPreset.from_mapping(name, _object(item, "provider preset"))
+                name: ProviderPreset.from_mapping(
+                    name, _object(item, "provider preset")
+                )
                 for name, item in providers.items()
             }
         )
@@ -215,12 +219,16 @@ class CapabilityPreset:
     def from_mapping(cls, name: str, value: Mapping[str, object]) -> CapabilityPreset:
         _exact_fields(
             value,
-            frozenset({"modalities", "streaming", "tools", "structured_output", "reasoning"}),
+            frozenset(
+                {"modalities", "streaming", "tools", "structured_output", "reasoning"}
+            ),
             "capability preset",
         )
         return cls(
             name=_non_empty(name, "capability preset name"),
-            modalities=ModelModalities.from_mapping(_object(value["modalities"], "modalities")),
+            modalities=ModelModalities.from_mapping(
+                _object(value["modalities"], "modalities")
+            ),
             streaming=ModelStreamingCapabilities.from_mapping(
                 _object(value["streaming"], "streaming")
             ),
@@ -257,7 +265,9 @@ class CapabilityPresetCatalog:
         presets = _object(raw["presets"], "presets")
         return cls(
             {
-                name: CapabilityPreset.from_mapping(name, _object(item, "capability preset"))
+                name: CapabilityPreset.from_mapping(
+                    name, _object(item, "capability preset")
+                )
                 for name, item in presets.items()
             }
         )

@@ -81,11 +81,20 @@ class ToolResultMedia:
     mime_type: str
     source: MediaSource
     detail: Literal["auto", "low", "high"] | None = None
+    width: int | None = None
+    height: int | None = None
+    duration_seconds: float | None = None
+    fps: float | None = None
+    has_audio: bool | None = None
 ```
 
 `detail` 是中立的质量提示。Adapter 仅在目标协议存在等价字段时发送；不能表达时应明确
 忽略这一非语义提示，而不能忽略媒体本身。首期不允许应用通过任意 Mapping 自定义未知
 内容块类型，避免 Provider 字段穿透公共契约。
+
+`width` 与 `height` 必须成对提供，适用于图片和视频。inline 图片未显式提供时会在构造阶段
+安全探测一次；视频还可提供正数 `duration_seconds`、`fps` 与 `has_audio`。URL/resource
+媒体应由知道元数据的工具填写，便于上下文预算无需下载媒体。
 
 ToolResult 增加一个默认空元组的模型可见投影：
 
@@ -239,6 +248,13 @@ ToolCall 与 `call_id` 保持不变，无法消费的媒体块在模型可见 To
 纯文本和 JSON ToolResult 保持当前 wire 行为，避免没有使用新内容类型的应用产生请求
 差异。各协议可以使用自己的等价结构，但必须保持块顺序、媒体语义和工具调用关联。
 
+内置原生映射还包括：Anthropic `tool_result.content` 的 image block、OpenAI Responses
+`function_call_output.output` 的 `input_image`，以及 Gemini 3.x
+`functionResponse.parts[].inlineData`。Gemini 旧模型与协议未声明的视频在请求路由前降级；
+Chat Completions 图片/视频继续是显式兼容 endpoint 能力，不推断为 OpenAI 标准能力。
+所有协议共用媒体解析、resolver、大小、摘要与 MIME 校验，provider token 公式则通过独立
+策略函数接入，未知 provider 使用保守 fallback。
+
 ## Context、持久化与恢复
 
 ToolResult content、MediaSource 和外层 call ID 必须进入同一个 Message codec。Context、
@@ -274,7 +290,7 @@ Worker 没有 resolver capability 时明确失败。框架不能丢弃该块、�
 | reason code | 条件 |
 | --- | --- |
 | `model_input_modality_unsupported` | 模型 capabilities 不包含媒体模态 |
-| `tool_result_content_unsupported` | Adapter/endpoint 不接受 tool 消息中的该模态 |
+| `media_transport_unsupported` | Adapter/endpoint 无法向模型传递该媒体 |
 | `media_source_unsupported` | 当前 Adapter/Resolver 不支持 source kind |
 | `media_source_unresolvable` | 资源不存在、过期、无权限或无法读取 |
 | `media_integrity_mismatch` | size 或 sha256 与解析结果不一致 |

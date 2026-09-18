@@ -91,6 +91,8 @@ def test_message_and_context_wire_round_trip_all_public_variants():
                                 sha256="0" * 64,
                                 size_bytes=12,
                             ),
+                            width=640,
+                            height=480,
                         ),
                     ),
                 ),
@@ -110,6 +112,58 @@ def test_message_and_context_wire_round_trip_all_public_variants():
         values[0],
         context,
     )
+
+
+def test_media_wire_reader_accepts_legacy_blocks_without_dimensions() -> None:
+    message = ToolMessage(
+        results=(
+            ToolResult(
+                call_id="call-1",
+                name="lookup",
+                status="succeeded",
+                content=(
+                    ToolResultMedia(
+                        media_type="image",
+                        mime_type="image/png",
+                        source=MediaSource.resource("media://legacy"),
+                    ),
+                ),
+            ),
+        )
+    )
+    value = message_to_dict(message)
+    media = value["results"][0]["content"][0]
+    assert media["width"] is None
+    assert media["height"] is None
+    for field in ("width", "height", "duration_seconds", "fps", "has_audio"):
+        media.pop(field)
+
+    assert message_from_dict(value) == message
+
+
+def test_video_media_metadata_round_trips_on_the_wire() -> None:
+    video = ToolResultMedia(
+        media_type="video",
+        mime_type="video/mp4",
+        source=MediaSource.resource("media://video"),
+        width=1920,
+        height=1080,
+        duration_seconds=2.5,
+        fps=24,
+        has_audio=True,
+    )
+    message = ToolMessage(
+        results=(
+            ToolResult(
+                call_id="video",
+                name="read",
+                status="succeeded",
+                content=(video,),
+            ),
+        )
+    )
+
+    assert message_from_dict(message_to_dict(message)) == message
 
 
 def test_assistant_wire_requires_usage() -> None:

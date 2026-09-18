@@ -23,11 +23,13 @@ from pygent.core import freeze_json_object
 from pygent.llm import (
     ModelErrorKind,
     ModelFailureReason,
+    ModelModalities,
     ModelProviderError,
     ModelProviderRequest,
     OpenAIResponsesAdapter,
     OpenAIResponsesClient,
 )
+from pygent.tool import MediaSource, ToolResultMedia
 from tests.support.model_specs import model_entry
 
 
@@ -102,28 +104,45 @@ def test_responses_request_projects_input_tools_schema_and_reasoning() -> None:
     assert payload["reasoning"] == {"effort": "low", "summary": "auto"}
 
 
-def test_responses_rejects_structured_tool_result_content_explicitly() -> None:
-    with pytest.raises(ModelProviderError) as raised:
-        OpenAIResponsesAdapter().build_request(
-            _request(
-                message=ToolMessage(
-                    results=(
-                        ToolResult(
-                            call_id="call-1",
-                            name="lookup",
-                            status="succeeded",
-                            content=(ToolResultText("result"),),
+def test_responses_projects_structured_tool_result_image_content() -> None:
+    request = _request(
+        message=ToolMessage(
+            results=(
+                ToolResult(
+                    call_id="call-1",
+                    name="lookup",
+                    status="succeeded",
+                    content=(
+                        ToolResultText("result"),
+                        ToolResultMedia(
+                            media_type="image",
+                            mime_type="image/png",
+                            source=MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture"),
+                            detail="low",
                         ),
-                    )
-                )
+                    ),
+                ),
             )
         )
-
-    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
-    assert (
-        raised.value.reason_code
-        is ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED
     )
+    request = replace(
+        request,
+        model=replace(
+            request.model,
+            capabilities=replace(
+                request.model.capabilities,
+                modalities=ModelModalities(input=("text", "image"), output=("text",)),
+            ),
+        ),
+    )
+    output = (
+        OpenAIResponsesAdapter().build_request(request).to_dict()["input"][0]["output"]
+    )
+
+    assert output[0] == {"type": "input_text", "text": "result"}
+    assert output[1]["type"] == "input_image"
+    assert output[1]["image_url"].startswith("data:image/png;base64,")
+    assert output[1]["detail"] == "low"
 
 
 @pytest.mark.parametrize("field", ["api_key", "headers", "base_url"])
@@ -232,13 +251,17 @@ def test_responses_continuation_is_replayed_before_visible_assistant_items() -> 
         protocol="openai_responses",
         data={"version": 1, "items": [{"id": "rs-1", "type": "reasoning"}]},
     )
-    payload = OpenAIResponsesAdapter().build_request(
-        _request(
-            context=Context(
-                messages=(AIMessage(content="answer", continuation=continuation),)
+    payload = (
+        OpenAIResponsesAdapter()
+        .build_request(
+            _request(
+                context=Context(
+                    messages=(AIMessage(content="answer", continuation=continuation),)
+                )
             )
         )
-    ).to_dict()
+        .to_dict()
+    )
     assert payload["input"][0] == {"id": "rs-1", "type": "reasoning"}
     assert payload["input"][1]["role"] == "assistant"
 

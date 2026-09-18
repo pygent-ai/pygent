@@ -87,9 +87,7 @@ def test_historical_message_usage_does_not_change_the_request_snapshot() -> None
         message=without_usage.message,
         context=Context(
             system_prompt=without_usage.context.system_prompt,
-            messages=(
-                AIMessage(content="history", usage={"input_tokens": 900}),
-            ),
+            messages=(AIMessage(content="history", usage={"input_tokens": 900}),),
             projection_revision=without_usage.context.projection_revision,
         ),
         generation=without_usage.generation,
@@ -108,8 +106,9 @@ def test_historical_message_usage_does_not_change_the_request_snapshot() -> None
         tools=without_usage.tools,
     )
 
-    assert prepared_request_event(with_usage, attempt=1)["request_digest"] == (
-        prepared_request_event(baseline, attempt=1)["request_digest"]
+    assert (
+        prepared_request_event(with_usage, attempt=1)["request_digest"]
+        == (prepared_request_event(baseline, attempt=1)["request_digest"])
     )
 
 
@@ -126,7 +125,9 @@ def test_snapshot_projects_only_a_digest_of_model_continuation() -> None:
         model_key=original.model_key,
         model=original.model,
         message=original.message,
-        context=Context(messages=(AIMessage(content="history", continuation=continuation),)),
+        context=Context(
+            messages=(AIMessage(content="history", continuation=continuation),)
+        ),
         generation=original.generation,
         tools=original.tools,
     )
@@ -200,8 +201,9 @@ def test_continuation_producer_changes_request_digest() -> None:
             )
         ),
     )
-    assert prepared_request_event(first, attempt=1)["request_digest"] != (
-        prepared_request_event(second, attempt=1)["request_digest"]
+    assert (
+        prepared_request_event(first, attempt=1)["request_digest"]
+        != (prepared_request_event(second, attempt=1)["request_digest"])
     )
 
 
@@ -219,7 +221,9 @@ async def test_large_snapshot_reaches_provider_io() -> None:
             self.calls += 1
             assert payload["messages"][-1]["content"] == content
             yield freeze_json_object({"choices": [{"delta": {"content": "ok"}}]})
-            yield freeze_json_object({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+            yield freeze_json_object(
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+            )
             yield freeze_json_object({"done": True})
 
         async def aclose(self):
@@ -238,9 +242,7 @@ async def test_large_snapshot_reaches_provider_io() -> None:
         ),
         retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
-        message=UserMessage(
-            content=content
-        ),
+        message=UserMessage(content=content),
         context=Context(),
     )
     async with execution.subscribe() as subscription:

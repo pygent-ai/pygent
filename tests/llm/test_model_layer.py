@@ -62,9 +62,7 @@ class RecordingInvoker:
             self.tools = kwargs["tools"]
             from pygent import AIMessage
 
-            return ModelProviderResponse(
-                AIMessage(content="done"), {"total_tokens": 1}
-            )
+            return ModelProviderResponse(AIMessage(content="done"), {"total_tokens": 1})
 
         return ModelExecution(operation)
 
@@ -123,7 +121,9 @@ async def test_managed_model_call_requires_a_finite_deadline() -> None:
     runtime = LocalRuntime()
     bound = runtime.bind(layer(RecordingInvoker()))
 
-    with pytest.raises(ExecutionAdmissionError, match="ModelCallLayer.*finite execution deadline"):
+    with pytest.raises(
+        ExecutionAdmissionError, match="ModelCallLayer.*finite execution deadline"
+    ):
         await bound.start(UserMessage(content="missing"), Context())
 
     answer, _ = await bound.invoke(
@@ -142,9 +142,7 @@ async def test_managed_deadline_remains_execution_deadline_when_provider_ignores
 ) -> None:
     from pygent.llm import invoker as invoker_module
 
-    monkeypatch.setattr(
-        invoker_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02
-    )
+    monkeypatch.setattr(invoker_module, "_CANCELLATION_CLEANUP_GRACE_SECONDS", 0.02)
 
     class StuckClient:
         def __init__(self) -> None:
@@ -226,12 +224,8 @@ async def test_streaming_invoker_drives_module_stream_and_final_result():
             raise AssertionError("streaming invoker must use SSE")
 
         async def stream(self, route, payload):
-            yield freeze_json_object(
-                {"choices": [{"delta": {"content": "hel"}}]}
-            )
-            yield freeze_json_object(
-                {"choices": [{"delta": {"content": "lo"}}]}
-            )
+            yield freeze_json_object({"choices": [{"delta": {"content": "hel"}}]})
+            yield freeze_json_object({"choices": [{"delta": {"content": "lo"}}]})
             yield freeze_json_object({"usage": {"completion_tokens": 2}})
             yield freeze_json_object({"done": True})
 
@@ -415,7 +409,9 @@ async def test_raw_provider_fields_do_not_leak_to_message_context_or_events() ->
     )
     model = layer(invoker)
     original_context = Context(metadata={"request": "safe"})
-    async with model.stream(UserMessage(content="question"), original_context) as stream:
+    async with model.stream(
+        UserMessage(content="question"), original_context
+    ) as stream:
         events = [event async for event in stream]
         answer, returned_context = await stream.final_result()
 
@@ -475,9 +471,7 @@ async def test_provider_errors_are_sanitized_for_invoke_stream_and_run_events() 
         invoker = configured_invoker(
             adapters={"openai": OpenAICompatibleAdapter()},
             clients={"primary": provider_client, "fallback": provider_client},
-            capabilities={
-                "openai": transport_mode(streaming=streaming)
-            },
+            capabilities={"openai": transport_mode(streaming=streaming)},
         )
         return ModelCallLayer(
             model_group=model_group(

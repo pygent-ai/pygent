@@ -175,7 +175,7 @@ ToolResult 中的结构化内容块。模型本身还必须在 `ModelCapabilitie
 ```python
 from pygent.llm import (
     OpenAICompatibleAdapter,
-    ToolResultContentCapabilities,
+    MediaTransportCapabilities,
 )
 
 
@@ -186,30 +186,41 @@ class AppMediaResolver:
 
 
 adapter = OpenAICompatibleAdapter(
-    tool_result_content=ToolResultContentCapabilities(
+    media_transport=MediaTransportCapabilities(
         enabled=True,
         modalities=("image", "video"),
-        source_kinds=("resource", "url", "inline"),
+        source_kinds=("url", "inline"),
         max_media_bytes=20 * 1024 * 1024,
+        image_mime_types=("image/jpeg", "image/png", "image/webp"),
+        video_mime_types=("video/mp4",),
     ),
-    media_resolver=AppMediaResolver(),
 )
+resolver = AppMediaResolver()
 invoker = DefaultModelInvoker(
     adapters={"openai_chat_completions": adapter},
     clients={entry.key: client},
+    media_resolver=resolver,
 )
 ```
 
-默认 `ToolResultContentCapabilities()` 为禁用状态，框架不会因为协议名、Provider 名或模型
-名推断 endpoint 支持该扩展。启用后，文本与 JSON 块分别编码为 `text`，图片与视频分别
-编码为 `image_url` 和 `video_url`，每个 `role: tool` 消息继续携带原
-`tool_call_id`。URL source 直接传递；inline 和 resource source 生成 data URI。资源读取、
-大小、SHA-256 和基本媒体签名在发起 Provider 请求前校验。
+默认 `MediaTransportCapabilities()` 为禁用状态，框架不会因为协议名、Provider 名或模型
+名推断 endpoint 支持该扩展。`ModelCapabilities.media_input` 进一步声明模型接受的 MIME、
+大小、图片尺寸/像素、视频时长/FPS/音轨等细节。Invoker 取模型能力和 endpoint 能力的
+交集，为每个目标模型独立生成 request-local 投影；图片可缩放、转码或压缩，视频在安装
+`video` extra 后可缩放、降帧、移除音轨并转码为 MP4。投影自己的摘要、大小与转换步骤进入
+prepared-request trace，canonical `ToolResultMedia` 与 Context 保持不变。
 
-当前 Anthropic Messages、Gemini generateContent 和 OpenAI Responses Adapter 尚未声明
-这种 Pygent tool-result content wire，收到非空内容块会返回
-`tool_result_content_unsupported`，不会转成普通字符串或用户消息。应用确认某一协议的
-等价结构后，应在对应 Adapter 中实现并声明能力。
+`media_resolver` 由 Invoker 使用，负责在需要转换或 inline 传输时解析稳定 resource/URL。
+inline Base64 按解码后的字节校验和计算 SHA-256；resource 按声明的摘要和大小复核。Adapter
+只把最终投影编码成目标协议原生字段。Anthropic Messages、Gemini generateContent、OpenAI
+Responses 和 OpenAI Chat Completions compatible Adapter 都使用同一投影契约；各 Adapter
+只声明自身实际支持的模态、来源与 MIME，不支持的视频不会被伪装成图片或文本。
+
+若模型组没有候选能够查看历史媒体，Invoker 为首个候选生成一次 `status="not_viewed"` 的
+请求投影，说明当前模型没有查看该媒体的能力，并保留 `media_ref`；这不表示文件不存在，也
+不会修改原工具结果。普通超时、限流或响应错误继续走现有 retry/fallback，失败尝试的
+Assistant 不进入 Context。fallback 到另一个兼容模型时，新投影始终从 canonical media
+重新生成，不从上一个模型的派生结果继续转换。
 
 ## Direct：Anthropic Messages
 

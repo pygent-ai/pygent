@@ -25,6 +25,7 @@ from pygent import (
 from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import (
     GenerationConfig,
+    MediaTransportCapabilities,
     ModelEntry,
     ModelErrorKind,
     ModelFailureReason,
@@ -34,7 +35,6 @@ from pygent.llm import (
     ModelProviderRequest,
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
-    ToolResultContentCapabilities,
 )
 from pygent.llm import _json_sse_transport as json_sse_transport_module
 from pygent.llm import openai_compatible as openai_compatible_module
@@ -92,9 +92,7 @@ def _stream_feed(adapter, request, payload):
 def test_openai_stream_decoder_rejects_premature_eof() -> None:
     decoder = OpenAICompatibleAdapter().create_stream_decoder(_request())
 
-    decoder.feed(
-        freeze_json_object({"choices": [{"delta": {"content": "partial"}}]})
-    )
+    decoder.feed(freeze_json_object({"choices": [{"delta": {"content": "partial"}}]}))
 
     with pytest.raises(ModelProviderError) as raised:
         decoder.finish()
@@ -303,7 +301,9 @@ def test_deepseek_continuation_version_rejects_boolean() -> None:
         OpenAICompatibleAdapter().build_request(request)
 
 
-@pytest.mark.parametrize("provider", ["deepseek", "aliyun_token_plan", "custom_gateway"])
+@pytest.mark.parametrize(
+    "provider", ["deepseek", "aliyun_token_plan", "custom_gateway"]
+)
 def test_openai_stream_emits_one_provider_scoped_continuation_before_finish(
     provider: str,
 ) -> None:
@@ -317,9 +317,7 @@ def test_openai_stream_emits_one_provider_scoped_continuation_before_finish(
     decoder = OpenAICompatibleAdapter().create_stream_decoder(request)
 
     first = decoder.feed(
-        freeze_json_object(
-            {"choices": [{"delta": {"reasoning_content": "rea"}}]}
-        )
+        freeze_json_object({"choices": [{"delta": {"reasoning_content": "rea"}}]})
     )
     final = decoder.feed(
         freeze_json_object(
@@ -356,9 +354,7 @@ def test_openai_stream_rejects_non_string_reasoning_content() -> None:
 
     with pytest.raises(ModelProviderError) as raised:
         decoder.feed(
-            freeze_json_object(
-                {"choices": [{"delta": {"reasoning_content": {}}}]}
-            )
+            freeze_json_object({"choices": [{"delta": {"reasoning_content": {}}}]})
         )
 
     assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
@@ -403,15 +399,22 @@ def test_openai_stream_accepts_null_reasoning_content_with_text() -> None:
         ({"stream_options": {"include_usage": False}}, {"include_usage": False}),
         ({"stream_options": {"include_usage": True}}, {"include_usage": True}),
         ({"stream_options": None}, None),
-        ({"stream_options": {"include_obfuscation": False}},
-         {"include_obfuscation": False, "include_usage": True}),
+        (
+            {"stream_options": {"include_obfuscation": False}},
+            {"include_obfuscation": False, "include_usage": True},
+        ),
     ],
 )
-async def test_stream_usage_defaults_preserve_options(monkeypatch, native, options, expected):
+async def test_stream_usage_defaults_preserve_options(
+    monkeypatch, native, options, expected
+):
     bodies = []
     frames = [
         {"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]},
-        {"choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}},
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        },
     ]
 
     class RecordingNativeClient:
@@ -431,7 +434,8 @@ async def test_stream_usage_defaults_preserve_options(monkeypatch, native, optio
         bodies.append(json.loads(request.content))
         return httpx.Response(
             200,
-            text="".join(f"data: {json.dumps(frame)}\n\n" for frame in frames) + "data: [DONE]\n\n",
+            text="".join(f"data: {json.dumps(frame)}\n\n" for frame in frames)
+            + "data: [DONE]\n\n",
             headers={"content-type": "text/event-stream"},
         )
 
@@ -442,15 +446,19 @@ async def test_stream_usage_defaults_preserve_options(monkeypatch, native, optio
     )
     route = model_entry("main", "openai", "gpt-test", provider_options=options)
     request = provider_request(
-        entry=route, message=UserMessage(content="hello"), context=Context(),
-        generation=GenerationConfig(), tools=(),
+        entry=route,
+        message=UserMessage(content="hello"),
+        context=Context(),
+        generation=GenerationConfig(),
+        tools=(),
     )
     adapter = OpenAICompatibleAdapter()
     payload = adapter.build_request(request)
     original = payload.to_dict()
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = OpenAICompatibleClient(
-            base_url="https://models.example/v1", client=None if native else http,
+            base_url="https://models.example/v1",
+            client=None if native else http,
         )
         try:
             streamed = [frame async for frame in client.stream(route.spec, payload)]
@@ -505,10 +513,10 @@ def test_openai_codec_parses_usage_tools_and_structured_output():
         (
             {
                 "message": {
-                        "content": [
-                            {"type": "text", "text": "part-"},
-                            {"type": "output_text", "text": "answer"},
-                        ]
+                    "content": [
+                        {"type": "text", "text": "part-"},
+                        {"type": "output_text", "text": "answer"},
+                    ]
                 }
             },
             "part-answer",
@@ -560,14 +568,18 @@ def test_openai_continuation_is_not_replayed_across_models() -> None:
             data={"version": 1, "reasoning_content": "private"},
         ),
     )
-    payload = OpenAICompatibleAdapter().build_request(
-        provider_request(
-            entry=entry,
-            message=message,
-            context=Context(),
-            generation=GenerationConfig(),
+    payload = (
+        OpenAICompatibleAdapter()
+        .build_request(
+            provider_request(
+                entry=entry,
+                message=message,
+                context=Context(),
+                generation=GenerationConfig(),
+            )
         )
-    ).to_dict()
+        .to_dict()
+    )
 
     assert "reasoning_content" not in payload["messages"][0]
 
@@ -642,7 +654,7 @@ def test_non_streaming_synthesizes_missing_tool_id_and_decodes_fenced_arguments(
                                 "type": "function",
                                 "function": {
                                     "name": "double",
-                                    "arguments": "```json\n{\"value\":2}\n```",
+                                    "arguments": '```json\n{"value":2}\n```',
                                 },
                             }
                         ],
@@ -712,7 +724,7 @@ def test_structured_output_failure_has_a_specific_closed_reason():
 
     with pytest.raises(ModelProviderError) as raised:
         OpenAICompatibleAdapter().parse_response(
-            request, adapter_request_payload(content="explanation {\"answer\":\"ok\"}")
+            request, adapter_request_payload(content='explanation {"answer":"ok"}')
         )
 
     assert raised.value.reason_code is ModelFailureReason.GENERATION_SCHEMA_INVALID
@@ -814,9 +826,7 @@ def test_structured_tool_result_encodes_image_json_and_text_blocks() -> None:
         generation=GenerationConfig(),
     )
     adapter = OpenAICompatibleAdapter(
-        tool_result_content=ToolResultContentCapabilities(
-            enabled=True, modalities=("image",)
-        )
+        media_transport=MediaTransportCapabilities(enabled=True, modalities=("image",))
     )
 
     payload = adapter.build_request(request).to_dict()
@@ -863,7 +873,7 @@ def test_structured_tool_result_resolves_video_resource() -> None:
         generation=GenerationConfig(),
     )
     adapter = OpenAICompatibleAdapter(
-        tool_result_content=ToolResultContentCapabilities(
+        media_transport=MediaTransportCapabilities(
             enabled=True, modalities=("video",), max_media_bytes=1024
         ),
         media_resolver=lambda candidate: video,
@@ -895,7 +905,17 @@ def test_structured_tool_result_requires_explicit_endpoint_capability() -> None:
     with pytest.raises(ModelProviderError) as raised:
         OpenAICompatibleAdapter().build_request(request)
 
-    assert raised.value.reason_code is ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED
+    assert (
+        raised.value.reason_code is ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED
+    )
+
+
+def test_unresolved_resource_is_not_advertised_as_deliverable() -> None:
+    adapter = OpenAICompatibleAdapter(
+        media_transport=MediaTransportCapabilities(enabled=True, modalities=("image",))
+    )
+
+    assert "resource" not in adapter.media_transport.source_kinds
 
 
 def test_tool_media_checks_model_modality_separately() -> None:
@@ -921,15 +941,15 @@ def test_tool_media_checks_model_modality_separately() -> None:
         generation=GenerationConfig(),
     )
     adapter = OpenAICompatibleAdapter(
-        tool_result_content=ToolResultContentCapabilities(
-            enabled=True, modalities=("image",)
-        )
+        media_transport=MediaTransportCapabilities(enabled=True, modalities=("image",))
     )
 
     with pytest.raises(ModelProviderError) as raised:
         adapter.build_request(request)
 
-    assert raised.value.reason_code is ModelFailureReason.MODEL_INPUT_MODALITY_UNSUPPORTED
+    assert (
+        raised.value.reason_code is ModelFailureReason.MODEL_INPUT_MODALITY_UNSUPPORTED
+    )
 
 
 def test_tool_media_rejects_resource_integrity_mismatch() -> None:
@@ -957,9 +977,7 @@ def test_tool_media_rejects_resource_integrity_mismatch() -> None:
         generation=GenerationConfig(),
     )
     adapter = OpenAICompatibleAdapter(
-        tool_result_content=ToolResultContentCapabilities(
-            enabled=True, modalities=("image",)
-        ),
+        media_transport=MediaTransportCapabilities(enabled=True, modalities=("image",)),
         media_resolver=lambda source: b"\x89PNG\r\n\x1a\nfixture",
     )
 
@@ -995,7 +1013,8 @@ def test_provider_raw_diagnostics_are_not_projected_through_usage() -> None:
         ),
     )
     stream_parts = _stream_feed(
-        adapter, request,
+        adapter,
+        request,
         freeze_json_object(
             {
                 "usage": {
@@ -1062,7 +1081,8 @@ async def test_provider_http_errors_expose_only_closed_sanitized_diagnostics() -
 
 def test_stream_accepts_openai_usage_only_chunk_with_empty_choices() -> None:
     parts = _stream_feed(
-        OpenAICompatibleAdapter(), _request(),
+        OpenAICompatibleAdapter(),
+        _request(),
         freeze_json_object(
             {
                 "choices": [],
@@ -1087,14 +1107,18 @@ def test_stream_accepts_openai_usage_only_chunk_with_empty_choices() -> None:
 def test_stream_ignores_empty_auxiliary_chunks_and_accepts_null_delta_finish():
     adapter = OpenAICompatibleAdapter()
 
-    assert _stream_feed(
-        adapter, _request(), freeze_json_object({"choices": [], "vendor": "keepalive"})
-    ) == ()
+    assert (
+        _stream_feed(
+            adapter,
+            _request(),
+            freeze_json_object({"choices": [], "vendor": "keepalive"}),
+        )
+        == ()
+    )
     parts = _stream_feed(
-        adapter, _request(),
-        freeze_json_object(
-            {"choices": [{"delta": None, "finish_reason": "stop"}]}
-        ),
+        adapter,
+        _request(),
+        freeze_json_object({"choices": [{"delta": None, "finish_reason": "stop"}]}),
     )
 
     assert [part.kind for part in parts] == ["finish"]
@@ -1102,7 +1126,8 @@ def test_stream_ignores_empty_auxiliary_chunks_and_accepts_null_delta_finish():
 
 def test_stream_normalizes_content_parts_and_compatible_tool_deltas():
     parts = _stream_feed(
-        OpenAICompatibleAdapter(), _request(),
+        OpenAICompatibleAdapter(),
+        _request(),
         freeze_json_object(
             {
                 "choices": [
@@ -1139,7 +1164,8 @@ def test_stream_normalizes_content_parts_and_compatible_tool_deltas():
 
 def test_stream_accepts_compatible_function_call_delta():
     parts = _stream_feed(
-        OpenAICompatibleAdapter(), _request(),
+        OpenAICompatibleAdapter(),
+        _request(),
         freeze_json_object(
             {
                 "choices": [

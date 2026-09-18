@@ -27,10 +27,12 @@ from pygent.llm import (
     ModelErrorKind,
     ModelFailureReason,
     ModelGroup,
+    ModelModalities,
     ModelProviderError,
     ModelProviderRequest,
     RetryPolicy,
 )
+from pygent.tool import MediaSource, ToolResultMedia
 from tests.support.model_specs import model_entry
 
 
@@ -69,9 +71,7 @@ def request(
 
 def test_anthropic_request_requires_explicit_max_tokens() -> None:
     with pytest.raises(ModelProviderError) as raised:
-        AnthropicMessagesAdapter().build_request(
-            request(generation=GenerationConfig())
-        )
+        AnthropicMessagesAdapter().build_request(request(generation=GenerationConfig()))
     assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
 
 
@@ -80,17 +80,21 @@ def test_anthropic_request_projects_system_tools_choice_and_schema() -> None:
     tool = ToolDefinition(
         name="lookup", description="Lookup", parameters={"type": "object"}
     )
-    payload = AnthropicMessagesAdapter().build_request(
-        request(
-            context=Context(system_prompt="system"),
-            tools=(tool,),
-            generation=GenerationConfig(
-                max_output_tokens=4096,
-                tool_choice="required",
-                response_schema=schema,
-            ),
+    payload = (
+        AnthropicMessagesAdapter()
+        .build_request(
+            request(
+                context=Context(system_prompt="system"),
+                tools=(tool,),
+                generation=GenerationConfig(
+                    max_output_tokens=4096,
+                    tool_choice="required",
+                    response_schema=schema,
+                ),
+            )
         )
-    ).to_dict()
+        .to_dict()
+    )
 
     assert payload["model"] == "claude-opus-5"
     assert payload["max_tokens"] == 4096
@@ -104,26 +108,30 @@ def test_anthropic_request_projects_system_tools_choice_and_schema() -> None:
 
 
 def test_anthropic_request_projects_valid_provider_options() -> None:
-    payload = AnthropicMessagesAdapter().build_request(
-        request(
-            entry=anthropic_entry(
-                options={
-                    "thinking": {
-                        "type": "enabled",
-                        "budget_tokens": 1024,
-                        "display": "summarized",
-                    },
-                    "output_config": {"effort": "high"},
-                    "service_tier": "standard_only",
-                    "stop_sequences": ["END"],
-                }
-            ),
-            generation=GenerationConfig(
-                max_output_tokens=4096,
-                temperature=1,
-            ),
+    payload = (
+        AnthropicMessagesAdapter()
+        .build_request(
+            request(
+                entry=anthropic_entry(
+                    options={
+                        "thinking": {
+                            "type": "enabled",
+                            "budget_tokens": 1024,
+                            "display": "summarized",
+                        },
+                        "output_config": {"effort": "high"},
+                        "service_tier": "standard_only",
+                        "stop_sequences": ["END"],
+                    }
+                ),
+                generation=GenerationConfig(
+                    max_output_tokens=4096,
+                    temperature=1,
+                ),
+            )
         )
-    ).to_dict()
+        .to_dict()
+    )
 
     assert payload["thinking"] == {
         "type": "enabled",
@@ -137,24 +145,26 @@ def test_anthropic_request_projects_valid_provider_options() -> None:
 
 def test_anthropic_request_projects_assistant_and_tool_results() -> None:
     call = ToolCall(call_id="call-1", name="lookup", arguments={"id": 1})
-    context = Context(
-        messages=(AIMessage(content="checking", tool_calls=(call,)),)
-    )
-    payload = AnthropicMessagesAdapter().build_request(
-        request(
-            message=ToolMessage(
-                results=(
-                    ToolResult(
-                        call_id="call-1",
-                        name="lookup",
-                        status="failed",
-                        error="not found",
-                    ),
-                )
-            ),
-            context=context,
+    context = Context(messages=(AIMessage(content="checking", tool_calls=(call,)),))
+    payload = (
+        AnthropicMessagesAdapter()
+        .build_request(
+            request(
+                message=ToolMessage(
+                    results=(
+                        ToolResult(
+                            call_id="call-1",
+                            name="lookup",
+                            status="failed",
+                            error="not found",
+                        ),
+                    )
+                ),
+                context=context,
+            )
         )
-    ).to_dict()
+        .to_dict()
+    )
 
     assert payload["messages"][0] == {
         "role": "assistant",
@@ -169,28 +179,51 @@ def test_anthropic_request_projects_assistant_and_tool_results() -> None:
     assert result["is_error"] is True
 
 
-def test_anthropic_rejects_structured_tool_result_content_explicitly() -> None:
-    with pytest.raises(ModelProviderError) as raised:
-        AnthropicMessagesAdapter().build_request(
+def test_anthropic_projects_structured_tool_result_image_content() -> None:
+    entry = anthropic_entry()
+    entry = replace(
+        entry,
+        spec=replace(
+            entry.spec,
+            capabilities=replace(
+                entry.spec.capabilities,
+                modalities=ModelModalities(input=("text", "image"), output=("text",)),
+            ),
+        ),
+    )
+    payload = (
+        AnthropicMessagesAdapter()
+        .build_request(
             request(
+                entry=entry,
                 message=ToolMessage(
                     results=(
                         ToolResult(
                             call_id="call-1",
                             name="lookup",
                             status="succeeded",
-                            content=(ToolResultText("result"),),
+                            content=(
+                                ToolResultText("result"),
+                                ToolResultMedia(
+                                    media_type="image",
+                                    mime_type="image/png",
+                                    source=MediaSource.inline(
+                                        b"\x89PNG\r\n\x1a\nfixture"
+                                    ),
+                                ),
+                            ),
                         ),
                     )
-                )
+                ),
             )
         )
-
-    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
-    assert (
-        raised.value.reason_code
-        is ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED
+        .to_dict()
     )
+
+    content = payload["messages"][0]["content"][0]["content"]
+    assert content[0] == {"type": "text", "text": "result"}
+    assert content[1]["type"] == "image"
+    assert content[1]["source"]["type"] == "base64"
 
 
 def test_anthropic_non_stream_response_decodes_blocks_usage_and_continuation() -> None:
@@ -204,7 +237,12 @@ def test_anthropic_non_stream_response_decodes_blocks_usage_and_continuation() -
                 "content": [
                     {"type": "thinking", "thinking": "reasoning", "signature": "sig"},
                     {"type": "text", "text": "answer"},
-                    {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"id": 1}},
+                    {
+                        "type": "tool_use",
+                        "id": "call-1",
+                        "name": "lookup",
+                        "input": {"id": 1},
+                    },
                 ],
                 "stop_reason": "tool_use",
                 "usage": {"input_tokens": 10, "output_tokens": 4},
@@ -268,7 +306,11 @@ async def test_anthropic_client_joins_endpoint_sets_headers_and_lists_models() -
         if raw.url.path.endswith("/models"):
             return httpx.Response(
                 200,
-                json={"data": [{"id": "claude-opus-5", "created_at": "2026-01-01T00:00:00Z"}]},
+                json={
+                    "data": [
+                        {"id": "claude-opus-5", "created_at": "2026-01-01T00:00:00Z"}
+                    ]
+                },
             )
         return httpx.Response(200, json={"type": "message"})
 
@@ -280,7 +322,9 @@ async def test_anthropic_client_joins_endpoint_sets_headers_and_lists_models() -
         client=http,
     )
     try:
-        await client.invoke(anthropic_entry(provider="deepseek").spec, freeze_json_object({}))
+        await client.invoke(
+            anthropic_entry(provider="deepseek").spec, freeze_json_object({})
+        )
         models = await client.models.list()
     finally:
         await client.aclose()
@@ -333,18 +377,58 @@ def test_anthropic_http_error_mapping_is_closed() -> None:
 def test_anthropic_stream_decoder_reduces_indexed_blocks_and_continuation() -> None:
     decoder = AnthropicMessagesAdapter().create_stream_decoder(request())
     payloads = [
-        {"type": "message_start", "message": {"id": "msg-1", "usage": {"input_tokens": 10}}},
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "reasoning"}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig"}},
+        {
+            "type": "message_start",
+            "message": {"id": "msg-1", "usage": {"input_tokens": 10}},
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "reasoning"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "signature_delta", "signature": "sig"},
+        },
         {"type": "content_block_stop", "index": 0},
-        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
-        {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "answer"}},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "text_delta", "text": "answer"},
+        },
         {"type": "content_block_stop", "index": 1},
-        {"type": "content_block_start", "index": 2, "content_block": {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {}}},
-        {"type": "content_block_delta", "index": 2, "delta": {"type": "input_json_delta", "partial_json": '{"id":1}'}},
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "tool_use",
+                "id": "call-1",
+                "name": "lookup",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 2,
+            "delta": {"type": "input_json_delta", "partial_json": '{"id":1}'},
+        },
         {"type": "content_block_stop", "index": 2},
-        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 4}},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 4},
+        },
         {"type": "message_stop"},
     ]
 
@@ -367,7 +451,9 @@ def test_anthropic_stream_decoder_reduces_indexed_blocks_and_continuation() -> N
     continuation = parts[-2].data
     assert continuation["provider"] == "anthropic"
     assert continuation["data"]["blocks"] == (
-        freeze_json_object({"type": "thinking", "thinking": "reasoning", "signature": "sig"}),
+        freeze_json_object(
+            {"type": "thinking", "thinking": "reasoning", "signature": "sig"}
+        ),
         freeze_json_object({"type": "text", "start": 0, "end": 6}),
         freeze_json_object({"type": "tool_use", "index": 0}),
     )
@@ -393,10 +479,10 @@ def test_anthropic_stream_rejects_missing_signature_and_premature_eof() -> None:
     )
 
     with pytest.raises(ModelProviderError) as missing_signature:
-        decoder.feed(
-            freeze_json_object({"type": "content_block_stop", "index": 0})
-        )
-    assert missing_signature.value.reason_code is ModelFailureReason.STREAM_EVENT_INVALID
+        decoder.feed(freeze_json_object({"type": "content_block_stop", "index": 0}))
+    assert (
+        missing_signature.value.reason_code is ModelFailureReason.STREAM_EVENT_INVALID
+    )
 
     incomplete = AnthropicMessagesAdapter().create_stream_decoder(request())
     with pytest.raises(ModelProviderError) as eof:
@@ -483,7 +569,12 @@ def test_anthropic_matching_continuation_rebuilds_exact_assistant_layout() -> No
                 "content": [
                     {"type": "thinking", "thinking": "reasoning", "signature": "sig"},
                     {"type": "text", "text": "answer"},
-                    {"type": "tool_use", "id": "call-1", "name": "lookup", "input": {"id": 1}},
+                    {
+                        "type": "tool_use",
+                        "id": "call-1",
+                        "name": "lookup",
+                        "input": {"id": 1},
+                    },
                 ],
                 "stop_reason": "tool_use",
                 "usage": {},
@@ -503,7 +594,11 @@ def test_anthropic_matching_continuation_rebuilds_exact_assistant_layout() -> No
 @pytest.mark.parametrize(
     "payload",
     [
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "x"}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "x"},
+        },
         {"type": "content_block_start", "index": 0, "content_block": {"type": "image"}},
         {"type": "message_delta", "delta": {"stop_reason": "pause_turn"}, "usage": {}},
     ],
@@ -520,15 +615,42 @@ def test_anthropic_stream_rejects_unknown_or_out_of_order_semantics(
 @pytest.mark.asyncio
 async def test_anthropic_http_stream_reaches_common_invoker_reducer() -> None:
     events = [
-        {"type": "message_start", "message": {"id": "msg-1", "usage": {"input_tokens": 2}}},
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "reason"}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig"}},
+        {
+            "type": "message_start",
+            "message": {"id": "msg-1", "usage": {"input_tokens": 2}},
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "reason"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "signature_delta", "signature": "sig"},
+        },
         {"type": "content_block_stop", "index": 0},
-        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
-        {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "answer"}},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "text_delta", "text": "answer"},
+        },
         {"type": "content_block_stop", "index": 1},
-        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 1},
+        },
         {"type": "message_stop"},
     ]
 

@@ -1049,6 +1049,8 @@ def _render_pdf_pages(
                         mime_type=prepared.mime_type,
                         source=source,
                         detail="high",
+                        width=prepared.delivered_dimensions[0],
+                        height=prepared.delivered_dimensions[1],
                     ),
                 )
             )
@@ -1572,6 +1574,8 @@ class FileTools:
             "mime_type": mime_type,
             "size_bytes": len(data),
         }
+        delivered_image_dimensions: tuple[int, int] | None = None
+        delivered_video_metadata: _VideoMetadata | None = None
         if media_type == "image":
             original_mime_type = mime_type
             original_size_bytes = len(data)
@@ -1584,6 +1588,7 @@ class FileTools:
             )
             data = prepared.data
             mime_type = prepared.mime_type
+            delivered_image_dimensions = prepared.delivered_dimensions
             metadata.update(
                 {
                     "mime_type": mime_type,
@@ -1606,6 +1611,7 @@ class FileTools:
                 max_fps=self.max_video_fps,
             )
             data = prepared_video.data
+            delivered_video_metadata = prepared_video.delivered_metadata
             metadata.update(
                 {
                     "size_bytes": len(data),
@@ -1641,6 +1647,39 @@ class FileTools:
                     media_type=media_type,
                     mime_type=mime_type,
                     source=source,
+                    width=(
+                        delivered_image_dimensions[0]
+                        if delivered_image_dimensions is not None
+                        else (
+                            None
+                            if delivered_video_metadata is None
+                            else delivered_video_metadata.dimensions[0]
+                        )
+                    ),
+                    height=(
+                        delivered_image_dimensions[1]
+                        if delivered_image_dimensions is not None
+                        else (
+                            None
+                            if delivered_video_metadata is None
+                            else delivered_video_metadata.dimensions[1]
+                        )
+                    ),
+                    duration_seconds=(
+                        None
+                        if delivered_video_metadata is None
+                        else delivered_video_metadata.duration_seconds
+                    ),
+                    fps=(
+                        None
+                        if delivered_video_metadata is None
+                        else delivered_video_metadata.fps
+                    ),
+                    has_audio=(
+                        None
+                        if delivered_video_metadata is None
+                        else delivered_video_metadata.audio_codec is not None
+                    ),
                 ),
             ),
         )

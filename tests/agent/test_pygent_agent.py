@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
+from io import BytesIO
 from typing import ClassVar
 
 import pytest
+from PIL import Image
 
 from pygent import (
     AIMessage,
@@ -29,7 +31,7 @@ from pygent.runtime import (
 )
 from pygent.runtime.codec import invocation_to_dict
 from pygent.runtime.context_codec import ContextCodecRegistry
-from pygent.tool import ToolCall, ToolResult
+from pygent.tool import MediaSource, ToolCall, ToolResult, ToolResultMedia
 
 
 class CallRecorder:
@@ -317,6 +319,119 @@ async def test_token_estimate_uses_foreground_effective_tools() -> None:
 
     assert not compressor.calls
     assert len(model.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_image_transport_base64_is_not_estimated_as_text() -> None:
+    stream = BytesIO()
+    Image.new("RGB", (1024, 1024), color=(12, 34, 56)).save(stream, format="BMP")
+    media = ToolResultMedia(
+        media_type="image",
+        mime_type="image/bmp",
+        source=MediaSource.inline(stream.getvalue()),
+        detail="high",
+    )
+    model = RecordingModel(AIMessage(content="done"))
+    compressor = RecordingModel(AIMessage(content="summary"))
+    agent = build_agent(
+        model=model,
+        compressor=compressor,
+        context_window_tokens=10_000,
+    )
+    history = ToolMessage(
+        results=(
+            ToolResult(
+                call_id="image-call",
+                name="read_image",
+                status="succeeded",
+                output={"size_bytes": media.source.size_bytes},
+                content=(media,),
+            ),
+        )
+    )
+    context = replace(agent.new_context(), messages=(history,))
+
+    await agent.invoke(UserMessage(content="describe it"), context)
+
+    assert not compressor.calls
+    assert len(model.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_video_transport_base64_is_not_estimated_as_text() -> None:
+    media = ToolResultMedia(
+        media_type="video",
+        mime_type="video/mp4",
+        source=MediaSource.inline(
+            b"\x00\x00\x00\x18ftypmp42" + b"x" * 2_000_000
+        ),
+        width=1280,
+        height=720,
+        duration_seconds=2,
+        fps=24,
+        has_audio=True,
+    )
+    model = RecordingModel(AIMessage(content="done"))
+    compressor = RecordingModel(AIMessage(content="summary"))
+    agent = build_agent(
+        model=model,
+        compressor=compressor,
+        context_window_tokens=10_000,
+    )
+    history = ToolMessage(
+        results=(
+            ToolResult(
+                call_id="video-call",
+                name="read_video",
+                status="succeeded",
+                content=(media,),
+            ),
+        )
+    )
+
+    await agent.invoke(
+        UserMessage(content="describe it"),
+        replace(agent.new_context(), messages=(history,)),
+    )
+
+    assert not compressor.calls
+    assert len(model.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_image_usage_does_not_recalibrate_text_scale() -> None:
+    stream = BytesIO()
+    Image.new("RGB", (32, 32), color=(1, 2, 3)).save(stream, format="PNG")
+    media = ToolResultMedia(
+        media_type="image",
+        mime_type="image/png",
+        source=MediaSource.inline(stream.getvalue()),
+    )
+    model = RecordingModel(AIMessage(content="done", usage={"input_tokens": 10_000}))
+    agent = build_agent(
+        model=model,
+        compressor=RecordingModel(AIMessage(content="summary")),
+        context_window_tokens=100_000,
+    )
+    history = ToolMessage(
+        results=(
+            ToolResult(
+                call_id="image-call",
+                name="read_image",
+                status="succeeded",
+                output={},
+                content=(media,),
+            ),
+        )
+    )
+
+    _, returned = await agent.invoke(
+        UserMessage(content="describe it"),
+        replace(agent.new_context(), messages=(history,)),
+    )
+
+    assert returned.input_token_scale_ppm == 1_100_000
+    assert returned.last_input_tokens == 10_000
 
 
 @pytest.mark.asyncio

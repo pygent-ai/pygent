@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -262,6 +263,11 @@ class ToolResultMedia:
     mime_type: str
     source: MediaSource
     detail: ToolResultMediaDetail | None = None
+    width: int | None = None
+    height: int | None = None
+    duration_seconds: float | None = None
+    fps: float | None = None
+    has_audio: bool | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         raise TypeError("ToolResultMedia cannot be subclassed")
@@ -280,7 +286,39 @@ class ToolResultMedia:
             raise TypeError("media source must be a MediaSource")
         if self.detail not in (None, "auto", "low", "high"):
             raise ValueError(f"unsupported media detail: {self.detail!r}")
+        if (self.width is None) != (self.height is None):
+            raise ValueError("media width and height must be provided together")
+        for name, dimension in (("width", self.width), ("height", self.height)):
+            if dimension is not None and (
+                not isinstance(dimension, int)
+                or isinstance(dimension, bool)
+                or dimension <= 0
+            ):
+                raise ValueError(f"media {name} must be a positive integer")
+        for name, measurement in (
+            ("duration_seconds", self.duration_seconds),
+            ("fps", self.fps),
+        ):
+            if measurement is not None and (
+                isinstance(measurement, bool)
+                or not isinstance(measurement, (int, float))
+                or not math.isfinite(measurement)
+                or measurement <= 0
+            ):
+                raise ValueError(f"media {name} must be a positive finite number")
+        if self.has_audio is not None and not isinstance(self.has_audio, bool):
+            raise TypeError("media has_audio must be a bool")
+        if self.media_type != "video" and any(
+            value is not None
+            for value in (self.duration_seconds, self.fps, self.has_audio)
+        ):
+            raise ValueError("duration, fps, and audio metadata require video media")
         object.__setattr__(self, "mime_type", mime_type)
+        if self.media_type == "image" and self.width is None:
+            dimensions = _inline_image_dimensions(self.source)
+            if dimensions is not None:
+                object.__setattr__(self, "width", dimensions[0])
+                object.__setattr__(self, "height", dimensions[1])
 
 
 ToolResultContent = ToolResultText | ToolResultJson | ToolResultMedia
@@ -298,6 +336,11 @@ def _tool_result_content_to_value(value: ToolResultContent) -> dict[str, object]
             "media_type": value.media_type,
             "mime_type": value.mime_type,
             "detail": value.detail,
+            "width": value.width,
+            "height": value.height,
+            "duration_seconds": value.duration_seconds,
+            "fps": value.fps,
+            "has_audio": value.has_audio,
             "source": {
                 "kind": source.kind,
                 "uri": source.uri,
@@ -310,6 +353,42 @@ def _tool_result_content_to_value(value: ToolResultContent) -> dict[str, object]
     raise TypeError("unsupported ToolResult content subtype")
 
 
+def _tool_result_media_dimensions(value: ToolResultMedia) -> tuple[int, int] | None:
+    """Return normalized image dimensions without counting transport bytes."""
+
+    if value.media_type != "image":
+        return None
+    if value.width is not None and value.height is not None:
+        return value.width, value.height
+    return _inline_image_dimensions(value.source)
+
+
+def _inline_image_dimensions(source: MediaSource) -> tuple[int, int] | None:
+    if source.kind != "inline":
+        return None
+    try:
+        import warnings
+        from io import BytesIO
+
+        from PIL import Image
+
+        data = base64.b64decode(cast(str, source.base64_data), validate=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(data)) as image:
+                width, height = image.size
+    except (
+        OSError,
+        ValueError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
 def _tool_result_content_from_value(value: object) -> ToolResultContent:
     if not isinstance(value, Mapping):
         raise TypeError("ToolResult content block must be an object")
@@ -319,9 +398,19 @@ def _tool_result_content_from_value(value: object) -> ToolResultContent:
         return ToolResultText(text=cast(str, block["text"]))
     if block_type == "json" and set(block) == {"type", "value"}:
         return ToolResultJson(value=cast(JsonValue, block["value"]))
-    if block_type == "media" and set(block) == {
-        "type", "media_type", "mime_type", "detail", "source"
-    }:
+    media_fields = {"type", "media_type", "mime_type", "detail", "source"}
+    media_metadata_fields = {
+        "width",
+        "height",
+        "duration_seconds",
+        "fps",
+        "has_audio",
+    }
+    if (
+        block_type == "media"
+        and media_fields <= set(block)
+        and set(block) <= media_fields | media_metadata_fields
+    ):
         raw_source = block["source"]
         if not isinstance(raw_source, Mapping) or set(raw_source) != {
             "kind", "uri", "url", "base64_data", "sha256", "size_bytes"
@@ -340,6 +429,11 @@ def _tool_result_content_from_value(value: object) -> ToolResultContent:
             mime_type=cast(str, block["mime_type"]),
             source=source,
             detail=cast(ToolResultMediaDetail | None, block["detail"]),
+            width=cast(int | None, block.get("width")),
+            height=cast(int | None, block.get("height")),
+            duration_seconds=cast(float | None, block.get("duration_seconds")),
+            fps=cast(float | None, block.get("fps")),
+            has_audio=cast(bool | None, block.get("has_audio")),
         )
     raise TypeError("unsupported ToolResult content block")
 

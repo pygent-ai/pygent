@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from itertools import pairwise
 from typing import Self, cast
 
@@ -21,16 +21,27 @@ from pygent.core import (
     freeze_json_object,
     thaw_json,
 )
-from pygent.tool import ToolCall, ToolDefinition, ToolResult
+from pygent.tool import (
+    MediaSource,
+    ToolCall,
+    ToolDefinition,
+    ToolResult,
+    ToolResultJson,
+    ToolResultMedia,
+    ToolResultText,
+)
 
 from ._adapter_contracts import (
+    MediaResolver,
+    MediaTransportCapabilities,
     ModelProviderRequest,
     ModelProviderResponse,
     ModelProviderStreamPart,
-    ToolResultContentCapabilities,
 )
 from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
+from ._media_content import media_base64, validate_media_delivery
+from ._media_tokens import anthropic_media_input_tokens
 from ._provider_policies import provider_protocol_policy
 from .catalog import ModelCatalog, ModelInfo
 from .configuration import ModelSpec
@@ -52,6 +63,10 @@ _STOP_REASONS = {
     "max_tokens": "length",
     "refusal": "content_filter",
 }
+_ANTHROPIC_IMAGE_MIME_TYPES = frozenset(
+    {"image/jpeg", "image/png", "image/gif", "image/webp"}
+)
+_ANTHROPIC_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 class AnthropicMessagesClient:
@@ -206,7 +221,34 @@ class AnthropicMessagesAdapter:
     """Strict codec for Anthropic Messages-compatible providers."""
 
     protocol = _PROTOCOL
-    tool_result_content = ToolResultContentCapabilities()
+
+    def __init__(
+        self,
+        *,
+        media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None = None,
+    ) -> None:
+        if media_resolver is not None and not (
+            isinstance(media_resolver, MediaResolver) or callable(media_resolver)
+        ):
+            raise TypeError("media_resolver must provide resolve() or be callable")
+        source_kinds = (
+            ("inline", "url", "resource") if media_resolver else ("inline", "url")
+        )
+        self.media_transport = MediaTransportCapabilities(
+            enabled=True,
+            modalities=("image",),
+            source_kinds=source_kinds,
+            max_media_bytes=_ANTHROPIC_MAX_IMAGE_BYTES,
+            image_mime_types=tuple(sorted(_ANTHROPIC_IMAGE_MIME_TYPES)),
+        )
+        self.media_resolver = media_resolver
+
+    def estimate_media_input_tokens(
+        self, block: ToolResultMedia, model: ModelSpec
+    ) -> int | None:
+        if model.provider != "anthropic":
+            return None
+        return anthropic_media_input_tokens(block, model.model_id)
 
     def validate_model(self, model: ModelSpec) -> None:
         _validate_provider_options(model.provider_options)
@@ -223,7 +265,13 @@ class AnthropicMessagesAdapter:
             messages: list[dict[str, object]] = []
             for message in (*request.context.messages, request.message):
                 messages.append(
-                    _encode_message(message, request.model, request.model_key)
+                    _encode_message(
+                        message,
+                        request.model,
+                        request.model_key,
+                        capabilities=self.media_transport,
+                        media_resolver=self.media_resolver,
+                    )
                 )
             body: dict[str, object] = {
                 "model": request.model.model_id,
@@ -312,7 +360,9 @@ class AnthropicMessagesAdapter:
             finish_reason=finish_reason,
         )
 
-    def create_stream_decoder(self, request: ModelProviderRequest) -> _AnthropicStreamDecoder:
+    def create_stream_decoder(
+        self, request: ModelProviderRequest
+    ) -> _AnthropicStreamDecoder:
         return _AnthropicStreamDecoder(request)
 
     def normalize_error(self, error: BaseException) -> ModelErrorKind:
@@ -418,16 +468,18 @@ class _AnthropicStreamDecoder:
                 raise TypeError
             state.update({"thinking": thinking, "signature": ""})
             if thinking:
-                parts.append(
-                    ModelProviderStreamPart("reasoning", {"text": thinking})
-                )
+                parts.append(ModelProviderStreamPart("reasoning", {"text": thinking}))
         elif kind == "redacted_thinking":
             data = raw.get("data")
             if not isinstance(data, str) or not data:
                 raise TypeError
             state["data"] = data
         elif kind == "tool_use":
-            call_id, name, tool_input = raw.get("id"), raw.get("name"), raw.get("input", {})
+            call_id, name, tool_input = (
+                raw.get("id"),
+                raw.get("name"),
+                raw.get("input", {}),
+            )
             if (
                 not isinstance(call_id, str)
                 or not call_id
@@ -436,7 +488,11 @@ class _AnthropicStreamDecoder:
                 or not isinstance(tool_input, Mapping)
             ):
                 raise TypeError
-            initial = "" if not tool_input else json.dumps(tool_input, ensure_ascii=False, separators=(",", ":"))
+            initial = (
+                ""
+                if not tool_input
+                else json.dumps(tool_input, ensure_ascii=False, separators=(",", ":"))
+            )
             state.update({"id": call_id, "name": name, "json": initial})
             parts.append(
                 ModelProviderStreamPart(
@@ -480,8 +536,10 @@ class _AnthropicStreamDecoder:
                 raise TypeError
             state["thinking"] = cast(str, state["thinking"]) + thinking
             return (
-                ModelProviderStreamPart("reasoning", {"text": thinking}),
-            ) if thinking else ()
+                (ModelProviderStreamPart("reasoning", {"text": thinking}),)
+                if thinking
+                else ()
+            )
         if block_kind == "thinking" and delta_kind == "signature_delta":
             signature = delta.get("signature")
             if not isinstance(signature, str):
@@ -494,16 +552,20 @@ class _AnthropicStreamDecoder:
                 raise TypeError
             state["json"] = cast(str, state["json"]) + partial
             return (
-                ModelProviderStreamPart(
-                    "tool_call",
-                    {
-                        "index": state["tool_index"],
-                        "call_id_delta": "",
-                        "name_delta": "",
-                        "arguments_delta": partial,
-                    },
-                ),
-            ) if partial else ()
+                (
+                    ModelProviderStreamPart(
+                        "tool_call",
+                        {
+                            "index": state["tool_index"],
+                            "call_id_delta": "",
+                            "name_delta": "",
+                            "arguments_delta": partial,
+                        },
+                    ),
+                )
+                if partial
+                else ()
+            )
         raise TypeError
 
     def _block_stop(
@@ -519,7 +581,11 @@ class _AnthropicStreamDecoder:
             if not text:
                 raise TypeError
             self._layout.append(
-                {"type": "text", "start": self._text_offset, "end": self._text_offset + len(text)}
+                {
+                    "type": "text",
+                    "start": self._text_offset,
+                    "end": self._text_offset + len(text),
+                }
             )
             self._text_offset += len(text)
         elif kind == "thinking":
@@ -554,8 +620,10 @@ class _AnthropicStreamDecoder:
     def _message_delta(
         self, event: Mapping[str, object]
     ) -> tuple[ModelProviderStreamPart, ...]:
-        if not self._started or self._completed or any(
-            state.get("open") is True for state in self._blocks.values()
+        if (
+            not self._started
+            or self._completed
+            or any(state.get("open") is True for state in self._blocks.values())
         ):
             raise TypeError
         delta = event.get("delta")
@@ -614,7 +682,12 @@ class _AnthropicStreamDecoder:
 def _validate_provider_options(value: object) -> None:
     if not isinstance(value, FrozenJsonObject):
         raise TypeError("provider_options must be an object")
-    unknown = set(value) - {"thinking", "output_config", "service_tier", "stop_sequences"}
+    unknown = set(value) - {
+        "thinking",
+        "output_config",
+        "service_tier",
+        "stop_sequences",
+    }
     if unknown:
         raise ValueError("unknown Anthropic provider option fields")
     thinking = value.get("thinking")
@@ -676,25 +749,35 @@ def _validate_option_combinations(
 
 
 def _encode_message(
-    message: Message, model: ModelSpec, model_key: str
+    message: Message,
+    model: ModelSpec,
+    model_key: str,
+    *,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
 ) -> dict[str, object]:
     if isinstance(message, ToolMessage):
         return {
             "role": "user",
-            "content": [_tool_result_value(result) for result in message.results],
+            "content": [
+                _tool_result_value(
+                    result,
+                    model=model,
+                    capabilities=capabilities,
+                    media_resolver=media_resolver,
+                )
+                for result in message.results
+            ],
         }
     blocks: list[dict[str, object]] = []
     if message.content:
         blocks.append({"type": "text", "text": message.content})
     if isinstance(message, AIMessage):
         continuation = message.continuation
-        if (
-            continuation is not None
-            and continuation_matches(
-                continuation,
-                model_key=model_key,
-                model=model,
-            )
+        if continuation is not None and continuation_matches(
+            continuation,
+            model_key=model_key,
+            model=model,
         ):
             blocks = _assistant_blocks(message, continuation)
         else:
@@ -716,7 +799,11 @@ def _assistant_blocks(
 ) -> list[dict[str, object]]:
     try:
         data = cast(FrozenJsonObject, continuation.data)
-        if set(data) != {"version", "blocks"} or type(data["version"]) is not int or data["version"] != 1:
+        if (
+            set(data) != {"version", "blocks"}
+            or type(data["version"]) is not int
+            or data["version"] != 1
+        ):
             raise ValueError
         layout = data["blocks"]
         if not isinstance(layout, tuple):
@@ -739,31 +826,38 @@ def _assistant_blocks(
                 rebuilt.append({"type": "text", "text": message.content[start:end]})
             elif kind == "tool_use" and set(raw) == {"type", "index"}:
                 index = raw["index"]
-                if type(index) is not int or index < 0 or index >= len(message.tool_calls) or index in used_tools:
+                if (
+                    type(index) is not int
+                    or index < 0
+                    or index >= len(message.tool_calls)
+                    or index in used_tools
+                ):
                     raise ValueError
                 used_tools.add(index)
                 call = message.tool_calls[index]
-                rebuilt.append({"type": "tool_use", "id": call.call_id, "name": call.name, "input": _thaw(call.arguments)})
+                rebuilt.append(
+                    {
+                        "type": "tool_use",
+                        "id": call.call_id,
+                        "name": call.name,
+                        "input": _thaw(call.arguments),
+                    }
+                )
             elif kind == "thinking":
                 fields = set(raw)
                 if (
-                    fields not in (
+                    fields
+                    not in (
                         {"type", "thinking"},
                         {"type", "thinking", "signature"},
                     )
                     or not isinstance(raw["thinking"], str)
-                    or (
-                        "signature" in raw
-                        and not isinstance(raw["signature"], str)
-                    )
+                    or ("signature" in raw and not isinstance(raw["signature"], str))
                     or (
                         provider_protocol_policy(
                             continuation.provider, continuation.protocol
                         ).requires_signed_thinking
-                        and (
-                            "signature" not in raw
-                            or not cast(str, raw["signature"])
-                        )
+                        and ("signature" not in raw or not cast(str, raw["signature"]))
                     )
                 ):
                     raise ValueError
@@ -780,7 +874,9 @@ def _assistant_blocks(
             left[1] > right[0] for left, right in pairwise(used_text)
         ):
             raise ValueError
-        if "".join(message.content[start:end] for start, end in used_text) != message.content or used_tools != set(range(len(message.tool_calls))):
+        if "".join(
+            message.content[start:end] for start, end in used_text
+        ) != message.content or used_tools != set(range(len(message.tool_calls))):
             raise ValueError
         return rebuilt
     except (KeyError, TypeError, ValueError):
@@ -790,22 +886,77 @@ def _assistant_blocks(
         ) from None
 
 
-def _tool_result_value(result: ToolResult) -> dict[str, object]:
+def _tool_result_value(
+    result: ToolResult,
+    *,
+    model: ModelSpec,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
+) -> dict[str, object]:
     if result.content:
-        raise ModelProviderError(
-            ModelErrorKind.INVALID_REQUEST,
-            "Anthropic Messages does not support Pygent structured tool-result content",
-            reason_code=ModelFailureReason.TOOL_RESULT_CONTENT_UNSUPPORTED,
-        )
-    content = result.output if result.status == "succeeded" else result.error
-    if not isinstance(content, str):
-        content = json.dumps(thaw_json(content), ensure_ascii=False, separators=(",", ":"))
+        content: object = [
+            _tool_result_content_block(
+                block,
+                model=model,
+                capabilities=capabilities,
+                media_resolver=media_resolver,
+            )
+            for block in result.content
+        ]
+    else:
+        content = result.output if result.status == "succeeded" else result.error
+        if not isinstance(content, str):
+            content = json.dumps(
+                thaw_json(content), ensure_ascii=False, separators=(",", ":")
+            )
     return {
         "type": "tool_result",
         "tool_use_id": result.call_id,
         "content": content or "",
         "is_error": result.status != "succeeded",
     }
+
+
+def _tool_result_content_block(
+    block: ToolResultText | ToolResultJson | ToolResultMedia,
+    *,
+    model: ModelSpec,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
+) -> dict[str, object]:
+    if type(block) is ToolResultText:
+        return {"type": "text", "text": block.text}
+    if type(block) is ToolResultJson:
+        return {
+            "type": "text",
+            "text": json.dumps(
+                thaw_json(block.value), ensure_ascii=False, separators=(",", ":")
+            ),
+        }
+    if type(block) is not ToolResultMedia:
+        raise TypeError("tool-result content block is invalid")
+    validate_media_delivery(
+        block,
+        model=model,
+        capabilities=capabilities,
+        allowed_mime_types=_ANTHROPIC_IMAGE_MIME_TYPES,
+    )
+    if block.source.kind == "url":
+        source: dict[str, object] = {
+            "type": "url",
+            "url": block.source.url,
+        }
+    else:
+        source = {
+            "type": "base64",
+            "media_type": block.mime_type,
+            "data": media_base64(
+                block,
+                capabilities=capabilities,
+                media_resolver=media_resolver,
+            ),
+        }
+    return {"type": "image", "source": source}
 
 
 def _event_index(event: Mapping[str, object]) -> int:
@@ -886,16 +1037,34 @@ def _decode_blocks(
             layout.append({"type": "text", "start": offset, "end": offset + len(text)})
             offset += len(text)
         elif kind == "tool_use":
-            call_id, name, arguments = block.get("id"), block.get("name"), block.get("input")
-            if not isinstance(call_id, str) or not call_id or not isinstance(name, str) or not name or not isinstance(arguments, Mapping):
+            call_id, name, arguments = (
+                block.get("id"),
+                block.get("name"),
+                block.get("input"),
+            )
+            if (
+                not isinstance(call_id, str)
+                or not call_id
+                or not isinstance(name, str)
+                or not name
+                or not isinstance(arguments, Mapping)
+            ):
                 raise TypeError
             layout.append({"type": "tool_use", "index": len(calls)})
-            calls.append(ToolCall(call_id=call_id, name=name, arguments=cast(Mapping[str, object], arguments)))
+            calls.append(
+                ToolCall(
+                    call_id=call_id,
+                    name=name,
+                    arguments=cast(Mapping[str, object], arguments),
+                )
+            )
         elif kind == "thinking":
             thinking, signature = block.get("thinking"), block.get("signature")
-            if not isinstance(thinking, str) or (
-                signature is not None and not isinstance(signature, str)
-            ) or (not signature and not allow_unsigned_thinking):
+            if (
+                not isinstance(thinking, str)
+                or (signature is not None and not isinstance(signature, str))
+                or (not signature and not allow_unsigned_thinking)
+            ):
                 raise TypeError
             thinking_block: dict[str, object] = {
                 "type": "thinking",
@@ -936,7 +1105,10 @@ def _anthropic_usage(value: object) -> FrozenJsonObject:
     if not isinstance(value, Mapping):
         raise TypeError
     result: dict[str, int] = {}
-    for source, target in (("input_tokens", "input_tokens"), ("output_tokens", "output_tokens")):
+    for source, target in (
+        ("input_tokens", "input_tokens"),
+        ("output_tokens", "output_tokens"),
+    ):
         count = value.get(source)
         if count is not None:
             if type(count) is not int or count < 0:
@@ -985,7 +1157,12 @@ def _anthropic_failure_reason(status: int, body: bytes) -> ModelFailureReason:
         404: ModelFailureReason.MODEL_NOT_FOUND,
         429: ModelFailureReason.RATE_LIMITED,
         504: ModelFailureReason.PROVIDER_TIMEOUT,
-    }.get(status, ModelFailureReason.PROVIDER_UNAVAILABLE if status >= 500 else ModelFailureReason.INVALID_PARAMETER)
+    }.get(
+        status,
+        ModelFailureReason.PROVIDER_UNAVAILABLE
+        if status >= 500
+        else ModelFailureReason.INVALID_PARAMETER,
+    )
 
 
 def _kind_for_status(status: int) -> ModelErrorKind:

@@ -407,6 +407,10 @@ async def test_read_inspects_safe_video_without_changing_bytes(tmp_path) -> None
     assert result.output["original_video"]["fps"] == 10
     assert result.output["delivered_video"] == result.output["original_video"]
     assert base64.b64decode(result.content[1].source.base64_data or "") == original
+    assert (result.content[1].width, result.content[1].height) == (320, 180)
+    assert result.content[1].duration_seconds == pytest.approx(1)
+    assert result.content[1].fps == pytest.approx(10)
+    assert result.content[1].has_audio is False
 
 
 @pytest.mark.asyncio
@@ -430,6 +434,9 @@ async def test_read_normalizes_video_for_model_delivery(tmp_path) -> None:
     assert result.output["delivered_video"]["video_codec"] == "h264"
     assert result.output["delivered_video"]["pixel_format"] == "yuv420p"
     assert result.output["size_bytes"] <= 12_000_000
+    assert result.content[1].duration_seconds is not None
+    assert result.content[1].fps is not None
+    assert result.content[1].fps <= 8
 
 
 @pytest.mark.asyncio

@@ -53,9 +53,7 @@ class FakeClient:
 def _completion(content: str = "ok") -> FrozenJsonObject:
     return freeze_json_object(
         {
-            "choices": [
-                {"message": {"content": content}, "finish_reason": "stop"}
-            ],
+            "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
             "usage": {},
         }
     )
@@ -69,9 +67,13 @@ def _entry(
     max_output_tokens: int | None = 4096,
     streaming_output: tuple[str, ...] = (),
 ) -> ModelEntry:
-    capabilities = CapabilityPresetCatalog.builtin().presets[preset].materialize(
-        context_tokens=32_768,
-        max_output_tokens=max_output_tokens or 4096,
+    capabilities = (
+        CapabilityPresetCatalog.builtin()
+        .presets[preset]
+        .materialize(
+            context_tokens=32_768,
+            max_output_tokens=max_output_tokens or 4096,
+        )
     )
     capabilities = replace(
         capabilities,
@@ -154,9 +156,7 @@ async def test_invoker_dispatches_by_protocol_and_falls_back_in_model_order() ->
 
 @pytest.mark.asyncio
 async def test_capability_warning_is_once_per_reached_model_not_retry() -> None:
-    primary = FakeClient(
-        [httpx.ConnectError("offline"), httpx.ConnectError("offline")]
-    )
+    primary = FakeClient([httpx.ConnectError("offline"), httpx.ConnectError("offline")])
     fallback = FakeClient([_completion("{}")])
     group = ModelGroup(
         "assistant",
@@ -196,9 +196,7 @@ async def test_capability_warning_is_once_per_reached_model_not_retry() -> None:
     async with execution.subscribe() as events:
         captured = [event async for event in events]
 
-    warnings = [
-        event for event in captured if event.kind == "model.capability.warning"
-    ]
+    warnings = [event for event in captured if event.kind == "model.capability.warning"]
     assert [event.data["model_key"] for event in warnings] == ["primary", "fallback"]
     assert all(
         event.data["missing_capabilities"]
@@ -261,9 +259,7 @@ async def test_invoker_uses_non_streaming_transport_without_text_streaming() -> 
         captured = [event async for event in events]
 
     assert result.message.content == "non-streamed"
-    warnings = [
-        event for event in captured if event.kind == "model.capability.warning"
-    ]
+    warnings = [event for event in captured if event.kind == "model.capability.warning"]
     assert all(
         "limits.max_output_tokens" not in event.data["missing_capabilities"]
         for event in warnings

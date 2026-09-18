@@ -548,6 +548,8 @@ def load_image(resource_uri: str) -> ToolOutput:
                     sha256="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                     size_bytes=12345,
                 ),
+                width=640,
+                height=480,
             ),
         ),
     )
@@ -556,6 +558,16 @@ def load_image(resource_uri: str) -> ToolOutput:
 `output` 是任务查询和业务持久化使用的严格 JSON；`content` 是模型可见投影。两者不会
 互相隐式复制。`ToolResultJson` 在没有原生 JSON 内容块的协议上编码为独立文本块。
 图片和视频分别使用 `media_type="image"` 与 `media_type="video"`，MIME 必须与类型匹配。
+媒体的 `width`/`height` 必须成对提供；inline 图片会自动探测，视频可另外提供
+`duration_seconds`、`fps` 和 `has_audio`。resource/URL 媒体建议由工具显式填写这些元数据，
+以便在不读取传输数据的情况下进行上下文 token 预算。
+
+内置协议按各自原生 wire contract 投影媒体：Anthropic Messages 的 `tool_result`
+和 OpenAI Responses 的 `function_call_output` 默认接受图片；Gemini 3.x 使用
+`functionResponse.parts[].inlineData`，Gemini 2.x 会在路由阶段把媒体投影为 unavailable
+文本。Chat Completions 的官方 tool message 没有标准化媒体块，因此只对显式配置了
+`MediaTransportCapabilities` 的兼容 endpoint 开启图片或视频。当前三个原生函数结果
+协议都不声明视频支持；视频只在明确支持 `video_url` 的兼容 endpoint 上传递。
 
 `MediaSource.inline(data)` 接受有界 `bytes` 并规范化为 Base64；
 `MediaSource.remote_url(url)` 保存 Provider 可访问的公开 HTTP(S) URL；

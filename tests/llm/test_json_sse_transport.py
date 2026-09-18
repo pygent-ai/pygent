@@ -36,9 +36,7 @@ async def test_json_transport_returns_objects_and_bounds_http_errors() -> None:
         assert requests[0].headers["x-test"] == "value"
 
         with pytest.raises(_HTTPResponseError) as raised:
-            await transport.request_json(
-                "GET", "https://models.example/error", None
-            )
+            await transport.request_json("GET", "https://models.example/error", None)
         assert raised.value.status == 429
         assert len(raised.value.body) == 64 * 1024
     finally:
@@ -55,8 +53,8 @@ async def test_sse_transport_parses_comments_events_and_multiline_data() -> None
             text=(
                 ": keepalive\n"
                 "event: message_start\n"
-                "data: {\"type\":\n"
-                "data: \"message_start\"}\n\n"
+                'data: {"type":\n'
+                'data: "message_start"}\n\n'
                 "data: [DONE]\n\n"
             ),
             headers={"content-type": "text/event-stream"},
@@ -86,7 +84,9 @@ async def test_sse_transport_parses_comments_events_and_multiline_data() -> None
 
 @pytest.mark.asyncio
 async def test_injected_client_is_borrowed_and_close_is_idempotent() -> None:
-    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200)))
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200))
+    )
     transport = _JsonSSETransport(
         client=client,
         trust_env_url="https://models.example",

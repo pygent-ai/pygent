@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from collections.abc import Mapping
@@ -15,9 +16,10 @@ from pygent.core import FrozenJsonObject, JsonObjectInput, freeze_json_object, t
 from .protocols import BuiltinModelProtocol
 from .types import ModelGroupResolution
 
-_CAPABILITY_FIELDS = frozenset(
+_REQUIRED_CAPABILITY_FIELDS = frozenset(
     {"modalities", "streaming", "tools", "structured_output", "reasoning", "limits"}
 )
+_CAPABILITY_FIELDS = _REQUIRED_CAPABILITY_FIELDS | {"media_input"}
 _MODEL_FIELDS = frozenset(
     {
         "connection",
@@ -35,6 +37,8 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TOOL_CHOICES = frozenset({"none", "auto", "required", "named"})
 _MODEL_INPUT_MODALITIES = frozenset({"text", "image", "audio", "video"})
 _MODEL_OUTPUT_MODALITIES = _MODEL_INPUT_MODALITIES | {"embedding"}
+_MEDIA_RESOLUTION_MODES = frozenset({"low", "high", "original"})
+_MIME_TYPE = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$")
 
 
 def _object(value: object, label: str) -> Mapping[str, object]:
@@ -43,13 +47,24 @@ def _object(value: object, label: str) -> Mapping[str, object]:
     return cast(Mapping[str, object], value)
 
 
-def _exact_fields(value: Mapping[str, object], fields: frozenset[str], label: str) -> None:
+def _exact_fields(
+    value: Mapping[str, object], fields: frozenset[str], label: str
+) -> None:
     unknown = set(value) - fields
     if unknown:
         raise ValueError(f"unknown {label} fields: " + ", ".join(sorted(unknown)))
     missing = fields - set(value)
     if missing:
         raise ValueError(f"missing {label} fields: " + ", ".join(sorted(missing)))
+
+
+def _capability_fields(value: Mapping[str, object]) -> None:
+    unknown = set(value) - _CAPABILITY_FIELDS
+    if unknown:
+        raise ValueError("unknown capabilities fields: " + ", ".join(sorted(unknown)))
+    missing = _REQUIRED_CAPABILITY_FIELDS - set(value)
+    if missing:
+        raise ValueError("missing capabilities fields: " + ", ".join(sorted(missing)))
 
 
 def _non_empty(value: object, label: str) -> str:
@@ -98,15 +113,42 @@ def _optional_positive_int(value: object, label: str) -> int | None:
     return _positive_int(value, label)
 
 
+def _optional_positive_number(value: object, label: str) -> float | None:
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(f"{label} must be a positive number")
+    return float(value)
+
+
+def _optional_bool(value: object, label: str) -> bool | None:
+    if value is None:
+        return None
+    return _bool(value, label)
+
+
+def _mime_types(value: object, label: str, prefix: str) -> tuple[str, ...]:
+    items = _string_tuple(value, label)
+    if any(
+        _MIME_TYPE.fullmatch(item) is None or not item.startswith(prefix)
+        for item in items
+    ):
+        raise ValueError(f"{label} must contain valid {prefix.rstrip('/')} MIME types")
+    return items
+
+
 def _modalities(
     value: object, label: str, allowed: frozenset[str] | set[str]
 ) -> tuple[str, ...]:
     items = _string_tuple(value, label)
     unknown = set(items) - allowed
     if unknown:
-        raise ValueError(
-            f"unsupported {label} values: " + ", ".join(sorted(unknown))
-        )
+        raise ValueError(f"unsupported {label} values: " + ", ".join(sorted(unknown)))
     return items
 
 
@@ -152,9 +194,7 @@ class ModelStreamingCapabilities:
         )
 
     @classmethod
-    def from_mapping(
-        cls, value: Mapping[str, object]
-    ) -> ModelStreamingCapabilities:
+    def from_mapping(cls, value: Mapping[str, object]) -> ModelStreamingCapabilities:
         _exact_fields(value, frozenset({"output"}), "streaming")
         return cls(
             output=_modalities(
@@ -186,7 +226,9 @@ class ModelToolCapabilities:
         choices = _string_tuple(value["choice"], "tools.choice")
         unknown = set(choices) - _TOOL_CHOICES
         if unknown:
-            raise ValueError("unsupported tools.choice values: " + ", ".join(sorted(unknown)))
+            raise ValueError(
+                "unsupported tools.choice values: " + ", ".join(sorted(unknown))
+            )
         return cls(
             call=_bool(value["call"], "tools.call"),
             choice=choices,
@@ -207,7 +249,9 @@ class ModelStructuredOutputCapabilities:
     def from_mapping(
         cls, value: Mapping[str, object]
     ) -> ModelStructuredOutputCapabilities:
-        _exact_fields(value, frozenset({"json_object", "json_schema"}), "structured_output")
+        _exact_fields(
+            value, frozenset({"json_object", "json_schema"}), "structured_output"
+        )
         return cls(
             json_object=_bool(value["json_object"], "structured_output.json_object"),
             json_schema=_bool(value["json_schema"], "structured_output.json_schema"),
@@ -226,9 +270,7 @@ class ModelReasoningCapabilities:
             raise ValueError("reasoning.controllable requires reasoning.supported")
 
     @classmethod
-    def from_mapping(
-        cls, value: Mapping[str, object]
-    ) -> ModelReasoningCapabilities:
+    def from_mapping(cls, value: Mapping[str, object]) -> ModelReasoningCapabilities:
         _exact_fields(value, frozenset({"supported", "controllable"}), "reasoning")
         supported = _bool(value["supported"], "reasoning.supported")
         controllable = _bool(value["controllable"], "reasoning.controllable")
@@ -248,7 +290,9 @@ class ModelLimits:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelLimits:
-        _exact_fields(value, frozenset({"context_tokens", "max_output_tokens"}), "limits")
+        _exact_fields(
+            value, frozenset({"context_tokens", "max_output_tokens"}), "limits"
+        )
         return cls(
             context_tokens=_optional_positive_int(
                 value["context_tokens"], "limits.context_tokens"
@@ -260,6 +304,219 @@ class ModelLimits:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelImageInputCapabilities:
+    """Machine-readable image constraints for one model."""
+
+    mime_types: tuple[str, ...] = ()
+    max_bytes: int | None = None
+    max_width: int | None = None
+    max_height: int | None = None
+    max_pixels: int | None = None
+    resolution_modes: tuple[str, ...] = ()
+    animated: bool | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "mime_types",
+            _mime_types(self.mime_types, "media_input.image.mime_types", "image/"),
+        )
+        for name in ("max_bytes", "max_width", "max_height", "max_pixels"):
+            _optional_positive_int(getattr(self, name), f"media_input.image.{name}")
+        modes = _string_tuple(
+            self.resolution_modes, "media_input.image.resolution_modes"
+        )
+        unknown = set(modes) - _MEDIA_RESOLUTION_MODES
+        if unknown:
+            raise ValueError(
+                "unsupported media_input.image.resolution_modes values: "
+                + ", ".join(sorted(unknown))
+            )
+        _optional_bool(self.animated, "media_input.image.animated")
+        object.__setattr__(self, "resolution_modes", modes)
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> ModelImageInputCapabilities:
+        fields = frozenset(
+            {
+                "mime_types",
+                "max_bytes",
+                "max_width",
+                "max_height",
+                "max_pixels",
+                "resolution_modes",
+                "animated",
+            }
+        )
+        _exact_fields(value, fields, "media_input.image")
+        return cls(
+            mime_types=_mime_types(
+                value["mime_types"], "media_input.image.mime_types", "image/"
+            ),
+            max_bytes=_optional_positive_int(
+                value["max_bytes"], "media_input.image.max_bytes"
+            ),
+            max_width=_optional_positive_int(
+                value["max_width"], "media_input.image.max_width"
+            ),
+            max_height=_optional_positive_int(
+                value["max_height"], "media_input.image.max_height"
+            ),
+            max_pixels=_optional_positive_int(
+                value["max_pixels"], "media_input.image.max_pixels"
+            ),
+            resolution_modes=_string_tuple(
+                value["resolution_modes"], "media_input.image.resolution_modes"
+            ),
+            animated=_optional_bool(value["animated"], "media_input.image.animated"),
+        )
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "mime_types": list(self.mime_types),
+            "max_bytes": self.max_bytes,
+            "max_width": self.max_width,
+            "max_height": self.max_height,
+            "max_pixels": self.max_pixels,
+            "resolution_modes": list(self.resolution_modes),
+            "animated": self.animated,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ModelVideoInputCapabilities:
+    """Machine-readable native-video constraints for one model."""
+
+    native: bool | None = None
+    mime_types: tuple[str, ...] = ()
+    max_bytes: int | None = None
+    max_duration_seconds: float | None = None
+    max_width: int | None = None
+    max_height: int | None = None
+    max_fps: float | None = None
+    audio: bool | None = None
+
+    def __post_init__(self) -> None:
+        _optional_bool(self.native, "media_input.video.native")
+        object.__setattr__(
+            self,
+            "mime_types",
+            _mime_types(self.mime_types, "media_input.video.mime_types", "video/"),
+        )
+        for name in ("max_bytes", "max_width", "max_height"):
+            _optional_positive_int(getattr(self, name), f"media_input.video.{name}")
+        _optional_positive_number(
+            self.max_duration_seconds, "media_input.video.max_duration_seconds"
+        )
+        _optional_positive_number(self.max_fps, "media_input.video.max_fps")
+        _optional_bool(self.audio, "media_input.video.audio")
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> ModelVideoInputCapabilities:
+        fields = frozenset(
+            {
+                "native",
+                "mime_types",
+                "max_bytes",
+                "max_duration_seconds",
+                "max_width",
+                "max_height",
+                "max_fps",
+                "audio",
+            }
+        )
+        _exact_fields(value, fields, "media_input.video")
+        return cls(
+            native=_optional_bool(value["native"], "media_input.video.native"),
+            mime_types=_mime_types(
+                value["mime_types"], "media_input.video.mime_types", "video/"
+            ),
+            max_bytes=_optional_positive_int(
+                value["max_bytes"], "media_input.video.max_bytes"
+            ),
+            max_duration_seconds=_optional_positive_number(
+                value["max_duration_seconds"],
+                "media_input.video.max_duration_seconds",
+            ),
+            max_width=_optional_positive_int(
+                value["max_width"], "media_input.video.max_width"
+            ),
+            max_height=_optional_positive_int(
+                value["max_height"], "media_input.video.max_height"
+            ),
+            max_fps=_optional_positive_number(
+                value["max_fps"], "media_input.video.max_fps"
+            ),
+            audio=_optional_bool(value["audio"], "media_input.video.audio"),
+        )
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "native": self.native,
+            "mime_types": list(self.mime_types),
+            "max_bytes": self.max_bytes,
+            "max_duration_seconds": self.max_duration_seconds,
+            "max_width": self.max_width,
+            "max_height": self.max_height,
+            "max_fps": self.max_fps,
+            "audio": self.audio,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ModelMediaInputCapabilities:
+    """Optional detailed media input limits layered on model modalities."""
+
+    image: ModelImageInputCapabilities | None = None
+    video: ModelVideoInputCapabilities | None = None
+
+    def __bool__(self) -> bool:
+        return self.image is not None or self.video is not None
+
+    def __post_init__(self) -> None:
+        if self.image is not None and not isinstance(
+            self.image, ModelImageInputCapabilities
+        ):
+            raise TypeError(
+                "media_input.image must be ModelImageInputCapabilities or None"
+            )
+        if self.video is not None and not isinstance(
+            self.video, ModelVideoInputCapabilities
+        ):
+            raise TypeError(
+                "media_input.video must be ModelVideoInputCapabilities or None"
+            )
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> ModelMediaInputCapabilities:
+        _exact_fields(value, frozenset({"image", "video"}), "media_input")
+        image = value["image"]
+        video = value["video"]
+        return cls(
+            image=(
+                None
+                if image is None
+                else ModelImageInputCapabilities.from_mapping(
+                    _object(image, "media_input.image")
+                )
+            ),
+            video=(
+                None
+                if video is None
+                else ModelVideoInputCapabilities.from_mapping(
+                    _object(video, "media_input.video")
+                )
+            ),
+        )
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "image": None if self.image is None else self.image.to_mapping(),
+            "video": None if self.video is None else self.video.to_mapping(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ModelCapabilities:
     modalities: ModelModalities
     streaming: ModelStreamingCapabilities
@@ -267,6 +524,10 @@ class ModelCapabilities:
     structured_output: ModelStructuredOutputCapabilities
     reasoning: ModelReasoningCapabilities
     limits: ModelLimits
+    media_input: ModelMediaInputCapabilities = field(
+        default_factory=ModelMediaInputCapabilities,
+        metadata={"pygent_omit_if_empty": True},
+    )
 
     def __post_init__(self) -> None:
         expected = (
@@ -276,6 +537,7 @@ class ModelCapabilities:
             ("structured_output", ModelStructuredOutputCapabilities),
             ("reasoning", ModelReasoningCapabilities),
             ("limits", ModelLimits),
+            ("media_input", ModelMediaInputCapabilities),
         )
         for name, value_type in expected:
             if not isinstance(getattr(self, name), value_type):
@@ -286,12 +548,18 @@ class ModelCapabilities:
                 "streaming.output must be a subset of modalities.output: "
                 + ", ".join(sorted(unsupported_streams))
             )
+        if self.media_input.image is not None and "image" not in self.modalities.input:
+            raise ValueError("media_input.image requires modalities.input image")
+        if self.media_input.video is not None and "video" not in self.modalities.input:
+            raise ValueError("media_input.video requires modalities.input video")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelCapabilities:
-        _exact_fields(value, _CAPABILITY_FIELDS, "capabilities")
+        _capability_fields(value)
         return cls(
-            modalities=ModelModalities.from_mapping(_object(value["modalities"], "modalities")),
+            modalities=ModelModalities.from_mapping(
+                _object(value["modalities"], "modalities")
+            ),
             streaming=ModelStreamingCapabilities.from_mapping(
                 _object(value["streaming"], "streaming")
             ),
@@ -303,10 +571,17 @@ class ModelCapabilities:
                 _object(value["reasoning"], "reasoning")
             ),
             limits=ModelLimits.from_mapping(_object(value["limits"], "limits")),
+            media_input=(
+                ModelMediaInputCapabilities()
+                if "media_input" not in value
+                else ModelMediaInputCapabilities.from_mapping(
+                    _object(value["media_input"], "media_input")
+                )
+            ),
         )
 
     def to_mapping(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "modalities": {
                 "input": list(self.modalities.input),
                 "output": list(self.modalities.output),
@@ -330,6 +605,9 @@ class ModelCapabilities:
                 "max_output_tokens": self.limits.max_output_tokens,
             },
         }
+        if self.media_input != ModelMediaInputCapabilities():
+            value["media_input"] = self.media_input.to_mapping()
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,7 +630,9 @@ class ModelSpec:
         if not isinstance(self.provider_options, Mapping):
             raise TypeError("provider_options must be an object")
         if not isinstance(self.provider_options, FrozenJsonObject):
-            object.__setattr__(self, "provider_options", freeze_json_object(self.provider_options))
+            object.__setattr__(
+                self, "provider_options", freeze_json_object(self.provider_options)
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -585,7 +865,9 @@ class ConnectionConfig:
             protocols[protocol] = _validated_url(endpoint["base_url"], "base_url")
         return cls(
             provider=_non_empty(value["provider"], "provider"),
-            credential=CredentialRef.from_mapping(_object(value["credential"], "credential")),
+            credential=CredentialRef.from_mapping(
+                _object(value["credential"], "credential")
+            ),
             protocols=protocols,
             verify_ssl=_bool(value.get("verify_ssl", True), "verify_ssl"),
             proxy=(None if value.get("proxy") is None else cast(str, value["proxy"])),
@@ -731,7 +1013,9 @@ class ModelConfig:
                 provider=connection.provider,
                 model_id=configured_model.model_id,
                 protocol=protocol,
-                provider_options=cast(JsonObjectInput, configured_model.provider_options),
+                provider_options=cast(
+                    JsonObjectInput, configured_model.provider_options
+                ),
                 capabilities=configured_model.capabilities,
             )
             entry = ModelEntry(key=key, spec=spec)
@@ -750,7 +1034,8 @@ class ModelConfig:
                     + ", ".join(sorted(unknown_models))
                 )
             groups[key] = ModelGroup(
-                name=key, models=tuple(entries[model_name] for model_name in model_names)
+                name=key,
+                models=tuple(entries[model_name] for model_name in model_names),
             )
         result = cls.__new__(cls)
         object.__setattr__(
@@ -792,12 +1077,15 @@ __all__ = [
     "ModelEntry",
     "ModelGroup",
     "ModelGroupConfig",
+    "ModelImageInputCapabilities",
     "ModelLimits",
+    "ModelMediaInputCapabilities",
     "ModelModalities",
     "ModelReasoningCapabilities",
     "ModelSpec",
     "ModelStreamingCapabilities",
     "ModelStructuredOutputCapabilities",
     "ModelToolCapabilities",
+    "ModelVideoInputCapabilities",
     "ResolvedModelConnection",
 ]

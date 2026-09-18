@@ -5,10 +5,12 @@ import subprocess
 import sys
 import time
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
 
 import httpx
 import pytest
+from PIL import Image
 
 from pygent import (
     AIMessage,
@@ -26,15 +28,17 @@ from pygent.llm import (
     DefaultModelInvoker,
     ExponentialBackoff,
     GenerationConfig,
+    MediaTransportCapabilities,
     ModelCallError,
     ModelErrorKind,
     ModelFailureReason,
+    ModelImageInputCapabilities,
+    ModelMediaInputCapabilities,
     ModelProviderError,
     ModelProviderResponse,
     ModelProviderStreamPart,
     OpenAICompatibleAdapter,
     RetryPolicy,
-    ToolResultContentCapabilities,
 )
 from pygent.llm import invoker as invoker_module
 from tests.support.model_specs import (
@@ -196,14 +200,121 @@ def media_message(media_type: str = "image") -> ToolMessage:
     )
 
 
+def projectable_image_message() -> ToolMessage:
+    buffer = BytesIO()
+    Image.new("RGB", (320, 160), (32, 96, 192)).save(buffer, format="PNG")
+    return ToolMessage(
+        results=(
+            ToolResult(
+                call_id="read-1",
+                name="read",
+                status="succeeded",
+                output={"file_path": "fixture.png"},
+                content=(
+                    ToolResultMedia(
+                        media_type="image",
+                        mime_type="image/png",
+                        source=MediaSource.inline(buffer.getvalue()),
+                        width=320,
+                        height=160,
+                    ),
+                ),
+            ),
+        )
+    )
+
+
+def image_model_entry(name: str, *, max_width: int):
+    entry = model_entry(name, "openai", name, streaming=False)
+    return replace(
+        entry,
+        spec=replace(
+            entry.spec,
+            capabilities=replace(
+                entry.spec.capabilities,
+                modalities=replace(
+                    entry.spec.capabilities.modalities,
+                    input=("text", "image"),
+                ),
+                media_input=ModelMediaInputCapabilities(
+                    image=ModelImageInputCapabilities(
+                        mime_types=("image/jpeg",),
+                        max_width=max_width,
+                        max_height=max_width,
+                        animated=False,
+                    )
+                ),
+            ),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_fallback_reprojects_canonical_media_for_each_model() -> None:
+    message = projectable_image_message()
+    original = message.results[0].content[0]
+    assert isinstance(original, ToolResultMedia)
+    primary = RecordingClient(
+        [ModelProviderError(ModelErrorKind.RATE_LIMIT, "try fallback")]
+    )
+    fallback = RecordingClient([completion("saw projected image")])
+    adapter = OpenAICompatibleAdapter(
+        media_transport=MediaTransportCapabilities(
+            enabled=True,
+            modalities=("image",),
+            source_kinds=("inline",),
+            image_mime_types=("image/jpeg",),
+        )
+    )
+    invoker = DefaultModelInvoker(
+        adapters={"openai_chat_completions": adapter},
+        clients={"primary": primary, "fallback": fallback},
+    )
+    execution = invoker.execute(
+        model_group=make_model_group(
+            "assistant",
+            (
+                image_model_entry("primary", max_width=128),
+                image_model_entry("fallback", max_width=32),
+            ),
+        ),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=message,
+        context=Context(),
+    )
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+    result = await execution.result()
+
+    assert result.message.content == "saw projected image"
+    assert primary.calls == 1
+    assert fallback.calls == 1
+    first_url = primary.payloads[0].to_dict()["messages"][0]["content"][0]["image_url"][
+        "url"
+    ]
+    second_url = fallback.payloads[0].to_dict()["messages"][0]["content"][0][
+        "image_url"
+    ]["url"]
+    assert first_url.startswith("data:image/jpeg;base64,")
+    assert second_url.startswith("data:image/jpeg;base64,")
+    assert first_url != second_url
+    traces = [
+        event.data["request"]["media_projections"][0]
+        for event in events
+        if event.kind == "model.request.prepared"
+    ]
+    assert [trace["width"] for trace in traces] == [128, 32]
+    assert traces[0]["canonical_sha256"] == traces[1]["canonical_sha256"]
+    assert traces[0]["projected_sha256"] != traces[1]["projected_sha256"]
+    assert message.results[0].content[0] is original
+    assert (original.width, original.height) == (320, 160)
+
+
 @pytest.mark.asyncio
 async def test_media_result_skips_incompatible_model_before_provider_io() -> None:
-    primary_entry = model_entry(
-        "primary", "openai", "text-only", streaming=False
-    )
-    fallback_entry = model_entry(
-        "fallback", "openai", "vision", streaming=False
-    )
+    primary_entry = model_entry("primary", "openai", "text-only", streaming=False)
+    fallback_entry = model_entry("fallback", "openai", "vision", streaming=False)
     fallback_entry = replace(
         fallback_entry,
         spec=replace(
@@ -220,18 +331,14 @@ async def test_media_result_skips_incompatible_model_before_provider_io() -> Non
     primary = RecordingClient([completion("unused")])
     fallback = RecordingClient([completion("saw image")])
     adapter = OpenAICompatibleAdapter(
-        tool_result_content=ToolResultContentCapabilities(
-            enabled=True, modalities=("image",)
-        )
+        media_transport=MediaTransportCapabilities(enabled=True, modalities=("image",))
     )
     invoker = DefaultModelInvoker(
         adapters={"openai_chat_completions": adapter},
         clients={"primary": primary, "fallback": fallback},
     )
     execution = invoker.execute(
-        model_group=make_model_group(
-            "assistant", (primary_entry, fallback_entry)
-        ),
+        model_group=make_model_group("assistant", (primary_entry, fallback_entry)),
         retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),
         message=media_message(),
@@ -247,19 +354,17 @@ async def test_media_result_skips_incompatible_model_before_provider_io() -> Non
     skipped = next(event for event in events if event.kind == "model.route.skipped")
     assert skipped.data["model_key"] == "primary"
     assert skipped.data["missing_capabilities"] == ("modalities.input.image",)
-    prepared = next(
-        event for event in events if event.kind == "model.request.prepared"
-    )
+    prepared = next(event for event in events if event.kind == "model.request.prepared")
     assert prepared.data["model_key"] == "fallback"
-    traced_media = prepared.data["request"]["current_message"]["results"][0][
-        "content"
-    ][0]
+    traced_media = prepared.data["request"]["current_message"]["results"][0]["content"][
+        0
+    ]
     assert traced_media["type"] == "media"
     assert fallback.payloads[0]["messages"][0]["tool_call_id"] == "read-1"
 
 
 @pytest.mark.asyncio
-async def test_media_result_projects_unavailable_when_no_model_can_consume_it() -> None:
+async def test_media_result_projects_not_viewed_when_no_model_can_consume_it() -> None:
     message = media_message()
     primary = RecordingClient([completion("cannot read image")])
     fallback = RecordingClient([completion("unused")])
@@ -291,29 +396,29 @@ async def test_media_result_projects_unavailable_when_no_model_can_consume_it() 
     assert isinstance(message.results[0].content[0], ToolResultMedia)
     wire_content = primary.payloads[0]["messages"][0]["content"]
     assert isinstance(wire_content, str)
-    assert "The current model cannot read this image." in wire_content
-    prepared = next(
-        event for event in events if event.kind == "model.request.prepared"
-    )
+    assert "The current model cannot view this image." in wire_content
+    assert "inline:sha256:" in wire_content
+    prepared = next(event for event in events if event.kind == "model.request.prepared")
     traced_result = prepared.data["request"]["current_message"]["results"][0]
     assert traced_result["content"] == ()
     assert (
         traced_result["output"]["model_visible_content"][0]["reason_code"]
         == "model_input_modality_unsupported"
     )
+    assert traced_result["output"]["model_visible_content"][0]["status"] == "not_viewed"
     assert any(event.kind == "model.capability.warning" for event in events)
     skipped = [event for event in events if event.kind == "model.route.skipped"]
     assert [event.data["model_key"] for event in skipped] == ["fallback"]
 
 
 @pytest.mark.asyncio
-async def test_text_model_receives_unavailable_block_when_endpoint_supports_media() -> None:
+async def test_text_model_receives_unavailable_block_when_endpoint_supports_media() -> (
+    None
+):
     message = media_message()
     client = RecordingClient([completion("please switch models")])
     adapter = OpenAICompatibleAdapter(
-        tool_result_content=ToolResultContentCapabilities(
-            enabled=True, modalities=("image",)
-        )
+        media_transport=MediaTransportCapabilities(enabled=True, modalities=("image",))
     )
     invoker = DefaultModelInvoker(
         adapters={"openai_chat_completions": adapter},
@@ -337,12 +442,8 @@ async def test_text_model_receives_unavailable_block_when_endpoint_supports_medi
     assert isinstance(content, tuple)
     assert content[0]["type"] == "text"
     assert "model_input_modality_unsupported" in content[0]["text"]
-    prepared = next(
-        event for event in events if event.kind == "model.request.prepared"
-    )
-    traced = prepared.data["request"]["current_message"]["results"][0][
-        "content"
-    ][0]
+    prepared = next(event for event in events if event.kind == "model.request.prepared")
+    traced = prepared.data["request"]["current_message"]["results"][0]["content"][0]
     assert traced["type"] == "text"
     assert "model_input_modality_unsupported" in traced["text"]
     assert isinstance(message.results[0].content[0], ToolResultMedia)
@@ -473,7 +574,9 @@ async def test_tool_continuation_preserves_history_and_resumes_only_its_producer
         assert primary_messages[1]["tool_call_id"] == "call-1"
         assert "42" in primary_messages[1]["content"]
         if matches:
-            assert fallback_messages[0]["tool_calls"] == primary_messages[0]["tool_calls"]
+            assert (
+                fallback_messages[0]["tool_calls"] == primary_messages[0]["tool_calls"]
+            )
             assert fallback_messages[1] == primary_messages[1]
     assert context.messages[0] is assistant
     assert assistant.continuation is not None
@@ -1162,9 +1265,7 @@ async def test_stream_idle_timeout_resets_after_every_provider_frame() -> None:
             del route, payload
             for _ in range(8):
                 await asyncio.sleep(0.02)
-                yield freeze_json_object(
-                    {"choices": [{"delta": {"content": "x"}}]}
-                )
+                yield freeze_json_object({"choices": [{"delta": {"content": "x"}}]})
             await asyncio.sleep(0.02)
             yield freeze_json_object({"done": True})
 
@@ -1203,9 +1304,7 @@ async def test_first_stream_frame_idle_timeout_retries_before_public_output() ->
             self.stream_calls += 1
             if self.stream_calls == 1:
                 await asyncio.sleep(1)
-            yield freeze_json_object(
-                {"choices": [{"delta": {"content": "retried"}}]}
-            )
+            yield freeze_json_object({"choices": [{"delta": {"content": "retried"}}]})
             yield freeze_json_object({"done": True})
 
     client = SlowFirstFrameClient()
@@ -1266,9 +1365,7 @@ async def test_stream_idle_timeout_resets_partial_output_and_retries() -> None:
                     }
                 )
                 await asyncio.sleep(1)
-            yield freeze_json_object(
-                {"choices": [{"delta": {"content": "recovered"}}]}
-            )
+            yield freeze_json_object({"choices": [{"delta": {"content": "recovered"}}]})
             yield freeze_json_object({"done": True})
 
     client = StalledStreamClient()
@@ -1374,9 +1471,7 @@ async def test_stream_partial_idle_timeout_obeys_retry_on_policy() -> None:
         async def stream(self, route, payload):
             del route, payload
             self.stream_calls += 1
-            yield freeze_json_object(
-                {"choices": [{"delta": {"content": "partial"}}]}
-            )
+            yield freeze_json_object({"choices": [{"delta": {"content": "partial"}}]})
             await asyncio.sleep(1)
             yield freeze_json_object({"done": True})
 
@@ -1412,7 +1507,9 @@ async def test_stream_partial_idle_timeout_obeys_retry_on_policy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_partial_output_is_not_reset_when_backoff_exhausts_deadline() -> None:
+async def test_stream_partial_output_is_not_reset_when_backoff_exhausts_deadline() -> (
+    None
+):
     class StalledStreamClient(FakeClient):
         def __init__(self) -> None:
             super().__init__([])
@@ -1518,9 +1615,7 @@ async def test_execution_deadline_still_bounds_an_active_provider_stream() -> No
             del route, payload
             while True:
                 await asyncio.sleep(0.01)
-                yield freeze_json_object(
-                    {"choices": [{"delta": {"content": "x"}}]}
-                )
+                yield freeze_json_object({"choices": [{"delta": {"content": "x"}}]})
 
     invoker = configured_invoker(
         adapters={"openai": OpenAICompatibleAdapter()},
@@ -1552,9 +1647,7 @@ async def test_streaming_output_limit_fails_as_partial_without_retrying():
     client = FakeClient(
         [
             freeze_json_object({"choices": [{"delta": {"content": "partial"}}]}),
-            freeze_json_object(
-                {"choices": [{"delta": {}, "finish_reason": "length"}]}
-            ),
+            freeze_json_object({"choices": [{"delta": {}, "finish_reason": "length"}]}),
         ]
     )
     model_group = make_model_group(
@@ -1580,7 +1673,9 @@ async def test_streaming_output_limit_fails_as_partial_without_retrying():
 
     assert raised.value.kind is ModelErrorKind.INCOMPLETE_RESPONSE
     assert raised.value.partial_output is True
-    assert raised.value.attempts[-1].reason_code is ModelFailureReason.OUTPUT_LIMIT_REACHED
+    assert (
+        raised.value.attempts[-1].reason_code is ModelFailureReason.OUTPUT_LIMIT_REACHED
+    )
     assert "model.text.delta" in [event.kind for event in events]
     assert "model.attempt.succeeded" not in [event.kind for event in events]
     assert "model.completed" not in [event.kind for event in events]
@@ -1893,16 +1988,20 @@ async def test_stream_synthesizes_a_missing_tool_call_id():
             )
         ]
     )
-    result = await configured_invoker(
-        adapters={"openai": OpenAICompatibleAdapter()},
-        clients={"openai": client},
-    ).execute(
-        model_group=group(),
-        retry_policy=RetryPolicy(max_attempts_per_model=1),
-        generation=GenerationConfig(),
-        message=UserMessage(content="hello"),
-        context=Context(),
-    ).result()
+    result = (
+        await configured_invoker(
+            adapters={"openai": OpenAICompatibleAdapter()},
+            clients={"openai": client},
+        )
+        .execute(
+            model_group=group(),
+            retry_policy=RetryPolicy(max_attempts_per_model=1),
+            generation=GenerationConfig(),
+            message=UserMessage(content="hello"),
+            context=Context(),
+        )
+        .result()
+    )
 
     call = result.message.tool_calls[0]
     assert call.call_id.startswith("call_")

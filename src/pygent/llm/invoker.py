@@ -14,13 +14,17 @@ from pygent.core import (
     Message,
     freeze_json_object,
 )
-from pygent.tool import ToolDefinition
+from pygent.tool import MediaSource, ToolDefinition
 
 from ._adapter_contracts import (
     EventSink,
+    MediaProjectionTrace,
+    MediaProjector,
+    MediaResolver,
     ModelEventKind,
     ModelProviderAdapter,
     ModelProviderClient,
+    ModelProviderMediaTokenEstimator,
     ModelProviderRequest,
     ModelProviderResponse,
     ModelProviderSpecValidator,
@@ -36,11 +40,14 @@ from ._continuation import (
     neutral_tool_context,
     pending_tool_continuation,
 )
+from ._media_projection import DefaultMediaProjector
 from ._media_routing import (
     media_delivery_gaps,
     pending_tool_result_media,
+    project_media_for_model,
     project_request_for_model,
 )
+from ._media_tokens import generic_media_input_tokens
 from ._model_execution import ModelExecution, _ProviderStreamOwner
 from ._request_snapshot import prepared_request_event
 from ._stream_accumulator import ModelStreamAccumulator
@@ -105,7 +112,10 @@ def _model_attempt_entries(
         for entry in (
             model_group.models
             if producer is None
-            else (producer, *(item for item in model_group.models if item.key != producer.key))
+            else (
+                producer,
+                *(item for item in model_group.models if item.key != producer.key),
+            )
         )
     )
 
@@ -118,9 +128,22 @@ class DefaultModelInvoker:
         *,
         adapters: Mapping[str, ModelProviderAdapter],
         clients: Mapping[str, ModelProviderClient],
+        media_projector: MediaProjector | None = None,
+        media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None = None,
     ) -> None:
         self._adapters = dict(adapters)
         self._clients = dict(clients)
+        if media_projector is not None and not isinstance(
+            media_projector, MediaProjector
+        ):
+            raise TypeError("media_projector must implement MediaProjector")
+        if media_projector is not None and media_resolver is not None:
+            raise ValueError(
+                "media_projector and media_resolver are mutually exclusive"
+            )
+        self._media_projector = media_projector or DefaultMediaProjector(
+            media_resolver=media_resolver
+        )
         for protocol, adapter in self._adapters.items():
             if not isinstance(protocol, str) or not protocol:
                 raise ValueError("adapter protocol keys must be non-empty strings")
@@ -128,7 +151,10 @@ class DefaultModelInvoker:
                 raise ValueError(
                     f"adapter registered for {protocol!r} declares a different protocol"
                 )
-        if any(not isinstance(model_key, str) or not model_key for model_key in self._clients):
+        if any(
+            not isinstance(model_key, str) or not model_key
+            for model_key in self._clients
+        ):
             raise ValueError("client model keys must be non-empty strings")
         self._quarantined_tasks: dict[int, set[asyncio.Future[Any]]] = {}
         self._active_executions: set[asyncio.Task[Any]] = set()
@@ -156,6 +182,56 @@ class DefaultModelInvoker:
             adapter.validate_model(model)
         except (TypeError, ValueError, ModelProviderError) as exc:
             raise ModelGroupConfigurationError(str(exc)) from None
+
+    def estimate_media_input_tokens(
+        self,
+        *,
+        model_group: ModelGroup,
+        message: Message,
+        context: Context,
+    ) -> int:
+        """Estimate media on the same eligible routes used by execution."""
+
+        media = pending_tool_result_media(message, context)
+        if not media:
+            return 0
+        assessed: list[tuple[ModelEntry, ModelProviderAdapter]] = []
+        for entry, _retains_continuation in _model_attempt_entries(
+            model_group, message, context
+        ):
+            adapter, _client = self._resolve(entry)
+            if not media_delivery_gaps(
+                media,
+                model=entry.spec,
+                adapter=adapter,
+                projector=self._media_projector,
+            ):
+                assessed.append((entry, adapter))
+        if not assessed:
+            # Execution projects every media block to an unavailable text value.
+            return 0
+        route_estimates: list[int] = []
+        for entry, adapter in assessed:
+            total = 0
+            for block in media:
+                estimate = (
+                    adapter.estimate_media_input_tokens(block, entry.spec)
+                    if isinstance(adapter, ModelProviderMediaTokenEstimator)
+                    else None
+                )
+                if estimate is None:
+                    estimate = generic_media_input_tokens(block)
+                if (
+                    isinstance(estimate, bool)
+                    or not isinstance(estimate, int)
+                    or estimate < 0
+                ):
+                    raise TypeError(
+                        "provider media token estimate must be a non-negative integer"
+                    )
+                total += estimate
+            route_estimates.append(total)
+        return max(route_estimates)
 
     def execute(
         self,
@@ -366,7 +442,10 @@ class DefaultModelInvoker:
                     (
                         entry,
                         media_delivery_gaps(
-                            media, model=entry.spec, adapter=adapter
+                            media,
+                            model=entry.spec,
+                            adapter=adapter,
+                            projector=self._media_projector,
                         ),
                     )
                 )
@@ -461,6 +540,17 @@ class DefaultModelInvoker:
                         "missing_capabilities": missing_capabilities,
                     },
                 )
+            media_projections: tuple[MediaProjectionTrace, ...] = ()
+            if pending_tool_result_media(request_message, model_context):
+                request_message, model_context, media_projections = (
+                    project_media_for_model(
+                        request_message,
+                        model_context,
+                        model=model,
+                        adapter=adapter,
+                        projector=self._media_projector,
+                    )
+                )
             request = ModelProviderRequest(
                 model_key=model_key,
                 model=model,
@@ -468,6 +558,7 @@ class DefaultModelInvoker:
                 context=model_context,
                 generation=generation,
                 tools=tuple(tools),
+                media_projections=media_projections,
             )
             payload = adapter.build_request(request)
             for number in range(1, retry_policy.max_attempts_per_model + 1):
@@ -531,7 +622,9 @@ class DefaultModelInvoker:
                         )
                     return
                 except asyncio.CancelledError:
-                    attempts.append(ModelAttempt(model_key, "cancelled", attempt=number))
+                    attempts.append(
+                        ModelAttempt(model_key, "cancelled", attempt=number)
+                    )
                     raise
                 except Exception as exc:  # noqa: BLE001 - provider SPI boundary
                     kind = adapter.normalize_error(exc)
@@ -578,13 +671,10 @@ class DefaultModelInvoker:
                         and kind in retry_policy.retry_on
                         and number < retry_policy.max_attempts_per_model
                     )
-                    can_fallback = (
-                        has_budget and model_index + 1 < attempt_plan_count
-                    )
+                    can_fallback = has_budget and model_index + 1 < attempt_plan_count
                     retryable_partial = (
                         emitted
-                        and reason_code
-                        is ModelFailureReason.PROVIDER_IDLE_TIMEOUT
+                        and reason_code is ModelFailureReason.PROVIDER_IDLE_TIMEOUT
                         and (can_retry or can_fallback)
                     )
                     if emitted and not retryable_partial:
@@ -776,10 +866,15 @@ def _missing_capabilities(
         missing.append("tools.call")
     choice = generation.tool_choice
     if tools and choice is not None:
-        required_choice = "named" if choice not in {"none", "auto", "required"} else choice
+        required_choice = (
+            "named" if choice not in {"none", "auto", "required"} else choice
+        )
         if required_choice not in capabilities.tools.choice:
             missing.append(f"tools.choice.{required_choice}")
-    if generation.response_schema is not None and not capabilities.structured_output.json_schema:
+    if (
+        generation.response_schema is not None
+        and not capabilities.structured_output.json_schema
+    ):
         missing.append("structured_output.json_schema")
     if (
         generation.max_output_tokens is not None
@@ -971,9 +1066,7 @@ async def _await_stream_owner(
         try:
             if wait_deadline is None:
                 return await owner.next()
-            async with asyncio.timeout(
-                max(0.0, wait_deadline - time.monotonic())
-            ):
+            async with asyncio.timeout(max(0.0, wait_deadline - time.monotonic())):
                 return await owner.next()
         except TimeoutError:
             owner.cancel()
@@ -999,9 +1092,7 @@ async def _await_stream_owner(
     if cancel_task is not None:
         waiters.add(cancel_task)
     timeout = (
-        None
-        if wait_deadline is None
-        else max(0.0, wait_deadline - time.monotonic())
+        None if wait_deadline is None else max(0.0, wait_deadline - time.monotonic())
     )
     try:
         done, _ = await asyncio.wait(

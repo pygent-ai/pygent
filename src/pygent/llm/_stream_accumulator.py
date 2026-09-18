@@ -233,9 +233,7 @@ class ModelStreamAccumulator:
                 reason_code=ModelFailureReason.GENERATION_SCHEMA_INVALID,
             )
 
-    async def _finish_tool_calls(
-        self, event_sink: EventSink | None
-    ) -> list[ToolCall]:
+    async def _finish_tool_calls(self, event_sink: EventSink | None) -> list[ToolCall]:
         tool_calls: list[ToolCall] = []
         for index in sorted(self.calls):
             call = self.calls[index]

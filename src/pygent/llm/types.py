@@ -54,7 +54,7 @@ class ModelFailureReason(str, Enum):
     GENERATION_SCHEMA_INVALID = "generation_schema_invalid"
     TOOL_CALL_INVALID = "tool_call_invalid"
     MODEL_INPUT_MODALITY_UNSUPPORTED = "model_input_modality_unsupported"
-    TOOL_RESULT_CONTENT_UNSUPPORTED = "tool_result_content_unsupported"
+    MEDIA_TRANSPORT_UNSUPPORTED = "media_transport_unsupported"
     MEDIA_SOURCE_UNSUPPORTED = "media_source_unsupported"
     MEDIA_SOURCE_UNRESOLVABLE = "media_source_unresolvable"
     MEDIA_INTEGRITY_MISMATCH = "media_integrity_mismatch"
@@ -90,9 +90,7 @@ class ModelResourceOwnership(str, Enum):
     OWNED = "owned"
 
 
-_OVERRIDABLE_GENERATION_FIELDS = frozenset(
-    {"temperature", "max_output_tokens"}
-)
+_OVERRIDABLE_GENERATION_FIELDS = frozenset({"temperature", "max_output_tokens"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,8 +107,7 @@ class ModelCallPolicy:
         unknown = values - _OVERRIDABLE_GENERATION_FIELDS
         if unknown:
             raise ValueError(
-                "unsupported generation override fields: "
-                + ", ".join(sorted(unknown))
+                "unsupported generation override fields: " + ", ".join(sorted(unknown))
             )
         object.__setattr__(self, "overridable_generation", values)
 
@@ -356,9 +353,7 @@ class RetryPolicy:
             or not math.isfinite(self.attempt_idle_timeout_seconds)
             or self.attempt_idle_timeout_seconds <= 0
         ):
-            raise ValueError(
-                "attempt_idle_timeout_seconds must be finite and positive"
-            )
+            raise ValueError("attempt_idle_timeout_seconds must be finite and positive")
         object.__setattr__(self, "retry_on", retry_on)
 
 
@@ -384,7 +379,10 @@ class GenerationConfig:
             or self.max_output_tokens <= 0
         ):
             raise ValueError("max_output_tokens must be greater than zero")
-        if not isinstance(self.response_schema_name, str) or not self.response_schema_name:
+        if (
+            not isinstance(self.response_schema_name, str)
+            or not self.response_schema_name
+        ):
             raise ValueError("response_schema_name must be a non-empty string")
         if self.tool_choice is not None and (
             not isinstance(self.tool_choice, str) or not self.tool_choice
@@ -512,7 +510,9 @@ class ModelCallError(ExecutionFailureError):
                     model_key=cast(str, item.get("model_key")),
                     status=cast(Any, item.get("status")),
                     error_kind=(
-                        None if raw_kind is None else ModelErrorKind(cast(str, raw_kind))
+                        None
+                        if raw_kind is None
+                        else ModelErrorKind(cast(str, raw_kind))
                     ),
                     attempt=cast(int, item.get("attempt", 1)),
                     reason_code=(
