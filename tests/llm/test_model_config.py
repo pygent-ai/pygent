@@ -159,11 +159,40 @@ def test_model_media_details_require_the_matching_input_modality() -> None:
                 "animated": None,
             },
             "video": None,
-        }
+        },
     )
 
     with pytest.raises(ValueError, match="requires modalities.input image"):
         ModelCapabilities.from_mapping(value)
+
+
+def test_model_video_delivery_modes_round_trip() -> None:
+    value = _capabilities(
+        modalities={"input": ["text", "video"], "output": ["text"]},
+        media_input={
+            "image": None,
+            "video": {
+                "native": True,
+                "mime_types": ["video/mp4"],
+                "max_bytes": None,
+                "max_duration_seconds": None,
+                "max_width": None,
+                "max_height": None,
+                "max_fps": None,
+                "audio": None,
+                "delivery_modes": ["image_frames"],
+            },
+        },
+    )
+
+    capabilities = ModelCapabilities.from_mapping(value)
+
+    assert capabilities.media_input.video == ModelVideoInputCapabilities(
+        native=True,
+        mime_types=("video/mp4",),
+        delivery_modes=("image_frames",),
+    )
+    assert capabilities.to_mapping() == value
 
 
 def test_model_config_parses_named_semantics_and_connection_projection() -> None:

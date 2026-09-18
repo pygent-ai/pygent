@@ -97,6 +97,7 @@ retry/fallback。模型调用成功时，由调用方明确追加 Assistant，�
 - 支持的 MIME；
 - 最大字节数、时长、宽、高和 FPS；
 - 是否接收视频中的音频。
+- 请求投影使用原生视频 URL 还是有序图像帧。
 
 `media_input` 是 `ModelCapabilities` 的公开能力结构；旧配置可以省略该字段。当前严格
 schema 如下：
@@ -126,9 +127,12 @@ capabilities:
       max_height: 1080
       max_fps: 30
       audio: true
+      delivery_modes: [video_url]
 ```
 
 无法从可靠资料确认的限制使用 `null` 表示未知，不能解释为无限制。
+`delivery_modes` 可使用 `video_url` 或 `image_frames`，并按具体模型记录；不能因为同一
+Provider 中某个模型需要帧序列，就把整个模型族都改成帧序列。
 
 模型媒体能力与协议传输能力必须分开。Endpoint 传输能力使用
 `MediaTransportCapabilities`，由 Adapter/endpoint 装配提供，并声明：

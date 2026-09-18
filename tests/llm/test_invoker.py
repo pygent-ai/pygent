@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 import sys
 import time
@@ -290,10 +291,10 @@ async def test_fallback_reprojects_canonical_media_for_each_model() -> None:
     assert result.message.content == "saw projected image"
     assert primary.calls == 1
     assert fallback.calls == 1
-    first_url = primary.payloads[0].to_dict()["messages"][0]["content"][0]["image_url"][
+    first_url = primary.payloads[0].to_dict()["messages"][1]["content"][1]["image_url"][
         "url"
     ]
-    second_url = fallback.payloads[0].to_dict()["messages"][0]["content"][0][
+    second_url = fallback.payloads[0].to_dict()["messages"][1]["content"][1][
         "image_url"
     ]["url"]
     assert first_url.startswith("data:image/jpeg;base64,")
@@ -439,9 +440,8 @@ async def test_text_model_receives_unavailable_block_when_endpoint_supports_medi
     await execution.result()
 
     content = client.payloads[0]["messages"][0]["content"]
-    assert isinstance(content, tuple)
-    assert content[0]["type"] == "text"
-    assert "model_input_modality_unsupported" in content[0]["text"]
+    assert isinstance(content, str)
+    assert json.loads(content)["reason_code"] == "model_input_modality_unsupported"
     prepared = next(event for event in events if event.kind == "model.request.prepared")
     traced = prepared.data["request"]["current_message"]["results"][0]["content"][0]
     assert traced["type"] == "text"

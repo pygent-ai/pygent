@@ -4,6 +4,17 @@
 
 ## 2026-09-18 发布候选复测
 
+后续按错误逐项修复 OpenAI Chat Completions 投影：原工具文本与 `tool_call_id` 继续保留在
+`role: tool`，媒体放入紧随其后的 `role: user`；需要帧序列的视频模型通过各自的
+`media_input.video.delivery_modes` 声明，不按 Provider 整族切换。ToolResult 矩阵同时排除
+`tools.call=false`、无法产生或接收工具结果的模型。
+
+修复后对 79 个“声明图片/视频输入且支持工具调用”的模型/模态场景进行真实复测，74 个
+正确理解媒体。剩余 5 个中，1 个路由返回 404、3 个路由返回 503，`kimi-k2.7-code` 的视频
+时序回答在相同输入下不稳定；有效场景中不再出现 400、403 或 429。GPT-4o 全系列及 GPT-5、
+GPT-5 Chat、GPT-5 Mini、GPT-5.4 均通过修正后的图片 ToolResult 投影；15 个单独声明
+`image_frames` 的 Qwen 视频模型也全部回答 `RED THEN BLUE`。
+
 在提交 `bb353a6` 后重新执行全部 91 个目录声明的图片/视频 ToolResult 场景，结果仍为
 56 个正确理解媒体、33 个 Provider 错误、2 个请求成功但答案不符，未出现相对上一轮标准
 文件工具矩阵的总体回退。随后通过 `DefaultModelInvoker` 定向调用 `qwen3.8-max`，图片和

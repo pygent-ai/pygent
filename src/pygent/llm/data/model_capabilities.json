@@ -235,6 +235,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -316,6 +334,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1185,6 +1221,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1229,6 +1283,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1273,6 +1345,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1317,6 +1407,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1361,6 +1469,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1405,6 +1531,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1449,6 +1593,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1493,6 +1655,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1537,6 +1717,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1581,6 +1779,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1625,6 +1841,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1669,6 +1903,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -1760,6 +2012,24 @@
         "limits": {
           "context_tokens": null,
           "max_output_tokens": null
+        },
+        "media_input": {
+          "image": null,
+          "video": {
+            "native": null,
+            "mime_types": [
+              "video/mp4"
+            ],
+            "max_bytes": null,
+            "max_duration_seconds": null,
+            "max_width": null,
+            "max_height": null,
+            "max_fps": null,
+            "audio": null,
+            "delivery_modes": [
+              "image_frames"
+            ]
+          }
         }
       }
     },
@@ -7614,7 +7884,6 @@
         }
       }
     },
-
     {
       "provider": "openai",
       "model_id": "gpt-audio-1.5",
@@ -7659,7 +7928,6 @@
         }
       }
     },
-
     {
       "provider": "openai",
       "model_id": "gpt-image-2",

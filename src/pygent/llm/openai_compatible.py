@@ -46,7 +46,11 @@ from ._adapter_contracts import (
 )
 from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
-from ._media_content import media_data_url, validate_media_delivery
+from ._media_content import (
+    media_data_url,
+    validate_media_delivery,
+    video_frame_data_urls,
+)
 from ._media_tokens import openai_media_input_tokens
 from ._provider_policies import provider_protocol_policy
 from .catalog import ModelCatalog, ModelInfo
@@ -922,28 +926,40 @@ def _encode_messages(
     media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None = None,
 ) -> list[dict[str, object]]:
     if isinstance(message, ToolMessage) and message.results:
-        encoded_results: list[dict[str, object]] = [
-            {
-                "role": "tool",
-                "tool_call_id": result.call_id,
-                "name": (wire_names or {}).get(result.name, result.name),
-                "content": _encode_tool_result_content(
-                    result,
-                    model=model,
-                    capabilities=media_transport or MediaTransportCapabilities(),
-                    media_resolver=media_resolver,
-                ),
-            }
-            for result in message.results
-        ]
+        encoded_results: list[dict[str, object]] = []
+        media_parts: list[dict[str, object]] = []
+        capabilities = media_transport or MediaTransportCapabilities()
+        for result in message.results:
+            content, result_media = _encode_openai_tool_result(
+                result,
+                model=model,
+                capabilities=capabilities,
+                media_resolver=media_resolver,
+            )
+            encoded_results.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": result.call_id,
+                    "name": (wire_names or {}).get(result.name, result.name),
+                    "content": content,
+                }
+            )
+            if result_media:
+                media_parts.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Media returned by tool {result.name} "
+                            f"for call {result.call_id}:"
+                        ),
+                    }
+                )
+                media_parts.extend(result_media)
         if message.content:
             prior = encoded_results[-1]["content"]
-            if isinstance(prior, str):
-                encoded_results[-1]["content"] = f"{prior}\n{message.content}"
-            else:
-                cast(list[dict[str, object]], prior).append(
-                    {"type": "text", "text": message.content}
-                )
+            encoded_results[-1]["content"] = f"{prior}\n{message.content}"
+        if media_parts:
+            encoded_results.append({"role": "user", "content": media_parts})
         return encoded_results
     encoded: dict[str, object] = {"role": message.role, "content": message.content}
     if isinstance(message, AIMessage) and model is not None:
@@ -988,13 +1004,13 @@ def _encode_messages(
     return [encoded]
 
 
-def _encode_tool_result_content(
+def _encode_openai_tool_result(
     result: ToolResult,
     *,
     model: ModelSpec | None,
     capabilities: MediaTransportCapabilities,
     media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
-) -> str | list[dict[str, object]]:
+) -> tuple[str, list[dict[str, object]]]:
     if result.content:
         if not capabilities.enabled:
             raise ModelProviderError(
@@ -1002,15 +1018,31 @@ def _encode_tool_result_content(
                 "endpoint does not support structured tool-result content",
                 reason_code=ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED,
             )
-        return [
-            _encode_tool_result_block(
-                item,
-                model=model,
-                capabilities=capabilities,
-                media_resolver=media_resolver,
-            )
-            for item in result.content
-        ]
+        text_parts: list[str] = []
+        media_parts: list[dict[str, object]] = []
+        for item in result.content:
+            if type(item) is ToolResultText:
+                text_parts.append(item.text)
+            elif type(item) is ToolResultJson:
+                text_parts.append(
+                    json.dumps(
+                        thaw_json(item.value),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
+            else:
+                media_parts.append(
+                    _encode_tool_result_media(
+                        item,
+                        model=model,
+                        capabilities=capabilities,
+                        media_resolver=media_resolver,
+                    )
+                )
+        if not text_parts:
+            text_parts.append("Media is attached in the following user message.")
+        return "\n".join(text_parts), media_parts
     content: dict[str, object] = {
         "status": result.status,
         "output": thaw_json(result.output),
@@ -1020,25 +1052,16 @@ def _encode_tool_result_content(
         content["error_kind"] = result.error_kind
     if result.error_code is not None:
         content["error_code"] = result.error_code
-    return json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(content, ensure_ascii=False, separators=(",", ":")), []
 
 
-def _encode_tool_result_block(
+def _encode_tool_result_media(
     block: ToolResultContent,
     *,
     model: ModelSpec | None,
     capabilities: MediaTransportCapabilities,
     media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
 ) -> dict[str, object]:
-    if type(block) is ToolResultText:
-        return {"type": "text", "text": block.text}
-    if type(block) is ToolResultJson:
-        return {
-            "type": "text",
-            "text": json.dumps(
-                thaw_json(block.value), ensure_ascii=False, separators=(",", ":")
-            ),
-        }
     if type(block) is not ToolResultMedia:
         raise ModelProviderError(
             ModelErrorKind.INVALID_REQUEST,
@@ -1052,6 +1075,23 @@ def _encode_tool_result_block(
             reason_code=ModelFailureReason.MODEL_INPUT_MODALITY_UNSUPPORTED,
         )
     validate_media_delivery(block, model=model, capabilities=capabilities)
+    video_details = model.capabilities.media_input.video
+    if (
+        block.media_type == "video"
+        and video_details is not None
+        and "image_frames" in video_details.delivery_modes
+        and block.source.kind != "url"
+    ):
+        return {
+            "type": "video",
+            "video": list(
+                video_frame_data_urls(
+                    block,
+                    capabilities=capabilities,
+                    media_resolver=media_resolver,
+                )
+            ),
+        }
     url = media_data_url(
         block,
         capabilities=capabilities,

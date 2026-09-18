@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 from collections.abc import Callable, Collection
+from io import BytesIO
 from typing import NoReturn, cast
 
 from pygent.tool import MediaSource, ToolResultMedia
@@ -105,6 +107,100 @@ def media_data_url(
     return f"data:{block.mime_type};base64,{encoded}"
 
 
+def video_frame_data_urls(
+    block: ToolResultMedia,
+    *,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolverLike | None,
+    max_frames: int = 32,
+    max_edge: int = 1024,
+) -> tuple[str, ...]:
+    """Decode bounded, ordered JPEG frames for frame-based video APIs."""
+
+    if block.media_type != "video":
+        raise TypeError("frame extraction requires video media")
+    if max_frames <= 0 or max_edge <= 0:
+        raise ValueError("frame extraction limits must be positive")
+    try:
+        import av  # type: ignore[import-untyped]
+    except (ImportError, OSError):
+        _invalid(
+            "frame-based video delivery requires the optional video backend",
+            ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED,
+        )
+    encoded = media_base64(
+        block,
+        capabilities=capabilities,
+        media_resolver=media_resolver,
+    )
+    data = base64.b64decode(encoded, validate=True)
+    try:
+        container = av.open(BytesIO(data), mode="r")
+        try:
+            stream = next(iter(container.streams.video))
+            duration = block.duration_seconds
+            if duration is None and stream.duration is not None and stream.time_base:
+                duration = float(stream.duration * stream.time_base)
+            interval = (
+                None
+                if duration is None or duration <= 0 or max_frames == 1
+                else duration / (max_frames - 1)
+            )
+            next_time = 0.0
+            frames: list[str] = []
+            decoded_index = 0
+            fps = float(stream.average_rate or block.fps or 1.0)
+            for frame in container.decode(stream):
+                frame_time = float(
+                    frame.time
+                    if frame.time is not None
+                    else decoded_index / max(fps, 1.0)
+                )
+                decoded_index += 1
+                if interval is not None and frame_time + 1e-9 < next_time:
+                    continue
+                image = frame.to_image()
+                try:
+                    scale = min(1.0, max_edge / max(image.size))
+                    if scale < 1.0:
+                        resized = image.resize(
+                            (
+                                max(1, math.floor(image.width * scale)),
+                                max(1, math.floor(image.height * scale)),
+                            )
+                        )
+                        image.close()
+                        image = resized
+                    output = BytesIO()
+                    image.save(output, format="JPEG", quality=85, optimize=True)
+                    frames.append(
+                        "data:image/jpeg;base64,"
+                        + base64.b64encode(output.getvalue()).decode("ascii")
+                    )
+                finally:
+                    image.close()
+                if len(frames) >= max_frames:
+                    break
+                if interval is not None:
+                    next_time = frame_time + interval
+            if not frames:
+                _invalid(
+                    "video contains no decodable frames",
+                    ModelFailureReason.MEDIA_CONTENT_INVALID,
+                )
+            return tuple(frames)
+        finally:
+            container.close()
+    except ModelProviderError:
+        raise
+    except Exception as exc:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "video frame extraction failed",
+            reason_code=ModelFailureReason.MEDIA_CONTENT_INVALID,
+        ) from exc
+
+
 def _resolve_resource(
     source: MediaSource, media_resolver: MediaResolverLike | None
 ) -> bytes:
@@ -191,4 +287,5 @@ __all__ = [
     "media_data_url",
     "validate_media_bytes",
     "validate_media_delivery",
+    "video_frame_data_urls",
 ]

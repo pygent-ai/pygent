@@ -922,6 +922,49 @@ def test_builtin_alibaba_visual_inputs_follow_official_model_boundaries() -> Non
     )
 
 
+def test_builtin_alibaba_video_delivery_modes_are_model_specific() -> None:
+    catalog = ModelCapabilityCatalog.builtin()
+    frame_models = {
+        "qwen-omni-turbo",
+        "qwen-vl-max",
+        "qwen3-vl-235b-a22b-instruct",
+        "qwen3-vl-235b-a22b-thinking",
+        "qwen3-vl-30b-a3b-instruct",
+        "qwen3-vl-30b-a3b-thinking",
+        "qwen3-vl-32b-instruct",
+        "qwen3-vl-32b-thinking",
+        "qwen3-vl-8b-instruct",
+        "qwen3-vl-8b-thinking",
+        "qwen3-vl-plus",
+        "qwen3.5-122b-a10b",
+        "qwen3.5-27b",
+        "qwen3.5-35b-a3b",
+        "qwen3.5-omni-flash",
+    }
+    native_models = {
+        "qwen3.5-397b-a17b",
+        "qwen3.5-omni-plus",
+        "qwen3.5-plus",
+        "qwen3.6-plus",
+        "qwen3.7-plus",
+        "qwen3.8-27b",
+        "qwen3.8-flash",
+        "qwen3.8-max",
+    }
+
+    for model_id in frame_models:
+        video = catalog.models[
+            ("alibaba_cloud", model_id, "openai_chat_completions")
+        ].media_input.video
+        assert video is not None
+        assert video.delivery_modes == ("image_frames",)
+    for model_id in native_models:
+        video = catalog.models[
+            ("alibaba_cloud", model_id, "openai_chat_completions")
+        ].media_input.video
+        assert video is None or "image_frames" not in video.delivery_modes
+
+
 def test_builtin_alibaba_fixed_reasoning_models_are_not_controllable() -> None:
     catalog = ModelCapabilityCatalog.builtin()
     fixed_reasoning = {

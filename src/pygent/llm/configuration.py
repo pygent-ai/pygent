@@ -395,6 +395,7 @@ class ModelVideoInputCapabilities:
     max_height: int | None = None
     max_fps: float | None = None
     audio: bool | None = None
+    delivery_modes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _optional_bool(self.native, "media_input.video.native")
@@ -410,6 +411,16 @@ class ModelVideoInputCapabilities:
         )
         _optional_positive_number(self.max_fps, "media_input.video.max_fps")
         _optional_bool(self.audio, "media_input.video.audio")
+        delivery_modes = tuple(self.delivery_modes)
+        if any(value not in ("video_url", "image_frames") for value in delivery_modes):
+            raise ValueError(
+                "media_input.video.delivery_modes contains an unsupported value"
+            )
+        if len(delivery_modes) != len(set(delivery_modes)):
+            raise ValueError(
+                "media_input.video.delivery_modes must not contain duplicates"
+            )
+        object.__setattr__(self, "delivery_modes", delivery_modes)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelVideoInputCapabilities:
@@ -423,9 +434,11 @@ class ModelVideoInputCapabilities:
                 "max_height",
                 "max_fps",
                 "audio",
+                "delivery_modes",
             }
         )
-        _exact_fields(value, fields, "media_input.video")
+        normalized = {"delivery_modes": (), **value}
+        _exact_fields(normalized, fields, "media_input.video")
         return cls(
             native=_optional_bool(value["native"], "media_input.video.native"),
             mime_types=_mime_types(
@@ -448,10 +461,13 @@ class ModelVideoInputCapabilities:
                 value["max_fps"], "media_input.video.max_fps"
             ),
             audio=_optional_bool(value["audio"], "media_input.video.audio"),
+            delivery_modes=_string_tuple(
+                normalized["delivery_modes"], "media_input.video.delivery_modes"
+            ),
         )
 
     def to_mapping(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "native": self.native,
             "mime_types": list(self.mime_types),
             "max_bytes": self.max_bytes,
@@ -461,6 +477,9 @@ class ModelVideoInputCapabilities:
             "max_fps": self.max_fps,
             "audio": self.audio,
         }
+        if self.delivery_modes:
+            value["delivery_modes"] = list(self.delivery_modes)
+        return value
 
 
 @dataclass(frozen=True, slots=True)

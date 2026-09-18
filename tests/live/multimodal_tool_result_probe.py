@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 from dataclasses import dataclass, replace
+from functools import cache
 from pathlib import Path
 
 from pygent import (
@@ -27,6 +28,7 @@ from pygent import (
 from pygent.llm import (
     CapabilityPresetCatalog,
     MediaTransportCapabilities,
+    ModelCapabilityCatalog,
     ModelEntry,
     ModelModalities,
     ModelProviderError,
@@ -120,6 +122,7 @@ def az_catalog_media_cases() -> tuple[tuple[str, str], ...]:
         if (
             item["protocol"] != "openai_chat_completions"
             or model_id not in openai_routes
+            or item["capabilities"]["tools"]["call"] is not True
         ):
             continue
         inputs = item["capabilities"]["modalities"]["input"]
@@ -135,27 +138,57 @@ def az_catalog_media_cases() -> tuple[tuple[str, str], ...]:
 
 
 def _entry(target: Target, modality: str) -> ModelEntry:
-    capabilities = (
-        CapabilityPresetCatalog.builtin()
-        .presets["text_tools_structured_reasoning"]
-        .materialize(context_tokens=131_072, max_output_tokens=4096)
+    provider = _catalog_provider(target.model_id)
+    capabilities = ModelCapabilityCatalog.builtin().models.get(
+        (provider, target.model_id, "openai_chat_completions")
     )
-    capabilities = replace(
-        capabilities,
-        modalities=ModelModalities(
-            input=("text", modality),
-            output=("text",),
-        ),
-    )
+    if capabilities is None:
+        capabilities = (
+            CapabilityPresetCatalog.builtin()
+            .presets["text_tools_structured_reasoning"]
+            .materialize(context_tokens=131_072, max_output_tokens=4096)
+        )
+        capabilities = replace(
+            capabilities,
+            modalities=ModelModalities(
+                input=("text", modality),
+                output=("text",),
+            ),
+        )
     return ModelEntry(
         target.name,
         ModelSpec(
-            provider="live_probe",
+            provider=provider,
             model_id=target.model_id,
             protocol="openai_chat_completions",
             capabilities=capabilities,
         ),
     )
+
+
+@cache
+def _catalog_provider(model_id: str) -> str:
+    root = Path(__file__).resolve().parents[2]
+    routes = json.loads(
+        (root / "tests/live/az_conformance/manifest.json").read_text(encoding="utf-8")
+    )["routes"]
+    route_providers = {
+        route["canonical_provider"] for route in routes if route["route_id"] == model_id
+    }
+    if len(route_providers) == 1:
+        return next(iter(route_providers))
+    models = json.loads(
+        (root / "src/pygent/llm/data/model_capabilities.json").read_text(
+            encoding="utf-8"
+        )
+    )["models"]
+    providers = {
+        item["provider"]
+        for item in models
+        if item["model_id"] == model_id
+        and item["protocol"] == "openai_chat_completions"
+    }
+    return next(iter(providers)) if len(providers) == 1 else "live_probe"
 
 
 def _authorize(request, _context):
@@ -240,12 +273,22 @@ async def probe(target: Target, modality: str) -> dict[str, object]:
     )
     try:
         payload = adapter.build_request(request)
-        wire_message = payload["messages"][-1]
+        wire_messages = payload["messages"]
+        wire_message = next(
+            (
+                item
+                for item in wire_messages
+                if item.get("role") == "tool"
+                and item.get("tool_call_id") == call.call_id
+            ),
+            None,
+        )
         if (
-            wire_message["role"] != "tool"
-            or wire_message["tool_call_id"] != call.call_id
+            wire_message is None
+            or wire_messages[-1].get("role") != "user"
+            or not isinstance(wire_messages[-1].get("content"), tuple)
         ):
-            raise AssertionError("tool message lost its call association")
+            raise AssertionError("tool media projection lost its call association")
         response = await client.invoke(entry.spec, payload)
         answer = adapter.parse_response(request, response).message.content.strip()
         return {

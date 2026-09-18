@@ -210,6 +210,12 @@ invoker = DefaultModelInvoker(
 `video` extra 后可缩放、降帧、移除音轨并转码为 MP4。投影自己的摘要、大小与转换步骤进入
 prepared-request trace，canonical `ToolResultMedia` 与 Context 保持不变。
 
+视频能力还可以通过 `media_input.video.delivery_modes` 按模型声明 `video_url` 或
+`image_frames`。该字段是模型级明细，不按 Provider 整族推断。OpenAI Chat Completions
+投影会保留原 `tool` 结果的文本和调用关联，并把图片或视频放入紧随其后的 `user` 媒体
+消息，因为该协议的媒体内容不是 `tool` 角色内容；这只影响请求 wire，不修改 Context 中的
+canonical ToolResult。
+
 `media_resolver` 由 Invoker 使用，负责在需要转换或 inline 传输时解析稳定 resource/URL。
 inline Base64 按解码后的字节校验和计算 SHA-256；resource 按声明的摘要和大小复核。Adapter
 只把最终投影编码成目标协议原生字段。Anthropic Messages、Gemini generateContent、OpenAI

@@ -30,9 +30,11 @@ from pygent.llm import (
     ModelErrorKind,
     ModelFailureReason,
     ModelInfo,
+    ModelMediaInputCapabilities,
     ModelModalities,
     ModelProviderError,
     ModelProviderRequest,
+    ModelVideoInputCapabilities,
     OpenAICompatibleAdapter,
     OpenAICompatibleClient,
 )
@@ -73,13 +75,24 @@ def _request(
     )
 
 
-def _media_entry(*modalities: str) -> ModelEntry:
-    entry = model_entry("main", "custom_gateway", "glm-media")
+def _media_entry(
+    *modalities: str,
+    provider: str = "custom_gateway",
+    video_delivery_modes: tuple[str, ...] = (),
+) -> ModelEntry:
+    entry = model_entry("main", provider, "glm-media")
     capabilities = replace(
         entry.spec.capabilities,
         modalities=ModelModalities(
             input=("text", *modalities),
             output=entry.spec.capabilities.modalities.output,
+        ),
+        media_input=(
+            ModelMediaInputCapabilities(
+                video=ModelVideoInputCapabilities(delivery_modes=video_delivery_modes)
+            )
+            if "video" in modalities and video_delivery_modes
+            else entry.spec.capabilities.media_input
         ),
     )
     return replace(entry, spec=replace(entry.spec, capabilities=capabilities))
@@ -830,18 +843,21 @@ def test_structured_tool_result_encodes_image_json_and_text_blocks() -> None:
     )
 
     payload = adapter.build_request(request).to_dict()
-    message = payload["messages"][0]
-    content = message["content"]
+    message, media_message = payload["messages"]
+    content = media_message["content"]
 
     assert message["role"] == "tool"
     assert message["tool_call_id"] == "read-1"
-    assert content[0] == {"type": "text", "text": "image read"}
-    assert content[1] == {"type": "text", "text": '{"width":1}'}
-    assert content[2]["type"] == "image_url"
-    assert content[2]["image_url"]["url"].startswith("data:image/png;base64,")
-    assert content[2]["image_url"]["detail"] == "low"
-    assert content[3] == {"type": "text", "text": "after media"}
-    assert "private" not in repr(content)
+    assert message["content"] == 'image read\n{"width":1}\nafter media'
+    assert media_message["role"] == "user"
+    assert content[0] == {
+        "type": "text",
+        "text": "Media returned by tool read for call read-1:",
+    }
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert content[1]["image_url"]["detail"] == "low"
+    assert "private" not in repr(payload)
 
 
 def test_structured_tool_result_resolves_video_resource() -> None:
@@ -879,10 +895,64 @@ def test_structured_tool_result_resolves_video_resource() -> None:
         media_resolver=lambda candidate: video,
     )
 
-    content = adapter.build_request(request).to_dict()["messages"][0]["content"]
+    messages = adapter.build_request(request).to_dict()["messages"]
+    content = messages[1]["content"]
 
-    assert content[0]["type"] == "video_url"
-    assert content[0]["video_url"]["url"].startswith("data:video/mp4;base64,")
+    assert messages[0]["role"] == "tool"
+    assert messages[0]["content"] == (
+        "Media is attached in the following user message."
+    )
+    assert messages[1]["role"] == "user"
+    assert content[1]["type"] == "video_url"
+    assert content[1]["video_url"]["url"].startswith("data:video/mp4;base64,")
+
+
+def test_alibaba_video_tool_result_uses_frame_based_user_media(monkeypatch) -> None:
+    video = b"\x00\x00\x00\x18ftypmp42fixture"
+    request = provider_request(
+        entry=_media_entry("video", video_delivery_modes=("image_frames",)),
+        message=ToolMessage(
+            results=(
+                ToolResult(
+                    call_id="video-1",
+                    name="read",
+                    status="succeeded",
+                    content=(
+                        ToolResultMedia(
+                            media_type="video",
+                            mime_type="video/mp4",
+                            source=MediaSource.inline(video),
+                        ),
+                    ),
+                ),
+            )
+        ),
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+    monkeypatch.setattr(
+        openai_compatible_module,
+        "video_frame_data_urls",
+        lambda *args, **kwargs: (
+            "data:image/jpeg;base64,first",
+            "data:image/jpeg;base64,second",
+        ),
+    )
+    adapter = OpenAICompatibleAdapter(
+        media_transport=MediaTransportCapabilities(enabled=True, modalities=("video",))
+    )
+
+    messages = adapter.build_request(request).to_dict()["messages"]
+
+    assert messages[0]["role"] == "tool"
+    assert messages[1]["role"] == "user"
+    assert messages[1]["content"][1] == {
+        "type": "video",
+        "video": [
+            "data:image/jpeg;base64,first",
+            "data:image/jpeg;base64,second",
+        ],
+    }
 
 
 def test_structured_tool_result_requires_explicit_endpoint_capability() -> None:
@@ -905,9 +975,7 @@ def test_structured_tool_result_requires_explicit_endpoint_capability() -> None:
     with pytest.raises(ModelProviderError) as raised:
         OpenAICompatibleAdapter().build_request(request)
 
-    assert (
-        raised.value.reason_code is ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED
-    )
+    assert raised.value.reason_code is ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED
 
 
 def test_unresolved_resource_is_not_advertised_as_deliverable() -> None:
