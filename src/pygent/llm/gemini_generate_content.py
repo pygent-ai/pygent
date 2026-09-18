@@ -369,9 +369,14 @@ class _GeminiStreamDecoder:
                     call = raw["functionCall"]
                     if not isinstance(call, Mapping):
                         raise TypeError
+                    call_id = call.get("id")
                     name, arguments = call.get("name"), call.get("args", {})
                     if (
-                        not isinstance(name, str)
+                        (
+                            call_id is not None
+                            and (not isinstance(call_id, str) or not call_id)
+                        )
+                        or not isinstance(name, str)
                         or not name
                         or not isinstance(arguments, Mapping)
                     ):
@@ -381,7 +386,8 @@ class _GeminiStreamDecoder:
                             "tool_call",
                             {
                                 "index": self._tool_index,
-                                "call_id_delta": f"gemini-call-{self._tool_index}",
+                                "call_id_delta": call_id
+                                or f"gemini-call-{self._tool_index}",
                                 "name_delta": name,
                                 "arguments_delta": json.dumps(
                                     dict(arguments),
@@ -481,6 +487,7 @@ def _content(
         parts.extend(
             {
                 "functionCall": {
+                    "id": call.call_id,
                     "name": call.name,
                     "args": cast(FrozenJsonObject, call.arguments).to_dict(),
                 }
@@ -642,16 +649,18 @@ def _decode_parts(
             call = raw["functionCall"]
             if not isinstance(call, Mapping):
                 raise TypeError
+            call_id = call.get("id")
             name, arguments = call.get("name"), call.get("args", {})
             if (
-                not isinstance(name, str)
+                (call_id is not None and (not isinstance(call_id, str) or not call_id))
+                or not isinstance(name, str)
                 or not name
                 or not isinstance(arguments, Mapping)
             ):
                 raise TypeError
             calls.append(
                 ToolCall(
-                    call_id=f"gemini-call-{len(calls)}",
+                    call_id=call_id or f"gemini-call-{len(calls)}",
                     name=name,
                     arguments=arguments,
                 )

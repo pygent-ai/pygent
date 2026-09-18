@@ -92,6 +92,7 @@ def test_gemini_request_projects_roles_tools_results_schema_and_thinking() -> No
     payload = GeminiGenerateContentAdapter().build_request(request).to_dict()
     assert payload["systemInstruction"] == {"parts": [{"text": "system"}]}
     assert payload["contents"][0]["role"] == "model"
+    assert payload["contents"][0]["parts"][1]["functionCall"]["id"] == "gemini-call-0"
     assert payload["contents"][0]["parts"][1]["functionCall"]["name"] == "lookup"
     assert payload["contents"][1]["parts"][0]["functionResponse"] == {
         "id": "gemini-call-0",
@@ -171,6 +172,7 @@ def test_gemini_parse_preserves_thought_signature_and_function_call() -> None:
                                 {"text": "answer"},
                                 {
                                     "functionCall": {
+                                        "id": "provider-call-1",
                                         "name": "lookup",
                                         "args": {"id": 1},
                                     },
@@ -192,7 +194,7 @@ def test_gemini_parse_preserves_thought_signature_and_function_call() -> None:
     )
     assert response.message.content == "answer"
     assert response.message.tool_calls[0] == ToolCall(
-        call_id="gemini-call-0", name="lookup", arguments={"id": 1}
+        call_id="provider-call-1", name="lookup", arguments={"id": 1}
     )
     assert response.usage["reasoning_tokens"] == 1
     assert response.finish_reason == "tool_calls"
@@ -207,7 +209,11 @@ def test_gemini_parse_preserves_thought_signature_and_function_call() -> None:
                 {"text": "reason", "thought": True, "thoughtSignature": "sig"},
                 {"text": "answer"},
                 {
-                    "functionCall": {"name": "lookup", "args": {"id": 1}},
+                    "functionCall": {
+                        "id": "provider-call-1",
+                        "name": "lookup",
+                        "args": {"id": 1},
+                    },
                     "thoughtSignature": "tool-sig",
                 },
             ],
@@ -396,6 +402,7 @@ def test_gemini_stream_preserves_signed_function_call_part() -> None:
                             "parts": [
                                 {
                                     "functionCall": {
+                                        "id": "provider-call-1",
                                         "name": "lookup",
                                         "args": {"id": 1},
                                     },
@@ -411,6 +418,7 @@ def test_gemini_stream_preserves_signed_function_call_part() -> None:
     )
 
     assert [part.kind for part in parts] == ["tool_call", "continuation", "finish"]
+    assert parts[0].data["call_id_delta"] == "provider-call-1"
     continuation = parts[1].data["data"]
     assert continuation["parts"][0]["thoughtSignature"] == "tool-sig"
 
