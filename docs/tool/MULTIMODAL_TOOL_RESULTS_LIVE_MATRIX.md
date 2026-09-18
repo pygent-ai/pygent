@@ -2,6 +2,23 @@
 
 > 记录时间：2026-09-17。结果只适用于本次测试的 AZ OpenAI Compatible endpoint 与当时可用路由，不能自动转化为其他 endpoint 的能力声明。
 
+## 2026-09-18 发布候选复测
+
+在提交 `bb353a6` 后重新执行全部 91 个目录声明的图片/视频 ToolResult 场景，结果仍为
+56 个正确理解媒体、33 个 Provider 错误、2 个请求成功但答案不符，未出现相对上一轮标准
+文件工具矩阵的总体回退。随后通过 `DefaultModelInvoker` 定向调用 `qwen3.8-max`，图片和
+视频均正确通过，并分别产生一个与实际请求一致的 prepared media projection。
+
+原生协议探测发现并修复了 Gemini streaming/non-streaming 解码丢失 Provider
+`functionCall.id` 的问题；修复提交为 `7844c36`。修复后请求能够保留调用身份并到达
+Provider，但本次 AZ Gemini 路由仍拒绝多模态 `functionResponse.parts`，Anthropic 路由
+返回 429。当前环境没有官方 OpenAI、Anthropic 或 Gemini 凭据，因此这三个官方端点不能
+记录为已经通过。
+
+本轮独立配置目标也不能作为通过证据：GLM endpoint 无法连接，通用 Qwen endpoint 返回
+403；AZ 中 `glm-5.3` 与 `glm-5.3-flash` 的图片和视频 ToolResult 均返回 422。以下历史矩阵
+继续保留为 2026-09-17 的一次性观测，不代表当前 endpoint 状态。
+
 初始矩阵从能力目录与 AZ `openai_chat_completions` 路由的交集中选择 62 个声明图片或视频输入的模型，并额外加入已知的 `glm-5.3` 与 `glm-5.3-flash`，共执行 95 个真实 Provider 场景。图片场景要求模型回答 `BLUE SQUARE`；视频场景要求回答 `RED THEN BLUE`。请求中的媒体都位于保留原 `tool_call_id` 的 `role: tool` 内容数组。
 
 结果为 55 个通过、29 个明确 `invalid_parameter`、5 个请求成功但未理解媒体、6 个因权限、限流或路由不可用而无法判定。`✅` 表示模型正确理解媒体；`❌` 表示本 endpoint 上明确不支持或没有理解；`⚠️` 表示本轮证据不足。
