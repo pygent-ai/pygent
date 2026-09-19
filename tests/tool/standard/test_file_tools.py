@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import locale
 import os
 import random
 import shutil
@@ -1516,3 +1517,209 @@ async def test_read_exact_byte_cap_does_not_report_false_truncation(tmp_path):
     tools = FileTools(workspace_root=tmp_path, max_read_bytes=4)
     (tmp_path / "exact.txt").write_bytes(b"abc\n")
     assert await succeeded(tools.read, file_path="exact.txt") == "1|abc\n"
+
+
+def test_detect_text_encoding_prefers_multibyte_codecs_and_rejects_binary(
+    monkeypatch,
+):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
+
+    assert file_module._detect_text_encoding(b"") == "utf-8-sig"
+    assert file_module._detect_text_encoding("中文\n".encode()) == "utf-8-sig"
+    assert file_module._detect_text_encoding("中文测试".encode("gbk")[:5]) == "gb18030"
+    assert file_module._detect_text_encoding("café\n".encode("cp1252")) == "cp1252"
+    assert file_module._detect_text_encoding("中文\n".encode("utf-16")) == "utf-16"
+    assert file_module._detect_text_encoding(b"blob\x00\x01") is None
+
+
+@pytest.mark.asyncio
+async def test_read_decodes_cp936_chinese_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
+    (tmp_path / "gbk.txt").write_bytes("中文测试\n第二行\n".encode("gbk"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.read, file_path="gbk.txt")
+
+    assert output == "1|中文测试\n2|第二行\n"
+    assert "\ufffd" not in output
+
+
+@pytest.mark.asyncio
+async def test_read_decodes_cp936_when_the_sample_splits_a_character(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
+    (tmp_path / "gbk.txt").write_bytes("中\n".encode("gbk") + "文".encode("gbk") * 20)
+    tools = FileTools(workspace_root=tmp_path, max_read_bytes=5)
+
+    output = await succeeded(tools.read, file_path="gbk.txt")
+
+    assert output.startswith("1|中\n")
+    assert "continue with offset=2" in output
+    assert "\ufffd" not in output
+
+
+@pytest.mark.asyncio
+async def test_read_decodes_utf16_text_with_bom(tmp_path):
+    (tmp_path / "unicode.txt").write_bytes("中文测试\n".encode("utf-16"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    assert await succeeded(tools.read, file_path="unicode.txt") == "1|中文测试\n"
+
+
+@pytest.mark.asyncio
+async def test_read_does_not_leak_utf8_bom_into_content(tmp_path):
+    (tmp_path / "bom.txt").write_bytes(b"\xef\xbb\xbf" + "中文\n".encode())
+    tools = FileTools(workspace_root=tmp_path)
+
+    assert await succeeded(tools.read, file_path="bom.txt") == "1|中文\n"
+
+
+@pytest.mark.asyncio
+async def test_grep_matches_non_ascii_pattern_in_cp936_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
+    (tmp_path / "gbk.txt").write_bytes("第一行\n第二行中文说明\n".encode("gbk"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    assert await succeeded(tools.grep, pattern="中文说明", path="gbk.txt") == (
+        "gbk.txt:2: 第二行中文说明"
+    )
+
+
+@pytest.mark.asyncio
+async def test_grep_fallback_matches_non_ascii_pattern_in_cp936_text(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
+    monkeypatch.setattr(file_module, "_search_executable", lambda *_names: None)
+    (tmp_path / "gbk.txt").write_bytes("第一行\n第二行中文说明\n".encode("gbk"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    assert await succeeded(tools.grep, pattern="中文说明", path="gbk.txt") == (
+        "gbk.txt:2: 第二行中文说明"
+    )
+
+
+@pytest.mark.asyncio
+async def test_grep_covers_utf8_and_cp936_files_in_one_search(tmp_path, monkeypatch):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
+    (tmp_path / "utf8.txt").write_text("中文说明\n", encoding="utf-8")
+    (tmp_path / "gbk.txt").write_bytes("中文说明\n".encode("gbk"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="中文说明", path=".")
+
+    assert set(output.splitlines()) == {
+        "utf8.txt:1: 中文说明",
+        "gbk.txt:1: 中文说明",
+    }
+
+
+@pytest.mark.asyncio
+async def test_grep_decodes_cp936_line_text_for_ascii_pattern(tmp_path, monkeypatch):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
+    (tmp_path / "gbk.txt").write_bytes("prefix中文测试\n".encode("gbk"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="prefix", path="gbk.txt")
+
+    assert output == "gbk.txt:1: prefix中文测试"
+    assert "\ufffd" not in output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_grep_context_lines_decode_cp936_text(tmp_path, monkeypatch, fallback):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
+    if fallback:
+        monkeypatch.setattr(file_module, "_search_executable", lambda *_names: None)
+    (tmp_path / "gbk.txt").write_bytes("第一行\n第二行中文说明\n".encode("gbk"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(
+        tools.grep, pattern="中文说明", path="gbk.txt", context=1
+    )
+
+    assert output == "gbk.txt-1- 第一行\ngbk.txt:2: 第二行中文说明\ngbk.txt-3- "
+    assert "\ufffd" not in output
+
+
+@pytest.mark.asyncio
+async def test_edit_reads_cp936_text_and_rewrites_utf8(tmp_path, monkeypatch):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
+    target = tmp_path / "notes.txt"
+    target.write_bytes("第一行\n第二行中文\n".encode("gbk"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    assert (
+        await succeeded(
+            tools.edit,
+            file_path="notes.txt",
+            old_string="第二行中文",
+            new_string="第二行中文改好",
+        )
+        == "替换完成"
+    )
+    assert target.read_text(encoding="utf-8") == "第一行\n第二行中文改好\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_rejects_undecodable_text_file(tmp_path):
+    (tmp_path / "blob.bin").write_bytes(b"\x00\x01\x02blob")
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(
+        tools.edit,
+        {"file_path": "blob.bin", "old_string": "a", "new_string": "b"},
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "unsupported_text_encoding"
+
+
+@pytest.mark.asyncio
+async def test_edit_notebook_reads_cp936_notebook(tmp_path, monkeypatch):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
+    notebook = tmp_path / "nb.ipynb"
+    notebook.write_bytes(
+        json.dumps(
+            {
+                "cells": [
+                    {
+                        "cell_type": "markdown",
+                        "metadata": {},
+                        "source": ["中文说明\n"],
+                    }
+                ],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5,
+            },
+            ensure_ascii=False,
+        ).encode("gbk")
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    await succeeded(
+        tools.edit_notebook,
+        target_notebook="nb.ipynb",
+        cell_idx=0,
+        is_new_cell=False,
+        cell_language="markdown",
+        old_string="中文说明",
+        new_string="中文已改",
+    )
+
+    data = json.loads(notebook.read_text(encoding="utf-8"))
+    assert data["cells"][0]["source"] == ["中文已改\n"]
+
+
+@pytest.mark.asyncio
+async def test_read_lints_decodes_cp936_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
+    (tmp_path / "chinese.py").write_bytes("中文变量 = 1\n".encode("gbk"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    diagnostics = json.loads(await succeeded(tools.read_lints, paths=["chinese.py"]))
+
+    assert diagnostics == {"tool": "python.compile", "diagnostics": []}

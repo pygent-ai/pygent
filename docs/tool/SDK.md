@@ -125,9 +125,9 @@ grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=10
 |---|---|---|---|
 | `bash` | `EXTERNAL / NOT_IDEMPOTENT` | `shell:execute` | 默认限制 cwd 在 workspace；独立任务默认前台等待 600 秒，到期返回任务引用并继续执行；显式停止和治理取消使用最多 2 秒的进程树清理预算；输出最多投影 512 KiB |
 | `tool_task_get`, `tool_task_stop` | `READ / INHERENT`、`WRITE / INHERENT` | 由应用授权 | 查询同一管理器中的任务、输出和结果，或请求取消；停止请求不证明副作用未发生 |
-| `read`, `glob`, `grep`, `read_lints` | `READ / INHERENT` | `filesystem:read` | 默认拒绝 workspace 外路径；`read` 按文件类型返回文本、PDF 文本或指定页渲染图、结构化图片/视频或二进制描述；图片按交付字节、长边和像素预算归一化；视频在 PyAV 或系统 FFmpeg 可用时按时长、交付字节、长边和帧率预算探测及归一化，否则只透传无需压缩的小文件；glob pattern、匹配结果和符号链接目标都重新验证；读取与搜索有界 |
+| `read`, `glob`, `grep`, `read_lints` | `READ / INHERENT` | `filesystem:read` | 默认拒绝 workspace 外路径；`read` 按文件类型返回文本、PDF 文本或指定页渲染图、结构化图片/视频或二进制描述；文本以 UTF-8 优先自动识别编码（支持 cp936/GB18030 中文与带 BOM 的 UTF-16），避免中文乱码；`grep` 对非 ASCII 模式额外以 `gb18030` 解码重扫一遍，以覆盖 GBK/GB2312 文本；图片按交付字节、长边和像素预算归一化；视频在 PyAV 或系统 FFmpeg 可用时按时长、交付字节、长边和帧率预算探测及归一化，否则只透传无需压缩的小文件；glob pattern、匹配结果和符号链接目标都重新验证；读取与搜索有界 |
 | `write` | `WRITE / INHERENT` | `filesystem:write` | 完整 UTF-8 原子替换；同一 FileTools 实例内的同路径变更串行；相同输入可重复得到相同文件内容 |
-| `edit`, `edit_notebook` | `WRITE / NOT_IDEMPOTENT` | `filesystem:write` | 同一实例内串行 read-modify-write 并原子提交；取消在所属写线程退出后返回；不确定失败不谎报未提交 |
+| `edit`, `edit_notebook` | `WRITE / NOT_IDEMPOTENT` | `filesystem:write` | 同一实例内串行 read-modify-write 并原子提交；取消在所属写线程退出后返回；不确定失败不谎报未提交；读取时按 `read` 的编码识别解码，写回统一为 UTF-8；无法解码的文本以 `unsupported_text_encoding` 失败，不写回有损内容 |
 | `web_search`, `web_fetch` | `READ / INHERENT` | `web:search`, `web:fetch` | 公开 HTTP(S)；限制响应大小；默认 fetcher 连接已验证 IP、保留 Host/SNI，并逐跳重新验证重定向 |
 
 `write@2.1.0` 的模型可见契约只把它用于新建或刻意整文件替换，要求提供完整字面内容并禁止省略占位符。已有文件的局部、复杂或较长修改必须改用多个更小的原子 `edit` 调用，不能借整文件重写规避拆分。`edit@2.1.0` 要求先读取当前文件并保持精确空白、缩进和换行；`old_string` 只携带定位所需的未变上下文，不应包含长段未修改文本。
