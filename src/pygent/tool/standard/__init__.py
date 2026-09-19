@@ -15,7 +15,11 @@ from pygent.tool.functional import ToolKit
 
 from ._bash import BashTools
 from ._files import FileTools
+from ._powershell import PowerShellTools
+from ._shell import ShellIdentity, describe_shell_environment
+from ._terminal import TerminalSession, TerminalTools
 from ._web import Fetcher, Resolver, Searcher, WebFetchTools, WebSearchTools
+from ._zsh import ZshTools
 
 
 class StandardTools:
@@ -97,7 +101,13 @@ class StandardTools:
 __all__ = [
     "BashTools",
     "FileTools",
+    "PowerShellTools",
+    "ShellIdentity",
     "StandardTools",
+    "TerminalSession",
+    "TerminalTools",
     "WebFetchTools",
     "WebSearchTools",
+    "ZshTools",
+    "describe_shell_environment",
 ]

@@ -62,6 +62,10 @@ class ToolExecutionContext:
     task_id: str | None = None
     recovery: bool = False
     publish_output: Callable[[JsonValue], Awaitable[None]] | None = None
+    # True only while the call runs inside an admitted independent ToolTask, so
+    # an executor that owns long-lived state can tell a detached call from an
+    # inline one instead of leaving work behind when the call returns.
+    admitted: bool = False
 
     def __post_init__(self) -> None:
         for name in ("execution_id", "task_id"):
@@ -70,6 +74,8 @@ class ToolExecutionContext:
                 raise ValueError(f"{name} must be a non-empty string or None")
         if not isinstance(self.recovery, bool):
             raise TypeError("recovery must be a bool")
+        if not isinstance(self.admitted, bool):
+            raise TypeError("admitted must be a bool")
 
 
 _current_tool_execution: ContextVar[ToolExecutionContext | None] = ContextVar(
@@ -651,6 +657,24 @@ class ToolTaskManager(Protocol):
     async def close(self, *, cancel: bool = False) -> None: ...
 
 
+@runtime_checkable
+class LiveToolTaskRegistry(Protocol):
+    """Trusted, process-local access to a still-running task's live resource.
+
+    A task manager that owns live tasks (for example an interactive terminal
+    process) can expose the resource so a trusted control adapter delivers input
+    to the task that already owns it. The resource stays opaque to this module:
+    the manager never interprets it, and it never crosses a public value, wire
+    message or model-visible result.
+    """
+
+    async def register_live_resource(self, task_id: str, resource: object) -> None: ...
+    async def unregister_live_resource(
+        self, task_id: str, resource: object
+    ) -> None: ...
+    async def get_live_resource(self, task_id: str) -> object | None: ...
+
+
 def _cancelled_task_result(
     spec: ToolSpec,
     call: ToolCall,
@@ -703,6 +727,7 @@ class InMemoryToolTaskManager:
         self._results: dict[str, ToolResult] = {}
         self._outputs: dict[str, JsonValue] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._live_resources: dict[str, object] = {}
         self._cleanup_task: asyncio.Task[None] | None = None
         self._invocations: dict[
             str, tuple[ToolSpec, ToolCall, ToolTaskExecution | None]
@@ -779,7 +804,11 @@ class InMemoryToolTaskManager:
                 spec,
                 call,
                 execution=execution,
-                context=ToolExecutionContext(task_id=snapshot.task_id, publish_output=publish_output),
+                context=ToolExecutionContext(
+                    task_id=snapshot.task_id,
+                    publish_output=publish_output,
+                    admitted=True,
+                ),
             )
             result = replace(
                 completed,
@@ -842,10 +871,24 @@ class InMemoryToolTaskManager:
             self._outputs.pop(task_id, None)
             self._tasks.pop(task_id, None)
             self._invocations.pop(task_id, None)
+            self._live_resources.pop(task_id, None)
 
     async def get_output(self, task_id: str) -> JsonValue:
         async with self._lock:
             return self._outputs.get(task_id)
+
+    async def register_live_resource(self, task_id: str, resource: object) -> None:
+        async with self._lock:
+            self._live_resources[task_id] = resource
+
+    async def unregister_live_resource(self, task_id: str, resource: object) -> None:
+        async with self._lock:
+            if self._live_resources.get(task_id) is resource:
+                self._live_resources.pop(task_id, None)
+
+    async def get_live_resource(self, task_id: str) -> object | None:
+        async with self._lock:
+            return self._live_resources.get(task_id)
 
     async def get_task(self, task_id: str) -> ToolTask | None:
         async with self._lock:
@@ -906,6 +949,8 @@ class InMemoryToolTaskManager:
                 self.cancel(task_id) for task_id in set(self._tasks) | set(self._invocations)
             ))
         await asyncio.gather(*tasks, return_exceptions=True)
+        async with self._lock:
+            self._live_resources.clear()
         cleanup = self._cleanup_task
         if cleanup is not None:
             await cleanup
@@ -995,6 +1040,7 @@ __all__ = [
     "HttpToolExecutor",
     "InMemoryToolTaskManager",
     "LocalToolExecutor",
+    "LiveToolTaskRegistry",
     "SandboxExecutorSupport",
     "ToolExecution",
     "ToolExecutionContext",

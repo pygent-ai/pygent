@@ -62,6 +62,7 @@ class DurableToolTaskManager:
         self.registry = registry
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._executions: dict[str, ToolTaskExecution] = {}
+        self._live_resources: dict[str, object] = {}
         self._lock = asyncio.Lock()
         self._prepared_ids: set[str] = set()
         self._owner_id = f"tool-owner-{uuid4()}"
@@ -83,6 +84,21 @@ class DurableToolTaskManager:
 
     async def get_output(self, task_id: str) -> JsonValue:
         return await self.history.get_tool_output(task_id)
+
+    # Live resources are process-local: the durable record observes the task, but
+    # a restart cannot reattach to a process it no longer owns.
+    async def register_live_resource(self, task_id: str, resource: object) -> None:
+        async with self._lock:
+            self._live_resources[task_id] = resource
+
+    async def unregister_live_resource(self, task_id: str, resource: object) -> None:
+        async with self._lock:
+            if self._live_resources.get(task_id) is resource:
+                self._live_resources.pop(task_id, None)
+
+    async def get_live_resource(self, task_id: str) -> object | None:
+        async with self._lock:
+            return self._live_resources.get(task_id)
 
     @staticmethod
     def _retry_safe(spec: ToolSpec, call: ToolCall | None = None) -> bool:
@@ -298,6 +314,7 @@ class DurableToolTaskManager:
                 context=ToolExecutionContext(
                     task_id=stored.task_id, recovery=recovery,
                     publish_output=lambda value: self._publish_output(stored.task_id, value),
+                    admitted=True,
                 ),
             )
             result = replace(
@@ -377,6 +394,7 @@ class DurableToolTaskManager:
                 context=ToolExecutionContext(
                     task_id=task_id,
                     publish_output=lambda value: self._publish_output(task_id, value),
+                    admitted=True,
                 ),
             )
             snapshot = self._snapshot(

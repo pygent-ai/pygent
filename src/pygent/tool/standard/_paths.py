@@ -126,6 +126,25 @@ def resolve_dir_path(
     return resolve_tool_path(path, context, default=default)
 
 
+def resolve_workspace_directory(
+    path: str | None,
+    context: ToolPathContext,
+    *,
+    default: str = ".",
+) -> str:
+    """Resolve one command working directory inside the configured workspace."""
+
+    resolved = resolve_dir_path(path, context, default=default)
+    if not resolved.is_dir():
+        raise ToolExecutionError(
+            f"working directory does not exist or is not a directory: {resolved}",
+            kind="filesystem_error",
+            code="not_a_directory",
+            side_effect_committed=False,
+        )
+    return str(resolved)
+
+
 __all__ = [
     "ToolPathContext",
     "is_absolute_tool_path",
@@ -135,4 +154,5 @@ __all__ = [
     "resolve_dir_path",
     "resolve_file_path",
     "resolve_tool_path",
+    "resolve_workspace_directory",
 ]
