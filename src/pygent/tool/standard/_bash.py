@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import locale
 import os
 import shutil
 import signal
@@ -38,6 +37,7 @@ from pygent.tool.types import (
     ToolSideEffect,
 )
 
+from ._encoding import code_page_candidates, unique_encodings
 from ._paths import ToolPathContext, resolve_dir_path
 
 _MAX_OUTPUT_BYTES = 512 * 1024
@@ -97,19 +97,6 @@ def _decode_mixed_utf16_prefix(data: bytes) -> str | None:
         return decoded_prefix + _decode_output(suffix, max_bytes=len(suffix))
 
 
-def _unique_encodings(*encodings: str | None) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for encoding in encodings:
-        if not encoding:
-            continue
-        normalized = encoding.lower().replace("_", "-")
-        if normalized not in seen:
-            seen.add(normalized)
-            result.append(encoding)
-    return result
-
-
 def _decode_output(data: bytes, max_bytes: int = _MAX_OUTPUT_BYTES) -> str:
     if not data:
         return ""
@@ -125,20 +112,9 @@ def _decode_output(data: bytes, max_bytes: int = _MAX_OUTPUT_BYTES) -> str:
         utf16_candidates = [guessed_utf16]
     elif _looks_like_utf16(data):
         utf16_candidates = ["utf-16", "utf-16-le", "utf-16-be"]
-    for encoding in _unique_encodings(
+    for encoding in unique_encodings(
         *utf16_candidates,
-        "utf-8-sig",
-        "utf-8",
-        # Try the common multibyte Windows encoding before locale-dependent
-        # single-byte codecs.  Code pages such as cp1252 accept every byte, so
-        # placing the host locale first can silently turn cp936 output into
-        # mojibake on an English Windows runner.
-        "gb18030",
-        "cp936",
-        locale.getpreferredencoding(False),
-        getattr(sys.stdout, "encoding", None),
-        "cp1252",
-        "latin-1",
+        *code_page_candidates(),
     ):
         candidate = data
         if (
