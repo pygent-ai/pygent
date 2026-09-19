@@ -29,7 +29,7 @@ from pygent.llm import (
     ModelProviderError,
     ModelProviderRequest,
 )
-from pygent.tool import MediaSource, ToolResultMedia
+from pygent.tool import MediaSource, ToolResultMedia, ToolTask, ToolTaskState
 from tests.support.model_specs import model_entry
 
 
@@ -110,6 +110,68 @@ def test_gemini_request_projects_roles_tools_results_schema_and_thinking() -> No
     assert generation["thinkingConfig"] == {
         "includeThoughts": True,
         "thinkingBudget": 64,
+    }
+
+
+def test_gemini_projects_tool_context_for_failed_results() -> None:
+    call = ToolCall(call_id="gemini-call-0", name="lookup", arguments={"id": 1})
+    request = _request(
+        message=ToolMessage(
+            results=(
+                ToolResult(
+                    call_id="gemini-call-0",
+                    name="lookup",
+                    status="rejected",
+                    error="not allowed",
+                    error_kind="authorization_error",
+                    error_code="permission_denied",
+                    side_effect_committed=False,
+                ),
+                ToolResult(
+                    call_id="gemini-call-1",
+                    name="bash",
+                    status="detached",
+                    task=ToolTask(
+                        task_id="t-1",
+                        call_id="gemini-call-1",
+                        tool_id="standard.bash",
+                        version="1.0.0",
+                        state=ToolTaskState.RUNNING,
+                    ),
+                    output={"task_id": "t-1", "stdout": "running..."},
+                    side_effect_committed=False,
+                ),
+            )
+        ),
+        context=Context(
+            messages=(AIMessage(content="checking", tool_calls=(call,)),),
+        ),
+        generation=GenerationConfig(),
+    )
+    payload = GeminiGenerateContentAdapter().build_request(request).to_dict()
+    assert payload["contents"][1]["parts"][0]["functionResponse"] == {
+        "id": "gemini-call-0",
+        "name": "lookup",
+        "response": {
+            "tool_context": {
+                "status": "rejected",
+                "error_kind": "authorization_error",
+                "error_code": "permission_denied",
+                "error": "not allowed",
+            }
+        },
+    }
+    assert payload["contents"][1]["parts"][1]["functionResponse"] == {
+        "id": "gemini-call-1",
+        "name": "bash",
+        "response": {
+            "tool_context": {
+                "status": "detached",
+                "task_id": "t-1",
+                "task_state": "running",
+                "output": {"task_id": "t-1", "stdout": "running..."},
+            }
+        },
     }
 
 

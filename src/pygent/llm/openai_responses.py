@@ -41,6 +41,7 @@ from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
 from ._media_content import media_data_url, validate_media_delivery
 from ._media_tokens import openai_media_input_tokens
+from ._tool_context import encode_tool_context
 from .configuration import ModelSpec
 from .types import (
     ModelErrorKind,
@@ -505,11 +506,14 @@ def _tool_result_value(
             for block in result.content
         ]
     else:
-        output = result.output if result.status == "succeeded" else result.error
-        if not isinstance(output, str):
-            output = json.dumps(
-                thaw_json(output), ensure_ascii=False, separators=(",", ":")
-            )
+        if result.status == "succeeded":
+            output: object = result.output
+            if not isinstance(output, str):
+                output = json.dumps(
+                    thaw_json(output), ensure_ascii=False, separators=(",", ":")
+                )
+        else:
+            output = encode_tool_context(result)
     return {
         "type": "function_call_output",
         "call_id": result.call_id,

@@ -43,6 +43,7 @@ from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
 from ._media_content import media_base64, validate_media_delivery
 from ._media_tokens import anthropic_media_input_tokens
 from ._provider_policies import provider_protocol_policy
+from ._tool_context import encode_tool_context
 from .catalog import ModelCatalog, ModelInfo
 from .configuration import ModelSpec
 from .types import (
@@ -904,16 +905,20 @@ def _tool_result_value(
             for block in result.content
         ]
     else:
-        content = result.output if result.status == "succeeded" else result.error
-        if not isinstance(content, str):
-            content = json.dumps(
-                thaw_json(content), ensure_ascii=False, separators=(",", ":")
-            )
+        if result.status == "succeeded":
+            content: object = result.output
+            if not isinstance(content, str):
+                content = json.dumps(
+                    thaw_json(content), ensure_ascii=False, separators=(",", ":")
+                )
+        else:
+            content = encode_tool_context(result)
     return {
         "type": "tool_result",
         "tool_use_id": result.call_id,
         "content": content or "",
-        "is_error": result.status != "succeeded",
+        # A detached acknowledgment started background work; it is not an error.
+        "is_error": result.status not in ("succeeded", "detached"),
     }
 
 

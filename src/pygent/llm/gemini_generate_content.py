@@ -41,6 +41,7 @@ from ._continuation import continuation_matches
 from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
 from ._media_content import media_base64, validate_media_delivery
 from ._media_tokens import gemini_media_input_tokens
+from ._tool_context import tool_context_payload
 from .configuration import ModelSpec
 from .types import (
     ModelErrorKind,
@@ -560,9 +561,10 @@ def _function_response(
                 raise TypeError("tool-result content block is invalid")
         response: object = {"content": values}
     else:
-        value = (
-            result.output if result.status == "succeeded" else {"error": result.error}
-        )
+        if result.status == "succeeded":
+            value: object = result.output
+        else:
+            value = {"tool_context": tool_context_payload(result)}
         if isinstance(value, FrozenJsonObject):
             response = value.to_dict()
         elif isinstance(value, Mapping):

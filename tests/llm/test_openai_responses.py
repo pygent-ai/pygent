@@ -29,7 +29,7 @@ from pygent.llm import (
     OpenAIResponsesAdapter,
     OpenAIResponsesClient,
 )
-from pygent.tool import MediaSource, ToolResultMedia
+from pygent.tool import MediaSource, ToolResultMedia, ToolTask, ToolTaskState
 from tests.support.model_specs import model_entry
 
 
@@ -143,6 +143,26 @@ def test_responses_projects_structured_tool_result_image_content() -> None:
     assert output[1]["type"] == "input_image"
     assert output[1]["image_url"].startswith("data:image/png;base64,")
     assert output[1]["detail"] == "low"
+
+
+def test_responses_projects_tool_context_for_failed_results() -> None:
+    request = _request(
+        message=ToolMessage(
+            results=(
+                ToolResult(
+                    call_id="call-1",
+                    name="lookup",
+                    status="failed",
+                    error=None,
+                    side_effect_committed=None,
+                ),
+            )
+        )
+    )
+    output = (
+        OpenAIResponsesAdapter().build_request(request).to_dict()["input"][0]["output"]
+    )
+    assert output == '<tool-context status="failed" side-effect="unknown"/>'
 
 
 @pytest.mark.parametrize("field", ["api_key", "headers", "base_url"])

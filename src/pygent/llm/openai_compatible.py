@@ -53,6 +53,7 @@ from ._media_content import (
 )
 from ._media_tokens import openai_media_input_tokens
 from ._provider_policies import provider_protocol_policy
+from ._tool_context import encode_tool_context
 from .catalog import ModelCatalog, ModelInfo
 from .configuration import ModelSpec
 from .types import (
@@ -1043,16 +1044,16 @@ def _encode_openai_tool_result(
         if not text_parts:
             text_parts.append("Media is attached in the following user message.")
         return "\n".join(text_parts), media_parts
-    content: dict[str, object] = {
-        "status": result.status,
-        "output": thaw_json(result.output),
-        "error": result.error,
-    }
-    if result.error_kind is not None:
-        content["error_kind"] = result.error_kind
-    if result.error_code is not None:
-        content["error_code"] = result.error_code
-    return json.dumps(content, ensure_ascii=False, separators=(",", ":")), []
+    if result.status == "succeeded":
+        fallback: object = result.output
+        if isinstance(fallback, str):
+            return fallback, []
+        return (
+            json.dumps(thaw_json(fallback), ensure_ascii=False, separators=(",", ":"))
+            if fallback is not None
+            else ""
+        ), []
+    return encode_tool_context(result), []
 
 
 def _encode_tool_result_media(

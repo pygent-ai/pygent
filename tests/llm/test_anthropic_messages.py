@@ -32,7 +32,7 @@ from pygent.llm import (
     ModelProviderRequest,
     RetryPolicy,
 )
-from pygent.tool import MediaSource, ToolResultMedia
+from pygent.tool import MediaSource, ToolResultMedia, ToolTask, ToolTaskState
 from tests.support.model_specs import model_entry
 
 
@@ -177,6 +177,59 @@ def test_anthropic_request_projects_assistant_and_tool_results() -> None:
     assert result["type"] == "tool_result"
     assert result["tool_use_id"] == "call-1"
     assert result["is_error"] is True
+
+
+def test_anthropic_projects_tool_context_for_failed_results() -> None:
+    call = ToolCall(call_id="call-1", name="lookup", arguments={"id": 1})
+    context = Context(messages=(AIMessage(content="checking", tool_calls=(call,)),))
+    payload = (
+        AnthropicMessagesAdapter()
+        .build_request(
+            request(
+                message=ToolMessage(
+                    results=(
+                        ToolResult(
+                            call_id="call-1",
+                            name="lookup",
+                            status="rejected",
+                            error="not allowed",
+                            error_kind="authorization_error",
+                            error_code="permission_denied",
+                            side_effect_committed=False,
+                        ),
+                        ToolResult(
+                            call_id="call-2",
+                            name="bash",
+                            status="detached",
+                            task=ToolTask(
+                                task_id="t-1",
+                                call_id="call-2",
+                                tool_id="standard.bash",
+                                version="1.0.0",
+                                state=ToolTaskState.RUNNING,
+                            ),
+                            output={"task_id": "t-1"},
+                            side_effect_committed=False,
+                        ),
+                    )
+                ),
+                context=context,
+            )
+        )
+        .to_dict()
+    )
+
+    blocks = payload["messages"][1]["content"]
+    assert blocks[0]["content"] == (
+        '<tool-context status="rejected" error-kind="authorization_error"'
+        ' error-code="permission_denied"><error>not allowed</error></tool-context>'
+    )
+    assert blocks[0]["is_error"] is True
+    assert blocks[1]["content"] == (
+        '<tool-context status="detached" task-id="t-1" task-state="running">'
+        '<output>{"task_id":"t-1"}</output></tool-context>'
+    )
+    assert blocks[1]["is_error"] is False
 
 
 def test_anthropic_projects_structured_tool_result_image_content() -> None:
