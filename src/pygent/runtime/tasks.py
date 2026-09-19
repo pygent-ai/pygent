@@ -298,6 +298,7 @@ class DurableToolTaskManager:
                 context=ToolExecutionContext(
                     task_id=stored.task_id, recovery=recovery,
                     publish_output=lambda value: self._publish_output(stored.task_id, value),
+                    admitted=True,
                 ),
             )
             result = replace(
@@ -377,6 +378,7 @@ class DurableToolTaskManager:
                 context=ToolExecutionContext(
                     task_id=task_id,
                     publish_output=lambda value: self._publish_output(task_id, value),
+                    admitted=True,
                 ),
             )
             snapshot = self._snapshot(

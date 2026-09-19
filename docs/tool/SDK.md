@@ -134,6 +134,49 @@ grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=10
 
 Bash 与文件工具的 `sandbox_profile` 为 `workspace`；Web 工具通过 URL/DNS 边界限制访问，任务查询与停止工具只调用已装配的任务设施。该字段只是隔离需求，不是标准工具或 Runtime 已经实施宿主机沙箱的证明。在 managed/durable 部署中，应用必须为精确工具版本注册实际支持 `workspace` 的 sandbox-aware executor，Runtime 据此派生并验证 capability；应用不得通过重复 ToolSpec 声明或手工添加 capability 绕过该验证。Direct 模式不会因为工具名是“标准工具”而自动获得沙箱、授权或跨 Root 容量治理。
 
+### Shell 身份与运行环境
+
+标准工具在装配阶段解析一次原生 Shell 身份，并把它作为定义配置保留。`ShellIdentity` 只包含 `platform`、`name`、`executable`、`args` 和可选的 `version`，不包含 cwd、环境变量变更、Shell 变量或进程状态。Bash 的解析顺序保持不变：显式 `bash_executable`、`PYGENT_BASH_PATH`、平台候选探测、按平台回退；`BashTools.shell_identity` 暴露解析结果，`bash_executable` 仍是同一个可执行文件路径。
+
+应用需要让模型知道当前执行环境时，用 `describe_shell_environment` 生成只陈述事实的文本，再通过自己的 `Reminder` 或 `StandaloneUserMessage` 注入。框架不自动改写 System Prompt，也不在该文本中加入“使用某种 Shell 语法”这类行为指令。
+
+```python
+from pathlib import Path
+
+from pygent import UserMessage
+from pygent.agent import InjectionKind, StandaloneUserMessage
+from pygent.tool import BashTools, describe_shell_environment
+
+tools = BashTools(workspace_root=Path.cwd())
+environment = describe_shell_environment(tools.shell_identity, cwd=str(Path.cwd()))
+message = StandaloneUserMessage(
+    UserMessage(content=environment, kind=InjectionKind.RUNTIME_CONTEXT.value)
+)
+```
+
+### Native PowerShell 工具
+
+`PowerShellTools(workspace_root=..., powershell_executable=None, restrict_to_workspace=True, timeout=600, task_manager=None)` 提供 `standard.shell.powershell@1.0.0`，它不在 `StandardTools` 的默认可见集合中，需要应用显式装配。每次调用启动一个独立的原生 PowerShell 进程（`-NoLogo -NoProfile -NonInteractive -Command`），因此工作目录、环境变量和会话状态不跨调用保留；工作目录沿用同一 workspace 边界校验。
+
+```python
+from pathlib import Path
+
+from pygent.tool import PowerShellTools
+
+async with PowerShellTools(workspace_root=Path.cwd()) as tools:
+    output = await tools.powershell("Get-ChildItem | Select-Object -First 3 Name")
+```
+
+`ShellIdentity` 经 `tools.shell_identity` 暴露；解析顺序为显式 `powershell_executable`、`PYGENT_POWERSHELL_PATH`、`pwsh`/Windows PowerShell 候选探测、按平台回退。命令字符串原样交给 PowerShell，不做语法翻译或转义；退出码是进程退出码，因此报告非终止错误的 cmdlet 仍可能以 0 退出，需要严格状态时应显式检查 `$?` 或调用原生命令。前台等待、后台任务与 `is_background` 语义和 Bash 相同：`ToolSpec` 声明 `wait_timeout=600`、没有执行硬超时，前台等待到期只返回后台任务引用并让命令继续执行，不会重新启动命令。PowerShell 与 Bash 共用 `resource_key="shell"`；需要用同一个任务设施承载两者的后台任务时，把同一个 `task_manager` 传给两个装配对象，模型侧的任务查询与停止使用该设施上的一组 `tool_task_get` / `tool_task_stop`。
+
+### Interactive Terminal 工具
+
+`TerminalTools(workspace_root=..., shell=..., backend="pipe", sandbox=False, timeout=0, task_manager=None, session_store=None)` 提供 `standard.shell.terminal` 与 `standard.shell.terminal_input`。持久会话由显式 ToolTask 承载：`terminal` 以 detach 生命周期 admission 独立任务，session 由该任务的 executor 在任务执行内创建，并在其 driver 的 finally 中唯一释放；`terminal_input(task_id, input)` 按 `task_id` 向会话 stdin 写入一行，同一会话的并发输入在 per-session 锁上串行，保持单一有序输入流。
+
+Python 原生调用 `terminal(...)` 返回 `str | ToolTaskHandle`，前台等待语义与 Bash 相同。启动握手在返回前等待三种终局之一：session 注册、任务到达终态、或有界观察超时；任务在创建 session 之前失败时直接传播其 `ToolExecutionError`，不返回指向已死任务的 handle。`terminal_input` 的返回值区分输出观察与执行就绪：`observation.output_quiet_seconds` 是传输层最后一次捕获输出字节以来的秒数；`foreground_active` 与 `waiting_for_input` 在 pipe/pty 后端不可观测，固定为 null。
+
+会话活状态（process、capture file、发布游标）存放在显式部署资源 `TerminalSessionStore` 中：process-local、single event loop、non-durable，一个 store 内每个 `task_id` 至多一个 live session（重复创建报 `terminal_session_already_exists`）。同一 event loop 中的多个 `TerminalTools` 可显式共享一个 `session_store`；它不跨线程、不跨进程，Runtime 重启后 session 不恢复。`session_store` 缺省时装配对象自建并持有；`task_manager` 的所有权语义与 Bash 相同。
+
 ### Bash 的有限等待与任务控制
 
 `BashTools(workspace_root=..., timeout=600, task_manager=None)` 的 `timeout` 单位为秒，只控制独立任务的前台等待时长。`standard.shell.bash@3.1.0` 声明 `wait_timeout=600`，没有执行硬超时；模型可传 `timeout` 覆盖本次等待时长，单位同为秒；省略或传 `None` 时使用装配配置。`bash(command, working_directory=None, description=None, is_background=False, timeout=None)` 只提交一次命令。期限内完成返回结果；等待到期或 `is_background=True` 返回同一任务的引用，进程与输出捕获继续由任务管理器持有。
@@ -401,7 +444,7 @@ missing_capabilities: [tool.sandbox.workspace-write]
 message: shell.command@1 requires tool.sandbox.workspace-write
 ```
 
-不得把 executor 缺失、profile 不匹配、durable reconnect 不可用或 provider session 过期都折叠为 `detach_unavailable`。`ToolExecutionContext` 提供稳定 `execution_id`、可选 `task_id`、`recovery` 事实和可选异步 `publish_output(JsonValue)` 回调；它不携带 provider client 或活 session。外部 adapter 可以据此在自己的并发安全存储中解析 session，因此并发调用不依赖全局“当前沙箱”，Pygent Module 仍保持无状态。`DurableToolTaskManager` 仅保存普通任务的状态、输出与结果用于重启查询，不因此要求进程重连能力；查询也不调用 executor 或重放命令。
+不得把 executor 缺失、profile 不匹配、durable reconnect 不可用或 provider session 过期都折叠为 `detach_unavailable`。`ToolExecutionContext` 提供稳定 `execution_id`、可选 `task_id`、`recovery` 事实和可选异步 `publish_output(JsonValue)` 回调；它不携带 provider client 或活 session。`admitted` 是 execution lifecycle fact：仅表示当前 executor invocation 运行在一个已完成 admission、具有稳定 `task_id`、生命周期独立于原同步调用观察窗口的独立 ToolTask 内（框架不变量：`admitted=True` 的 context 必然携带非空 `task_id`）；它不表达 sandbox 能力、durability、recovery 能力、资源权限、业务授权或持久状态许可，这些事实分别由 `ToolSpec`、Runtime capability、recovery 协议、授权决策与部署 adapter 表达。外部 adapter 可以据此在自己的并发安全存储中解析 session，因此并发调用不依赖全局“当前沙箱”，Pygent Module 仍保持无状态。`DurableToolTaskManager` 仅保存普通任务的状态、输出与结果用于重启查询，不因此要求进程重连能力；查询也不调用 executor 或重放命令。
 
 Direct execution 可以继续显式传入同一个外部 executor，但没有 managed capability 派生、跨 Root 容量或 durable recovery。调用方必须确保 adapter 真正实施所声明的隔离，并负责 provider session 的拥有、取消、join 和关闭。框架可以提供基于 command/file 最小接口的标准工具便捷 adapter，但该 helper 必须建立在 `ToolExecutor` 之上，不能成为接入外部沙箱的强制协议。
 

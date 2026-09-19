@@ -930,3 +930,18 @@ async def test_in_memory_task_manager_bounds_completed_task_retention() -> None:
     assert len(manager._tasks) <= 2
     assert manager._invocations == {}
     assert await manager.get_result(task_ids[0]) is None
+
+
+def test_tool_execution_context_admitted_requires_task_id() -> None:
+    """An admitted context always belongs to one admitted ToolTask, so the
+    framework rejects the state without a stable task_id."""
+
+    with pytest.raises(
+        ValueError, match="admitted ToolExecutionContext requires task_id"
+    ):
+        ToolExecutionContext(admitted=True)
+
+    context = ToolExecutionContext(admitted=True, task_id="tool-1")
+    assert context.task_id == "tool-1"
+    # Inline contexts may stay task-less.
+    assert ToolExecutionContext().admitted is False

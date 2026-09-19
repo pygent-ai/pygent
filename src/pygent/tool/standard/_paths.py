@@ -30,19 +30,6 @@ class ToolPathContext:
         )
 
 
-def normalize_desktop_path(path: str) -> str:
-    """Normalize common model-generated desktop aliases."""
-
-    value = str(path).strip().replace("\\", "/")
-    if value.startswith("/Users/Desktop") or value.lower().startswith(
-        "c:/users/desktop"
-    ):
-        prefix_length = 17 if value.lower().startswith("c:/users/desktop") else 14
-        rest = value[prefix_length:].lstrip("/")
-        return "~/Desktop/" + rest if rest else "~/Desktop"
-    return str(path).strip()
-
-
 def normalize_msys_drive_path(path: str) -> str:
     """Convert Git Bash/MSYS paths such as ``/c/Users/me`` on Windows."""
 
@@ -58,8 +45,7 @@ def normalize_msys_drive_path(path: str) -> str:
 
 
 def normalize_tool_path(path: str, base: str | None = None) -> Path:
-    value = normalize_desktop_path(path)
-    value = normalize_msys_drive_path(os.path.expanduser(value))
+    value = normalize_msys_drive_path(os.path.expanduser(path))
     resolved = Path(value)
     if not resolved.is_absolute() and base:
         resolved = Path(base).expanduser() / resolved
@@ -126,13 +112,32 @@ def resolve_dir_path(
     return resolve_tool_path(path, context, default=default)
 
 
+def resolve_workspace_directory(
+    path: str | None,
+    context: ToolPathContext,
+    *,
+    default: str = ".",
+) -> str:
+    """Resolve one command working directory inside the configured workspace."""
+
+    resolved = resolve_dir_path(path, context, default=default)
+    if not resolved.is_dir():
+        raise ToolExecutionError(
+            f"working directory does not exist or is not a directory: {resolved}",
+            kind="filesystem_error",
+            code="not_a_directory",
+            side_effect_committed=False,
+        )
+    return str(resolved)
+
+
 __all__ = [
     "ToolPathContext",
     "is_absolute_tool_path",
-    "normalize_desktop_path",
     "normalize_msys_drive_path",
     "normalize_tool_path",
     "resolve_dir_path",
     "resolve_file_path",
     "resolve_tool_path",
+    "resolve_workspace_directory",
 ]

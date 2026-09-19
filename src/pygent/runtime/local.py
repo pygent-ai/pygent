@@ -358,6 +358,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
                         task_id=context.task_id,
                         recovery=context.recovery,
                         publish_output=context.publish_output,
+                        admitted=True,
                     )
                     return await registry.execute(spec, call, managed_context)
                 finally:

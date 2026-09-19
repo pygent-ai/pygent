@@ -30,7 +30,7 @@ from pygent import (
 from pygent.tool.standard import _files as file_module
 from pygent.tool.standard._encoding import detect_text_encoding
 from pygent.tool.standard._files import FileTools
-from pygent.tool.standard._paths import normalize_desktop_path, normalize_tool_path
+from pygent.tool.standard._paths import normalize_tool_path
 
 from ._helpers import invoke_tool, succeeded
 
@@ -134,15 +134,16 @@ def test_pdf_reader_uses_current_pypdf_backend(tmp_path) -> None:
     assert file_module._read_pdf_text(path, "1") == "--- page 1 ---"
 
 
-def test_resolve_path_handles_relative_and_desktop_alias(tmp_path):
+def test_resolve_path_handles_relative_paths(tmp_path):
     assert (
         normalize_tool_path("notes.txt", str(tmp_path))
         == (tmp_path / "notes.txt").resolve()
     )
-    assert normalize_desktop_path("/Users/Desktop/report.txt") == "~/Desktop/report.txt"
+    # Desktop-like paths are not rewritten by a framework alias; they are
+    # resolved as ordinary paths from the workspace base when relative.
     assert (
-        normalize_desktop_path("C:\\Users\\Desktop\\report.txt")
-        == "~/Desktop/report.txt"
+        normalize_tool_path("C:/Users/Desktop/report.txt", str(tmp_path))
+        == (tmp_path / "C:/Users/Desktop/report.txt").resolve()
     )
 
 

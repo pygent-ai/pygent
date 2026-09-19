@@ -18,9 +18,15 @@ from .layer import ToolCallLayer, TrustedAuthorizationAdapter
 from .standard import (
     BashTools,
     FileTools,
+    PowerShellTools,
+    ShellIdentity,
     StandardTools,
+    TerminalSessionStore,
+    TerminalTools,
     WebFetchTools,
     WebSearchTools,
+    ZshTools,
+    describe_shell_environment,
 )
 from .task_handle import ToolTaskHandle
 from .types import (
@@ -52,8 +58,12 @@ __all__ = [
     "InMemoryToolTaskManager",
     "LocalToolExecutor",
     "MediaSource",
+    "PowerShellTools",
     "SandboxExecutorSupport",
+    "ShellIdentity",
     "StandardTools",
+    "TerminalSessionStore",
+    "TerminalTools",
     "ToolAuthorizationDecision",
     "ToolAuthorizationRequest",
     "ToolCall",
@@ -82,5 +92,7 @@ __all__ = [
     "TrustedAuthorizationAdapter",
     "WebFetchTools",
     "WebSearchTools",
+    "ZshTools",
+    "describe_shell_environment",
     "tool",
 ]

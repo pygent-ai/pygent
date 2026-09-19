@@ -62,6 +62,15 @@ class ToolExecutionContext:
     task_id: str | None = None
     recovery: bool = False
     publish_output: Callable[[JsonValue], Awaitable[None]] | None = None
+    # Execution lifecycle fact: True only while this executor invocation runs
+    # inside an admitted independent ToolTask — one that has completed
+    # admission, carries a stable task_id, and whose lifecycle outlives the
+    # original call's observation window.  It is not a capability: sandbox
+    # support, durability, recovery, resource permissions and business
+    # authorization are each expressed by ToolSpec, Runtime capabilities, the
+    # recovery protocol and authorization decisions; an admitted context
+    # grants no persistent-state permission by itself.
+    admitted: bool = False
 
     def __post_init__(self) -> None:
         for name in ("execution_id", "task_id"):
@@ -70,6 +79,12 @@ class ToolExecutionContext:
                 raise ValueError(f"{name} must be a non-empty string or None")
         if not isinstance(self.recovery, bool):
             raise TypeError("recovery must be a bool")
+        if not isinstance(self.admitted, bool):
+            raise TypeError("admitted must be a bool")
+        # An admitted context always belongs to one admitted ToolTask, so the
+        # stable task_id is part of the state itself.
+        if self.admitted and self.task_id is None:
+            raise ValueError("admitted ToolExecutionContext requires task_id")
 
 
 _current_tool_execution: ContextVar[ToolExecutionContext | None] = ContextVar(
@@ -779,7 +794,11 @@ class InMemoryToolTaskManager:
                 spec,
                 call,
                 execution=execution,
-                context=ToolExecutionContext(task_id=snapshot.task_id, publish_output=publish_output),
+                context=ToolExecutionContext(
+                    task_id=snapshot.task_id,
+                    publish_output=publish_output,
+                    admitted=True,
+                ),
             )
             result = replace(
                 completed,
