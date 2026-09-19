@@ -209,6 +209,34 @@ def _flatten_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _grouped_median_by_load(stages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for stage in stages:
+        load_shape = stage.get("load_shape")
+        if load_shape == "closed":
+            load = f"c={stage.get('concurrency')}"
+        else:
+            # open loop summarized by load_factor when present, else offered_rps
+            lf = stage.get("load_factor")
+            load = f"factor={lf}" if lf is not None else f"rps={stage.get('offered_rps')}"
+        key = f"{stage.get('scenario')}|{load_shape}|{load}"
+        groups.setdefault(key, []).append(stage)
+    results: list[dict[str, Any]] = []
+    for key, items in sorted(groups.items()):
+        scenario, load_shape, load = key.split("|", 2)
+        med = median_summary(items)
+        results.append(
+            {
+                "scenario": scenario,
+                "load_shape": load_shape,
+                "load": load,
+                "achieved_rps": med["achieved_rps"],
+                "p95_ms": med["p95_ms"],
+            }
+        )
+    return results
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         f"# Pygent benchmark: {report['profile_name']}",
@@ -221,7 +249,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "| Scenario | Shape | Load | RPS | Success | P50 ms | P95 ms | P99 ms | Model trace P95 ms | Attempts | Trace failures | Dropped |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    for stage in report.get("stages", []):
+    stages = report.get("stages", [])
+    for stage in stages:
         latency = stage["latency_ms"]
         load = stage["concurrency"] or stage["offered_rps"]
         lines.append(
@@ -242,6 +271,25 @@ def render_markdown(report: dict[str, Any]) -> str:
                 dropped=stage["dropped"],
             )
         )
+    # Concurrency/open-load grouped medians
+    if stages:
+        lines.extend([
+            "",
+            "## Concurrency summary (median)",
+            "",
+            "| Scenario | Shape | Load | Median RPS | Median P95 ms |",
+            "|---|---:|---:|---:|---:|",
+        ])
+        for row in _grouped_median_by_load(stages):
+            lines.append(
+                "| {scenario} | {shape} | {load} | {rps:.3f} | {p95:.3f} |".format(
+                    scenario=row["scenario"],
+                    shape=row["load_shape"],
+                    load=row["load"],
+                    rps=row["achieved_rps"],
+                    p95=row["p95_ms"],
+                )
+            )
     partial = report.get("partial_stage")
     if isinstance(partial, dict):
         lines.extend(
