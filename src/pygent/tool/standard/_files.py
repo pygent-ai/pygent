@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import fnmatch
 import json
-import locale
 import os
 import re
 import shutil
@@ -38,6 +36,7 @@ from pygent.tool.types import (
     ToolSideEffect,
 )
 
+from ._encoding import detect_text_encoding, text_code_page
 from ._file_services import (
     FileDiagnosticsService,
     FileIOService,
@@ -84,16 +83,7 @@ _IMAGE_FORMAT_MIME_TYPES = {
     "WEBP": "image/webp",
 }
 _EXIF_ORIENTATION_TAG = 274
-_TEXT_BYTES = frozenset({*range(0x20, 0x100), 7, 8, 9, 10, 12, 13, 27})
 _TEXT_SNIFF_BYTES = 64 * 1024
-_UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
-_TRUNCATED_TAIL_REASONS = frozenset(
-    {
-        "unexpected end of data",
-        "incomplete multibyte sequence",
-        "truncated data",
-    }
-)
 _SEARCH_MAX_BYTES = 50 * 1024
 _GREP_MAX_LINE_LENGTH = 500
 _WRITE_TOOL_DESCRIPTION = (
@@ -883,51 +873,6 @@ def _media_signature_matches(data: bytes, mime_type: str) -> bool:
     return False
 
 
-def _decodes_as_text(data: bytes, encoding: str) -> bool:
-    """Report whether a sample decodes strictly, tolerating a split last character."""
-
-    try:
-        data.decode(encoding, errors="strict")
-    except UnicodeDecodeError as exc:
-        return exc.reason in _TRUNCATED_TAIL_REASONS and exc.end >= len(data)
-    except LookupError:
-        return False
-    return True
-
-
-def _text_code_page(sample: bytes) -> str:
-    """Choose the code page for a sample that is already known to be text.
-
-    Windows editors commonly save Chinese text as cp936/GBK rather than UTF-8.
-    Single-byte codecs such as cp1252 accept every byte, so the multibyte
-    candidates must come before the locale and single-byte fallbacks; otherwise
-    such a file silently decodes into mojibake instead of failing cleanly.
-    """
-
-    for encoding in (
-        "utf-8-sig",
-        "utf-8",
-        "gb18030",
-        "cp936",
-        locale.getpreferredencoding(False),
-        "cp1252",
-        "latin-1",
-    ):
-        if encoding and _decodes_as_text(sample, encoding):
-            return encoding
-    return "utf-8"
-
-
-def _detect_text_encoding(sample: bytes) -> str | None:
-    """Select the text code page for a file sample, or None when it is binary."""
-
-    if sample.startswith(_UTF16_BOMS):
-        return "utf-16"
-    if sample and not all(byte in _TEXT_BYTES for byte in sample):
-        return None
-    return _text_code_page(sample)
-
-
 def _file_text_encoding(path: Path, cache: dict[Path, str | None]) -> str | None:
     """Detect the code page of one file, cached per search operation."""
 
@@ -938,7 +883,7 @@ def _file_text_encoding(path: Path, cache: dict[Path, str | None]) -> str | None
         except OSError:
             cache[path] = "utf-8"
         else:
-            cache[path] = _detect_text_encoding(sample)
+            cache[path] = detect_text_encoding(sample)
     return cache[path]
 
 
@@ -946,25 +891,20 @@ def _read_text_document(path: Path, errors: str) -> str | None:
     """Decode a whole text file with its detected code page, or None when binary."""
 
     data = path.read_bytes()
-    encoding = _detect_text_encoding(data[:_TEXT_SNIFF_BYTES])
+    encoding = detect_text_encoding(data[:_TEXT_SNIFF_BYTES])
     if encoding is None:
         return None
     return data.decode(encoding, errors=errors)
 
 
-def _ripgrep_encodings(pattern: str) -> tuple[tuple[str, ...], ...]:
-    """Return the ripgrep encodings needed to match one pattern faithfully.
+def _read_search_lines(path: Path) -> list[str] | None:
+    """Decode a matched file into the lines ripgrep numbered, or None if binary."""
 
-    ripgrep only sniffs a byte-order mark, so a Chinese pattern never matches
-    cp936/GBK text unless the file is decoded with that code page first.  A
-    second pass cannot invent matches: it can only reach text that really is
-    encoded that way.  Patterns that match ASCII bytes only, and therefore
-    cannot depend on the code page, skip the extra pass.
-    """
-
-    if pattern.isascii() and "\\" not in pattern:
-        return ((),)
-    return ((), ("--encoding", "gb18030"))
+    try:
+        text = _read_text_document(path, errors="replace")
+    except OSError:
+        return None
+    return None if text is None else text.replace("\r\n", "\n").split("\n")
 
 
 def _read_text_range(
@@ -1615,7 +1555,7 @@ class FileTools:
         try:
             with path.open("rb") as stream:
                 sample = stream.read(self.max_read_bytes)
-                encoding = _detect_text_encoding(sample)
+                encoding = detect_text_encoding(sample)
                 if encoding is not None:
                     stream.seek(0)
                     with TextIOWrapper(
@@ -2359,12 +2299,19 @@ class FileTools:
         search_target = "." if root.is_dir() else root.name
         search_root = root if root.is_dir() else root.parent
 
-        encodings: dict[Path, str | None] = {}
+        code_pages: dict[Path, str | None] = {}
         matches: list[tuple[Path, int, str]] = []
         seen: set[tuple[Path, int]] = set()
         reached_limit = False
-        for encoding_arguments in _ripgrep_encodings(pattern):
-            found, reached_limit = await self._run_ripgrep_pass(
+        passes: list[list[str]] = [[]]
+        if not pattern.isascii() or "\\" in pattern:
+            # ripgrep only sniffs a byte-order mark, so a pattern that can match
+            # non-ASCII characters never reaches cp936/GBK text unless the file
+            # is decoded with that code page first.  The extra pass cannot
+            # invent matches: it only reaches text really encoded that way.
+            passes.append(["--encoding", "gb18030"])
+        for encoding_arguments in passes:
+            reached_limit = await self._run_ripgrep_pass(
                 executable,
                 [*arguments, *encoding_arguments, "--", pattern, search_target],
                 cwd=process_cwd,
@@ -2372,42 +2319,38 @@ class FileTools:
                 search_root=search_root,
                 glob=glob,
                 limit=effective_limit - len(matches),
-                encodings=encodings,
+                code_pages=code_pages,
                 seen=seen,
+                matches=matches,
             )
-            for found_path, found_line, found_text in found:
-                seen.add((found_path, found_line))
-                matches.append((found_path, found_line, found_text))
             if reached_limit:
                 break
 
         if not matches:
             return "No matches found"
 
-        file_cache: dict[Path, list[str]] = {}
+        file_cache: dict[Path, list[str] | None] = {}
         output_lines: list[str] = []
         lines_truncated = False
         for file_path, line_number, matched_text in matches:
             relative = _relative_search_path(file_path, search_root)
+            lines: list[str] | None = None
+            page = _file_text_encoding(file_path, code_pages)
+            if context or (page is not None and not page.startswith("utf-8")):
+                # ripgrep decodes every file as UTF-8, so a matched file that is
+                # really cp936/GB18030 or UTF-16 must be decoded again here.
+                if file_path not in file_cache:
+                    file_cache[file_path] = _read_search_lines(file_path)
+                lines = file_cache[file_path]
             if context == 0:
+                if lines is not None and 0 < line_number <= len(lines):
+                    matched_text = lines[line_number - 1]
                 value = matched_text.replace("\r\n", "\n").replace("\r", "")
                 value = value.removesuffix("\n")
                 value, truncated = _truncate_search_line(value)
                 lines_truncated |= truncated
                 output_lines.append(f"{relative}:{line_number}: {value}")
                 continue
-            lines = file_cache.get(file_path)
-            if lines is None:
-                try:
-                    text = _read_text_document(file_path, errors="replace")
-                except OSError:
-                    text = None
-                lines = (
-                    []
-                    if text is None
-                    else text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-                )
-                file_cache[file_path] = lines
             if not lines:
                 output_lines.append(f"{relative}:{line_number}: (unable to read file)")
                 continue
@@ -2444,12 +2387,12 @@ class FileTools:
         search_root: Path,
         glob: str | None,
         limit: int,
-        encodings: dict[Path, str | None],
+        code_pages: dict[Path, str | None],
         seen: set[tuple[Path, int]],
-    ) -> tuple[list[tuple[Path, int, str]], bool]:
-        """Collect matches from one ripgrep invocation."""
+        matches: list[tuple[Path, int, str]],
+    ) -> bool:
+        """Collect matches from one ripgrep invocation into matches."""
 
-        matches: list[tuple[Path, int, str]] = []
         reached_limit = False
         process = await self._start_search_process(executable, arguments, cwd=cwd)
         assert process.stderr is not None
@@ -2466,8 +2409,7 @@ class FileTools:
                 data = event.get("data", {})
                 raw_path = data.get("path", {}).get("text")
                 line_number = data.get("line_number")
-                fields = data.get("lines", {})
-                line_text = fields.get("text")
+                line_text = data.get("lines", {}).get("text")
                 if not isinstance(raw_path, str) or not isinstance(line_number, int):
                     continue
                 candidate = Path(raw_path)
@@ -2479,18 +2421,10 @@ class FileTools:
                     continue
                 if (candidate, line_number) in seen:
                     continue
-                if not isinstance(line_text, str):
-                    # ripgrep reports non-UTF-8 lines as raw base64 bytes.
-                    raw_bytes = fields.get("bytes")
-                    line_text = (
-                        base64.b64decode(raw_bytes).decode(
-                            _file_text_encoding(candidate, encodings) or "utf-8",
-                            errors="replace",
-                        )
-                        if isinstance(raw_bytes, str)
-                        else ""
-                    )
-                matches.append((candidate, line_number, line_text))
+                matches.append(
+                    (candidate, line_number, line_text if isinstance(line_text, str) else "")
+                )
+                seen.add((candidate, line_number))
                 if len(matches) >= limit:
                     reached_limit = True
                     await _terminate_search_process(process, stderr_task)
@@ -2505,7 +2439,7 @@ class FileTools:
 
         if not reached_limit and code not in (0, 1):
             self._raise_search_failure(stderr, code, "ripgrep")
-        return matches, reached_limit
+        return reached_limit
 
     def _grep_fallback(
         self,
@@ -2551,7 +2485,7 @@ class FileTools:
                 continue
             if b"\x00" in data[:8192]:
                 continue
-            encoding = _text_code_page(data[:_TEXT_SNIFF_BYTES])
+            encoding = text_code_page(data[:_TEXT_SNIFF_BYTES])
             lines = data.decode(encoding, errors="replace").replace(
                 "\r\n", "\n"
             ).replace("\r", "\n").split("\n")

@@ -28,6 +28,7 @@ from pygent import (
     ToolSideEffect,
 )
 from pygent.tool.standard import _files as file_module
+from pygent.tool.standard._encoding import detect_text_encoding
 from pygent.tool.standard._files import FileTools
 from pygent.tool.standard._paths import normalize_desktop_path, normalize_tool_path
 
@@ -1524,12 +1525,12 @@ def test_detect_text_encoding_prefers_multibyte_codecs_and_rejects_binary(
 ):
     monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
 
-    assert file_module._detect_text_encoding(b"") == "utf-8-sig"
-    assert file_module._detect_text_encoding("中文\n".encode()) == "utf-8-sig"
-    assert file_module._detect_text_encoding("中文测试".encode("gbk")[:5]) == "gb18030"
-    assert file_module._detect_text_encoding("café\n".encode("cp1252")) == "cp1252"
-    assert file_module._detect_text_encoding("中文\n".encode("utf-16")) == "utf-16"
-    assert file_module._detect_text_encoding(b"blob\x00\x01") is None
+    assert detect_text_encoding(b"") == "utf-8-sig"
+    assert detect_text_encoding("中文\n".encode()) == "utf-8-sig"
+    assert detect_text_encoding("中文测试".encode("gbk")[:5]) == "gb18030"
+    assert detect_text_encoding("café\n".encode("cp1252")) == "cp1252"
+    assert detect_text_encoding("中文\n".encode("utf-16")) == "utf-16"
+    assert detect_text_encoding(b"blob\x00\x01") is None
 
 
 @pytest.mark.asyncio
@@ -1618,12 +1619,14 @@ async def test_grep_covers_utf8_and_cp936_files_in_one_search(tmp_path, monkeypa
 @pytest.mark.asyncio
 async def test_grep_decodes_cp936_line_text_for_ascii_pattern(tmp_path, monkeypatch):
     monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale: "cp1252")
-    (tmp_path / "gbk.txt").write_bytes("prefix中文测试\n".encode("gbk"))
+    # "一" is cp936 D2BB, which is also valid UTF-8, so the matched line alone
+    # does not reveal the code page of the file it belongs to.
+    (tmp_path / "gbk.txt").write_bytes("value = 一\n第二行中文\n".encode("gbk"))
     tools = FileTools(workspace_root=tmp_path)
 
-    output = await succeeded(tools.grep, pattern="prefix", path="gbk.txt")
+    output = await succeeded(tools.grep, pattern="value", path="gbk.txt")
 
-    assert output == "gbk.txt:1: prefix中文测试"
+    assert output == "gbk.txt:1: value = 一"
     assert "\ufffd" not in output
 
 
