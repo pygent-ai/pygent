@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable
 from contextvars import Context
@@ -67,6 +68,7 @@ class SQLiteHistoryStore(
         max_pending_event_batches: int = 16,
         max_transaction_batch_size: int = 64,
         max_pending_transactions: int = 1024,
+        timeout_seconds: float = 30.0,
     ) -> None:
         if (
             not isinstance(max_event_batch_size, int)
@@ -86,6 +88,13 @@ class SQLiteHistoryStore(
         ):
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        if (
+            not isinstance(timeout_seconds, (int, float))
+            or isinstance(timeout_seconds, bool)
+            or not timeout_seconds > 0
+            or not math.isfinite(timeout_seconds)
+        ):
+            raise ValueError("timeout_seconds must be a finite positive number")
         self.path = str(path)
         self._connection: aiosqlite.Connection | None = None
         self._cancel_owners: dict[str, asyncio.Task[Any]] = {}
@@ -101,11 +110,21 @@ class SQLiteHistoryStore(
         self._transaction_writer_task: asyncio.Task[None] | None = None
         self._transaction_capacity = asyncio.Semaphore(max_pending_transactions)
         self._max_transaction_batch_size = max_transaction_batch_size
+        self._timeout_seconds = float(timeout_seconds)
 
     async def open(self) -> Self:
         if self._connection is not None:
             return self
-        self._connection = await aiosqlite.connect(self.path)
+        self._connection = await aiosqlite.connect(
+            self.path, timeout=self._timeout_seconds
+        )
+        # SQLite has no cross-process fairness of its own: without an explicit
+        # busy handler, a write that arrives while another runtime process holds
+        # the WAL write lock fails after sqlite3's implicit 5s default instead
+        # of waiting out a normal concurrent commit.
+        await self._connection.execute(
+            f"PRAGMA busy_timeout={int(self._timeout_seconds * 1000)}"
+        )
         await self._connection.execute("PRAGMA journal_mode=WAL")
         await self._connection.execute("PRAGMA foreign_keys=ON")
         user_version_row = await (

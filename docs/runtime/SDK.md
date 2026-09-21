@@ -645,13 +645,16 @@ bound = runtime.create_binding(
 report = bound.durability
 ```
 
-`SQLiteHistoryStore(max_event_batch_size=64, max_pending_event_batches=16, max_transaction_batch_size=64, max_pending_transactions=1024)` 会在不改变逻辑事件、sequence 或
+`SQLiteHistoryStore(max_event_batch_size=64, max_pending_event_batches=16, max_transaction_batch_size=64, max_pending_transactions=1024, timeout_seconds=30.0)` 会在不改变逻辑事件、sequence 或
 terminal 原子事务的前提下，对并发 Execution 的普通 Journal 事件执行有界 group
-commit。`LocalRuntime(max_retained_executions=1024)` 只限制进程内最近完成的
+commit。`timeout_seconds` 是 SQLite busy 等待时间（秒），多个 Runtime 进程共享同一 journal
+时写锁竞争会被该等待吸收，而不是在 sqlite3 默认的 5 秒后以 `database is locked` 穿透到调用方；
+锁竞争持续超过该上限时写操作仍会失败，调用方需要自行重试。`LocalRuntime(max_retained_executions=1024)` 只限制进程内最近完成的
 ExecutionRecord；已有 Handle 继续有效。内存淘汰后不会由 `start()` 自动切换为
 durable Handle，历史读取必须显式调用 `get_execution_handle()`。恢复返回的本地 Handle
 只订阅当前 attempt 的内存事件段；完整 Journal 由 durable Handle 分页读取。
-四个 SQLite batch/capacity 参数和 `max_retained_executions` 都必须是正整数。
+四个 SQLite batch/capacity 参数和 `max_retained_executions` 都必须是正整数，
+`timeout_seconds` 必须是正数。
 普通 Journal 写入只让出一个事件循环轮次来聚合并发事件，并让同一批事件共享提交回执；
 生产者只在有界 pending event 容量耗尽时等待，订阅游标仍只推进到已经提交的 sequence。
 并发 Execution create/claim/renew/update、effect begin/complete、Inbox receive 和 terminal 操作共享有界物理事务；任一请求失败时整批

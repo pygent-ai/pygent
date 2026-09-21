@@ -4,6 +4,8 @@ import asyncio
 import hashlib
 import json
 import sqlite3
+import threading
+import time
 
 import pytest
 
@@ -43,6 +45,90 @@ def test_pending_event_batches_must_be_positive_integer(tmp_path, pending_batche
 def test_transaction_batch_bounds_must_be_positive_integers(tmp_path, name, value):
     with pytest.raises(ValueError, match=name):
         SQLiteHistoryStore(tmp_path / "history.sqlite3", **{name: value})
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("timeout_seconds", 0),
+        ("timeout_seconds", -1),
+        ("timeout_seconds", True),
+        ("timeout_seconds", float("nan")),
+        ("timeout_seconds", float("inf")),
+    ],
+)
+def test_timeout_seconds_must_be_finite_positive_number(tmp_path, name, value):
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        SQLiteHistoryStore(tmp_path / "history.sqlite3", **{name: value})
+
+
+@pytest.mark.asyncio
+async def test_busy_timeout_connection_setting_is_configurable(tmp_path):
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as default:
+        row = await (await default._db().execute("PRAGMA busy_timeout")).fetchone()
+    assert row is not None and int(row[0]) == 30000
+
+    async with SQLiteHistoryStore(
+        tmp_path / "history.sqlite3", timeout_seconds=2.5
+    ) as custom:
+        row = await (await custom._db().execute("PRAGMA busy_timeout")).fetchone()
+    assert row is not None and int(row[0]) == 2500
+
+
+def _hold_sqlite_write_lock(path: str, seconds: float, acquired: threading.Event) -> None:
+    """Simulate another runtime process holding the WAL write lock."""
+    conn = sqlite3.connect(path, timeout=30.0)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("BEGIN IMMEDIATE")
+        acquired.set()
+        time.sleep(seconds)
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_write_waits_out_short_lock_contention(tmp_path):
+    path = tmp_path / "history.sqlite3"
+    async with SQLiteHistoryStore(path, timeout_seconds=3.0) as store:
+        acquired = threading.Event()
+        holder = threading.Thread(
+            target=_hold_sqlite_write_lock, args=(str(path), 1.0, acquired)
+        )
+        holder.start()
+        try:
+            assert acquired.wait(5.0)
+            # The write must wait out the holder instead of failing after
+            # sqlite3's implicit 5s busy timeout.
+            assert await store.admit_tool_observation("task-1", "owner-1", 60.0)
+        finally:
+            holder.join(10.0)
+    assert not holder.is_alive()
+
+
+@pytest.mark.asyncio
+async def test_write_fails_promptly_when_busy_timeout_is_exceeded(tmp_path):
+    path = tmp_path / "history.sqlite3"
+    async with SQLiteHistoryStore(path, timeout_seconds=0.3) as store:
+        acquired = threading.Event()
+        holder = threading.Thread(
+            target=_hold_sqlite_write_lock, args=(str(path), 1.5, acquired)
+        )
+        started = time.monotonic()
+        holder.start()
+        try:
+            assert acquired.wait(5.0)
+            with pytest.raises(
+                sqlite3.OperationalError, match="database is locked"
+            ):
+                await store.admit_tool_observation("task-1", "owner-1", 60.0)
+            # Fails at the configured timeout, not after the 5s default.
+            assert time.monotonic() - started < 5.0
+        finally:
+            holder.join(10.0)
+        # Once the holder commits, the same write succeeds (contention only).
+        assert await store.admit_tool_observation("task-1", "owner-1", 60.0)
 
 
 def test_validated_json_object_serialization_reuses_frozen_children():
