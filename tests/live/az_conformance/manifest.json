@@ -1,9 +1,9 @@
 {
   "schema_version": 2,
   "snapshot": {
-    "captured_at": "2026-09-11",
-    "count": 211,
-    "sha256": "7398801a0d480abc1b45d64d87e9c8eac508404f53dffc37d202c222f264330e"
+    "captured_at": "2026-09-21",
+    "count": 213,
+    "sha256": "a043b70ad3e56ae84bbd70eb248ba134d0f8711e69bcd49b27f7bdb462e79859"
   },
   "routes": [
     {
@@ -870,6 +870,37 @@
             "tool_choice",
             "json_object",
             "reasoning"
+          ]
+        }
+      ],
+      "catalog_eligible": true
+    },
+    {
+      "route_id": "deepseek-flash",
+      "kind": "official_model",
+      "canonical_provider": "deepseek",
+      "canonical_model_id": "deepseek-flash",
+      "protocols": [
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "reasoning"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice",
+            "json_object",
+            "reasoning",
+            "image_input"
           ]
         }
       ],
@@ -2682,6 +2713,34 @@
       "kind": "official_model",
       "canonical_provider": "zhipu",
       "canonical_model_id": "glm-5.3-flash",
+      "protocols": [
+        {
+          "protocol": "anthropic_messages",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "tool_choice"
+          ]
+        },
+        {
+          "protocol": "openai_chat_completions",
+          "required_scenarios": [
+            "text",
+            "text_stream",
+            "tools",
+            "json_object",
+            "reasoning"
+          ]
+        }
+      ],
+      "catalog_eligible": true
+    },
+    {
+      "route_id": "glm-5.3-flashx",
+      "kind": "official_model",
+      "canonical_provider": "zhipu",
+      "canonical_model_id": "glm-5.3-flashx",
       "protocols": [
         {
           "protocol": "anthropic_messages",

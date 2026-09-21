@@ -30,9 +30,9 @@ def test_frozen_route_id_snapshot_is_exact() -> None:
 
     assert text.endswith("\n")
     assert ids == sorted(ids)
-    assert len(ids) == len(set(ids)) == 211
+    assert len(ids) == len(set(ids)) == 213
     assert sha256(payload).hexdigest() == (
-        "7398801a0d480abc1b45d64d87e9c8eac508404f53dffc37d202c222f264330e"
+        "a043b70ad3e56ae84bbd70eb248ba134d0f8711e69bcd49b27f7bdb462e79859"
     )
 
 
@@ -240,7 +240,7 @@ def test_source_index_is_strict_https_and_unique() -> None:
 
 def test_builtin_source_index_is_populated() -> None:
     index = load_sources()
-    assert len(index.sources) == 215
+    assert len(index.sources) == 219
 
 
 def test_builtin_manifest_classifies_the_exact_frozen_inventory() -> None:
@@ -248,7 +248,7 @@ def test_builtin_manifest_classifies_the_exact_frozen_inventory() -> None:
     frozen_ids = tuple(_ROUTE_IDS.read_text(encoding="utf-8").splitlines())
 
     assert tuple(route.route_id for route in manifest.routes) == frozen_ids
-    assert len(manifest.routes) == 211
+    assert len(manifest.routes) == 213
     assert all(route.protocols for route in manifest.routes)
     assert all(
         requirements.required_scenarios
@@ -265,12 +265,12 @@ def test_builtin_manifest_preserves_advertised_protocol_counts() -> None:
         for route in manifest.routes
         for requirements in route.protocols
     ]
-    assert protocol_names.count("openai_chat_completions") == 198
+    assert protocol_names.count("openai_chat_completions") == 200
     assert protocol_names.count("openai_audio_speech") == 1
     assert protocol_names.count("openai_embeddings") == 3
     assert protocol_names.count("openai_images") == 3
     assert protocol_names.count("openai_realtime") == 2
-    assert protocol_names.count("anthropic_messages") == 45
+    assert protocol_names.count("anthropic_messages") == 47
     assert protocol_names.count("gemini_generate_content") == 28
     assert protocol_names.count("serpapi_search") == 7
     assert protocol_names.count("dashscope_multimodal_generation") == 2

@@ -4325,7 +4325,7 @@
           "controllable": true
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 1000000,
           "max_output_tokens": null
         }
       }
@@ -4367,7 +4367,7 @@
           "controllable": true
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 1000000,
           "max_output_tokens": null
         }
       }
@@ -4494,6 +4494,92 @@
         },
         "limits": {
           "context_tokens": null,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-flash",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": null
+        }
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-flash",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": true
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
           "max_output_tokens": null
         }
       }
@@ -9856,7 +9942,7 @@
           "controllable": false
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 1000000,
           "max_output_tokens": null
         }
       }
@@ -9895,7 +9981,7 @@
           "controllable": true
         },
         "limits": {
-          "context_tokens": null,
+          "context_tokens": 1000000,
           "max_output_tokens": null
         }
       }
@@ -9937,8 +10023,8 @@
           "controllable": false
         },
         "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
+          "context_tokens": 1000000,
+          "max_output_tokens": 128000
         }
       }
     },
@@ -9976,8 +10062,8 @@
           "controllable": true
         },
         "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
+          "context_tokens": 1000000,
+          "max_output_tokens": 128000
         }
       }
     },
@@ -9988,7 +10074,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -10018,8 +10106,8 @@
           "controllable": false
         },
         "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
+          "context_tokens": 1000000,
+          "max_output_tokens": 128000
         }
       }
     },
@@ -10030,7 +10118,9 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image",
+            "video"
           ],
           "output": [
             "text"
@@ -10057,8 +10147,93 @@
           "controllable": true
         },
         "limits": {
-          "context_tokens": null,
-          "max_output_tokens": null
+          "context_tokens": 1000000,
+          "max_output_tokens": 128000
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.3-flashx",
+      "protocol": "anthropic_messages",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "none",
+            "auto",
+            "required",
+            "named"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": false,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": 128000
+        }
+      }
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.3-flashx",
+      "protocol": "openai_chat_completions",
+      "capabilities": {
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "streaming": {
+          "output": [
+            "text"
+          ]
+        },
+        "tools": {
+          "call": true,
+          "choice": [
+            "auto"
+          ],
+          "parallel": false
+        },
+        "structured_output": {
+          "json_object": true,
+          "json_schema": false
+        },
+        "reasoning": {
+          "supported": true,
+          "controllable": true
+        },
+        "limits": {
+          "context_tokens": 1000000,
+          "max_output_tokens": 128000
         }
       }
     },
@@ -10069,7 +10244,8 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "output": [
             "text"
@@ -10111,7 +10287,8 @@
       "capabilities": {
         "modalities": {
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "output": [
             "text"

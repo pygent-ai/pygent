@@ -1505,6 +1505,34 @@
       "protocol": "anthropic_messages",
       "url": "https://platform.kimi.com/docs/api/messages",
       "checked_at": "2026-09-11"
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-flash",
+      "protocol": "openai_chat_completions",
+      "url": "https://api-docs.deepseek.com/guides/vision",
+      "checked_at": "2026-09-21"
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-flash",
+      "protocol": "anthropic_messages",
+      "url": "https://api-docs.deepseek.com/guides/anthropic_api",
+      "checked_at": "2026-09-21"
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.3-flashx",
+      "protocol": "anthropic_messages",
+      "url": "https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash",
+      "checked_at": "2026-09-21"
+    },
+    {
+      "provider": "zhipu",
+      "model_id": "glm-5.3-flashx",
+      "protocol": "openai_chat_completions",
+      "url": "https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash",
+      "checked_at": "2026-09-21"
     }
   ]
 }
