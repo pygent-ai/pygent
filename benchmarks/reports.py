@@ -15,7 +15,7 @@ from time import perf_counter
 from typing import Any, TextIO
 
 from .config import LoadProfile
-from .metrics import Sample, StageResult
+from .metrics import Sample, StageResult, median_summary
 from .runner import StageProgress
 
 
