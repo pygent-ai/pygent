@@ -99,7 +99,7 @@ class _PROCESS_INFORMATION(ctypes.Structure):
 
 # ── Load kernel32 ────────────
 
-_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
 
 _kernel32.CreatePipe.restype = wintypes.BOOL
 _kernel32.CreatePipe.argtypes = [
@@ -109,7 +109,7 @@ _kernel32.CreatePipe.argtypes = [
     wintypes.DWORD,
 ]
 
-_kernel32.CreatePseudoConsole.restype = ctypes.HRESULT
+_kernel32.CreatePseudoConsole.restype = ctypes.HRESULT  # type: ignore[attr-defined]
 _kernel32.CreatePseudoConsole.argtypes = [
     ctypes.POINTER(_COORD),
     wintypes.HANDLE,
