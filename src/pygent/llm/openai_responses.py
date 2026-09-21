@@ -13,6 +13,7 @@ import jsonschema  # type: ignore[import-untyped]
 from pygent.core import (
     AIMessage,
     FrozenJsonObject,
+    JsonValue,
     Message,
     ModelContinuation,
     ToolMessage,
@@ -507,10 +508,10 @@ def _tool_result_value(
         ]
     else:
         if result.status == "succeeded":
-            output: object = result.output
+            output = result.output
             if not isinstance(output, str):
                 output = json.dumps(
-                    thaw_json(output), ensure_ascii=False, separators=(",", ":")
+                    thaw_json(cast(JsonValue, output)), ensure_ascii=False, separators=(",", ":")
                 )
         else:
             output = encode_tool_context(result)

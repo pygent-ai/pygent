@@ -17,6 +17,7 @@ import jsonschema  # type: ignore[import-untyped]
 from pygent.core import (
     AIMessage,
     FrozenJsonObject,
+    JsonValue,
     Message,
     ModelContinuation,
     ToolMessage,
@@ -1049,7 +1050,7 @@ def _encode_openai_tool_result(
         if isinstance(fallback, str):
             return fallback, []
         return (
-            json.dumps(thaw_json(fallback), ensure_ascii=False, separators=(",", ":"))
+            json.dumps(thaw_json(cast(JsonValue, fallback)), ensure_ascii=False, separators=(",", ":"))
             if fallback is not None
             else ""
         ), []

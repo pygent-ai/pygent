@@ -906,10 +906,10 @@ def _tool_result_value(
         ]
     else:
         if result.status == "succeeded":
-            content: object = result.output
+            content = result.output
             if not isinstance(content, str):
                 content = json.dumps(
-                    thaw_json(content), ensure_ascii=False, separators=(",", ":")
+                    thaw_json(cast(JsonValue, content)), ensure_ascii=False, separators=(",", ":")
                 )
         else:
             content = encode_tool_context(result)

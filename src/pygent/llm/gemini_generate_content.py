@@ -14,6 +14,7 @@ import jsonschema  # type: ignore[import-untyped]
 from pygent.core import (
     AIMessage,
     FrozenJsonObject,
+    JsonValue,
     Message,
     ModelContinuation,
     ToolMessage,
@@ -570,7 +571,7 @@ def _function_response(
         elif isinstance(value, Mapping):
             response = dict(value)
         else:
-            response = {"result": thaw_json(value)}
+            response = {"result": thaw_json(cast(JsonValue, value))}
     function_response: dict[str, object] = {
         "id": result.call_id,
         "name": result.name,
