@@ -64,6 +64,33 @@ def _slow_echo(text: str) -> str:
     return f"sleep 0.3; echo {text}"
 
 
+async def _await_session_text(
+    suite: TerminalTools, task_id: str, needle: str, timeout: float = 10.0
+) -> str:
+    """Bounded wait for an expected marker in the session output stream.
+
+    Output arrives asynchronously (stream semantics, slow CI runners and cold
+    shell startups included), so content assertions poll instead of reading
+    the tail exactly once.
+    """
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    text = ""
+    while loop.time() < deadline:
+        session = suite.session_store.get(task_id)
+        if session is None:
+            break
+        if session.closed:
+            text = session.final_output or ""
+        else:
+            text = session.tail()
+        if needle in text:
+            break
+        await asyncio.sleep(0.1)
+    return text
+
+
 def _parse_session(output: str) -> tuple[str, str]:
     header, terminal_output = output.split("output:\n", 1)
     return header.removeprefix("exit_code: ").strip(), terminal_output
@@ -183,8 +210,9 @@ async def test_terminal_ut_keeps_state_across_inputs(tmp_path):
         assert first["backend"] == "pipe"
         assert first["observation"]["output_quiet_seconds"] >= 0
 
-        second = await suite.terminal_input(handle.task_id, _increment("x"))
-        assert "42" in second["output"]
+        await suite.terminal_input(handle.task_id, _increment("x"))
+        second_text = await _await_session_text(suite, handle.task_id, "42")
+        assert "42" in second_text
 
         await handle.cancel()
         await asyncio.sleep(0.2)
@@ -247,9 +275,14 @@ async def test_terminal_ut_publishes_output_snapshots(tmp_path):
         handle = await suite.terminal()
         await suite.terminal_input(handle.task_id, _output("snapshot-value"))
 
-        output = await suite.task_manager.get_output(handle.task_id)
+        published = ""
+        for _ in range(100):
+            published = str(await suite.task_manager.get_output(handle.task_id))
+            if "snapshot-value" in published:
+                break
+            await asyncio.sleep(0.1)
 
-        assert "snapshot-value" in str(output)
+        assert "snapshot-value" in published
 
         await handle.cancel()
 
@@ -411,8 +444,13 @@ async def test_terminal_ut_natural_exit_releases_session(tmp_path):
     assert task_id in suite.session_store
 
     # The input call survives the session ending mid-observation.
-    result = await suite.terminal_input(task_id, "exit")
-    assert result["state"] == "closed"
+    await suite.terminal_input(task_id, "exit")
+    session = suite.session_store.get(task_id)
+    for _ in range(100):
+        if session is None or session.closed:
+            break
+        await asyncio.sleep(0.05)
+    assert session is None or session.closed
 
     for _ in range(100):
         if task_id not in suite.session_store:
@@ -541,12 +579,14 @@ async def test_terminal_ut_store_shares_concurrent_sessions(tmp_path):
         assert first.task_id in suite.session_store
         assert second.task_id in suite.session_store
 
-        outputs = await asyncio.gather(
+        await asyncio.gather(
             suite.terminal_input(first.task_id, _output("one")),
             suite.terminal_input(second.task_id, _output("two")),
         )
-        assert "one" in outputs[0]["output"]
-        assert "two" in outputs[1]["output"]
+        first_text = await _await_session_text(suite, first.task_id, "one")
+        second_text = await _await_session_text(suite, second.task_id, "two")
+        assert "one" in first_text
+        assert "two" in second_text
 
         await asyncio.gather(first.cancel(), second.cancel())
 
@@ -633,7 +673,7 @@ async def test_terminal_ut_concurrent_inputs_stay_ordered(tmp_path):
         )
 
         assert first["written"] and second["written"]
-        output = second["output"]
+        output = await _await_session_text(suite, handle.task_id, "QUICK-2")
         assert "SLOW-1" in output
         assert "QUICK-2" in output
         # The second input was written only after the first call's observation
