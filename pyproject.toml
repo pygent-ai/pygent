@@ -83,3 +83,9 @@ markers = [
 
 [tool.mypy]
 mypy_path = "src"
+
+# The ConPTY transport is Windows-only and is imported only from Windows
+# code paths; analyze it with Windows ctypes stubs on every host OS.
+[[tool.mypy.overrides]]
+module = "pygent.tool.standard._conpty"
+platform = "win32"
