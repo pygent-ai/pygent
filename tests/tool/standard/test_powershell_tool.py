@@ -7,7 +7,7 @@ import os
 import shutil
 import subprocess
 import time
-from pathlib import Path
+from pathlib import PureWindowsPath
 
 import pytest
 
@@ -290,7 +290,7 @@ def test_powershell_ut_platform_candidates_are_absolute_paths(monkeypatch):
 
     candidates = powershell_module._powershell_candidates()
 
-    assert all(Path(candidate).is_absolute() for candidate in candidates)
+    assert all(PureWindowsPath(candidate).is_absolute() for candidate in candidates)
     assert any(candidate.endswith("powershell.exe") for candidate in candidates)
 
 

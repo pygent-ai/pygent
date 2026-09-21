@@ -28,6 +28,42 @@ def _identity():
     return identity
 
 
+IS_WINDOWS = sys.platform == "win32"
+
+
+def _functional_shell() -> dict[str, str]:
+    """PowerShell is the verified interactive shell on Windows, bash on POSIX.
+
+    Interactive pipe semantics are platform-specific: pwsh on Linux does not
+    process piped stdin as a line-oriented REPL, so each platform runs the
+    session functional tests against its native shell.
+    """
+
+    if IS_WINDOWS:
+        return {"shell": "powershell", "shell_executable": _identity().executable}
+    if not _bash_available():
+        pytest.skip("functional native shell is not available")
+    return {"shell": "bash"}
+
+
+def _assign(name: str, value: int) -> str:
+    return f"${name} = {value}" if IS_WINDOWS else f"{name}={value}"
+
+
+def _increment(name: str) -> str:
+    return f"Write-Output (${name} + 1)" if IS_WINDOWS else f"echo $((${name} + 1))"
+
+
+def _output(text: str) -> str:
+    return f"Write-Output {text}" if IS_WINDOWS else f"echo {text}"
+
+
+def _slow_echo(text: str) -> str:
+    if IS_WINDOWS:
+        return f"Start-Sleep -Milliseconds 300; Write-Output {text}"
+    return f"sleep 0.3; echo {text}"
+
+
 def _parse_session(output: str) -> tuple[str, str]:
     header, terminal_output = output.split("output:\n", 1)
     return header.removeprefix("exit_code: ").strip(), terminal_output
@@ -134,8 +170,7 @@ def test_terminal_ut_interactive_arguments_per_shell():
 async def test_terminal_ut_keeps_state_across_inputs(tmp_path):
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
     )
 
     async with suite:
@@ -143,12 +178,12 @@ async def test_terminal_ut_keeps_state_across_inputs(tmp_path):
         session = suite.session_store.get(handle.task_id)
         assert session is not None
 
-        first = await suite.terminal_input(handle.task_id, "$x = 41")
+        first = await suite.terminal_input(handle.task_id, _assign("x", 41))
         assert first["state"] == "running"
         assert first["backend"] == "pipe"
         assert first["observation"]["output_quiet_seconds"] >= 0
 
-        second = await suite.terminal_input(handle.task_id, "Write-Output ($x + 1)")
+        second = await suite.terminal_input(handle.task_id, _increment("x"))
         assert "42" in second["output"]
 
         await handle.cancel()
@@ -183,8 +218,7 @@ async def test_terminal_ut_rejects_unknown_task(tmp_path):
 async def test_terminal_ut_stopped_session_refuses_input(tmp_path):
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
     )
 
     async with suite:
@@ -206,13 +240,12 @@ async def test_terminal_ut_stopped_session_refuses_input(tmp_path):
 async def test_terminal_ut_publishes_output_snapshots(tmp_path):
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
     )
 
     async with suite:
         handle = await suite.terminal()
-        await suite.terminal_input(handle.task_id, "Write-Output 'snapshot-value'")
+        await suite.terminal_input(handle.task_id, _output("snapshot-value"))
 
         output = await suite.task_manager.get_output(handle.task_id)
 
@@ -225,8 +258,7 @@ async def test_terminal_ut_publishes_output_snapshots(tmp_path):
 async def test_terminal_ut_model_path_returns_detached_task(tmp_path):
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
     )
 
     async with suite:
@@ -330,8 +362,7 @@ async def test_terminal_ut_session_survives_foreground_observation(tmp_path):
 
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
     )
 
     async with suite:
@@ -354,8 +385,7 @@ async def test_terminal_ut_session_survives_foreground_observation(tmp_path):
 async def test_terminal_ut_close_releases_sessions(tmp_path):
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
     )
     handle = await suite.terminal()
     session = suite.session_store.get(handle.task_id)
@@ -374,8 +404,7 @@ async def test_terminal_ut_natural_exit_releases_session(tmp_path):
 
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
     )
     handle = await suite.terminal()
     task_id = handle.task_id
@@ -399,8 +428,7 @@ async def test_terminal_ut_initial_command_exit_completes_task(tmp_path):
 
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
     )
 
     async with suite:
@@ -419,8 +447,7 @@ async def test_terminal_ut_aclose_external_manager_reaches_terminal(tmp_path):
 
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
     )
     external = suite.task_manager
     suite._owns_task_manager = False  # simulate an externally-owned manager
@@ -505,8 +532,7 @@ async def test_terminal_ut_store_shares_concurrent_sessions(tmp_path):
 
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
     )
 
     async with suite:
@@ -516,8 +542,8 @@ async def test_terminal_ut_store_shares_concurrent_sessions(tmp_path):
         assert second.task_id in suite.session_store
 
         outputs = await asyncio.gather(
-            suite.terminal_input(first.task_id, "Write-Output one"),
-            suite.terminal_input(second.task_id, "Write-Output two"),
+            suite.terminal_input(first.task_id, _output("one")),
+            suite.terminal_input(second.task_id, _output("two")),
         )
         assert "one" in outputs[0]["output"]
         assert "two" in outputs[1]["output"]
@@ -566,8 +592,7 @@ async def test_terminal_ut_registration_timeout_keeps_handle(
     store = _DelayedStore()
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
         session_store=store,
     )
     monkeypatch.setattr(_terminal, "_TERMINAL_READ_TIMEOUT_SECONDS", 0.05)
@@ -594,8 +619,7 @@ async def test_terminal_ut_concurrent_inputs_stay_ordered(tmp_path):
 
     suite = TerminalTools(
         workspace_root=tmp_path,
-        shell="powershell",
-        shell_executable=_identity().executable,
+        **_functional_shell(),
     )
 
     async with suite:
@@ -603,9 +627,9 @@ async def test_terminal_ut_concurrent_inputs_stay_ordered(tmp_path):
         first, second = await asyncio.gather(
             suite.terminal_input(
                 handle.task_id,
-                "Start-Sleep -Milliseconds 300; Write-Output SLOW-1",
+                _slow_echo("SLOW-1"),
             ),
-            suite.terminal_input(handle.task_id, "Write-Output QUICK-2"),
+            suite.terminal_input(handle.task_id, _output("QUICK-2")),
         )
 
         assert first["written"] and second["written"]
@@ -783,7 +807,15 @@ async def test_terminal_pty_input_keeps_state(tmp_path):
         assert first["state"] == "running"
 
         second = await suite.terminal_input(handle.task_id, "echo $((x + 1))")
-        assert "42" in second["output"], f"output={second['output']!r}"
+        output = second["output"]
+        session = suite.session_store.get(handle.task_id)
+        for _ in range(30):
+            if "42" in output:
+                break
+            await asyncio.sleep(0.1)
+            if session is not None and not session.closed:
+                output = session.tail()
+        assert "42" in output, f"output={output!r}"
 
         await handle.cancel()
         await asyncio.sleep(0.2)
