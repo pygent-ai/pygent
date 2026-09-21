@@ -12,7 +12,7 @@ from tests.live.multimodal_tool_result_probe import (
 def test_az_catalog_media_cases_cover_tool_capable_declared_modalities() -> None:
     cases = az_catalog_media_cases()
 
-    assert len(cases) == 79
+    assert len(cases) == 85
     assert len(cases) == len(set(cases))
     assert ("gpt-4.1", "image") in cases
     assert ("qwen3.8-max", "video") in cases

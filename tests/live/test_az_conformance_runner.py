@@ -508,7 +508,7 @@ def test_cli_validate_needs_no_credentials_and_reports_sanitized_summary(
     assert cli.main(["validate", "--manifest", str(manifest)], environ={}) == 0
 
     output = capsys.readouterr().out
-    assert "routes=211 classified=211" in output
+    assert "routes=213 classified=213" in output
     assert "missing_sources=0 missing_probes=0" in output
 
 
@@ -546,7 +546,7 @@ def test_cli_inventory_drift_stops_before_client_construction(
     manifest_path = Path(__file__).with_name("az_conformance") / "manifest.json"
     manifest = cli.load_manifest(manifest_path)
     drift = InventoryDiff(
-        expected_count=211,
+        expected_count=213,
         actual_count=210,
         expected_sha256=manifest.snapshot.sha256,
         actual_sha256="8" * 64,
