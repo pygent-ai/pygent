@@ -281,7 +281,7 @@ class BashTools(NativeShellTools):
                 proxy_env = self._detect_system_proxy_env(env)
                 self._system_proxy_env = proxy_env
             if proxy_env:
-                existing = {k.lower() for k in env.keys()}
+                existing = {k.lower() for k in env}
                 for k, v in proxy_env.items():
                     if k.lower() not in existing and v:
                         env[k] = v
@@ -294,7 +294,9 @@ class BashTools(NativeShellTools):
                 for k in ("http_proxy", "https_proxy", "all_proxy", "no_proxy"):
                     _mirror(k)
             kwargs["env"] = env
-        except Exception:
+        # Proxy detection is best-effort: any failure must fall back to the
+        # inherited environment instead of breaking the shell invocation.
+        except Exception:  # noqa: BLE001
             kwargs["env"] = os.environ.copy()
         if self._is_windows:
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -358,7 +360,8 @@ class BashTools(NativeShellTools):
                             no_proxy = ",".join([h.strip() for h in proxy_override.split(";") if h.strip()])
                             if no_proxy:
                                 result["NO_PROXY"] = no_proxy
-                except Exception:
+                # Registry probe is best-effort; an absent key is normal.
+                except Exception:  # noqa: BLE001, S110
                     pass
                 # WinHTTP fallback
                 try:
@@ -404,7 +407,9 @@ class BashTools(NativeShellTools):
                                 items = [i.strip() for i in rhs.replace(",", ";").split(";") if i.strip()]
                                 if items:
                                     result["NO_PROXY"] = ",".join(items)
-                except Exception:
+                # WinHTTP/netsh parsing is best-effort; any failure just
+                # leaves the result without proxy hints.
+                except Exception:  # noqa: BLE001, S110
                     pass
             elif sys.platform == "darwin":
                 try:
@@ -455,7 +460,8 @@ class BashTools(NativeShellTools):
                                         items.append(s)
                             if items:
                                 result["NO_PROXY"] = ",".join(items)
-                except Exception:
+                # macOS proxy probe is best-effort; failure means no hints.
+                except Exception:  # noqa: BLE001, S110
                     pass
             else:
                 # Linux: try GNOME gsettings if available
@@ -502,9 +508,13 @@ class BashTools(NativeShellTools):
                                 items = [i.strip().strip("'\"") for i in ignore.strip("[]").split(",") if i.strip()]
                                 if items:
                                     result["NO_PROXY"] = ",".join(items)
-                except Exception:
+                # gsettings probe is best-effort; failure just means no
+                # proxy hints from the desktop environment.
+                except Exception:  # noqa: BLE001, S110
                     pass
-        except Exception:
+        # The whole environment probe is best-effort: callers fall back to the
+        # inherited environment when this returns {}.
+        except Exception:  # noqa: BLE001
             return {}
         return result
 
