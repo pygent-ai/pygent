@@ -93,6 +93,7 @@ class _ExecutionRecord:
     model_calls: Any = None
     model_admission: Any = None
     deferred_tool_tasks: list[tuple[ToolTaskManager, str]] = field(default_factory=list)
+    step_interrupt_event: asyncio.Event | None = None
 
     @property
     def terminal(self) -> bool:

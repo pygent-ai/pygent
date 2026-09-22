@@ -160,6 +160,13 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             else None
         )
 
+        layer_infrastructure = current_infrastructure()
+        interrupt_getter = getattr(
+            layer_infrastructure, "step_interrupt_event", None
+        )
+        interrupt_event = (
+            interrupt_getter() if callable(interrupt_getter) else None
+        )
         async def run(call: ToolCall) -> ToolResult:
             await self.emit(
                 kind="tool.requested",
@@ -185,11 +192,43 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             (lambda call=call: run(call)) for call in message.tool_calls
         )
         gather = getattr(infrastructure, "gather", None)
-        results = (
-            await gather(operations)
-            if callable(gather)
-            else tuple(await asyncio.gather(*(operation() for operation in operations)))
-        )
+        interrupt_getter = getattr(infrastructure, "gather_until", None)
+        if interrupt_event is not None and callable(interrupt_getter):
+            started = [False] * len(operations)
+
+            def wrapped(index: int, operation):
+                async def op():
+                    started[index] = True
+                    return await operation()
+
+                return op
+
+            tracked = tuple(
+                wrapped(index, operation)
+                for index, operation in enumerate(operations)
+            )
+            raw, completed, interrupted = await interrupt_getter(
+                tracked, abort=interrupt_event
+            )
+            if not interrupted:
+                results = raw
+            else:
+                results = tuple(
+                    raw[index]
+                    if completed[index]
+                    else self._cancelled_result(
+                        call,
+                        specs_by_name.get(call.name),
+                        started[index],
+                    )
+                    for index, call in enumerate(message.tool_calls)
+                )
+        else:
+            results = (
+                await gather(operations)
+                if callable(gather)
+                else tuple(await asyncio.gather(*(operation() for operation in operations)))
+            )
         return ToolMessage(results=cast(tuple[ToolResult, ...], results)), context
 
     async def _handle_call(
@@ -270,6 +309,71 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
         if spec.wait_timeout is not None and cast(FrozenJsonObject, call.arguments).get("is_background") is True:
             return await self._reject_event(call, "background_requires_detach", spec)
         return await self._execute_sync(admitted_call, spec)
+
+    @staticmethod
+    def _cancelled_result(
+        call: ToolCall, spec: ToolSpec | None, started: bool
+    ) -> ToolResult:
+        return ToolResult(
+            call_id=call.call_id,
+            name=call.name,
+            status="cancelled",
+            error_kind="cancelled",
+            error_code="interrupted_by_steering",
+            retryable=False,
+            side_effect_committed=None if started else False,
+            tool_id=None if spec is None else spec.tool_id,
+            tool_version=None if spec is None else spec.version,
+        )
+
+    async def _wait_tool_task_until(
+        self,
+        infrastructure: Any,
+        manager: ToolTaskManager,
+        call: ToolCall,
+        spec: ToolSpec,
+        task: ToolTask,
+        timeout: float,
+    ) -> ToolResult | None:
+        """Wait for one admitted task, returning early on a steering interrupt.
+
+        On interrupt the admitted task keeps running; the caller receives the
+        current detached snapshot instead of the final result.
+        """
+
+        interrupt_getter = getattr(infrastructure, "step_interrupt_event", None)
+        interrupt_event = (
+            interrupt_getter() if callable(interrupt_getter) else None
+        )
+        if interrupt_event is None:
+            return await infrastructure.wait_tool_task(task.task_id, timeout)
+        wait_task = asyncio.create_task(
+            infrastructure.wait_tool_task(task.task_id, timeout)
+        )
+        abort_task = asyncio.create_task(interrupt_event.wait())
+        try:
+            await asyncio.wait(
+                {wait_task, abort_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if wait_task.done():
+                return wait_task.result()
+            snapshot = await manager.get_task(task.task_id) or task
+            output = await manager.get_output(task.task_id)
+            return ToolResult(
+                call_id=call.call_id,
+                name=call.name,
+                status="detached",
+                task=snapshot,
+                output=output,
+                side_effect_committed=None,
+                tool_id=spec.tool_id,
+                tool_version=spec.version,
+            )
+        finally:
+            abort_task.cancel()
+            if not wait_task.done():
+                wait_task.cancel()
+                await asyncio.gather(wait_task, return_exceptions=True)
 
     async def _reject_event(
         self, call: ToolCall, reason: str, spec: ToolSpec | None = None
@@ -529,7 +633,14 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             timeout = spec.resolve_wait_timeout(cast(FrozenJsonObject, call.arguments))
             assert timeout is not None
             if infrastructure.managed_execution_id is not None:
-                final = await infrastructure.wait_tool_task(task.task_id, timeout)
+                final = await self._wait_tool_task_until(
+                    infrastructure,
+                    manager,
+                    call,
+                    spec,
+                    task,
+                    timeout,
+                )
             else:
                 final = await ToolTaskHandle(manager, task.task_id).wait(timeout)
             if isinstance(final, ToolResult):

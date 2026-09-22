@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import TypeAlias, cast
 
 from pygent.core import JsonValue, Message, UserMessage, freeze_json
@@ -10,6 +11,19 @@ from pygent.core import JsonValue, Message, UserMessage, freeze_json
 from .reminder import InjectionKind
 
 REACT_PROJECTION_OPERATION_KIND = "react.projection.operation.v2"
+
+
+class SteeringMode(str, Enum):
+    """Delivery mode for a steering (standalone user message) operation.
+
+    ``WAIT`` lets the current model or tool step finish and applies the
+    message before the next model call. ``IMMEDIATE`` asks ReAct to
+    interrupt the in-flight step so the message becomes the next model
+    input as soon as possible.
+    """
+
+    WAIT = "wait"
+    IMMEDIATE = "immediate"
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,10 +40,12 @@ class AppendToolResultContent:
 @dataclass(frozen=True, slots=True)
 class StandaloneUserMessage:
     message: UserMessage
+    mode: SteeringMode = SteeringMode.WAIT
 
     def __post_init__(self) -> None:
         if type(self.message) is not UserMessage:
             raise TypeError("StandaloneUserMessage.message must be a UserMessage")
+        object.__setattr__(self, "mode", SteeringMode(self.mode))
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +88,7 @@ def encode_react_projection_operation(operation: ReActProjectionOperation) -> Js
         raw = {
             "type": "standalone_user_message",
             "message": message_to_dict(operation.message),
+            "mode": operation.mode.value,
         }
     elif type(operation) is ReplaceMessageProjection:
         raw = {
@@ -102,11 +119,15 @@ def decode_react_projection_operation(value: JsonValue) -> ReActProjectionOperat
         return AppendToolResultContent(
             cast(str, data["content"]), InjectionKind(data["kind"])
         )
-    if operation_type == "standalone_user_message" and set(data) == {"type", "message"}:
+    if operation_type == "standalone_user_message" and set(data) in (
+        {"type", "message"},
+        {"type", "message", "mode"},
+    ):
         message = message_from_dict(data["message"])
         if type(message) is not UserMessage:
             raise ValueError("standalone operation requires a UserMessage")
-        return StandaloneUserMessage(message)
+        mode = SteeringMode(data["mode"]) if "mode" in data else SteeringMode.WAIT
+        return StandaloneUserMessage(message, mode)
     if operation_type == "replace_message_projection" and set(data) == {
         "type",
         "messages",
@@ -130,6 +151,7 @@ __all__ = [
     "ReActProjectionOperation",
     "ReplaceMessageProjection",
     "StandaloneUserMessage",
+    "SteeringMode",
     "decode_react_projection_operation",
     "encode_react_projection_operation",
 ]

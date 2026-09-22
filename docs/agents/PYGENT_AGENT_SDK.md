@@ -163,6 +163,7 @@ Runtime 接收 opaque Execution Input；ReAct 只解释固定 kind：
 from pygent.agent import (
     REACT_PROJECTION_OPERATION_KIND,
     StandaloneUserMessage,
+    SteeringMode,
     encode_react_projection_operation,
 )
 
@@ -183,6 +184,21 @@ delivery = await handle.send_input(
 
 `accepted` 表示进入当前 Execution；`duplicate` 表示相同 `input_id` 已投递；
 `execution_finished` 表示调用方应把该 UserMessage 作为下一 turn 的 Initial UserMessage。
+
+投递模式缺省为 `wait`（等待当前步骤结束，在下一次模型调用前生效）；`mode=SteeringMode.IMMEDIATE` 立即中断进行中的模型或工具步骤，让该消息尽快成为下一次模型调用的输入，处置规则见 [Agent SDK](../agent/SDK.md)。
+
+```python
+immediate_operation = StandaloneUserMessage(
+    UserMessage(content="放弃当前方向，先确认测试基线。"),
+    mode=SteeringMode.IMMEDIATE,
+)
+
+await handle.send_input(
+    input_id="chat-message-1844",
+    kind=REACT_PROJECTION_OPERATION_KIND,
+    value=encode_react_projection_operation(immediate_operation),
+)
+```
 
 工作区变化等补充上下文使用 `InjectionKind.RUNTIME_CONTEXT.value` 标记，ReAct 会统一包装 XML；也可以由普通 [Reminder Module](../agent/SDK.md#reminder) 显式生成：
 

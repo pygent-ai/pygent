@@ -1,6 +1,9 @@
 """Bounded ReAct composition with managed runtime context inputs."""
 
+import asyncio
+from contextlib import suppress
 from dataclasses import replace
+from typing import cast
 
 from pygent.core import (
     AIMessage,
@@ -13,18 +16,29 @@ from pygent.core import (
     RecoverySafety,
     ToolMessage,
     UserMessage,
+    active_infrastructure,
 )
 
 from .react_projection_operations import (
     REACT_PROJECTION_OPERATION_KIND,
     AppendToolResultContent,
+    ReActProjectionOperation,
     ReplaceMessageProjection,
     StandaloneUserMessage,
+    SteeringMode,
     decode_react_projection_operation,
 )
 from .reminder import InjectionKind, format_context
 
 _INJECTION_KINDS = frozenset(kind.value for kind in InjectionKind)
+
+_STEERING_POLL_SECONDS = 0.05
+
+TOOL_BATCH_INTERRUPT_NOTICE = (
+    "Tool batch interrupted by a new user message. Completed calls keep "
+    "their results; unfinished calls are reported as cancelled. A detached "
+    "result carries the task_id of a task that is still running."
+)
 
 
 class ReActBudgetExceeded(RuntimeError):
@@ -37,6 +51,49 @@ class ReActBudgetExceeded(RuntimeError):
         super().__init__(
             f"ReAct {budget} budget exhausted "
             f"(limit={limit}, requested={requested})"
+        )
+
+
+class _SteeringState:
+    """Per-call steering absorption shared by the run loop and its watcher.
+
+    The watcher consumes projection operations while a step is in flight and
+    records them here in arrival order; the run loop merges them into its own
+    drains so every operation is applied exactly once, in input sequence.
+    """
+
+    __slots__ = (
+        "event",
+        "finished_event",
+        "pending",
+        "tool_batch_interrupted",
+    )
+
+    def __init__(self, event: asyncio.Event | None) -> None:
+        self.event = event
+        self.finished_event = asyncio.Event()
+        self.pending: list[tuple[ExecutionInput, ReActProjectionOperation]] = []
+        self.tool_batch_interrupted = False
+
+    def absorb(self, item: ExecutionInput, operation: ReActProjectionOperation) -> None:
+        self.pending.append((item, operation))
+        if (
+            isinstance(operation, StandaloneUserMessage)
+            and operation.mode is SteeringMode.IMMEDIATE
+            and self.event is not None
+        ):
+            self.event.set()
+
+    def take_pending(self) -> list[tuple[ExecutionInput, ReActProjectionOperation]]:
+        taken = self.pending
+        self.pending = []
+        return taken
+
+    def has_pending_immediate(self) -> bool:
+        return any(
+            isinstance(operation, StandaloneUserMessage)
+            and operation.mode is SteeringMode.IMMEDIATE
+            for _, operation in self.pending
         )
 
 
@@ -74,6 +131,79 @@ class ReActLayer(Module[UserMessage, AIMessage]):
     async def forward(
         self, message: UserMessage, context: Context
     ) -> tuple[AIMessage, Context]:
+        infrastructure = active_infrastructure()
+        state = _SteeringState(self._steering_event(infrastructure))
+        if state.event is None or infrastructure is None:
+            # No interrupt channel (direct execution, durable replay, remote
+            # worker): steering applies at the wait-mode drain points only.
+            return await self._run_react(message, context, state, infrastructure)
+        assert infrastructure is not None
+
+        async def run() -> tuple[AIMessage, Context]:
+            try:
+                return await self._run_react(message, context, state, infrastructure)
+            finally:
+                state.finished_event.set()
+
+        async def watch() -> None:
+            await self._watch_steering(state)
+
+        results = await infrastructure.gather((run, watch))
+        return results[0]
+
+    @staticmethod
+    def _steering_event(infrastructure: object) -> asyncio.Event | None:
+        getter = getattr(infrastructure, "step_interrupt_event", None)
+        event = getter() if callable(getter) else None
+        return event if isinstance(event, asyncio.Event) else None
+
+    async def _watch_steering(self, state: _SteeringState) -> None:
+        assert state.event is not None
+        try:
+            while not state.finished_event.is_set():
+                inputs = await self.receive_execution_inputs(
+                    kinds=(REACT_PROJECTION_OPERATION_KIND,),
+                    limit=16,
+                    seal_if_empty=False,
+                )
+                if not inputs:
+                    try:
+                        await asyncio.wait_for(
+                            state.finished_event.wait(),
+                            timeout=_STEERING_POLL_SECONDS,
+                        )
+                    except TimeoutError:
+                        pass
+                    continue
+                for item in inputs:
+                    try:
+                        operation = decode_react_projection_operation(item.value)
+                    except (TypeError, ValueError, KeyError):
+                        await self._reject_projection_operation(
+                            item, "invalid_operation"
+                        )
+                        continue
+                    state.absorb(item, operation)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - monitoring must not fail the run
+            # Steering monitoring must never take down a healthy run; the run
+            # loop still applies operations at its own drain points. Surface
+            # the degradation once, then keep serving wait-mode drains.
+            with suppress(Exception):
+                await self.emit(
+                    kind="react.steering_watch_failed",
+                    data={"error": type(exc).__name__},
+                )
+            return
+
+    async def _run_react(
+        self,
+        message: UserMessage,
+        context: Context,
+        state: _SteeringState,
+        infrastructure: object,
+    ) -> tuple[AIMessage, Context]:
         steps = 0
         model_calls = 0
         tool_calls = 0
@@ -98,6 +228,7 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                 entry_revision=entry_revision,
                 changes=changes,
                 seal_if_empty=False,
+                prelude=state.take_pending(),
             )
             _admit("max_steps", used=steps, requested=1, limit=self.max_steps)
             _admit(
@@ -106,13 +237,28 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                 requested=1,
                 limit=self.max_model_calls,
             )
+            if state.event is not None and not state.has_pending_immediate():
+                # Pending steering has been applied; the next in-flight step
+                # must not be aborted by an already-handled interrupt. An
+                # immediate absorbed while this drain was running keeps its
+                # signal: only consumed immediates may clear it.
+                state.event.clear()
 
             # One completed invocation of the model Module is one inference
             # step. Provider retries are internal to that Module and do not
-            # pass through this accounting boundary.
-            answer, model_context = await self.model(current, history)
+            # pass through this accounting boundary. An interrupted call is
+            # discarded but still consumed a model-call budget slot.
+            answer, model_context, model_interrupted = await self._invoke_model(
+                current, history, state, infrastructure
+            )
             steps += 1
             model_calls += 1
+            if model_interrupted:
+                await self.emit(
+                    kind="react.interrupted",
+                    data={"point": "model", "call_ids": ()},
+                )
+                continue
             history, model_replaced_projection = _accept_model_context(
                 history, model_context
             )
@@ -140,11 +286,33 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                         entry_revision=entry_revision,
                         changes=changes,
                         seal_if_empty=True,
+                        prelude=state.take_pending(),
                     )
                     if not received:
                         break
                 if isinstance(current, AIMessage):
                     return current, history
+                continue
+
+            if state.has_pending_immediate():
+                # The model returned tool calls while an immediate steering
+                # message was already waiting: the answer is voided before
+                # any tool runs (no tool-call budget consumed). The model
+                # module did complete, so its returned context — including an
+                # explicit projection replacement such as compression — is
+                # still accepted per the module contract.
+                history, model_replaced_projection = _accept_model_context(
+                    history, model_context
+                )
+                if model_replaced_projection:
+                    changes.append((history.projection_revision, "replace", None))
+                await self.emit(
+                    kind="react.interrupted",
+                    data={
+                        "point": "model_returned",
+                        "call_ids": tuple(call.call_id for call in answer.tool_calls),
+                    },
+                )
                 continue
 
             _admit(
@@ -159,6 +327,20 @@ class ReActLayer(Module[UserMessage, AIMessage]):
             tool_context = _commit_message(history, current)
             tool_message, tool_context = await self.tools(answer, tool_context)
             tool_calls += calls_this_turn
+            if state.event is not None and state.event.is_set():
+                state.tool_batch_interrupted = True
+                await self.emit(
+                    kind="react.interrupted",
+                    data={
+                        "point": "tool_batch",
+                        "call_ids": tuple(call.call_id for call in answer.tool_calls),
+                    },
+                )
+                if not state.has_pending_immediate():
+                    # Immediates absorbed while the batch ran stay pending for
+                    # the next drain; their interrupt signal survives until
+                    # they are consumed.
+                    state.event.clear()
 
             # Keep the ToolMessage separate from history until the next model
             # call; this preserves the Module (message, context) convention and
@@ -167,10 +349,53 @@ class ReActLayer(Module[UserMessage, AIMessage]):
             changes.append((history.projection_revision, "append", answer))
             current = tool_message
             current_committed = False
+            if state.tool_batch_interrupted:
+                notice = format_context(
+                    TOOL_BATCH_INTERRUPT_NOTICE, kind=InjectionKind.RUNTIME_CONTEXT
+                )
+                current = replace(
+                    current,
+                    content=(
+                        notice
+                        if not current.content
+                        else f"{current.content}\n{notice}"
+                    ),
+                )
+                state.tool_batch_interrupted = False
+                history = replace(
+                    history, projection_revision=history.projection_revision + 1
+                )
+                changes.append(
+                    (history.projection_revision, "append_tool_result_content", None)
+                )
             history = replace(
                 history, projection_revision=history.projection_revision + 1
             )
             changes.append((history.projection_revision, "append", current))
+
+    async def _invoke_model(
+        self,
+        current: Message,
+        history: Context,
+        state: _SteeringState,
+        infrastructure: object,
+    ) -> tuple[AIMessage, Context, bool]:
+        """Run one model step, aborted cooperatively by immediate steering."""
+
+        if state.event is None:
+            answer, model_context = await self.model(current, history)
+            return answer, model_context, False
+        invoke_until = getattr(infrastructure, "invoke_module_until", None)
+        if not callable(invoke_until):
+            answer, model_context = await self.model(current, history)
+            return answer, model_context, False
+        result, interrupted = await invoke_until(
+            self.model, current, history, abort=state.event
+        )
+        if interrupted:
+            return AIMessage(content=""), history, True
+        answer, model_context = cast("tuple[AIMessage, Context]", result)
+        return answer, model_context, False
 
     async def _drain_projection_operations(
         self,
@@ -181,23 +406,36 @@ class ReActLayer(Module[UserMessage, AIMessage]):
         entry_revision: int,
         changes: list[tuple[int, str, Message | None]],
         seal_if_empty: bool,
+        prelude: list[tuple[ExecutionInput, ReActProjectionOperation]] | None = None,
     ) -> tuple[Context, Message, bool, bool]:
-        received_any = False
+        received_any = prelude is not None and bool(prelude)
+        pending: list[tuple[ExecutionInput, ReActProjectionOperation]] = (
+            list(prelude) if prelude else []
+        )
         while True:
-            inputs = await self.receive_execution_inputs(
-                kinds=(REACT_PROJECTION_OPERATION_KIND,),
-                limit=16,
-                seal_if_empty=seal_if_empty,
-            )
-            if not inputs:
-                return history, current, current_committed, received_any
-            received_any = True
-            for item in inputs:
-                try:
-                    operation = decode_react_projection_operation(item.value)
-                except (TypeError, ValueError, KeyError):
-                    await self._reject_projection_operation(item, "invalid_operation")
-                    continue
+            if pending:
+                batch = pending
+                pending = []
+            else:
+                inputs = await self.receive_execution_inputs(
+                    kinds=(REACT_PROJECTION_OPERATION_KIND,),
+                    limit=16,
+                    seal_if_empty=seal_if_empty,
+                )
+                if not inputs:
+                    return history, current, current_committed, received_any
+                received_any = True
+                batch = []
+                for item in inputs:
+                    try:
+                        operation = decode_react_projection_operation(item.value)
+                    except (TypeError, ValueError, KeyError):
+                        await self._reject_projection_operation(
+                            item, "invalid_operation"
+                        )
+                        continue
+                    batch.append((item, operation))
+            for item, operation in batch:
                 if isinstance(operation, AppendToolResultContent):
                     if not isinstance(current, ToolMessage) or not current.results:
                         await self._reject_projection_operation(
@@ -361,4 +599,4 @@ def _replacement_rejection_reason(
     return None
 
 
-__all__ = ["ReActBudgetExceeded", "ReActLayer"]
+__all__ = ["TOOL_BATCH_INTERRUPT_NOTICE", "ReActBudgetExceeded", "ReActLayer"]

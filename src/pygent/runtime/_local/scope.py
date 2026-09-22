@@ -134,6 +134,166 @@ class _ManagedScope(ExecutionScope):
             seal_if_empty=seal_if_empty,
         )
 
+    def step_interrupt_event(self) -> asyncio.Event | None:
+        """Return this execution's cooperative step-interrupt signal.
+
+        Modules decide what a step is and when to request the interrupt;
+        structured child waits observe the signal. History-backed (durable)
+        executions return ``None``: their replay requires deterministic
+        receive ordering, so no watcher may poll while a step is in flight.
+        """
+
+        if self.record.history is not None:
+            return None
+        event = self.record.step_interrupt_event
+        if event is None:
+            event = asyncio.Event()
+            self.record.step_interrupt_event = event
+        return event
+
+    async def invoke_module_until(
+        self,
+        module: ModuleDependency[Any, Any],
+        message: Message,
+        context: Context,
+        *,
+        abort: asyncio.Event,
+    ) -> tuple[Any, bool]:
+        """Run one Module Child until it completes or ``abort`` is set.
+
+        Returns ``(result, interrupted)``. The Child runs as a registered
+        parallel task so it keeps full access to structured services; abort
+        cancels it and waits for its bounded cleanup to unwind.
+        """
+
+        self._require_owner_task()
+        frame = _execution_frame.get()
+        if frame is None:
+            raise RuntimeError("managed abortable Child call has no execution frame")
+        parent_had_lease = frame.runnable_held
+        if parent_had_lease:
+            self._release_runnable(frame)
+        self.record.phase = ExecutionPhase.WAITING_CHILD
+        child = asyncio.create_task(self.invoke_module(module, message, context))
+        self._parallel_tasks.add(child)
+        try:
+            results, completed, _ = await self._abortable_wait((child,), abort=abort)
+            if completed[0]:
+                return results[0], False
+            return None, True
+        finally:
+            self._parallel_tasks.discard(child)
+            current = asyncio.current_task()
+            if parent_had_lease and (current is None or current.cancelling() == 0):
+                self.record.phase = ExecutionPhase.WAITING_RESUME
+                await self._resume_runnable(frame)
+                self.record.phase = ExecutionPhase.RUNNING
+
+    async def gather_until(
+        self,
+        operations: tuple[Callable[[], Awaitable[Any]], ...],
+        *,
+        abort: asyncio.Event,
+    ) -> tuple[tuple[object, ...], tuple[bool, ...], bool]:
+        """Run a bounded structured parallel group that may end early.
+
+        Returns ``(results, completed, interrupted)``. When ``abort`` fires
+        before every operation completes, in-flight operations are cancelled
+        (``None`` with ``completed=False``); completed operations keep their
+        results. Adjudication rule: a task keeps its real result whenever it
+        has completed before cancellation is actually applied --
+        ``task.cancel()`` never retires an already-finished task -- so the
+        outcome does not depend on scheduler interleaving beyond that
+        definition. Failures propagate as usual while the group is not
+        interrupted.
+        """
+
+        self._require_owner_task()
+        frame = _execution_frame.get()
+        if frame is None:
+            raise RuntimeError("managed parallel group has no execution frame")
+        if not operations:
+            return (), (), False
+        parent_had_lease = frame.runnable_held
+        if parent_had_lease:
+            self._release_runnable(frame)
+        self.record.phase = ExecutionPhase.WAITING_CHILD
+
+        async def run(operation: Callable[[], Awaitable[Any]]) -> Any:
+            return await operation()
+
+        tasks = tuple(
+            asyncio.create_task(run(operation), name="pygent-parallel-child")
+            for operation in operations
+        )
+        self._parallel_tasks.update(tasks)
+        try:
+            return await self._abortable_wait(tasks, abort=abort)
+        finally:
+            self._parallel_tasks.difference_update(tasks)
+            current = asyncio.current_task()
+            if parent_had_lease and (current is None or current.cancelling() == 0):
+                self.record.phase = ExecutionPhase.WAITING_RESUME
+                await self._resume_runnable(frame)
+                self.record.phase = ExecutionPhase.RUNNING
+
+    async def _abortable_wait(
+        self,
+        tasks: tuple[asyncio.Task[Any], ...],
+        *,
+        abort: asyncio.Event,
+    ) -> tuple[tuple[object, ...], tuple[bool, ...], bool]:
+        """Wait for registered tasks until they finish or ``abort`` fires.
+
+        Shared cancellation primitive behind ``invoke_module_until`` and
+        ``gather_until``.
+        """
+
+        waiter = asyncio.create_task(abort.wait())
+        interrupted = False
+        try:
+            pending = set(tasks)
+            while pending:
+                done, _ = await asyncio.wait(
+                    pending | {waiter}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if waiter in done:
+                    interrupted = not all(task.done() for task in tasks)
+                    break
+                pending -= done
+            if interrupted:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            for task in tasks:
+                exc = (
+                    task.exception()
+                    if task.done() and not task.cancelled()
+                    else None
+                )
+                if exc is not None:
+                    raise exc
+            results: list[object] = []
+            completed_flags: list[bool] = []
+            for task in tasks:
+                ok = (
+                    task.done()
+                    and not task.cancelled()
+                    and task.exception() is None
+                )
+                completed_flags.append(ok)
+                results.append(task.result() if ok else None)
+            return tuple(results), tuple(completed_flags), interrupted
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        finally:
+            waiter.cancel()
+
     async def gather(
         self, operations: tuple[Callable[[], Awaitable[Any]], ...]
     ) -> tuple[Any, ...]:

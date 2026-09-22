@@ -254,9 +254,18 @@ class ApprovalModule(Module[Message, Message]):
 
 ## ReAct 运行中 Projection Operation
 
-托管 ReAct 固定消费 `react.projection.operation.v2`。开发者通过 `handle.send_input()` 发送由 `encode_react_projection_operation()` 编码的 `StandaloneUserMessage`、`AppendToolResultContent` 或 `ReplaceMessageProjection`；ReAct 在每次模型调用前以及最终返回前读取并按 input sequence 应用。`ReplaceMessageProjection` 使用 `Context.projection_revision` 做严格替换，或以 `rebase_appended=True` 保留 base revision 后可以证明为完整 Message 追加的尾部。解码、revision、replacement 或 pending ToolResult 校验失败会发出 `react.projection_operation.rejected`，不会终结 Execution。
+托管 ReAct 固定消费 `react.projection.operation.v2`。开发者通过 `handle.send_input()` 发送由 `encode_react_projection_operation()` 编码的 `StandaloneUserMessage`、`AppendToolResultContent` 或 `ReplaceMessageProjection`；ReAct 在每次模型调用前、执行中打断监测以及最终返回前读取并按 input sequence 应用。`ReplaceMessageProjection` 使用 `Context.projection_revision` 做严格替换，或以 `rebase_appended=True` 保留 base revision 后可以证明为完整 Message 追加的尾部。解码、revision、replacement 或 pending ToolResult 校验失败会发出 `react.projection_operation.rejected`，不会终结 Execution。
 
-该能力使 `ReActLayer.execution_requirements.effect_safety` 固定为 `MANAGED_EFFECTS`。direct execution 的 receive 固定为空，因此运行中 Projection Operation 只属于 bound/managed ReAct。
+`StandaloneUserMessage` 支持投递模式 `mode`，缺省为 `SteeringMode.WAIT`：等待当前模型或工具步骤自然结束，在下一次模型调用前生效；编码中省略 `mode` 的旧 payload 一律按 `wait` 解码。`mode=SteeringMode.IMMEDIATE` 表示立即响应：ReAct 中断进行中的步骤，让该消息尽快成为下一次模型调用的输入，并按以下规则处置被打断的工作：
+
+- 模型调用进行中：取消该调用，不产生 AIMessage；该次调用计入模型调用预算。
+- 模型已返回 tool_calls：整个 AIMessage 作废，不派发工具、不产生 ToolMessage、不计工具调用预算；模型模块返回的投影替换（如压缩）仍被接受。
+- 工具批次执行中：为每个原始 `call_id` 生成对应 ToolResult，与 AIMessage 一起按原顺序提交进 history。以独立任务 admission 运行且被同步等待的调用（detach 生命周期 + 有限等待的 shell 家族）立即返回 `status="detached"` 结果与已捕获的中间输出，任务不因打断停止；其余调用——包括以同步生命周期执行的 shell 进程——返回 `status="cancelled"`（`error_kind="cancelled"`，未开始调用的 `side_effect_committed=False`，进行中被终止的调用为未知即 `None`）。已 admit 的调用计入工具调用预算。
+- 同一批到达的多条 immediate 消息按 input sequence 依次应用，最后一条成为下一次模型调用输入。
+
+打断发出 `react.interrupted` 事件（含打断点与受影响 call_ids）。打断只属于 ReAct 内部控制，不终结 Execution；受影响 ToolMessage 的 `content` 会被 ReAct 追加固定的事实性 `<runtime-context>` 通知（进行中任务的 `task_id` 与中间输出随 ToolResult 呈现，`ToolResult` 值本身不改写；固定文本以公开常量 `TOOL_BATCH_INTERRUPT_NOTICE` 为准）。打断监测自身失败会发出 `react.steering_watch_failed` 并降级为 wait 时机。history-backed durable 执行与远程 Worker 目前不提供执行中打断监测：immediate 输入在这些边界按 wait 时机应用。
+
+该能力使 `ReActLayer.execution_requirements.effect_safety` 固定为 `MANAGED_EFFECTS`。direct execution 的 receive 固定为空，因此运行中 Projection Operation（含 immediate 打断）只属于 bound/managed ReAct。
 
 ## Reminder
 
@@ -273,6 +282,7 @@ from pygent.agent import (
     REACT_PROJECTION_OPERATION_KIND,
     AppendToolResultContent,
     StandaloneUserMessage,
+    SteeringMode,
     encode_react_projection_operation,
 )
 
@@ -292,6 +302,18 @@ receipt = await handle.send_input(
     input_id="context-17",
     kind=REACT_PROJECTION_OPERATION_KIND,
     value=encode_react_projection_operation(operation),
+)
+
+# 立即响应：中断进行中的模型或工具步骤，让该消息尽快进入下一次模型调用。
+immediate = StandaloneUserMessage(
+    UserMessage(content="切换到新的方向。", kind=InjectionKind.USER_CONTEXT.value),
+    mode=SteeringMode.IMMEDIATE,
+)
+
+await handle.send_input(
+    input_id="steer-immediate-18",
+    kind=REACT_PROJECTION_OPERATION_KIND,
+    value=encode_react_projection_operation(immediate),
 )
 ```
 
