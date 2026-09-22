@@ -21,7 +21,7 @@ from pygent.llm._media_tokens import (
     generic_media_input_tokens,
     openai_media_input_tokens,
 )
-from pygent.tool import MediaSource, MediaBlock
+from pygent.tool import MediaBlock, MediaSource
 from tests.support.model_specs import model_entry, model_group
 
 

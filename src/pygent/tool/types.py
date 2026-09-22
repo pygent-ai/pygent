@@ -10,13 +10,13 @@ from typing import Literal
 from pygent.core import JsonValue, Message
 from pygent.core._tool_values import (
     IdempotencyPolicy,
+    MediaBlock,
     MediaSource,
     ToolCall,
     ToolDefinition,
     ToolResult,
     ToolResultContent,
     ToolResultJson,
-    MediaBlock,
     ToolResultStatus,
     ToolResultText,
     ToolSideEffect,
@@ -171,6 +171,7 @@ class ToolAuthorizationDecision(
 
 __all__ = [
     "IdempotencyPolicy",
+    "MediaBlock",
     "MediaSource",
     "ToolAuthorizationDecision",
     "ToolAuthorizationRequest",
@@ -181,7 +182,6 @@ __all__ = [
     "ToolResult",
     "ToolResultContent",
     "ToolResultJson",
-    "MediaBlock",
     "ToolResultStatus",
     "ToolResultText",
     "ToolSideEffect",

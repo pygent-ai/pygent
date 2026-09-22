@@ -25,12 +25,12 @@ from pygent.core._tool_values import (
 )
 from pygent.tool import (
     IdempotencyPolicy,
+    MediaBlock,
     ToolAuthorizationDecision,
     ToolAuthorizationRequest,
     ToolCall,
     ToolDefinition,
     ToolResult,
-    MediaBlock,
     ToolSideEffect,
     ToolSpec,
     ToolTask,

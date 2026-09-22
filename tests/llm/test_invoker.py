@@ -16,12 +16,12 @@ from PIL import Image
 from pygent import (
     AIMessage,
     Context,
+    MediaBlock,
     MediaSource,
     ModelContinuation,
     ToolCall,
     ToolMessage,
     ToolResult,
-    MediaBlock,
     UserMessage,
 )
 from pygent.core import FrozenJsonObject, freeze_json_object

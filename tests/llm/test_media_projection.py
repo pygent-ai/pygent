@@ -8,7 +8,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
-from pygent import MediaSource, MediaBlock
+from pygent import MediaBlock, MediaSource
 from pygent.llm import (
     DefaultMediaProjector,
     MediaTransportCapabilities,

@@ -508,6 +508,9 @@ class ToolResult:
 
 __all__ = [
     "IdempotencyPolicy",
+    "MediaBlock",
+    "MediaBlockDetail",
+    "MediaBlockType",
     "MediaSource",
     "MediaSourceKind",
     "ToolCall",
@@ -515,9 +518,6 @@ __all__ = [
     "ToolResult",
     "ToolResultContent",
     "ToolResultJson",
-    "MediaBlock",
-    "MediaBlockDetail",
-    "MediaBlockType",
     "ToolResultStatus",
     "ToolResultText",
     "ToolSideEffect",

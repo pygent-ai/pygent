@@ -17,7 +17,7 @@ from typing import Any, NoReturn, cast
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from pygent.tool import MediaSource, MediaBlock
+from pygent.tool import MediaBlock, MediaSource
 
 from ._adapter_contracts import (
     MediaProjectionPlan,

@@ -31,6 +31,7 @@ from .standard import (
 from .task_handle import ToolTaskHandle
 from .types import (
     IdempotencyPolicy,
+    MediaBlock,
     MediaSource,
     ToolAuthorizationDecision,
     ToolAuthorizationRequest,
@@ -40,7 +41,6 @@ from .types import (
     ToolResult,
     ToolResultContent,
     ToolResultJson,
-    MediaBlock,
     ToolResultText,
     ToolSideEffect,
     ToolSpec,
@@ -57,6 +57,7 @@ __all__ = [
     "IdempotencyPolicy",
     "InMemoryToolTaskManager",
     "LocalToolExecutor",
+    "MediaBlock",
     "MediaSource",
     "PowerShellTools",
     "SandboxExecutorSupport",
@@ -79,7 +80,6 @@ __all__ = [
     "ToolResult",
     "ToolResultContent",
     "ToolResultJson",
-    "MediaBlock",
     "ToolResultText",
     "ToolRunner",
     "ToolSideEffect",

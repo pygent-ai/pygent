@@ -14,9 +14,9 @@ from pygent.core import (
     thaw_json,
 )
 from pygent.tool import (
+    MediaBlock,
     ToolResult,
     ToolResultJson,
-    MediaBlock,
     ToolResultText,
 )
 
@@ -319,18 +319,20 @@ def _project_media_message(
     results: list[ToolResult] = []
     for result in message.results:
         content: list[ToolResultText | ToolResultJson | MediaBlock] = []
-        for block in result.content:
-            if type(block) is not MediaBlock:
-                content.append(block)
+        for result_block in result.content:
+            if type(result_block) is not MediaBlock:
+                content.append(result_block)
                 continue
             plan = projector.plan(
-                block,
+                result_block,
                 model=model,
                 endpoint=adapter.media_transport,
             )
             if plan is None:
                 raise ValueError("media projector received an incompatible route")
-            projected = projector.project(block, call_id=result.call_id, plan=plan)
+            projected = projector.project(
+                result_block, call_id=result.call_id, plan=plan
+            )
             content.append(projected.media)
             traces.append(projected.trace)
         results.append(

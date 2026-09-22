@@ -60,6 +60,7 @@ from .llm import (
 from .runtime.context_codec import ContextCodec
 from .tool import (
     IdempotencyPolicy,
+    MediaBlock,
     MediaSource,
     ToolAuthorizationDecision,
     ToolAuthorizationRequest,
@@ -71,7 +72,6 @@ from .tool import (
     ToolResult,
     ToolResultContent,
     ToolResultJson,
-    MediaBlock,
     ToolResultText,
     ToolSideEffect,
     ToolSpec,
@@ -95,6 +95,7 @@ __all__ = [
     "IdempotencyPolicy",
     "InjectionKind",
     "JsonValueError",
+    "MediaBlock",
     "MediaSource",
     "Message",
     "ModelCallError",
@@ -133,7 +134,6 @@ __all__ = [
     "ToolResult",
     "ToolResultContent",
     "ToolResultJson",
-    "MediaBlock",
     "ToolResultText",
     "ToolSideEffect",
     "ToolSpec",

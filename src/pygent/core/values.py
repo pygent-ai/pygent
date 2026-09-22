@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, fields, is_dataclass, replace
 from types import NotImplementedType
 from typing import ClassVar
 
-from ._tool_values import ToolCall, ToolDefinition, ToolResult, MediaBlock
+from ._tool_values import MediaBlock, ToolCall, ToolDefinition, ToolResult
 from .json_values import (
     FrozenJsonObject,
     JsonObjectInput,

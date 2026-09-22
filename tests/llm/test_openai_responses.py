@@ -29,7 +29,7 @@ from pygent.llm import (
     OpenAIResponsesAdapter,
     OpenAIResponsesClient,
 )
-from pygent.tool import MediaSource, MediaBlock
+from pygent.tool import MediaBlock, MediaSource
 from tests.support.model_specs import model_entry
 
 

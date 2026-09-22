@@ -22,6 +22,7 @@ from pygent.runtime.codec import (
 )
 from pygent.tool import (
     IdempotencyPolicy,
+    MediaBlock,
     MediaSource,
     ToolAuthorizationDecision,
     ToolAuthorizationRequest,
@@ -29,7 +30,6 @@ from pygent.tool import (
     ToolDefinition,
     ToolResult,
     ToolResultJson,
-    MediaBlock,
     ToolResultText,
     ToolSideEffect,
     ToolSpec,

@@ -9,7 +9,7 @@ from collections.abc import Callable, Collection
 from io import BytesIO
 from typing import NoReturn, cast
 
-from pygent.tool import MediaSource, MediaBlock
+from pygent.tool import MediaBlock, MediaSource
 
 from ._adapter_contracts import (
     MediaResolver,

@@ -11,6 +11,7 @@ import pytest
 from pygent import (
     AIMessage,
     Context,
+    MediaBlock,
     MediaSource,
     ModelContinuation,
     ToolCall,
@@ -18,7 +19,6 @@ from pygent import (
     ToolMessage,
     ToolResult,
     ToolResultJson,
-    MediaBlock,
     ToolResultText,
     UserMessage,
 )

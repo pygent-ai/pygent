@@ -31,7 +31,7 @@ from pygent.runtime import (
 )
 from pygent.runtime.codec import invocation_to_dict
 from pygent.runtime.context_codec import ContextCodecRegistry
-from pygent.tool import MediaSource, ToolCall, ToolResult, MediaBlock
+from pygent.tool import MediaBlock, MediaSource, ToolCall, ToolResult
 
 
 class CallRecorder:

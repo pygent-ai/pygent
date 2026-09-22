@@ -16,7 +16,7 @@ from pygent.core import (
     Message,
     freeze_json_object,
 )
-from pygent.tool import MediaSource, ToolDefinition, MediaBlock
+from pygent.tool import MediaBlock, MediaSource, ToolDefinition
 
 from .configuration import ModelGroup, ModelSpec
 from .types import (
