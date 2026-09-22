@@ -51,8 +51,8 @@ ToolResultStatus = Literal[
     "succeeded", "rejected", "failed", "cancelled", "unknown", "detached"
 ]
 MediaSourceKind = Literal["resource", "url", "inline"]
-ToolResultMediaType = Literal["image", "video"]
-ToolResultMediaDetail = Literal["auto", "low", "high"]
+MediaBlockType = Literal["image", "video"]
+MediaBlockDetail = Literal["auto", "low", "high"]
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MIME_TYPE = re.compile(r"^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$")
@@ -258,11 +258,11 @@ class ToolResultJson:
 
 
 @dataclass(frozen=True, slots=True)
-class ToolResultMedia:
-    media_type: ToolResultMediaType
+class MediaBlock:
+    media_type: MediaBlockType
     mime_type: str
     source: MediaSource
-    detail: ToolResultMediaDetail | None = None
+    detail: MediaBlockDetail | None = None
     width: int | None = None
     height: int | None = None
     duration_seconds: float | None = None
@@ -270,11 +270,11 @@ class ToolResultMedia:
     has_audio: bool | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
-        raise TypeError("ToolResultMedia cannot be subclassed")
+        raise TypeError("MediaBlock cannot be subclassed")
 
     def __post_init__(self) -> None:
         if self.media_type not in ("image", "video"):
-            raise ValueError(f"unsupported tool result media type: {self.media_type!r}")
+            raise ValueError(f"unsupported media block type: {self.media_type!r}")
         if not isinstance(self.mime_type, str):
             raise TypeError("media mime_type must be a string")
         mime_type = self.mime_type.lower()
@@ -321,7 +321,7 @@ class ToolResultMedia:
                 object.__setattr__(self, "height", dimensions[1])
 
 
-ToolResultContent = ToolResultText | ToolResultJson | ToolResultMedia
+ToolResultContent = ToolResultText | ToolResultJson | MediaBlock
 
 
 def _tool_result_content_to_value(value: ToolResultContent) -> dict[str, object]:
@@ -329,7 +329,7 @@ def _tool_result_content_to_value(value: ToolResultContent) -> dict[str, object]
         return {"type": "text", "text": value.text}
     if type(value) is ToolResultJson:
         return {"type": "json", "value": thaw_json(value.value)}
-    if type(value) is ToolResultMedia:
+    if type(value) is MediaBlock:
         source = value.source
         return {
             "type": "media",
@@ -353,7 +353,7 @@ def _tool_result_content_to_value(value: ToolResultContent) -> dict[str, object]
     raise TypeError("unsupported ToolResult content subtype")
 
 
-def _tool_result_media_dimensions(value: ToolResultMedia) -> tuple[int, int] | None:
+def _media_block_dimensions(value: MediaBlock) -> tuple[int, int] | None:
     """Return normalized image dimensions without counting transport bytes."""
 
     if value.media_type != "image":
@@ -424,11 +424,11 @@ def _tool_result_content_from_value(value: object) -> ToolResultContent:
             sha256=cast(str | None, raw_source["sha256"]),
             size_bytes=cast(int | None, raw_source["size_bytes"]),
         )
-        return ToolResultMedia(
-            media_type=cast(ToolResultMediaType, block["media_type"]),
+        return MediaBlock(
+            media_type=cast(MediaBlockType, block["media_type"]),
             mime_type=cast(str, block["mime_type"]),
             source=source,
-            detail=cast(ToolResultMediaDetail | None, block["detail"]),
+            detail=cast(MediaBlockDetail | None, block["detail"]),
             width=cast(int | None, block.get("width")),
             height=cast(int | None, block.get("height")),
             duration_seconds=cast(float | None, block.get("duration_seconds")),
@@ -480,7 +480,7 @@ class ToolResult:
             raise ValueError("an authorization rejection cannot include a ToolTask")
         content = tuple(self.content)
         if any(
-            type(value) not in (ToolResultText, ToolResultJson, ToolResultMedia)
+            type(value) not in (ToolResultText, ToolResultJson, MediaBlock)
             for value in content
         ):
             raise TypeError("ToolResult content contains an unsupported value")
@@ -515,9 +515,9 @@ __all__ = [
     "ToolResult",
     "ToolResultContent",
     "ToolResultJson",
-    "ToolResultMedia",
-    "ToolResultMediaDetail",
-    "ToolResultMediaType",
+    "MediaBlock",
+    "MediaBlockDetail",
+    "MediaBlockType",
     "ToolResultStatus",
     "ToolResultText",
     "ToolSideEffect",

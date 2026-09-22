@@ -30,6 +30,7 @@ from pygent.tool import (
     ToolCall,
     ToolDefinition,
     ToolResult,
+    MediaBlock,
     ToolSideEffect,
     ToolSpec,
     ToolTask,
@@ -383,7 +384,12 @@ def _message_value(
         "data": project(value.data),
         "metadata": project(value.metadata),
     }
-    if isinstance(value, AIMessage):
+    if isinstance(value, UserMessage):
+        data["media"] = [
+            project(freeze_json_object(_tool_result_content_to_value(block)))
+            for block in value.media
+        ]
+    elif isinstance(value, AIMessage):
         data["tool_calls"] = [_tool_call_to_dict(call, project) for call in value.tool_calls]
         data["usage"] = project(value.usage)
         data["continuation"] = (
@@ -441,6 +447,7 @@ def message_from_dict(value: object) -> Message:
             {"tool_calls", "usage", "continuation"} if role == "assistant" else set()
         )
         expected |= {"results"} if role == "tool" else set()
+        expected |= {"media"} if role == "user" else set()
     _only(data, expected, "Message")
     kwargs = {
         "content": data.get("content", ""),
@@ -473,7 +480,16 @@ def message_from_dict(value: object) -> Message:
                 lifecycle=data.get("lifecycle", "sync"),
             )
         if role == "user":
-            return UserMessage(**kwargs)
+            media = data.get("media", [])
+            if not isinstance(media, (list, tuple)):
+                raise TypeError
+            blocks: list[MediaBlock] = []
+            for item in media:
+                block = _tool_result_content_from_value(item)
+                if type(block) is not MediaBlock:
+                    raise TypeError
+                blocks.append(block)
+            return UserMessage(**kwargs, media=tuple(blocks))
         if role == "assistant":
             calls = data.get("tool_calls", [])
             if not isinstance(calls, (list, tuple)):

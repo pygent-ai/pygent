@@ -32,7 +32,7 @@ from pygent.core._tool_values import _tool_result_content_to_value
 from pygent.tool import ToolCall, ToolDefinition
 
 from ._adapter_contracts import ModelInvoker, ModelRequestMediaTokenEstimator
-from ._media_routing import pending_tool_result_media
+from ._media_routing import pending_media_blocks
 from ._media_tokens import generic_media_input_tokens
 from ._model_spec_codec import model_entry_value
 from .configuration import ModelEntry, ModelGroup
@@ -109,7 +109,7 @@ class ModelCallLayer(Module[Message, AIMessage]):
     ) -> int:
         """Estimate against the resolved deployment and invoker routing policy."""
 
-        media = pending_tool_result_media(message, context)
+        media = pending_media_blocks(message, context)
         if not media:
             return 0
         infrastructure = current_infrastructure()

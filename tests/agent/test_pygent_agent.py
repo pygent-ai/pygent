@@ -31,7 +31,7 @@ from pygent.runtime import (
 )
 from pygent.runtime.codec import invocation_to_dict
 from pygent.runtime.context_codec import ContextCodecRegistry
-from pygent.tool import MediaSource, ToolCall, ToolResult, ToolResultMedia
+from pygent.tool import MediaSource, ToolCall, ToolResult, MediaBlock
 
 
 class CallRecorder:
@@ -325,7 +325,7 @@ async def test_token_estimate_uses_foreground_effective_tools() -> None:
 async def test_image_transport_base64_is_not_estimated_as_text() -> None:
     stream = BytesIO()
     Image.new("RGB", (1024, 1024), color=(12, 34, 56)).save(stream, format="BMP")
-    media = ToolResultMedia(
+    media = MediaBlock(
         media_type="image",
         mime_type="image/bmp",
         source=MediaSource.inline(stream.getvalue()),
@@ -359,7 +359,7 @@ async def test_image_transport_base64_is_not_estimated_as_text() -> None:
 
 @pytest.mark.asyncio
 async def test_video_transport_base64_is_not_estimated_as_text() -> None:
-    media = ToolResultMedia(
+    media = MediaBlock(
         media_type="video",
         mime_type="video/mp4",
         source=MediaSource.inline(
@@ -402,7 +402,7 @@ async def test_video_transport_base64_is_not_estimated_as_text() -> None:
 async def test_image_usage_does_not_recalibrate_text_scale() -> None:
     stream = BytesIO()
     Image.new("RGB", (32, 32), color=(1, 2, 3)).save(stream, format="PNG")
-    media = ToolResultMedia(
+    media = MediaBlock(
         media_type="image",
         mime_type="image/png",
         source=MediaSource.inline(stream.getvalue()),

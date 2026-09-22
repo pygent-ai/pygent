@@ -536,7 +536,7 @@ PDF 未传 `pages` 时提取文本；显式传入单页或连续页范围（如 
 满足模型输出边界的小图保持原字节；超出 2048 px 长边、3,500,000 字节输出预算或带 EXIF
 方向的图片会纠正方向、等比缩放并受控重编码。动态 GIF 被明确拒绝。PDF 渲染页复用同一
 图片管线。读取器使用 `MediaSource.inline(bytes)` 把有界媒体字节规范化为 Base64，并返回
-文本块和 `ToolResultMedia`。Base64 位于结构化 `content`，不会复制到业务 `output` 或
+文本块和 `MediaBlock`。Base64 位于结构化 `content`，不会复制到业务 `output` 或
 日志；OpenAI-compatible Adapter 最终生成 `data:<mime>;base64,...`。空媒体、格式不匹配、
 解码像素、渲染像素或媒体总字节超限以及读取失败都会返回明确的工具错误。业务 `output`
 记录原始/交付尺寸和大小、最终 MIME 及转换步骤；未知二进制文件返回有界元数据描述。
@@ -565,7 +565,7 @@ from pygent import (
     MediaSource,
     ToolOutput,
     ToolResultJson,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
     ToolSideEffect,
     tool,
@@ -583,7 +583,7 @@ def load_image(resource_uri: str) -> ToolOutput:
         content=(
             ToolResultText("工具读取到的图片。"),
             ToolResultJson({"width": 640, "height": 480}),
-            ToolResultMedia(
+            MediaBlock(
                 media_type="image",
                 mime_type="image/png",
                 source=MediaSource.resource(
@@ -626,6 +626,11 @@ Base64。模型组按声明顺序跳过无法消费媒体结果的模型或 endp
 首个候选生成一次不持久化的模型请求投影，把媒体表示为保持原 `call_id` 的不可用说明，
 让模型可以继续回复。原 ToolResult 与 Context 不变。资源无法解析、摘要不符或媒体超限且
 无法通过候选能力筛选处理时，模型调用仍在 Provider I/O 前明确失败。
+
+`MediaBlock` 与 `MediaSource` 同时是用户消息多模态输入的块类型：`UserMessage.media`
+接受相同构造与校验，路由门控、request-local 投影、token 估算和 `not_viewed` 降级共用
+同一套管线；各 Adapter 把用户媒体编码为该协议原生的 user 消息部分。投递细节见
+`docs/llm/SDK.md` 的「多模态用户消息」。
 
 仓库提供 opt-in live probe，使用标准 `FileTools.read` 验证图片与视频完整链路，
 并只输出脱敏结果。下面的命令仅测试 `.env` 中 AZ endpoint 的指定模型：

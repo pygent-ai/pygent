@@ -13,7 +13,7 @@ from pygent import (
     ToolDefinition,
     ToolMessage,
     ToolResult,
-    ToolResultMedia,
+    MediaBlock,
     UserMessage,
     freeze_json_object,
 )
@@ -159,7 +159,7 @@ def test_prepared_request_records_media_identity_without_base64() -> None:
                     name="read",
                     status="succeeded",
                     content=(
-                        ToolResultMedia(
+                        MediaBlock(
                             media_type="image",
                             mime_type="image/png",
                             source=source,

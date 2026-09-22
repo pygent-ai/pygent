@@ -18,6 +18,7 @@ from pygent.core import (
     Message,
     ModelContinuation,
     ToolMessage,
+    UserMessage,
     freeze_json_object,
     thaw_json,
 )
@@ -27,7 +28,7 @@ from pygent.tool import (
     ToolDefinition,
     ToolResult,
     ToolResultJson,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
 )
 
@@ -245,7 +246,7 @@ class AnthropicMessagesAdapter:
         self.media_resolver = media_resolver
 
     def estimate_media_input_tokens(
-        self, block: ToolResultMedia, model: ModelSpec
+        self, block: MediaBlock, model: ModelSpec
     ) -> int | None:
         if model.provider != "anthropic":
             return None
@@ -773,6 +774,16 @@ def _encode_message(
     blocks: list[dict[str, object]] = []
     if message.content:
         blocks.append({"type": "text", "text": message.content})
+    if isinstance(message, UserMessage) and message.media:
+        blocks.extend(
+            _anthropic_image_block(
+                block,
+                model=model,
+                capabilities=capabilities,
+                media_resolver=media_resolver,
+            )
+            for block in message.media
+        )
     if isinstance(message, AIMessage):
         continuation = message.continuation
         if continuation is not None and continuation_matches(
@@ -923,7 +934,7 @@ def _tool_result_value(
 
 
 def _tool_result_content_block(
-    block: ToolResultText | ToolResultJson | ToolResultMedia,
+    block: ToolResultText | ToolResultJson | MediaBlock,
     *,
     model: ModelSpec,
     capabilities: MediaTransportCapabilities,
@@ -938,8 +949,23 @@ def _tool_result_content_block(
                 thaw_json(block.value), ensure_ascii=False, separators=(",", ":")
             ),
         }
-    if type(block) is not ToolResultMedia:
+    if type(block) is not MediaBlock:
         raise TypeError("tool-result content block is invalid")
+    return _anthropic_image_block(
+        block,
+        model=model,
+        capabilities=capabilities,
+        media_resolver=media_resolver,
+    )
+
+
+def _anthropic_image_block(
+    block: MediaBlock,
+    *,
+    model: ModelSpec,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
+) -> dict[str, object]:
     validate_media_delivery(
         block,
         model=model,

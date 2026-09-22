@@ -8,7 +8,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
-from pygent import MediaSource, ToolResultMedia
+from pygent import MediaSource, MediaBlock
 from pygent.llm import (
     DefaultMediaProjector,
     MediaTransportCapabilities,
@@ -70,7 +70,7 @@ def _mp4() -> bytes:
 
 
 def test_image_projection_is_request_local_and_has_distinct_integrity_facts() -> None:
-    original = ToolResultMedia(
+    original = MediaBlock(
         media_type="image",
         mime_type="image/png",
         source=MediaSource.inline(_png()),
@@ -104,7 +104,7 @@ def test_image_projection_is_request_local_and_has_distinct_integrity_facts() ->
 
 def test_resource_projection_checks_declared_integrity_before_decoding() -> None:
     expected = _png()
-    original = ToolResultMedia(
+    original = MediaBlock(
         media_type="image",
         mime_type="image/png",
         source=MediaSource.resource(
@@ -135,7 +135,7 @@ def test_resource_projection_checks_declared_integrity_before_decoding() -> None
 
 
 def test_projection_plan_requires_a_model_endpoint_mime_intersection() -> None:
-    original = ToolResultMedia(
+    original = MediaBlock(
         media_type="image",
         mime_type="image/png",
         source=MediaSource.inline(_png()),
@@ -158,7 +158,7 @@ def test_projection_plan_requires_a_model_endpoint_mime_intersection() -> None:
 
 
 def test_unsupported_image_detail_is_removed_only_from_the_request_projection() -> None:
-    original = ToolResultMedia(
+    original = MediaBlock(
         media_type="image",
         mime_type="image/png",
         source=MediaSource.inline(_png()),
@@ -205,7 +205,7 @@ def test_unsupported_image_detail_is_removed_only_from_the_request_projection() 
 
 
 def test_video_projection_applies_model_dimensions_and_frame_rate() -> None:
-    original = ToolResultMedia(
+    original = MediaBlock(
         media_type="video",
         mime_type="video/mp4",
         source=MediaSource.inline(_mp4()),

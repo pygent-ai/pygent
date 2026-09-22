@@ -29,7 +29,7 @@ from pygent.llm import (
     OpenAIResponsesAdapter,
     OpenAIResponsesClient,
 )
-from pygent.tool import MediaSource, ToolResultMedia
+from pygent.tool import MediaSource, MediaBlock
 from tests.support.model_specs import model_entry
 
 
@@ -114,7 +114,7 @@ def test_responses_projects_structured_tool_result_image_content() -> None:
                     status="succeeded",
                     content=(
                         ToolResultText("result"),
-                        ToolResultMedia(
+                        MediaBlock(
                             media_type="image",
                             mime_type="image/png",
                             source=MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture"),
@@ -143,6 +143,40 @@ def test_responses_projects_structured_tool_result_image_content() -> None:
     assert output[1]["type"] == "input_image"
     assert output[1]["image_url"].startswith("data:image/png;base64,")
     assert output[1]["detail"] == "low"
+
+
+def test_responses_projects_user_message_media() -> None:
+    request = _request(
+        message=UserMessage(
+            content="what is this",
+            media=(
+                MediaBlock(
+                    media_type="image",
+                    mime_type="image/png",
+                    source=MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture"),
+                    detail="low",
+                ),
+            ),
+        )
+    )
+    request = replace(
+        request,
+        model=replace(
+            request.model,
+            capabilities=replace(
+                request.model.capabilities,
+                modalities=ModelModalities(input=("text", "image"), output=("text",)),
+            ),
+        ),
+    )
+    items = OpenAIResponsesAdapter().build_request(request).to_dict()["input"]
+
+    assert items[0]["role"] == "user"
+    content = items[0]["content"]
+    assert content[0] == {"type": "input_text", "text": "what is this"}
+    assert content[1]["type"] == "input_image"
+    assert content[1]["image_url"].startswith("data:image/png;base64,")
+    assert content[1]["detail"] == "low"
 
 
 def test_responses_projects_tool_context_for_failed_results() -> None:

@@ -18,6 +18,7 @@ from pygent.core import (
     Message,
     ModelContinuation,
     ToolMessage,
+    UserMessage,
     freeze_json_object,
     thaw_json,
 )
@@ -27,7 +28,7 @@ from pygent.tool import (
     ToolDefinition,
     ToolResult,
     ToolResultJson,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
 )
 
@@ -54,7 +55,7 @@ _PROTOCOL = "gemini_generate_content"
 _SAFETY_REASONS = frozenset(
     {"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "IMAGE_SAFETY"}
 )
-_GEMINI_FUNCTION_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
+_GEMINI_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 
 
 class GeminiGenerateContentClient:
@@ -160,17 +161,17 @@ class GeminiGenerateContentAdapter:
             enabled=True,
             modalities=("image",),
             source_kinds=source_kinds,
-            image_mime_types=tuple(sorted(_GEMINI_FUNCTION_IMAGE_MIME_TYPES)),
+            image_mime_types=tuple(sorted(_GEMINI_IMAGE_MIME_TYPES)),
         )
         self.media_resolver = media_resolver
 
     def media_delivery_gaps(
-        self, block: ToolResultMedia, model: ModelSpec
+        self, block: MediaBlock, model: ModelSpec
     ) -> tuple[str, ...]:
         return _gemini_media_delivery_gaps(block, model)
 
     def estimate_media_input_tokens(
-        self, block: ToolResultMedia, model: ModelSpec
+        self, block: MediaBlock, model: ModelSpec
     ) -> int | None:
         if model.provider != "google":
             return None
@@ -485,6 +486,16 @@ def _content(
             return {"role": role, "parts": parts}
     if message.content:
         parts.append({"text": message.content})
+    if isinstance(message, UserMessage):
+        parts.extend(
+            _inline_data_part(
+                block,
+                model=model,
+                capabilities=capabilities,
+                media_resolver=media_resolver,
+            )
+            for block in message.media
+        )
     if isinstance(message, AIMessage):
         parts.extend(
             {
@@ -515,6 +526,31 @@ def _continuation_parts(continuation: ModelContinuation) -> list[dict[str, objec
     return parts
 
 
+def _inline_data_part(
+    block: MediaBlock,
+    *,
+    model: ModelSpec,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
+) -> dict[str, object]:
+    validate_media_delivery(
+        block,
+        model=model,
+        capabilities=capabilities,
+        allowed_mime_types=_GEMINI_IMAGE_MIME_TYPES,
+    )
+    return {
+        "inlineData": {
+            "mimeType": block.mime_type,
+            "data": media_base64(
+                block,
+                capabilities=capabilities,
+                media_resolver=media_resolver,
+            ),
+        }
+    }
+
+
 def _function_response(
     result: ToolResult,
     *,
@@ -530,7 +566,7 @@ def _function_response(
                 values.append(block.text)
             elif type(block) is ToolResultJson:
                 values.append(thaw_json(block.value))
-            elif type(block) is ToolResultMedia:
+            elif type(block) is MediaBlock:
                 if _gemini_media_delivery_gaps(block, model):
                     raise ModelProviderError(
                         ModelErrorKind.INVALID_REQUEST,
@@ -541,7 +577,7 @@ def _function_response(
                     block,
                     model=model,
                     capabilities=capabilities,
-                    allowed_mime_types=_GEMINI_FUNCTION_IMAGE_MIME_TYPES,
+                    allowed_mime_types=_GEMINI_IMAGE_MIME_TYPES,
                 )
                 display_name = f"{result.call_id}-{index}"
                 values.append({"$ref": display_name})
@@ -583,12 +619,12 @@ def _function_response(
 
 
 def _gemini_media_delivery_gaps(
-    block: ToolResultMedia, model: ModelSpec
+    block: MediaBlock, model: ModelSpec
 ) -> tuple[str, ...]:
     gaps: list[str] = []
     if not model.model_id.lower().startswith("gemini-3"):
         gaps.append("media_transport.model")
-    if block.mime_type not in _GEMINI_FUNCTION_IMAGE_MIME_TYPES:
+    if block.mime_type not in _GEMINI_IMAGE_MIME_TYPES:
         gaps.append("media_transport.mime_type")
     return tuple(gaps)
 

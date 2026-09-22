@@ -16,7 +16,7 @@ from pygent.core import (
     Message,
     freeze_json_object,
 )
-from pygent.tool import MediaSource, ToolDefinition, ToolResultMedia
+from pygent.tool import MediaSource, ToolDefinition, MediaBlock
 
 from .configuration import ModelGroup, ModelSpec
 from .types import (
@@ -200,12 +200,12 @@ class MediaProjectionTrace:
 class ProjectedMedia:
     """One request-local media block and its provider-neutral trace."""
 
-    media: ToolResultMedia
+    media: MediaBlock
     trace: MediaProjectionTrace
 
     def __post_init__(self) -> None:
-        if type(self.media) is not ToolResultMedia:
-            raise TypeError("projected media must be a ToolResultMedia")
+        if type(self.media) is not MediaBlock:
+            raise TypeError("projected media must be a MediaBlock")
         if not isinstance(self.trace, MediaProjectionTrace):
             raise TypeError("projected media trace must be a MediaProjectionTrace")
 
@@ -223,7 +223,7 @@ class MediaProjector(Protocol):
 
     def plan(
         self,
-        block: ToolResultMedia,
+        block: MediaBlock,
         *,
         model: ModelSpec,
         endpoint: MediaTransportCapabilities,
@@ -231,7 +231,7 @@ class MediaProjector(Protocol):
 
     def project(
         self,
-        block: ToolResultMedia,
+        block: MediaBlock,
         *,
         call_id: str,
         plan: MediaProjectionPlan,
@@ -436,7 +436,7 @@ class ModelProviderMediaTokenEstimator(Protocol):
     """Optional provider-owned deterministic media token accounting."""
 
     def estimate_media_input_tokens(
-        self, block: ToolResultMedia, model: ModelSpec
+        self, block: MediaBlock, model: ModelSpec
     ) -> int | None: ...
 
 
@@ -445,7 +445,7 @@ class ModelProviderMediaDeliveryValidator(Protocol):
     """Optional model-aware restrictions beyond static protocol capabilities."""
 
     def media_delivery_gaps(
-        self, block: ToolResultMedia, model: ModelSpec
+        self, block: MediaBlock, model: ModelSpec
     ) -> tuple[str, ...]: ...
 
 

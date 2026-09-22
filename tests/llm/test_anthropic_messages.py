@@ -32,7 +32,7 @@ from pygent.llm import (
     ModelProviderRequest,
     RetryPolicy,
 )
-from pygent.tool import MediaSource, ToolResultMedia, ToolTask, ToolTaskState
+from pygent.tool import MediaSource, MediaBlock, ToolTask, ToolTaskState
 from tests.support.model_specs import model_entry
 
 
@@ -257,7 +257,7 @@ def test_anthropic_projects_structured_tool_result_image_content() -> None:
                             status="succeeded",
                             content=(
                                 ToolResultText("result"),
-                                ToolResultMedia(
+                                MediaBlock(
                                     media_type="image",
                                     mime_type="image/png",
                                     source=MediaSource.inline(
@@ -277,6 +277,47 @@ def test_anthropic_projects_structured_tool_result_image_content() -> None:
     assert content[0] == {"type": "text", "text": "result"}
     assert content[1]["type"] == "image"
     assert content[1]["source"]["type"] == "base64"
+
+
+def test_anthropic_projects_user_message_media() -> None:
+    entry = anthropic_entry()
+    entry = replace(
+        entry,
+        spec=replace(
+            entry.spec,
+            capabilities=replace(
+                entry.spec.capabilities,
+                modalities=ModelModalities(input=("text", "image"), output=("text",)),
+            ),
+        ),
+    )
+    payload = (
+        AnthropicMessagesAdapter()
+        .build_request(
+            request(
+                entry=entry,
+                message=UserMessage(
+                    content="what is this",
+                    media=(
+                        MediaBlock(
+                            media_type="image",
+                            mime_type="image/png",
+                            source=MediaSource.inline(
+                                b"\x89PNG\r\n\x1a\nfixture"
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+        .to_dict()
+    )
+
+    content = payload["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "what is this"}
+    assert content[1]["type"] == "image"
+    assert content[1]["source"]["type"] == "base64"
+    assert content[1]["source"]["media_type"] == "image/png"
 
 
 def test_anthropic_non_stream_response_decodes_blocks_usage_and_continuation() -> None:

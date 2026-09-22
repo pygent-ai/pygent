@@ -27,7 +27,7 @@ from pydantic import Field
 from pypdf import PdfReader
 
 from pygent.core import freeze_json_object
-from pygent.core._tool_values import MediaSource, ToolResultMedia, ToolResultText
+from pygent.core._tool_values import MediaSource, MediaBlock, ToolResultText
 from pygent.tool.executors import ToolExecutionError
 from pygent.tool.functional import tool
 from pygent.tool.types import (
@@ -1017,7 +1017,7 @@ def _render_pdf_pages(
         if not page_indexes:
             _fail("PDF has no pages to render", "empty_pdf")
 
-        content: list[ToolResultText | ToolResultMedia] = []
+        content: list[ToolResultText | MediaBlock] = []
         rendered_pages: list[dict[str, object]] = []
         total_size_bytes = 0
         for page_index in page_indexes:
@@ -1080,7 +1080,7 @@ def _render_pdf_pages(
             content.extend(
                 (
                     ToolResultText(f"Rendered page {page_number} from {path.name}."),
-                    ToolResultMedia(
+                    MediaBlock(
                         media_type="image",
                         mime_type=prepared.mime_type,
                         source=source,
@@ -1681,7 +1681,7 @@ class FileTools:
             output=freeze_json_object(metadata),
             content=(
                 ToolResultText(result_text),
-                ToolResultMedia(
+                MediaBlock(
                     media_type=media_type,
                     mime_type=mime_type,
                     source=source,

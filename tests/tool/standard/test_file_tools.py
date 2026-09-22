@@ -23,7 +23,7 @@ from pypdf import PdfWriter
 from pygent import (
     IdempotencyPolicy,
     ToolKit,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
     ToolSideEffect,
 )
@@ -228,7 +228,7 @@ async def test_read_renders_requested_pdf_pages_as_inline_images(tmp_path) -> No
         media = result.content[content_index + 1]
         assert isinstance(label, ToolResultText)
         assert f"page {page_number}" in label.text
-        assert isinstance(media, ToolResultMedia)
+        assert isinstance(media, MediaBlock)
         assert media.media_type == "image"
         assert media.mime_type == "image/png"
         assert media.detail == "high"
@@ -357,7 +357,7 @@ async def test_read_returns_inline_structured_media_content(
     assert result.output["size_bytes"] == len(data)
     assert isinstance(result.content[0], ToolResultText)
     media = result.content[1]
-    assert isinstance(media, ToolResultMedia)
+    assert isinstance(media, MediaBlock)
     assert media.media_type == media_type
     assert media.mime_type == mime_type
     assert media.source.kind == "inline"

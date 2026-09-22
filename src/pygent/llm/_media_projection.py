@@ -17,7 +17,7 @@ from typing import Any, NoReturn, cast
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from pygent.tool import MediaSource, ToolResultMedia
+from pygent.tool import MediaSource, MediaBlock
 
 from ._adapter_contracts import (
     MediaProjectionPlan,
@@ -53,7 +53,7 @@ class DefaultMediaProjector:
 
     def plan(
         self,
-        block: ToolResultMedia,
+        block: MediaBlock,
         *,
         model: ModelSpec,
         endpoint: MediaTransportCapabilities,
@@ -226,7 +226,7 @@ class DefaultMediaProjector:
 
     def project(
         self,
-        block: ToolResultMedia,
+        block: MediaBlock,
         *,
         call_id: str,
         plan: MediaProjectionPlan,
@@ -302,8 +302,8 @@ class DefaultMediaProjector:
 
 
 def _project_image(
-    block: ToolResultMedia, data: bytes, plan: MediaProjectionPlan
-) -> tuple[ToolResultMedia, tuple[str, ...]]:
+    block: MediaBlock, data: bytes, plan: MediaProjectionPlan
+) -> tuple[MediaBlock, tuple[str, ...]]:
     try:
         with Image.open(BytesIO(data)) as opened:
             is_animated = bool(getattr(opened, "is_animated", False))
@@ -350,7 +350,7 @@ def _project_image(
         )
         source = MediaSource.inline(encoded)
         return (
-            ToolResultMedia(
+            MediaBlock(
                 media_type="image",
                 mime_type=target_mime,
                 source=source,
@@ -411,8 +411,8 @@ def _encode_image_with_budget(
 
 
 def _project_video(
-    block: ToolResultMedia, data: bytes, plan: MediaProjectionPlan
-) -> tuple[ToolResultMedia, tuple[str, ...]]:
+    block: MediaBlock, data: bytes, plan: MediaProjectionPlan
+) -> tuple[MediaBlock, tuple[str, ...]]:
     try:
         import av  # type: ignore[import-untyped]
     except (ImportError, OSError):
@@ -536,7 +536,7 @@ def _project_video(
         )
     source = MediaSource.inline(output_data)
     return (
-        ToolResultMedia(
+        MediaBlock(
             media_type="video",
             mime_type="video/mp4",
             source=source,
@@ -581,8 +581,8 @@ def _video_dimensions(
 
 def _trace(
     call_id: str,
-    canonical: ToolResultMedia,
-    projected: ToolResultMedia,
+    canonical: MediaBlock,
+    projected: MediaBlock,
     transformations: tuple[str, ...],
     version: str,
 ) -> MediaProjectionTrace:
@@ -618,7 +618,7 @@ def _source_reference(source: MediaSource) -> str:
 
 
 def _image_limits_exceeded(
-    block: ToolResultMedia,
+    block: MediaBlock,
     *,
     max_width: int | None,
     max_height: int | None,
@@ -634,7 +634,7 @@ def _image_limits_exceeded(
 
 
 def _video_limits_exceeded(
-    block: ToolResultMedia,
+    block: MediaBlock,
     *,
     max_width: int | None,
     max_height: int | None,

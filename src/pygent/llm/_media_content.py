@@ -9,7 +9,7 @@ from collections.abc import Callable, Collection
 from io import BytesIO
 from typing import NoReturn, cast
 
-from pygent.tool import MediaSource, ToolResultMedia
+from pygent.tool import MediaSource, MediaBlock
 
 from ._adapter_contracts import (
     MediaResolver,
@@ -22,7 +22,7 @@ MediaResolverLike = MediaResolver | Callable[[MediaSource], bytes]
 
 
 def validate_media_delivery(
-    block: ToolResultMedia,
+    block: MediaBlock,
     *,
     model: ModelSpec,
     capabilities: MediaTransportCapabilities,
@@ -37,7 +37,7 @@ def validate_media_delivery(
         )
     if not capabilities.enabled or block.media_type not in capabilities.modalities:
         _invalid(
-            f"endpoint does not support {block.media_type} in tool results",
+            f"endpoint does not support {block.media_type} media",
             ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED,
         )
     if block.source.kind not in capabilities.source_kinds:
@@ -47,7 +47,7 @@ def validate_media_delivery(
         )
     if allowed_mime_types is not None and block.mime_type not in allowed_mime_types:
         _invalid(
-            f"endpoint does not support {block.mime_type} tool-result media",
+            f"endpoint does not support {block.mime_type} media",
             ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED,
         )
     if (
@@ -62,7 +62,7 @@ def validate_media_delivery(
 
 
 def media_base64(
-    block: ToolResultMedia,
+    block: MediaBlock,
     *,
     capabilities: MediaTransportCapabilities,
     media_resolver: MediaResolverLike | None,
@@ -90,7 +90,7 @@ def media_base64(
 
 
 def media_data_url(
-    block: ToolResultMedia,
+    block: MediaBlock,
     *,
     capabilities: MediaTransportCapabilities,
     media_resolver: MediaResolverLike | None,
@@ -108,7 +108,7 @@ def media_data_url(
 
 
 def video_frame_data_urls(
-    block: ToolResultMedia,
+    block: MediaBlock,
     *,
     capabilities: MediaTransportCapabilities,
     media_resolver: MediaResolverLike | None,
@@ -229,7 +229,7 @@ def _resolve_resource(
 
 
 def validate_media_bytes(
-    block: ToolResultMedia,
+    block: MediaBlock,
     data: bytes,
     *,
     max_bytes: int | None = None,

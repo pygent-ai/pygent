@@ -18,7 +18,7 @@ from pygent import (
     ToolKit,
     ToolOutput,
     ToolResultJson,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
     ToolSideEffect,
     tool,
@@ -135,7 +135,7 @@ async def test_local_layer_preserves_structured_tool_output() -> None:
             content=(
                 ToolResultText("image"),
                 ToolResultJson({"width": 1}),
-                ToolResultMedia(
+                MediaBlock(
                     media_type="image",
                     mime_type="image/png",
                     source=MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture"),
@@ -154,7 +154,7 @@ async def test_local_layer_preserves_structured_tool_output() -> None:
     assert result.status == "succeeded"
     assert result.output["width"] == 1
     assert result.content[0] == ToolResultText("image")
-    assert isinstance(result.content[2], ToolResultMedia)
+    assert isinstance(result.content[2], MediaBlock)
 
 
 @pytest.mark.asyncio

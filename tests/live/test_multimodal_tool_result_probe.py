@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pygent import ToolResultMedia, ToolResultText
+from pygent import MediaBlock, ToolResultText
 from tests.live.multimodal_tool_result_probe import (
     _tool_message,
     az_catalog_media_cases,
@@ -34,7 +34,7 @@ async def test_probe_read_tools_return_correlated_media_content(modality: str) -
     assert result.status == "succeeded"
     assert isinstance(result.content[0], ToolResultText)
     media = result.content[1]
-    assert isinstance(media, ToolResultMedia)
+    assert isinstance(media, MediaBlock)
     assert media.media_type == modality
     assert media.source.kind == "inline"
     assert media.source.size_bytes is not None and media.source.size_bytes > 0

@@ -18,7 +18,7 @@ from pygent import (
     ToolMessage,
     ToolResult,
     ToolResultJson,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
     UserMessage,
 )
@@ -903,7 +903,7 @@ def test_structured_tool_result_encodes_image_json_and_text_blocks() -> None:
                     content=(
                         ToolResultText("image read"),
                         ToolResultJson({"width": 1}),
-                        ToolResultMedia(
+                        MediaBlock(
                             media_type="image",
                             mime_type="image/png",
                             source=source,
@@ -938,6 +938,40 @@ def test_structured_tool_result_encodes_image_json_and_text_blocks() -> None:
     assert "private" not in repr(payload)
 
 
+def test_user_message_media_encodes_text_and_image_parts() -> None:
+    request = provider_request(
+        entry=_media_entry("image"),
+        message=UserMessage(
+            content="what is this",
+            media=(
+                MediaBlock(
+                    media_type="image",
+                    mime_type="image/png",
+                    source=MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture"),
+                    detail="low",
+                ),
+            ),
+        ),
+        context=Context(),
+        generation=GenerationConfig(),
+    )
+    adapter = OpenAICompatibleAdapter(
+        media_transport=MediaTransportCapabilities(enabled=True, modalities=("image",))
+    )
+
+    payload = adapter.build_request(request).to_dict()
+
+    assert len(payload["messages"]) == 1
+    message = payload["messages"][0]
+    assert message["role"] == "user"
+    assert message["content"][0] == {"type": "text", "text": "what is this"}
+    assert message["content"][1]["type"] == "image_url"
+    assert message["content"][1]["image_url"]["url"].startswith(
+        "data:image/png;base64,"
+    )
+    assert message["content"][1]["image_url"]["detail"] == "low"
+
+
 def test_structured_tool_result_resolves_video_resource() -> None:
     video = b"\x00\x00\x00\x18ftypmp42fixture"
     source = MediaSource.resource(
@@ -954,7 +988,7 @@ def test_structured_tool_result_resolves_video_resource() -> None:
                     name="read",
                     status="succeeded",
                     content=(
-                        ToolResultMedia(
+                        MediaBlock(
                             media_type="video",
                             mime_type="video/mp4",
                             source=source,
@@ -996,7 +1030,7 @@ def test_alibaba_video_tool_result_uses_frame_based_user_media(monkeypatch) -> N
                     name="read",
                     status="succeeded",
                     content=(
-                        ToolResultMedia(
+                        MediaBlock(
                             media_type="video",
                             mime_type="video/mp4",
                             source=MediaSource.inline(video),
@@ -1074,7 +1108,7 @@ def test_tool_media_checks_model_modality_separately() -> None:
                     name="read",
                     status="succeeded",
                     content=(
-                        ToolResultMedia(
+                        MediaBlock(
                             media_type="image",
                             mime_type="image/png",
                             source=MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture"),
@@ -1108,7 +1142,7 @@ def test_tool_media_rejects_resource_integrity_mismatch() -> None:
                     name="read",
                     status="succeeded",
                     content=(
-                        ToolResultMedia(
+                        MediaBlock(
                             media_type="image",
                             mime_type="image/png",
                             source=MediaSource.resource(

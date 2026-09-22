@@ -9,13 +9,14 @@ from pygent.core import (
     Context,
     Message,
     ToolMessage,
+    UserMessage,
     freeze_json,
     thaw_json,
 )
 from pygent.tool import (
     ToolResult,
     ToolResultJson,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
 )
 
@@ -29,21 +30,31 @@ from .configuration import ModelSpec
 from .types import ModelFailureReason
 
 
-def pending_tool_result_media(
+def pending_media_blocks(
     message: Message, context: Context
-) -> tuple[ToolResultMedia, ...]:
+) -> tuple[MediaBlock, ...]:
     return tuple(
         block
         for candidate in (*context.messages, message)
-        if isinstance(candidate, ToolMessage)
-        for result in candidate.results
-        for block in result.content
-        if type(block) is ToolResultMedia
+        for block in _message_media_blocks(candidate)
     )
 
 
+def _message_media_blocks(message: Message) -> tuple[MediaBlock, ...]:
+    if isinstance(message, UserMessage):
+        return message.media
+    if isinstance(message, ToolMessage):
+        return tuple(
+            block
+            for result in message.results
+            for block in result.content
+            if type(block) is MediaBlock
+        )
+    return ()
+
+
 def media_delivery_gaps(
-    blocks: tuple[ToolResultMedia, ...],
+    blocks: tuple[MediaBlock, ...],
     *,
     model: ModelSpec,
     adapter: ModelProviderAdapter,
@@ -144,7 +155,7 @@ def project_media_for_model(
 
 
 def _delivery_reason(
-    block: ToolResultMedia,
+    block: MediaBlock,
     *,
     model: ModelSpec,
     adapter: ModelProviderAdapter,
@@ -170,7 +181,7 @@ def _delivery_reason(
 
 
 def _not_viewed_media_value(
-    block: ToolResultMedia, reason: ModelFailureReason
+    block: MediaBlock, reason: ModelFailureReason
 ) -> dict[str, object]:
     media_ref = _media_reference(block)
     return {
@@ -199,7 +210,7 @@ def _project_result(
     model: ModelSpec,
     adapter: ModelProviderAdapter,
 ) -> ToolResult:
-    if not any(type(block) is ToolResultMedia for block in result.content):
+    if not any(type(block) is MediaBlock for block in result.content):
         return result
     if adapter.media_transport.enabled:
         projected_content = tuple(
@@ -210,7 +221,7 @@ def _project_result(
                     separators=(",", ":"),
                 )
             )
-            if type(block) is ToolResultMedia
+            if type(block) is MediaBlock
             and (reason := _delivery_reason(block, model=model, adapter=adapter))
             is not None
             else block
@@ -224,7 +235,7 @@ def _project_result(
             projected_blocks.append({"type": "text", "text": block.text})
         elif type(block) is ToolResultJson:
             projected_blocks.append({"type": "json", "value": thaw_json(block.value)})
-        elif type(block) is ToolResultMedia:
+        elif type(block) is MediaBlock:
             reason = _delivery_reason(block, model=model, adapter=adapter)
             if (
                 reason is None
@@ -249,6 +260,23 @@ def _project_message(
     model: ModelSpec,
     adapter: ModelProviderAdapter,
 ) -> Message:
+    if isinstance(message, UserMessage) and message.media:
+        notes: list[str] = []
+        for block in message.media:
+            reason = _delivery_reason(block, model=model, adapter=adapter)
+            if reason is None:  # pragma: no cover - fallback implies delivery gaps
+                reason = ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED
+            notes.append(
+                json.dumps(
+                    _not_viewed_media_value(block, reason),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        content = message.content
+        for note in notes:
+            content = f"{content}\n{note}" if content else note
+        return replace(message, content=content, media=())
     if not isinstance(message, ToolMessage):
         return message
     results = tuple(
@@ -266,13 +294,33 @@ def _project_media_message(
     projector: MediaProjector,
     traces: list[MediaProjectionTrace],
 ) -> Message:
+    if isinstance(message, UserMessage):
+        if not message.media:
+            return message
+        projected_media: list[MediaBlock] = []
+        for block in message.media:
+            plan = projector.plan(
+                block,
+                model=model,
+                endpoint=adapter.media_transport,
+            )
+            if plan is None:
+                raise ValueError("media projector received an incompatible route")
+            projected = projector.project(block, call_id="user", plan=plan)
+            projected_media.append(projected.media)
+            traces.append(projected.trace)
+        return (
+            message
+            if tuple(projected_media) == message.media
+            else replace(message, media=tuple(projected_media))
+        )
     if not isinstance(message, ToolMessage):
         return message
     results: list[ToolResult] = []
     for result in message.results:
-        content: list[ToolResultText | ToolResultJson | ToolResultMedia] = []
+        content: list[ToolResultText | ToolResultJson | MediaBlock] = []
         for block in result.content:
-            if type(block) is not ToolResultMedia:
+            if type(block) is not MediaBlock:
                 content.append(block)
                 continue
             plan = projector.plan(
@@ -298,7 +346,7 @@ def _project_media_message(
     )
 
 
-def _media_reference(block: ToolResultMedia) -> str:
+def _media_reference(block: MediaBlock) -> str:
     source = block.source
     if source.kind == "resource":
         return str(source.uri)
@@ -309,7 +357,7 @@ def _media_reference(block: ToolResultMedia) -> str:
 
 __all__ = [
     "media_delivery_gaps",
-    "pending_tool_result_media",
+    "pending_media_blocks",
     "project_media_for_model",
     "project_request_for_model",
 ]

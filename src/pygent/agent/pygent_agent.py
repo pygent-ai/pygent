@@ -24,7 +24,7 @@ from pygent.core import (
 )
 from pygent.core._tool_values import _tool_result_content_to_value
 from pygent.llm._media_tokens import generic_media_input_tokens
-from pygent.tool import ToolDefinition, ToolResultContent, ToolResultMedia
+from pygent.tool import ToolDefinition, ToolResultContent, MediaBlock
 
 from .react import ReActLayer
 
@@ -412,14 +412,14 @@ async def _request_token_estimate(
 
 def _request_media(
     current: Message, context: Context
-) -> tuple[ToolResultMedia, ...]:
+) -> tuple[MediaBlock, ...]:
     return tuple(
         block
         for message in (*context.messages, current)
         if isinstance(message, ToolMessage)
         for result in message.results
         for block in result.content
-        if type(block) is ToolResultMedia
+        if type(block) is MediaBlock
     )
 
 
@@ -464,7 +464,7 @@ def _message_projection(message: Message) -> dict[str, object]:
 
 def _estimated_content_value(value: ToolResultContent) -> dict[str, object]:
     projected = _tool_result_content_to_value(value)
-    if type(value) is ToolResultMedia:
+    if type(value) is MediaBlock:
         source = cast(dict[str, object], projected["source"])
         source["base64_data"] = None
     return projected

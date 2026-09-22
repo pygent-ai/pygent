@@ -146,6 +146,10 @@ await business_history.append(
 )
 ```
 
+`UserMessage` 支持多模态输入：`media` 元组接受与工具结果相同的 `MediaBlock` 媒体块，
+按声明顺序在文本之后投递；构造校验、路由门控、投影与 token 估算与工具结果媒体共用
+同一套管线，canonical Context 保持不变。
+
 `committed_messages` 已包含 Initial/Mid-run UserMessage、ToolCall AIMessage、ToolMessage
 和最终 AIMessage，业务服务不得再次追加 `answer`。只有成功结果具有可提交的消息增量；
 业务 Store 负责以 Execution 或 invocation identity 实现幂等追加、revision、审计和冲突处理。
@@ -225,7 +229,7 @@ System Prompt + Context.messages + current + Context.tools
 ```
 
 ASCII 内容、非 ASCII 内容和消息/工具结构分别计入估算。类型化
-`ToolResultMedia` 的 Base64 是 Provider transport，不作为文本计费。图片和视频的尺寸、
+`MediaBlock` 的 Base64 是 Provider transport，不作为文本计费。图片和视频的尺寸、
 视频时长、帧率及音轨标志在媒体对象中归一化并随 wire value 持久化；inline 图片只需解码
 一次，标准文件工具直接提供规范化后的视频元数据。`ModelCallLayer` 先解析实际部署，Invoker
 再复用真实调用的媒体能力与 fallback 路由，只有会收到媒体的候选才参与估算；具体计费公式

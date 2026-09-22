@@ -17,6 +17,7 @@ from pygent.core import (
     Message,
     ModelContinuation,
     ToolMessage,
+    UserMessage,
     freeze_json_object,
     thaw_json,
 )
@@ -26,7 +27,7 @@ from pygent.tool import (
     ToolDefinition,
     ToolResult,
     ToolResultJson,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
 )
 
@@ -174,7 +175,7 @@ class OpenAIResponsesAdapter:
         self.media_resolver = media_resolver
 
     def estimate_media_input_tokens(
-        self, block: ToolResultMedia, model: ModelSpec
+        self, block: MediaBlock, model: ModelSpec
     ) -> int | None:
         if model.provider != "openai":
             return None
@@ -455,7 +456,21 @@ def _input_items(
             model=model,
         ):
             items.extend(_continuation_items(continuation))
-    if message.content:
+    if isinstance(message, UserMessage) and message.media:
+        content: list[dict[str, object]] = []
+        if message.content:
+            content.append({"type": "input_text", "text": message.content})
+        content.extend(
+            _input_image_item(
+                block,
+                model=model,
+                capabilities=capabilities,
+                media_resolver=media_resolver,
+            )
+            for block in message.media
+        )
+        items.append({"role": message.role, "content": content})
+    elif message.content:
         items.append({"role": message.role, "content": message.content})
     if isinstance(message, AIMessage):
         items.extend(
@@ -523,7 +538,7 @@ def _tool_result_value(
 
 
 def _tool_result_content_block(
-    block: ToolResultText | ToolResultJson | ToolResultMedia,
+    block: ToolResultText | ToolResultJson | MediaBlock,
     *,
     model: ModelSpec,
     capabilities: MediaTransportCapabilities,
@@ -538,8 +553,23 @@ def _tool_result_content_block(
                 thaw_json(block.value), ensure_ascii=False, separators=(",", ":")
             ),
         }
-    if type(block) is not ToolResultMedia:
+    if type(block) is not MediaBlock:
         raise TypeError("tool-result content block is invalid")
+    return _input_image_item(
+        block,
+        model=model,
+        capabilities=capabilities,
+        media_resolver=media_resolver,
+    )
+
+
+def _input_image_item(
+    block: MediaBlock,
+    *,
+    model: ModelSpec,
+    capabilities: MediaTransportCapabilities,
+    media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
+) -> dict[str, object]:
     validate_media_delivery(block, model=model, capabilities=capabilities)
     value: dict[str, object] = {
         "type": "input_image",

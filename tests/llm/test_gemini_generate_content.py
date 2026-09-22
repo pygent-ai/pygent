@@ -29,7 +29,7 @@ from pygent.llm import (
     ModelProviderError,
     ModelProviderRequest,
 )
-from pygent.tool import MediaSource, ToolResultMedia, ToolTask, ToolTaskState
+from pygent.tool import MediaSource, MediaBlock, ToolTask, ToolTaskState
 from tests.support.model_specs import model_entry
 
 
@@ -185,7 +185,7 @@ def test_gemini_projects_multimodal_function_response_parts() -> None:
                     status="succeeded",
                     content=(
                         ToolResultText("result"),
-                        ToolResultMedia(
+                        MediaBlock(
                             media_type="image",
                             mime_type="image/png",
                             source=MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture"),
@@ -214,6 +214,40 @@ def test_gemini_projects_multimodal_function_response_parts() -> None:
     assert response["id"] == "call-1"
     assert response["response"]["content"] == ["result", {"$ref": "call-1-1"}]
     assert response["parts"][0]["inlineData"]["displayName"] == "call-1-1"
+
+
+def test_gemini_projects_user_message_media_parts() -> None:
+    request = _request(
+        message=UserMessage(
+            content="what is this",
+            media=(
+                MediaBlock(
+                    media_type="image",
+                    mime_type="image/png",
+                    source=MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture"),
+                ),
+            ),
+        )
+    )
+    request = replace(
+        request,
+        model=replace(
+            request.model,
+            capabilities=replace(
+                request.model.capabilities,
+                modalities=ModelModalities(input=("text", "image"), output=("text",)),
+            ),
+        ),
+    )
+    contents = GeminiGenerateContentAdapter().build_request(request).to_dict()[
+        "contents"
+    ]
+
+    assert contents[0]["role"] == "user"
+    parts = contents[0]["parts"]
+    assert parts[0] == {"text": "what is this"}
+    assert parts[1]["inlineData"]["mimeType"] == "image/png"
+    assert parts[1]["inlineData"]["data"]
 
 
 def test_gemini_parse_preserves_thought_signature_and_function_call() -> None:

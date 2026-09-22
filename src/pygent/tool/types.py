@@ -16,7 +16,7 @@ from pygent.core._tool_values import (
     ToolResult,
     ToolResultContent,
     ToolResultJson,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultStatus,
     ToolResultText,
     ToolSideEffect,
@@ -48,7 +48,7 @@ class ToolOutput:
         if not content:
             raise ValueError("ToolOutput content must be non-empty")
         if any(
-            type(value) not in (ToolResultText, ToolResultJson, ToolResultMedia)
+            type(value) not in (ToolResultText, ToolResultJson, MediaBlock)
             for value in content
         ):
             raise TypeError("ToolOutput content contains an unsupported value")
@@ -181,7 +181,7 @@ __all__ = [
     "ToolResult",
     "ToolResultContent",
     "ToolResultJson",
-    "ToolResultMedia",
+    "MediaBlock",
     "ToolResultStatus",
     "ToolResultText",
     "ToolSideEffect",

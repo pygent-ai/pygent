@@ -13,12 +13,13 @@ from pygent.core import (
     Message,
     ModelContinuation,
     ToolMessage,
+    UserMessage,
     thaw_json,
 )
 from pygent.tool import (
     ToolResultContent,
     ToolResultJson,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
 )
 
@@ -109,7 +110,9 @@ def _message_projection(message: Message) -> dict[str, object]:
         "kind": message.kind,
         "slot": message.slot,
     }
-    if isinstance(message, AIMessage):
+    if isinstance(message, UserMessage):
+        value["media"] = [_content_projection(block) for block in message.media]
+    elif isinstance(message, AIMessage):
         value["continuation_digest"] = _continuation_digest(message.continuation)
         value["tool_calls"] = [
             {
@@ -148,7 +151,7 @@ def _content_projection(value: ToolResultContent) -> dict[str, object]:
         return {"type": "text", "text": value.text}
     if type(value) is ToolResultJson:
         return {"type": "json", "value": thaw_json(value.value)}
-    if type(value) is ToolResultMedia:
+    if type(value) is MediaBlock:
         source = value.source
         return {
             "type": "media",

@@ -29,7 +29,7 @@ from pygent.tool import (
     ToolDefinition,
     ToolResult,
     ToolResultJson,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
     ToolSideEffect,
     ToolSpec,
@@ -59,7 +59,23 @@ def test_message_and_context_wire_round_trip_all_public_variants():
             data={"operation_id": "op-1", "scopes": ["publish"]},
             slot="approval/current",
         ),
-        UserMessage(content="hello", metadata={"request": 1}),
+        UserMessage(
+            content="hello",
+            media=(
+                MediaBlock(
+                    media_type="image",
+                    mime_type="image/png",
+                    source=MediaSource.resource(
+                        "media://user-image",
+                        sha256="1" * 64,
+                        size_bytes=12,
+                    ),
+                    width=640,
+                    height=480,
+                ),
+            ),
+            metadata={"request": 1},
+        ),
         AIMessage(
             content="calling",
             tool_calls=(call,),
@@ -83,7 +99,7 @@ def test_message_and_context_wire_round_trip_all_public_variants():
                     content=(
                         ToolResultText("image"),
                         ToolResultJson({"value": 2}),
-                        ToolResultMedia(
+                        MediaBlock(
                             media_type="image",
                             mime_type="image/png",
                             source=MediaSource.resource(
@@ -122,7 +138,7 @@ def test_media_wire_reader_accepts_legacy_blocks_without_dimensions() -> None:
                 name="lookup",
                 status="succeeded",
                 content=(
-                    ToolResultMedia(
+                    MediaBlock(
                         media_type="image",
                         mime_type="image/png",
                         source=MediaSource.resource("media://legacy"),
@@ -141,8 +157,38 @@ def test_media_wire_reader_accepts_legacy_blocks_without_dimensions() -> None:
     assert message_from_dict(value) == message
 
 
+def test_user_media_wire_round_trip_and_legacy_payload_without_media() -> None:
+    message = UserMessage(
+        content="what is this",
+        media=(
+            MediaBlock(
+                media_type="image",
+                mime_type="image/png",
+                source=MediaSource.resource(
+                    "media://user-image", sha256="a" * 64, size_bytes=12
+                ),
+                width=64,
+                height=48,
+            ),
+        ),
+    )
+    value = message_to_dict(message)
+    assert value["media"][0]["type"] == "media"
+    assert message_from_dict(value) == message
+
+    legacy = {key: item for key, item in value.items() if key != "media"}
+    assert message_from_dict(legacy) == UserMessage(content="what is this")
+
+
+def test_user_media_wire_rejects_non_media_blocks() -> None:
+    value = message_to_dict(UserMessage(content="hello"))
+    value["media"] = [{"type": "text", "text": "not media"}]
+    with pytest.raises(WireCodecError):
+        message_from_dict(value)
+
+
 def test_video_media_metadata_round_trips_on_the_wire() -> None:
-    video = ToolResultMedia(
+    video = MediaBlock(
         media_type="video",
         mime_type="video/mp4",
         source=MediaSource.resource("media://video"),

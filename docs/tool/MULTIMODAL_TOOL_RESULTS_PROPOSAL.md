@@ -62,7 +62,7 @@ Message 或 Context。应用入口可以接收二进制，但必须在公开值�
 当前 SDK 提供封闭的 `ToolResultContent` 联合类型：
 
 ```python
-ToolResultContent = ToolResultText | ToolResultJson | ToolResultMedia
+ToolResultContent = ToolResultText | ToolResultJson | MediaBlock
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +76,7 @@ class ToolResultJson:
 
 
 @dataclass(frozen=True, slots=True)
-class ToolResultMedia:
+class MediaBlock:
     media_type: Literal["image", "video"]
     mime_type: str
     source: MediaSource
@@ -129,7 +129,7 @@ return ToolOutput(
     output={"width": 640, "height": 480},
     content=(
         ToolResultText("工具读取到的图片。"),
-        ToolResultMedia(
+        MediaBlock(
             media_type="image",
             mime_type="image/png",
             source=MediaSource.resource(
@@ -156,7 +156,7 @@ return ToolOutput(
 | `inline` | `base64_data` | 已规范化的 Base64 内容；只适合有界小媒体 |
 
 所有来源都可以携带 `sha256` 和 `size_bytes`；持久恢复要求二者存在。MIME 类型放在
-`ToolResultMedia` 上，不从文件扩展名或 URL 猜测。解析后必须校验实际大小、摘要、声明
+`MediaBlock` 上，不从文件扩展名或 URL 猜测。解析后必须校验实际大小、摘要、声明
 MIME 与允许格式；不匹配时在 Provider I/O 前失败。
 
 URL 不能内嵌用户名、密码、API key、签名 token 或其他 secret。需要认证、短时签名或

@@ -14,7 +14,7 @@ from pygent.tool import (
     ToolCall,
     ToolDefinition,
     ToolOutput,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
     ToolSideEffect,
     ToolSpec,
@@ -56,7 +56,7 @@ async def test_durable_tool_task_persists_admission_and_terminal_result(tmp_path
                 output={"echo": arguments["value"]},
                 content=(
                     ToolResultText("image restored"),
-                    ToolResultMedia(
+                    MediaBlock(
                         media_type="image",
                         mime_type="image/png",
                         source=MediaSource.resource(

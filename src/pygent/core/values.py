@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, fields, is_dataclass, replace
 from types import NotImplementedType
 from typing import ClassVar
 
-from ._tool_values import ToolCall, ToolDefinition, ToolResult
+from ._tool_values import ToolCall, ToolDefinition, ToolResult, MediaBlock
 from .json_values import (
     FrozenJsonObject,
     JsonObjectInput,
@@ -76,7 +76,17 @@ class Message:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UserMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
+    """One user turn; media blocks are delivered after the text content."""
+
+    media: tuple[MediaBlock, ...] = ()
     role: ClassVar[str] = "user"
+
+    def __post_init__(self) -> None:
+        Message.__post_init__(self)
+        media = tuple(self.media)
+        if any(type(block) is not MediaBlock for block in media):
+            raise TypeError("UserMessage.media must contain only MediaBlock values")
+        object.__setattr__(self, "media", media)
 
 
 @dataclass(frozen=True, slots=True)

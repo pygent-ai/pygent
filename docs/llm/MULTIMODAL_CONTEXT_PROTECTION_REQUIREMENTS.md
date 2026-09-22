@@ -34,7 +34,7 @@ Pygent 的原生工具可以返回 canonical 图片或视频。该媒体可以�
 
 ### 2.1 Context 最小补充
 
-本需求不新增 `Context` 顶层字段。`Context.messages` 中的 `ToolResultMedia.source` 表示工具
+本需求不新增 `Context` 顶层字段。`Context.messages` 中的 `MediaBlock.source` 表示工具
 产生的 canonical media artifact，不能被某个模型专属的缩放、转码、抽帧或传输编码结果
 覆盖。
 
@@ -71,7 +71,7 @@ canonical media 生成。不能从前一个模型的 request-local 派生媒体�
 Context。
 
 模型调用失败时，不提交失败尝试产生的 Assistant，Context 保持不变并继续正常
-retry/fallback。模型调用成功时，由调用方明确追加 Assistant，原 `ToolResultMedia`
+retry/fallback。模型调用成功时，由调用方明确追加 Assistant，原 `MediaBlock`
 继续保留。
 
 因此 Context 不新增 media store、media projections、活跃 resolver 或 Provider 请求；最小
@@ -222,7 +222,7 @@ Base64 是支持的传输形式之一，不是唯一形式。图片和有界小�
 6. Adapter 把该 Base64 放入目标协议的原生图片或视频字段，并发起模型调用。
 
 ```text
-ToolResultMedia
+MediaBlock
     ↓
 Invoker 选择 MediaProjectionPlan
     ↓
@@ -263,7 +263,7 @@ canonical media 生成。不能把前一个模型已经缩放或有损转换的 
 ## 6. 成功模型调用
 
 模型调用成功不会把 request-local 媒体投影写回 Context。Context 继续保留原
-`ToolResultMedia`，调用方只按现有规则提交成功的 Assistant。每个真实 attempt 的
+`MediaBlock`，调用方只按现有规则提交成功的 Assistant。每个真实 attempt 的
 prepared-request trace 记录该 attempt 使用的媒体投影身份和转换事实。
 
 成功后的模型上下文形态为：
@@ -346,7 +346,7 @@ MediaProjector 优先从稳定原始资源生成；没有原始资源时，从 C
 
 - 成功完成的模型调用才提交对应 Assistant；
 - 失败尝试的 Assistant 不进入历史；
-- 当前 Context 投影中的 `ToolResultMedia` 必须可重放；
+- 当前 Context 投影中的 `MediaBlock` 必须可重放；
 - 成功请求的 request-local 媒体投影不写回 Context；
 - 失败或切换模型不会删除 canonical media 或已有的稳定原始资源引用；
 - 模型调用失败沿用正常 retry/fallback，不创建多模态专用恢复上下文；
@@ -357,7 +357,7 @@ MediaProjector 优先从稳定原始资源生成；没有原始资源时，从 C
 - 模型可见结果必须区分“当前模型不能查看”和“文件确实不存在”；
 - 历史工具调用的 `call_id`、工具结果和媒体引用保持关联。
 
-这些规则只保证当前模型投影中的 `ToolResultMedia` 可重放。Context 经压缩或显式 replacement
+这些规则只保证当前模型投影中的 `MediaBlock` 可重放。Context 经压缩或显式 replacement
 后，长期完整历史和媒体资源位置由外部 History/Media Store 保存。
 
 ## 10. 验收场景

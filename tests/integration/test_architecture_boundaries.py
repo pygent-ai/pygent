@@ -51,7 +51,7 @@ def test_production_does_not_import_removed_tool_value_definitions() -> None:
         "ToolResult",
         "ToolResultContent",
         "ToolResultJson",
-        "ToolResultMedia",
+        "MediaBlock",
         "ToolResultText",
         "ToolTask",
     }

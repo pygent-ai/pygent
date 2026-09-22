@@ -21,7 +21,7 @@ from pygent import (
     ToolCall,
     ToolMessage,
     ToolResult,
-    ToolResultMedia,
+    MediaBlock,
     UserMessage,
 )
 from pygent.core import FrozenJsonObject, freeze_json_object
@@ -190,7 +190,7 @@ def media_message(media_type: str = "image") -> ToolMessage:
                 status="succeeded",
                 output={"file_path": f"fixture.{media_type}"},
                 content=(
-                    ToolResultMedia(
+                    MediaBlock(
                         media_type=media_type,
                         mime_type=mime_type,
                         source=MediaSource.inline(data),
@@ -198,6 +198,19 @@ def media_message(media_type: str = "image") -> ToolMessage:
                 ),
             ),
         )
+    )
+
+
+def user_media_message() -> UserMessage:
+    return UserMessage(
+        content="what is this",
+        media=(
+            MediaBlock(
+                media_type="image",
+                mime_type="image/png",
+                source=MediaSource.inline(b"\x89PNG\r\n\x1a\nfixture"),
+            ),
+        ),
     )
 
 
@@ -212,7 +225,7 @@ def projectable_image_message() -> ToolMessage:
                 status="succeeded",
                 output={"file_path": "fixture.png"},
                 content=(
-                    ToolResultMedia(
+                    MediaBlock(
                         media_type="image",
                         mime_type="image/png",
                         source=MediaSource.inline(buffer.getvalue()),
@@ -254,7 +267,7 @@ def image_model_entry(name: str, *, max_width: int):
 async def test_fallback_reprojects_canonical_media_for_each_model() -> None:
     message = projectable_image_message()
     original = message.results[0].content[0]
-    assert isinstance(original, ToolResultMedia)
+    assert isinstance(original, MediaBlock)
     primary = RecordingClient(
         [ModelProviderError(ModelErrorKind.RATE_LIMIT, "try fallback")]
     )
@@ -394,7 +407,7 @@ async def test_media_result_projects_not_viewed_when_no_model_can_consume_it() -
     assert result.message.content == "cannot read image"
     assert primary.calls == 1
     assert fallback.calls == 0
-    assert isinstance(message.results[0].content[0], ToolResultMedia)
+    assert isinstance(message.results[0].content[0], MediaBlock)
     wire_content = primary.payloads[0]["messages"][0]["content"]
     assert isinstance(wire_content, str)
     assert "The current model cannot view this image." in wire_content
@@ -410,6 +423,98 @@ async def test_media_result_projects_not_viewed_when_no_model_can_consume_it() -
     assert any(event.kind == "model.capability.warning" for event in events)
     skipped = [event for event in events if event.kind == "model.route.skipped"]
     assert [event.data["model_key"] for event in skipped] == ["fallback"]
+
+
+@pytest.mark.asyncio
+async def test_user_media_skips_incompatible_model_before_provider_io() -> None:
+    primary_entry = model_entry("primary", "openai", "text-only", streaming=False)
+    fallback_entry = model_entry("fallback", "openai", "vision", streaming=False)
+    fallback_entry = replace(
+        fallback_entry,
+        spec=replace(
+            fallback_entry.spec,
+            capabilities=replace(
+                fallback_entry.spec.capabilities,
+                modalities=replace(
+                    fallback_entry.spec.capabilities.modalities,
+                    input=("text", "image"),
+                ),
+            ),
+        ),
+    )
+    primary = RecordingClient([completion("unused")])
+    fallback = RecordingClient([completion("saw image")])
+    adapter = OpenAICompatibleAdapter(
+        media_transport=MediaTransportCapabilities(enabled=True, modalities=("image",))
+    )
+    invoker = DefaultModelInvoker(
+        adapters={"openai_chat_completions": adapter},
+        clients={"primary": primary, "fallback": fallback},
+    )
+    execution = invoker.execute(
+        model_group=make_model_group("assistant", (primary_entry, fallback_entry)),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=user_media_message(),
+        context=Context(),
+    )
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+    result = await execution.result()
+
+    assert result.message.content == "saw image"
+    assert primary.calls == 0
+    assert fallback.calls == 1
+    skipped = next(event for event in events if event.kind == "model.route.skipped")
+    assert skipped.data["model_key"] == "primary"
+    assert skipped.data["missing_capabilities"] == ("modalities.input.image",)
+    prepared = next(event for event in events if event.kind == "model.request.prepared")
+    assert prepared.data["model_key"] == "fallback"
+    traced_media = prepared.data["request"]["current_message"]["media"][0]
+    assert traced_media["type"] == "media"
+    wire_message = fallback.payloads[0].to_dict()["messages"][0]
+    assert wire_message["role"] == "user"
+    assert wire_message["content"][0] == {"type": "text", "text": "what is this"}
+    assert wire_message["content"][1]["type"] == "image_url"
+
+
+@pytest.mark.asyncio
+async def test_user_media_projects_not_viewed_note_when_no_model_can_consume_it() -> None:
+    message = user_media_message()
+    primary = RecordingClient([completion("cannot read image")])
+    invoker = DefaultModelInvoker(
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
+        clients={"primary": primary},
+    )
+    text_group = make_model_group(
+        "assistant",
+        (model_entry("primary", "openai", "first", streaming=False),),
+    )
+    execution = invoker.execute(
+        model_group=text_group,
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=message,
+        context=Context(),
+    )
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+    result = await execution.result()
+
+    assert result.message.content == "cannot read image"
+    assert primary.calls == 1
+    assert len(message.media) == 1
+    wire_content = primary.payloads[0]["messages"][0]["content"]
+    assert isinstance(wire_content, str)
+    assert wire_content.startswith("what is this\n")
+    note = json.loads(wire_content.split("\n", 1)[1])
+    assert note["status"] == "not_viewed"
+    assert note["reason_code"] == "model_input_modality_unsupported"
+    prepared = next(event for event in events if event.kind == "model.request.prepared")
+    traced = prepared.data["request"]["current_message"]
+    assert traced["media"] == ()
+    assert "The current model cannot view this image." in traced["content"]
+    assert any(event.kind == "model.capability.warning" for event in events)
 
 
 @pytest.mark.asyncio
@@ -446,7 +551,7 @@ async def test_text_model_receives_unavailable_block_when_endpoint_supports_medi
     traced = prepared.data["request"]["current_message"]["results"][0]["content"][0]
     assert traced["type"] == "text"
     assert "model_input_modality_unsupported" in traced["text"]
-    assert isinstance(message.results[0].content[0], ToolResultMedia)
+    assert isinstance(message.results[0].content[0], MediaBlock)
 
 
 def test_invoker_rejects_adapter_registered_under_another_protocol() -> None:

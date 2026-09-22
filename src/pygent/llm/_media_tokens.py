@@ -9,15 +9,15 @@ from __future__ import annotations
 import math
 import re
 
-from pygent.core._tool_values import _tool_result_media_dimensions
-from pygent.tool import ToolResultMedia
+from pygent.core._tool_values import _media_block_dimensions
+from pygent.tool import MediaBlock
 
 _UNKNOWN_IMAGE_TOKEN_BUDGET = 36_000
 _UNKNOWN_VIDEO_TOKEN_BUDGET = 2_000_000
 _GENERIC_VIDEO_TOKENS_PER_SECOND = 1_000
 
 
-def generic_media_input_tokens(block: ToolResultMedia) -> int:
+def generic_media_input_tokens(block: MediaBlock) -> int:
     """Conservative fallback for media without a provider-owned rule."""
 
     if block.media_type == "video":
@@ -27,18 +27,18 @@ def generic_media_input_tokens(block: ToolResultMedia) -> int:
             1,
             math.ceil(block.duration_seconds * _GENERIC_VIDEO_TOKENS_PER_SECOND),
         )
-    dimensions = _tool_result_media_dimensions(block)
+    dimensions = _media_block_dimensions(block)
     if dimensions is None:
         return _UNKNOWN_IMAGE_TOKEN_BUDGET
     return 2 * _patch_count(*dimensions)
 
 
-def openai_media_input_tokens(block: ToolResultMedia, model_id: str) -> int | None:
+def openai_media_input_tokens(block: MediaBlock, model_id: str) -> int | None:
     """Return OpenAI's documented rule for recognized native input media."""
 
     if block.media_type != "image":
         return None
-    dimensions = _tool_result_media_dimensions(block)
+    dimensions = _media_block_dimensions(block)
     if dimensions is None:
         return None
     return _openai_image_tokens(
@@ -46,7 +46,7 @@ def openai_media_input_tokens(block: ToolResultMedia, model_id: str) -> int | No
     )
 
 
-def gemini_media_input_tokens(block: ToolResultMedia) -> int | None:
+def gemini_media_input_tokens(block: MediaBlock) -> int | None:
     """Return Gemini static-processing media tokens using documented rates."""
 
     if block.media_type == "video":
@@ -55,7 +55,7 @@ def gemini_media_input_tokens(block: ToolResultMedia) -> int | None:
         # High/static video is approximately 300 tokens per second. Using the
         # high rate is conservative when a request does not expose resolution.
         return max(1, math.ceil(block.duration_seconds * 300))
-    dimensions = _tool_result_media_dimensions(block)
+    dimensions = _media_block_dimensions(block)
     if dimensions is None:
         return None
     width, height = dimensions
@@ -64,12 +64,12 @@ def gemini_media_input_tokens(block: ToolResultMedia) -> int | None:
     return max(1, math.ceil(width / 768) * math.ceil(height / 768)) * 258
 
 
-def anthropic_media_input_tokens(block: ToolResultMedia, model_id: str) -> int | None:
+def anthropic_media_input_tokens(block: MediaBlock, model_id: str) -> int | None:
     """Return Claude's documented 28px-patch rule after native resizing."""
 
     if block.media_type != "image":
         return None
-    dimensions = _tool_result_media_dimensions(block)
+    dimensions = _media_block_dimensions(block)
     if dimensions is None:
         return None
     high_resolution = _anthropic_high_resolution_model(model_id)

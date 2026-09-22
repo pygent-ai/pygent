@@ -43,7 +43,7 @@ from ._continuation import (
 from ._media_projection import DefaultMediaProjector
 from ._media_routing import (
     media_delivery_gaps,
-    pending_tool_result_media,
+    pending_media_blocks,
     project_media_for_model,
     project_request_for_model,
 )
@@ -192,7 +192,7 @@ class DefaultModelInvoker:
     ) -> int:
         """Estimate media on the same eligible routes used by execution."""
 
-        media = pending_tool_result_media(message, context)
+        media = pending_media_blocks(message, context)
         if not media:
             return 0
         assessed: list[tuple[ModelEntry, ModelProviderAdapter]] = []
@@ -425,7 +425,7 @@ class DefaultModelInvoker:
         _validate_deadline(deadline)
         attempts: list[ModelAttempt] = []
         last_kind = ModelErrorKind.UNKNOWN
-        media = pending_tool_result_media(message, context)
+        media = pending_media_blocks(message, context)
         if not media:
             attempt_plans: Iterator[tuple[ModelEntry, Message, Context]] = (
                 (entry, message, item)
@@ -541,7 +541,7 @@ class DefaultModelInvoker:
                     },
                 )
             media_projections: tuple[MediaProjectionTrace, ...] = ()
-            if pending_tool_result_media(request_message, model_context):
+            if pending_media_blocks(request_message, model_context):
                 request_message, model_context, media_projections = (
                     project_media_for_model(
                         request_message,

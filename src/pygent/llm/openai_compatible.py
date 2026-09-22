@@ -21,6 +21,7 @@ from pygent.core import (
     Message,
     ModelContinuation,
     ToolMessage,
+    UserMessage,
     freeze_json_object,
     thaw_json,
 )
@@ -31,7 +32,7 @@ from pygent.tool import (
     ToolResult,
     ToolResultContent,
     ToolResultJson,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
 )
 
@@ -404,7 +405,7 @@ class OpenAICompatibleAdapter:
         _validate_openai_provider_options(model)
 
     def estimate_media_input_tokens(
-        self, block: ToolResultMedia, model: ModelSpec
+        self, block: MediaBlock, model: ModelSpec
     ) -> int | None:
         """Estimate only native OpenAI models; compatible vendors own their rules."""
 
@@ -963,6 +964,21 @@ def _encode_messages(
         if media_parts:
             encoded_results.append({"role": "user", "content": media_parts})
         return encoded_results
+    if isinstance(message, UserMessage) and message.media:
+        capabilities = media_transport or MediaTransportCapabilities()
+        parts: list[dict[str, object]] = []
+        if message.content:
+            parts.append({"type": "text", "text": message.content})
+        parts.extend(
+            _encode_media_part(
+                block,
+                model=model,
+                capabilities=capabilities,
+                media_resolver=media_resolver,
+            )
+            for block in message.media
+        )
+        return [{"role": message.role, "content": parts}]
     encoded: dict[str, object] = {"role": message.role, "content": message.content}
     if isinstance(message, AIMessage) and model is not None:
         continuation = message.continuation
@@ -1035,7 +1051,7 @@ def _encode_openai_tool_result(
                 )
             else:
                 media_parts.append(
-                    _encode_tool_result_media(
+                    _encode_media_part(
                         item,
                         model=model,
                         capabilities=capabilities,
@@ -1057,14 +1073,14 @@ def _encode_openai_tool_result(
     return encode_tool_context(result), []
 
 
-def _encode_tool_result_media(
+def _encode_media_part(
     block: ToolResultContent,
     *,
     model: ModelSpec | None,
     capabilities: MediaTransportCapabilities,
     media_resolver: MediaResolver | Callable[[MediaSource], bytes] | None,
 ) -> dict[str, object]:
-    if type(block) is not ToolResultMedia:
+    if type(block) is not MediaBlock:
         raise ModelProviderError(
             ModelErrorKind.INVALID_REQUEST,
             "tool-result content block is invalid",

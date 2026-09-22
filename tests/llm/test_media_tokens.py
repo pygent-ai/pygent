@@ -21,14 +21,14 @@ from pygent.llm._media_tokens import (
     generic_media_input_tokens,
     openai_media_input_tokens,
 )
-from pygent.tool import MediaSource, ToolResultMedia
+from pygent.tool import MediaSource, MediaBlock
 from tests.support.model_specs import model_entry, model_group
 
 
-def image(width: int, height: int, *, detail: str = "high") -> ToolResultMedia:
+def image(width: int, height: int, *, detail: str = "high") -> MediaBlock:
     stream = BytesIO()
     Image.new("RGB", (width, height), color=(10, 20, 30)).save(stream, format="PNG")
-    return ToolResultMedia(
+    return MediaBlock(
         media_type="image",
         mime_type="image/png",
         source=MediaSource.inline(stream.getvalue()),
@@ -36,8 +36,8 @@ def image(width: int, height: int, *, detail: str = "high") -> ToolResultMedia:
     )
 
 
-def video(*, duration_seconds: float | None) -> ToolResultMedia:
-    return ToolResultMedia(
+def video(*, duration_seconds: float | None) -> MediaBlock:
+    return MediaBlock(
         media_type="video",
         mime_type="video/mp4",
         source=MediaSource.inline(b"\x00\x00\x00\x18ftypmp42fixture"),
@@ -266,7 +266,7 @@ def test_invoker_counts_no_media_tokens_when_routing_projects_media_away() -> No
     )
 
 
-def _media_message(block: ToolResultMedia) -> ToolMessage:
+def _media_message(block: MediaBlock) -> ToolMessage:
     return ToolMessage(
         results=(
             ToolResult(

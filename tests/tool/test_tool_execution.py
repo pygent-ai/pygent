@@ -35,7 +35,7 @@ from pygent.tool import (
     ToolExecutionContext,
     ToolExecutionError,
     ToolOutput,
-    ToolResultMedia,
+    MediaBlock,
     ToolResultText,
     ToolSideEffect,
     ToolSpec,
@@ -351,7 +351,7 @@ async def test_explicit_detach_returns_queryable_task() -> None:
 async def test_explicit_detach_preserves_structured_tool_result_content() -> None:
     tool = spec()
     registry = ExecutorRegistry()
-    media = ToolResultMedia(
+    media = MediaBlock(
         media_type="image",
         mime_type="image/png",
         source=MediaSource.inline(b"\x89PNG\r\n\x1a\ncontent"),

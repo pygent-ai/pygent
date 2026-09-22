@@ -208,7 +208,7 @@ invoker = DefaultModelInvoker(
 大小、图片尺寸/像素、视频时长/FPS/音轨等细节。Invoker 取模型能力和 endpoint 能力的
 交集，为每个目标模型独立生成 request-local 投影；图片可缩放、转码或压缩，视频在安装
 `video` extra 后可缩放、降帧、移除音轨并转码为 MP4。投影自己的摘要、大小与转换步骤进入
-prepared-request trace，canonical `ToolResultMedia` 与 Context 保持不变。
+prepared-request trace，canonical `MediaBlock` 与 Context 保持不变。
 
 视频能力还可以通过 `media_input.video.delivery_modes` 按模型声明 `video_url` 或
 `image_frames`。该字段是模型级明细，不按 Provider 整族推断。OpenAI Chat Completions
@@ -227,6 +227,18 @@ Responses 和 OpenAI Chat Completions compatible Adapter 都使用同一投影�
 不会修改原工具结果。普通超时、限流或响应错误继续走现有 retry/fallback，失败尝试的
 Assistant 不进入 Context。fallback 到另一个兼容模型时，新投影始终从 canonical media
 重新生成，不从上一个模型的派生结果继续转换。
+
+## 多模态用户消息
+
+`UserMessage` 除了文本 `content`，还支持 `media` 媒体块元组；块类型为 `MediaBlock`
+（工具结果内容块与用户消息共用同一类型），来源为 `MediaSource`。文本之后按声明顺序
+投递媒体；构造时的校验
+（MIME、SHA-256、尺寸描述）、路由门控、request-local 投影、token 估算和 `not_viewed`
+降级都与工具结果媒体共用同一套管线，canonical Context 不变。Adapter 把用户媒体编码为
+目标协议的原生 user 消息部分：OpenAI Responses 使用 `input_image`，Chat Completions
+使用 `image_url`/`video_url` content parts，Anthropic Messages 使用 `image` source 块，
+Gemini generateContent 使用 `inlineData` part。Wire codec 会序列化 `media` 字段，读取
+不带该字段的旧 payload 时按无媒体处理。
 
 ## Direct：Anthropic Messages
 
