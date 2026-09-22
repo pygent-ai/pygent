@@ -1009,13 +1009,166 @@ async def test_edit_uses_workspace_path_schema_and_exact_replacement(tmp_path):
         "replace_all",
     }
     assert parameters["properties"]["replace_all"]["default"] is False
-    assert toolkit.specs[0].version == "2.1.0"
+    assert toolkit.specs[0].version == "2.3.0"
     assert "\n\nUsage:\n" in definition.description
     assert "MUST split" in definition.description
     assert "smaller atomic edit calls" in definition.description
     assert "do not include long runs" in parameters["properties"]["old_string"][
         "description"
     ]
+
+
+@pytest.mark.asyncio
+async def test_edit_matches_anchors_across_line_ending_styles(tmp_path):
+    tools = FileTools(workspace_root=tmp_path)
+    target = tmp_path / "crlf.txt"
+    target.write_bytes(b"alpha\r\nbeta\r\nalpha\r\n")
+
+    # LF anchors match a CRLF file and the file keeps its CRLF style.
+    await succeeded(
+        tools.edit,
+        file_path=str(target),
+        old_string="alpha\nbeta",
+        new_string="gamma\ndelta",
+    )
+    assert target.read_bytes() == b"gamma\r\ndelta\r\nalpha\r\n"
+
+    repeated = tmp_path / "repeated.txt"
+    repeated.write_bytes(b"a\r\nb\r\na\r\nb\r\n")
+    await succeeded(
+        tools.edit,
+        file_path=str(repeated),
+        old_string="a\nb",
+        new_string="x\ny",
+        replace_all=True,
+    )
+    assert repeated.read_bytes() == b"x\r\ny\r\nx\r\ny\r\n"
+
+    # A match opening on a folded CRLF consumes that CR instead of orphaning it.
+    boundary = tmp_path / "boundary.txt"
+    boundary.write_bytes(b"head\r\ntail\r\nmore\r\n")
+    await succeeded(
+        tools.edit,
+        file_path=str(boundary),
+        old_string="\ntail\nmore",
+        new_string="\nHEAD\nMORE",
+    )
+    assert boundary.read_bytes() == b"head\r\nHEAD\r\nMORE\r\n"
+
+    # CRLF anchors also match LF files; the changed endings land verbatim.
+    source = tmp_path / "lf.txt"
+    source.write_bytes(b"one\ntwo\n")
+    await succeeded(
+        tools.edit,
+        file_path=str(source),
+        old_string="one\r\ntwo",
+        new_string="three\nfour",
+    )
+    assert source.read_bytes() == b"three\nfour\n"
+
+    # Byte-exact anchors with a consistent ending sequence adopt the region style.
+    exact = tmp_path / "exact.txt"
+    exact.write_bytes(b"keep\r\nme\r\n")
+    await succeeded(
+        tools.edit,
+        file_path=str(exact),
+        old_string="keep\r\nme",
+        new_string="kept\r\nyou",
+    )
+    assert exact.read_bytes() == b"kept\r\nyou\r\n"
+
+    missing = await invoke_tool(
+        tools.edit,
+        {
+            "file_path": str(target),
+            "old_string": "absent\nanchor",
+            "new_string": "x",
+        },
+    )
+    assert missing.error_code == "match_not_found"
+
+
+@pytest.mark.asyncio
+async def test_edit_replacement_line_endings_are_unified_and_reported(tmp_path):
+    tools = FileTools(workspace_root=tmp_path)
+
+    # Exact single-line anchors follow the same EOL adoption as tolerant ones.
+    target = tmp_path / "crlf.txt"
+    target.write_bytes(b"A\r\nB\r\nC")
+    report = await succeeded(
+        tools.edit, file_path=str(target), old_string="B", new_string="X\nY"
+    )
+    assert target.read_bytes() == b"A\r\nX\r\nY\r\nC"
+    assert report == "替换完成(1 处,新文本行尾已适配为 CRLF)"
+
+    # An anchor carrying CRLF with a changed ending sequence lands verbatim.
+    explicit = tmp_path / "explicit.txt"
+    explicit.write_bytes(b"keep\r\nme\r\n")
+    report = await succeeded(
+        tools.edit,
+        file_path=str(explicit),
+        old_string="keep\r\nme",
+        new_string="keep\nme",
+    )
+    assert explicit.read_bytes() == b"keep\nme\r\n"
+    assert report == "替换完成(1 处,行尾按 new_string 原样写入)"
+
+    # A byte-exact anchor with CRLF and an all-LF replacement is also explicit.
+    rewritten = tmp_path / "rewritten.txt"
+    rewritten.write_bytes(b"A\nB\r\nC\r\nD")
+    await succeeded(
+        tools.edit,
+        file_path=str(rewritten),
+        old_string="A\nB\r\nC",
+        new_string="X\nY\nZ",
+    )
+    assert rewritten.read_bytes() == b"X\nY\nZ\r\nD"
+
+    # CRLF introduced by new_string is deliberate and lands verbatim.
+    inserted = tmp_path / "insert.txt"
+    inserted.write_bytes(b"A\nB\n")
+    await succeeded(
+        tools.edit,
+        file_path=str(inserted),
+        old_string="B",
+        new_string="X\r\nY",
+    )
+    assert inserted.read_bytes() == b"A\nX\r\nY\n"
+
+    # Mixed regions follow the majority style with a document-level fallback.
+    mixed = tmp_path / "mixed.txt"
+    mixed.write_bytes(b"A\r\nB\nC\nD\r\nE")
+    await succeeded(
+        tools.edit,
+        file_path=str(mixed),
+        old_string="B\nC\nD\n",
+        new_string="X\nY\nZ\n",
+    )
+    assert mixed.read_bytes() == b"A\r\nX\nY\nZ\nE"
+
+    # Region style ties fall back to the document's dominant style.
+    tie = tmp_path / "tie.txt"
+    tie.write_bytes(b"A\r\nq\r\nr\nB")
+    await succeeded(
+        tools.edit,
+        file_path=str(tie),
+        old_string="q\nr\n",
+        new_string="s\nt\n",
+    )
+    assert tie.read_bytes() == b"A\r\ns\r\nt\r\nB"
+
+    # replace_all reports every style applied across differently-styled regions.
+    repeated = tmp_path / "repeated.txt"
+    repeated.write_bytes(b"p\r\nq\np\nq\n")
+    report = await succeeded(
+        tools.edit,
+        file_path=str(repeated),
+        old_string="p\nq",
+        new_string="x\ny",
+        replace_all=True,
+    )
+    assert repeated.read_bytes() == b"x\r\ny\nx\ny\n"
+    assert report == "替换完成(2 处,新文本行尾已按命中区域适配为 CRLF/LF)"
 
 
 @pytest.mark.asyncio
@@ -1662,7 +1815,7 @@ async def test_edit_reads_cp936_text_and_rewrites_utf8(tmp_path, monkeypatch):
             old_string="第二行中文",
             new_string="第二行中文改好",
         )
-        == "替换完成"
+        == "替换完成(1 处,新文本行尾已适配为 LF)"
     )
     assert target.read_text(encoding="utf-8") == "第一行\n第二行中文改好\n"
 

@@ -86,6 +86,7 @@ _EXIF_ORIENTATION_TAG = 274
 _TEXT_SNIFF_BYTES = 64 * 1024
 _SEARCH_MAX_BYTES = 50 * 1024
 _GREP_MAX_LINE_LENGTH = 500
+_CRLF = "\r\n"
 _WRITE_TOOL_DESCRIPTION = (
     "Create a new UTF-8 file or completely replace an existing file.\n\n"
     "Usage:\n"
@@ -102,6 +103,10 @@ _EDIT_TOOL_DESCRIPTION = (
     "Usage:\n"
     "- Read the current file before editing and preserve exact whitespace, "
     "indentation, and newlines.\n"
+    "- Matching tolerates CRLF/LF line-ending differences. Replacement "
+    "newlines adopt the matched region's dominant style unless you "
+    "deliberately change line endings (they land verbatim then); the result "
+    "message states what happened.\n"
     "- Keep every edit focused. For complex or long changes, you MUST split the "
     "work into multiple smaller atomic edit calls.\n"
     "- Include only enough unchanged surrounding context to target the intended "
@@ -905,6 +910,143 @@ def _read_search_lines(path: Path) -> list[str] | None:
     except OSError:
         return None
     return None if text is None else text.replace("\r\n", "\n").split("\n")
+
+
+def _normalize_crlf(text: str) -> tuple[str, list[int]]:
+    """Fold CRLF into LF and record each kept character's source offset."""
+
+    normalized: list[str] = []
+    sources: list[int] = []
+    index = 0
+    while index < len(text):
+        if text[index] == "\r" and text[index + 1 : index + 2] == "\n":
+            index += 1
+        normalized.append(text[index])
+        sources.append(index)
+        index += 1
+    sources.append(len(text))
+    return "".join(normalized), sources
+
+
+def _line_endings(text: str) -> list[str]:
+    """Return the ordered line-ending styles ("CRLF"/"LF") used by the text."""
+
+    endings: list[str] = []
+    index = 0
+    while index < len(text):
+        if text.startswith(_CRLF, index):
+            endings.append("CRLF")
+            index += 2
+        elif text[index] == "\n":
+            endings.append("LF")
+            index += 1
+        else:
+            index += 1
+    return endings
+
+
+def _replacement_is_explicit(old_string: str, new_string: str) -> bool:
+    """Decide whether the anchors deliberately change line-ending usage.
+
+    Plain LF is how anchors are typed by default and carries no style intent;
+    CRLF is never accidental. When old_string demonstrates CRLF awareness,
+    any change in the ending sequence is a deliberate edit and new_string
+    must land verbatim.
+    """
+
+    if _CRLF in old_string:
+        return _line_endings(old_string) != _line_endings(new_string)
+    return _CRLF in new_string
+
+
+def _dominant_line_ending(sample: str, fallback: str) -> str:
+    """Return the majority EOL style of the sample, falling back to the fallback's."""
+
+    crlf = sample.count(_CRLF)
+    lf = sample.count("\n") - crlf
+    if crlf != lf:
+        return "CRLF" if crlf > lf else "LF"
+    crlf = fallback.count(_CRLF)
+    lf = fallback.count("\n") - crlf
+    return "CRLF" if crlf > lf else "LF"
+
+
+def _normalized_spans(
+    text: str, old_string: str, replace_all: bool
+) -> list[tuple[int, int]] | None:
+    """Locate the anchor in LF-normalized space, mapped back to source spans."""
+
+    if not old_string:
+        if not replace_all:
+            return [(0, 0)]
+        return [(index, index) for index in range(len(text) + 1)]
+    normalized, sources = _normalize_crlf(text)
+    old_normalized = old_string.replace(_CRLF, "\n")
+    start = normalized.find(old_normalized)
+    if start < 0:
+        return None
+    spans: list[tuple[int, int]] = []
+    while start >= 0:
+        finish = start + len(old_normalized)
+        begin = sources[start]
+        # A match opening on a folded CRLF must consume its CR.
+        if normalized[start] == "\n" and text[begin - 1 : begin] == "\r":
+            begin -= 1
+        spans.append((begin, sources[finish - 1] + 1))
+        if not replace_all:
+            break
+        start = normalized.find(old_normalized, finish)
+    return spans
+
+
+def _replace_with_line_endings(
+    text: str, old_string: str, new_string: str, replace_all: bool
+) -> tuple[str, str] | None:
+    """Replace literal text, splicing in a line-ending-aware replacement.
+
+    Anchors are located in LF-normalized space (byte-exact matches are
+    the same occurrences once CRLF is folded) and mapped back to source
+    spans. Unless the anchors deliberately change
+    line-ending usage (see _replacement_is_explicit), the replacement's
+    newlines adopt the matched region's dominant EOL style, falling back to
+    the document's on ties and when the region holds no line break. Returns
+    the updated document plus a report of the EOL outcome, or None when the
+    anchor is absent.
+    """
+
+    spans = _normalized_spans(text, old_string, replace_all)
+    if spans is None:
+        return None
+    literal = _replacement_is_explicit(old_string, new_string)
+    new_normalized = new_string.replace(_CRLF, "\n")
+    pieces: list[str] = []
+    styles: list[str] = []
+    cursor = 0
+    for begin, end in spans:
+        pieces.append(text[cursor:begin])
+        if literal:
+            pieces.append(new_string)
+        else:
+            style = _dominant_line_ending(text[begin:end], text)
+            if style not in styles:
+                styles.append(style)
+            pieces.append(
+                new_normalized.replace("\n", _CRLF)
+                if style == "CRLF"
+                else new_normalized
+            )
+        cursor = end
+    pieces.append(text[cursor:])
+    if literal:
+        report = f"替换完成({len(spans)} 处,行尾按 new_string 原样写入)"
+    elif len(styles) == 1:
+        report = f"替换完成({len(spans)} 处,新文本行尾已适配为 {styles[0]})"
+    else:
+        report = (
+            f"替换完成({len(spans)} 处,"
+            f"新文本行尾已按命中区域适配为 {'/'.join(styles)})"
+        )
+    return "".join(pieces), report
 
 
 def _read_text_range(
@@ -1776,7 +1918,7 @@ class FileTools:
 
     @tool(
         tool_id="standard.files.edit",
-        version="2.1.0",
+        version="2.3.0",
         side_effect=ToolSideEffect.WRITE,
         description=_EDIT_TOOL_DESCRIPTION,
         idempotency=IdempotencyPolicy.NOT_IDEMPOTENT,
@@ -1843,11 +1985,12 @@ class FileTools:
                 text = _read_text_document(path, errors="strict")
                 if text is None:
                     _fail(f"file is not text: {path}", "unsupported_text_encoding")
-                if old_string not in text:
-                    _fail("exact old_string was not found", "match_not_found")
-                updated = text.replace(
-                    old_string, new_string, -1 if replace_all else 1
+                outcome = _replace_with_line_endings(
+                    text, old_string, new_string, replace_all
                 )
+                if outcome is None:
+                    _fail("exact old_string was not found", "match_not_found")
+                updated, report = outcome
                 _atomic_write_text(path, updated)
         except ToolExecutionError:
             raise
@@ -1866,7 +2009,7 @@ class FileTools:
                 retryable=True,
                 side_effect_committed=None,
             ) from exc
-        return "替换完成"
+        return report
 
     @tool(
         tool_id="standard.files.edit_notebook",
