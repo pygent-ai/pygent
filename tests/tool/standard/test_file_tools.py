@@ -183,7 +183,11 @@ def test_file_toolkit_exposes_only_lowercase_tool_names(tmp_path):
         {"max_video_duration_seconds": 0},
         {"max_video_edge": 0},
         {"max_video_fps": 0},
+        {"max_video_bit_rate": 0},
+        {"max_pdf_render_pixels": 0},
         {"max_search_files": 0},
+        {"max_search_output_bytes": 0},
+        {"max_grep_line_length": 0},
     ],
 )
 def test_file_tools_require_positive_resource_limits(tmp_path, option) -> None:
@@ -297,6 +301,33 @@ async def test_rendered_pdf_page_rejects_excessive_pixel_dimensions(tmp_path) ->
 
     assert result.status == "failed"
     assert result.error_code == "pdf_page_too_large"
+
+
+@pytest.mark.asyncio
+async def test_pdf_render_pixel_limit_is_configurable(tmp_path) -> None:
+    # 2600x2200 points render at scale 2.0 into 22.88M pixels: above the old
+    # hardcoded 20M ceiling but below a raised configured limit.
+    _write_blank_pdf(tmp_path / "document.pdf", width=2600, height=2200)
+    strict = FileTools(workspace_root=tmp_path)
+    raised = FileTools(workspace_root=tmp_path, max_pdf_render_pixels=24_000_000)
+    tiny = FileTools(workspace_root=tmp_path, max_pdf_render_pixels=1)
+
+    strict_result = await invoke_tool(
+        strict.read, {"file_path": "document.pdf", "pages": "1"}
+    )
+    raised_result = await invoke_tool(
+        raised.read, {"file_path": "document.pdf", "pages": "1"}
+    )
+    tiny_result = await invoke_tool(
+        tiny.read, {"file_path": "document.pdf", "pages": "1"}
+    )
+
+    assert strict_result.status == "failed"
+    assert strict_result.error_code == "pdf_page_too_large"
+    assert raised_result.status == "succeeded", (raised_result.error_code, raised_result.error)
+    assert raised_result.output["rendered_pages"][0]["page"] == 1
+    assert tiny_result.status == "failed"
+    assert tiny_result.error_code == "pdf_page_too_large"
 
 
 @pytest.mark.asyncio
@@ -452,6 +483,38 @@ async def test_read_rejects_video_over_duration_limit(tmp_path) -> None:
 
     assert result.status == "failed"
     assert result.error_code == "video_too_long"
+
+
+@pytest.mark.asyncio
+async def test_read_fails_fast_when_minimum_bit_rate_cannot_fit_budget(tmp_path) -> None:
+    path = tmp_path / "long.mp4"
+    _write_test_video(path, duration=4, with_audio=True)
+    tools = FileTools(workspace_root=tmp_path, max_video_output_bytes=1)
+
+    result = await invoke_tool(tools.read, {"file_path": "long.mp4"})
+
+    assert result.status == "failed"
+    assert result.error_code == "video_output_too_large"
+    assert "minimum encode bit rate" in (result.error or "")
+    assert "max_video_output_bytes" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_read_normalizes_video_with_configured_bit_rate_cap(tmp_path) -> None:
+    path = tmp_path / "source.mp4"
+    _write_test_video(path, size="640x360", fps=30)
+    tools = FileTools(
+        workspace_root=tmp_path,
+        max_video_edge=160,
+        max_video_fps=8,
+        max_video_bit_rate=150_000,
+    )
+
+    result = await invoke_tool(tools.read, {"file_path": "source.mp4"})
+
+    assert result.status == "succeeded", (result.error_code, result.error)
+    assert result.output["processing"] == "normalized"
+    assert result.output["size_bytes"] <= 12_000_000
 
 
 @pytest.mark.asyncio
@@ -1880,3 +1943,39 @@ async def test_read_lints_decodes_cp936_source(tmp_path, monkeypatch):
     diagnostics = json.loads(await succeeded(tools.read_lints, paths=["chinese.py"]))
 
     assert diagnostics == {"tool": "python.compile", "diagnostics": []}
+
+
+@pytest.mark.asyncio
+async def test_grep_line_truncation_honors_configured_line_length(tmp_path):
+    long_line = "x" * 600 + " needle"
+    (tmp_path / "notes.txt").write_text(f"head\n{long_line}\ntail\n", encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path, max_grep_line_length=20)
+
+    output = await succeeded(tools.grep, pattern="needle", path=str(tmp_path))
+
+    assert "... [truncated]" in output
+    assert long_line not in output
+    assert "truncated to 20 char" in output
+
+
+@pytest.mark.asyncio
+async def test_grep_output_budget_honors_configured_byte_limit(tmp_path):
+    for index in range(12):
+        (tmp_path / f"file-{index:02d}.txt").write_text(
+            "searchable payload line\n", encoding="utf-8"
+        )
+    tools = FileTools(workspace_root=tmp_path, max_search_output_bytes=64)
+
+    output = await succeeded(tools.grep, pattern="payload", path=str(tmp_path))
+
+    assert "64 bytes limit reached" in output
+
+
+@pytest.mark.asyncio
+async def test_grep_default_output_budget_notice_is_unchanged(tmp_path):
+    (tmp_path / "notes.txt").write_text("needle here\n", encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", path=str(tmp_path))
+
+    assert output == "notes.txt:1: needle here"

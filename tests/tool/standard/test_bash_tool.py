@@ -194,6 +194,24 @@ def test_bash_ut_registers_bash_tool_name_only(tmp_path):
     assert definitions[0].name != "run_terminal_cmd"
 
 
+def test_bash_ut_forwards_output_and_capture_limits(tmp_path):
+    tools = BashTools(
+        workspace_root=tmp_path,
+        max_output_bytes=64 * 1024,
+        max_capture_bytes=1024 * 1024,
+    )
+
+    assert tools._max_output_bytes() == 64 * 1024
+    assert tools._max_capture_bytes() == 1024 * 1024
+
+
+def test_bash_ut_rejects_non_positive_output_limits(tmp_path):
+    with pytest.raises(ValueError, match="must be positive"):
+        BashTools(workspace_root=tmp_path, max_output_bytes=0)
+    with pytest.raises(ValueError, match="must be positive"):
+        BashTools(workspace_root=tmp_path, max_capture_bytes=0)
+
+
 def test_bash_ut_find_bash_honors_explicit_override(monkeypatch):
     monkeypatch.setenv("PYGENT_BASH_PATH", "custom-bash")
     assert _find_bash_executable() == "custom-bash"
@@ -534,11 +552,10 @@ async def test_bash_bounds_stalled_taskkill_and_releases_transports(
 
 
 @pytest.mark.asyncio
-async def test_bash_drains_output_beyond_capture_limit(tmp_path, monkeypatch):
-    monkeypatch.setattr(bash_module, "_MAX_FULL_OUTPUT_BYTES", 1024)
-    output = await PythonCommandTools(workspace_root=tmp_path).bash(
-        command="import sys; sys.stdout.write('x' * 1000000)"
-    )
+async def test_bash_drains_output_beyond_capture_limit(tmp_path):
+    output = await PythonCommandTools(
+        workspace_root=tmp_path, max_capture_bytes=1024
+    ).bash(command="import sys; sys.stdout.write('x' * 1000000)")
     exit_code, terminal_output = _parse_result(output)
     assert exit_code == "0"
     assert terminal_output.startswith("x" * 1024 + "\n[")

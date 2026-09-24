@@ -40,13 +40,19 @@ class NativeShellTools:
         timeout: float = 600,
         task_manager: ToolTaskManager | None = None,
         task_event_sink: ToolEventEmitter | None = None,
+        max_output_bytes: int = _process.MAX_OUTPUT_BYTES,
+        max_capture_bytes: int = _process.MAX_FULL_OUTPUT_BYTES,
     ) -> None:
         if not isinstance(shell_identity, ShellIdentity):
             raise TypeError("shell_identity must be a ShellIdentity")
+        if min(max_output_bytes, max_capture_bytes) <= 0:
+            raise ValueError("max_output_bytes and max_capture_bytes must be positive")
         configured_timeout = resolve_wait_timeout(timeout)
         if configured_timeout is None:
             raise ValueError("configured timeout must be a number of seconds")
         self.timeout = configured_timeout
+        self._output_byte_limit = max_output_bytes
+        self._capture_byte_limit = max_capture_bytes
         self._task_manager = task_manager
         self._owns_task_manager = task_manager is None
         self._task_event_sink = task_event_sink
@@ -140,10 +146,10 @@ class NativeShellTools:
         return tempfile.TemporaryFile()
 
     def _max_output_bytes(self) -> int:
-        return _process.MAX_OUTPUT_BYTES
+        return self._output_byte_limit
 
     def _max_capture_bytes(self) -> int:
-        return _process.MAX_FULL_OUTPUT_BYTES
+        return self._capture_byte_limit
 
     def _task_prefix(self) -> str:
         return f"pygent-{self.shell_name}"

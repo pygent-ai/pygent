@@ -210,7 +210,7 @@ async def main():
 asyncio.run(main())
 ```
 
-`tools.toolkit` 包含 Bash、`tool_task_get(task_id)` 和 `tool_task_stop(task_id)`，并投影实例等待配置。`StandardTools(..., bash_timeout=600, max_media_bytes=20 * 1024 * 1024, max_image_output_bytes=3_500_000, max_image_edge=2048, max_image_pixels=40_000_000, max_video_output_bytes=12_000_000, max_video_duration_seconds=120, max_video_edge=1280, max_video_fps=15, task_manager=None)` 提供相同装配和关闭接口，共十二个工具。也可用 `ToolKit(tools.bash, tools.tool_task_get, tools.tool_task_stop, wait_timeouts={"bash": 2.0})` 按模型可见工具名覆盖等待时长。`@tool(wait_timeout=...)` 与 `ToolSpec.wait_timeout` 是可移植的装配策略；普通 `ToolSpec.timeout` 的执行截止语义仍适用于其他工具。
+`tools.toolkit` 包含 Bash、`tool_task_get(task_id)` 和 `tool_task_stop(task_id)`，并投影实例等待配置。`StandardTools(..., bash_timeout=600, max_media_bytes=20 * 1024 * 1024, max_image_output_bytes=3_500_000, max_image_edge=2048, max_image_pixels=40_000_000, max_video_output_bytes=12_000_000, max_video_duration_seconds=120, max_video_edge=1280, max_video_fps=15, max_video_bit_rate=1_000_000, max_pdf_render_pixels=20_000_000, max_fetch_bytes=2 * 1024 * 1024, max_output_bytes=512 * 1024, max_capture_bytes=16 * 1024 * 1024, task_manager=None)` 提供相同装配和关闭接口，共十二个工具。也可用 `ToolKit(tools.bash, tools.tool_task_get, tools.tool_task_stop, wait_timeouts={"bash": 2.0})` 按模型可见工具名覆盖等待时长。`@tool(wait_timeout=...)` 与 `ToolSpec.wait_timeout` 是可移植的装配策略；普通 `ToolSpec.timeout` 的执行截止语义仍适用于其他工具。
 
 模型调用必须由应用授权选择 `lifecycle="detach"`，才会 admission 独立任务并应用有限等待；`is_background=True` 只请求立即返回，不授予权限。`lifecycle="sync"` 保持当前执行内同步等待；显式后台参数与同步授权冲突时拒绝调用。未配置 `wait_timeout` 的 detach 默认立即返回。有限等待释放并恢复 Parent runnable lease，实际工具执行仍占用其工具资源。Parent 的截止限制观察等待，不作为新任务的命令截止时间。
 
@@ -526,6 +526,11 @@ files = FileTools(
     max_video_duration_seconds=120,
     max_video_edge=1280,
     max_video_fps=15,
+    max_video_bit_rate=1_000_000,
+    max_pdf_render_pixels=20_000_000,
+    max_search_files=10_000,
+    max_search_output_bytes=50 * 1024,
+    max_grep_line_length=500,
 )
 read_tools = ToolKit(files.read)
 ```
@@ -537,7 +542,9 @@ PDF 未传 `pages` 时提取文本；显式传入单页或连续页范围（如 
 模型可见媒体；媒体读取拒绝文本范围参数。图片先验证实际格式、尺寸、像素数和动画状态。
 满足模型输出边界的小图保持原字节；超出 2048 px 长边、3,500,000 字节输出预算或带 EXIF
 方向的图片会纠正方向、等比缩放并受控重编码。动态 GIF 被明确拒绝。PDF 渲染页复用同一
-图片管线。读取器使用 `MediaSource.inline(bytes)` 把有界媒体字节规范化为 Base64，并返回
+图片管线。视频转码码率上限由 `max_video_bit_rate` 约束；若按最低码率推算仍无法装入
+输出预算，读取在转码前直接失败并提示调整 `max_video_output_bytes`。读取器使用
+`MediaSource.inline(bytes)` 把有界媒体字节规范化为 Base64，并返回
 文本块和 `MediaBlock`。Base64 位于结构化 `content`，不会复制到业务 `output` 或
 日志；OpenAI-compatible Adapter 最终生成 `data:<mime>;base64,...`。空媒体、格式不匹配、
 解码像素、渲染像素或媒体总字节超限以及读取失败都会返回明确的工具错误。业务 `output`

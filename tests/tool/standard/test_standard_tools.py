@@ -146,6 +146,23 @@ def test_standard_tools_forward_video_normalization_limits(tmp_path) -> None:
     assert suite.files.max_video_fps == 12
 
 
+def test_standard_tools_forward_media_fetch_and_process_limits(tmp_path) -> None:
+    suite = StandardTools(
+        workspace_root=tmp_path,
+        max_video_bit_rate=250_000,
+        max_pdf_render_pixels=24_000_000,
+        max_fetch_bytes=4096,
+        max_output_bytes=64 * 1024,
+        max_capture_bytes=1024 * 1024,
+    )
+
+    assert suite.files.max_video_bit_rate == 250_000
+    assert suite.files.max_pdf_render_pixels == 24_000_000
+    assert suite.web_fetch.max_fetch_bytes == 4096
+    assert suite.bash._max_output_bytes() == 64 * 1024
+    assert suite.bash._max_capture_bytes() == 1024 * 1024
+
+
 @pytest.mark.parametrize("tool_name", STANDARD_TOOL_NAMES)
 @pytest.mark.asyncio
 async def test_every_standard_tool_runs_through_02_tool_call_layer(tmp_path, tool_name):

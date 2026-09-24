@@ -340,7 +340,11 @@ class WebFetchTools:
         *,
         fetcher: Fetcher | None = None,
         resolver: Resolver | None = None,
+        max_fetch_bytes: int = _MAX_FETCH_BYTES,
     ) -> None:
+        if max_fetch_bytes <= 0:
+            raise ValueError("max_fetch_bytes must be positive")
+        self.max_fetch_bytes = max_fetch_bytes
         self._resolver = resolver or socket.getaddrinfo
         self._fetcher = fetcher or self._default_fetch
 
@@ -461,7 +465,7 @@ class WebFetchTools:
         try:
             with self._fetcher(request, 15) as response:
                 content_type = response.headers.get("Content-Type", "")
-                raw = response.read(_MAX_FETCH_BYTES + 1)
+                raw = response.read(self.max_fetch_bytes + 1)
         except ToolExecutionError:
             raise
         except Exception as exc:
@@ -472,9 +476,9 @@ class WebFetchTools:
                 retryable=True,
                 side_effect_committed=False,
             ) from exc
-        if len(raw) > _MAX_FETCH_BYTES:
+        if len(raw) > self.max_fetch_bytes:
             raise ToolExecutionError(
-                "web response exceeds the configured size limit",
+                f"web response exceeds the {self.max_fetch_bytes}-byte size limit",
                 kind="validation_error",
                 code="response_too_large",
                 side_effect_committed=False,

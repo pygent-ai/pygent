@@ -234,6 +234,39 @@ async def test_web_fetch_rejects_unsupported_content_type():
     assert "application/octet-stream" in (result.error or "")
 
 
+def test_web_fetch_requires_positive_fetch_limit():
+    with pytest.raises(ValueError, match="max_fetch_bytes must be positive"):
+        WebFetchTools(max_fetch_bytes=0)
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_enforces_configured_fetch_limit():
+    tools = WebFetchTools(
+        fetcher=lambda request, timeout: _FakeResponse(b"x" * 100, "text/plain"),
+        resolver=_public_resolver,
+        max_fetch_bytes=64,
+    )
+
+    result = await invoke_tool(tools.web_fetch, {"url": "https://example.com/page"})
+
+    assert result.status == "failed"
+    assert result.error_code == "response_too_large"
+    assert "64-byte size limit" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_allows_responses_under_raised_limit():
+    tools = WebFetchTools(
+        fetcher=lambda request, timeout: _FakeResponse(b"x" * 100, "text/plain"),
+        resolver=_public_resolver,
+        max_fetch_bytes=200,
+    )
+
+    output = await succeeded(tools.web_fetch, url="https://example.com/page")
+
+    assert "x" in output
+
+
 def test_duckduckgo_parser_extracts_real_result_urls_and_skips_ads():
     parser = _DuckDuckGoHTMLParser()
     parser.feed(

@@ -156,6 +156,8 @@ class BashTools(NativeShellTools):
         timeout: float = 600,
         task_manager: ToolTaskManager | None = None,
         task_event_sink: ToolEventEmitter | None = None,
+        max_output_bytes: int = _MAX_OUTPUT_BYTES,
+        max_capture_bytes: int = _MAX_FULL_OUTPUT_BYTES,
     ) -> None:
         identity = _bash_shell_resolver(executable=bash_executable).resolve()
         super().__init__(
@@ -165,15 +167,14 @@ class BashTools(NativeShellTools):
             timeout=timeout,
             task_manager=task_manager,
             task_event_sink=task_event_sink,
+            max_output_bytes=max_output_bytes,
+            max_capture_bytes=max_capture_bytes,
         )
         self.bash_executable = identity.executable
 
     def _temporary_output_file(self) -> Any:
         # Kept on this module so deployments and tests can substitute the capture file.
         return tempfile.TemporaryFile()
-
-    def _max_capture_bytes(self) -> int:
-        return _MAX_FULL_OUTPUT_BYTES
 
     @tool(
         tool_id="standard.shell.bash",

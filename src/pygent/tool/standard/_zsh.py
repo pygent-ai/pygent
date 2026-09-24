@@ -19,6 +19,7 @@ from pygent.tool.functional import tool
 from pygent.tool.task_handle import ToolTaskHandle
 from pygent.tool.types import IdempotencyPolicy, ToolSideEffect
 
+from ._process import MAX_FULL_OUTPUT_BYTES, MAX_OUTPUT_BYTES
 from ._shell import ShellIdentity, ShellResolver, append_unique_path, run_probe
 from ._shell_tools import NativeShellTools
 
@@ -91,6 +92,8 @@ class ZshTools(NativeShellTools):
         timeout: float = 600,
         task_manager: ToolTaskManager | None = None,
         task_event_sink: ToolEventEmitter | None = None,
+        max_output_bytes: int = MAX_OUTPUT_BYTES,
+        max_capture_bytes: int = MAX_FULL_OUTPUT_BYTES,
     ) -> None:
         identity = ShellResolver(
             "zsh",
@@ -107,6 +110,8 @@ class ZshTools(NativeShellTools):
             timeout=timeout,
             task_manager=task_manager,
             task_event_sink=task_event_sink,
+            max_output_bytes=max_output_bytes,
+            max_capture_bytes=max_capture_bytes,
         )
         self.zsh_executable = identity.executable
 

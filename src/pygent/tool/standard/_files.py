@@ -69,13 +69,14 @@ _DEFAULT_MAX_VIDEO_DURATION_SECONDS = 120.0
 _DEFAULT_MAX_VIDEO_EDGE = 1280
 _DEFAULT_MAX_VIDEO_FPS = 15.0
 _VIDEO_AUDIO_BIT_RATE = 64_000
-_VIDEO_MAX_BIT_RATE = 1_000_000
+_DEFAULT_MAX_VIDEO_BIT_RATE = 1_000_000
+_VIDEO_MIN_BIT_RATE = 100_000
 _VIDEO_BACKEND_HINT = (
     "Install pygent-ai[video] or provide FFmpeg with both ffmpeg and ffprobe on "
     "PATH to enable video metadata validation and automatic normalization."
 )
 _PDF_RENDER_SCALE = 2.0
-_MAX_PDF_RENDER_PIXELS = 20_000_000
+_DEFAULT_MAX_PDF_RENDER_PIXELS = 20_000_000
 _IMAGE_FORMAT_MIME_TYPES = {
     "GIF": "image/gif",
     "JPEG": "image/jpeg",
@@ -84,8 +85,8 @@ _IMAGE_FORMAT_MIME_TYPES = {
 }
 _EXIF_ORIENTATION_TAG = 274
 _TEXT_SNIFF_BYTES = 64 * 1024
-_SEARCH_MAX_BYTES = 50 * 1024
-_GREP_MAX_LINE_LENGTH = 500
+_DEFAULT_SEARCH_MAX_BYTES = 50 * 1024
+_DEFAULT_GREP_MAX_LINE_LENGTH = 500
 _CRLF = "\r\n"
 _WRITE_TOOL_DESCRIPTION = (
     "Create a new UTF-8 file or completely replace an existing file.\n\n"
@@ -583,6 +584,7 @@ def _transcode_video_with_pyav(
     max_output_bytes: int,
     max_edge: int,
     max_fps: float,
+    max_video_bit_rate: int,
     crf: int,
 ) -> bytes:
     av = backend.module
@@ -614,8 +616,8 @@ def _transcode_video_with_pyav(
         total_bit_rate = int(max_output_bytes * 8 * 0.88 / duration)
         audio_bit_rate = _VIDEO_AUDIO_BIT_RATE if input_audio is not None else 0
         video_bit_rate = max(
-            100_000,
-            min(_VIDEO_MAX_BIT_RATE, total_bit_rate - audio_bit_rate),
+            _VIDEO_MIN_BIT_RATE,
+            min(max_video_bit_rate, total_bit_rate - audio_bit_rate),
         )
         output_video = output_container.add_stream("libx264", rate=target_rate)
         output_video.width, output_video.height = target_dimensions
@@ -708,6 +710,7 @@ def _transcode_video_once(
     max_output_bytes: int,
     max_edge: int,
     max_fps: float,
+    max_video_bit_rate: int,
     crf: int,
 ) -> bytes:
     if isinstance(backend, _PyAvVideoBackend):
@@ -718,14 +721,15 @@ def _transcode_video_once(
             max_output_bytes=max_output_bytes,
             max_edge=max_edge,
             max_fps=max_fps,
+            max_video_bit_rate=max_video_bit_rate,
             crf=crf,
         )
     duration = max(metadata.duration_seconds, 0.001)
     total_bit_rate = int(max_output_bytes * 8 * 0.88 / duration)
     audio_bit_rate = _VIDEO_AUDIO_BIT_RATE if metadata.audio_codec is not None else 0
     video_bit_rate = max(
-        100_000,
-        min(_VIDEO_MAX_BIT_RATE, total_bit_rate - audio_bit_rate),
+        _VIDEO_MIN_BIT_RATE,
+        min(max_video_bit_rate, total_bit_rate - audio_bit_rate),
     )
     filter_graph = (
         f"scale={max_edge}:{max_edge}:force_original_aspect_ratio=decrease:"
@@ -794,13 +798,15 @@ def _prepare_video(
     max_duration_seconds: float,
     max_edge: int,
     max_fps: float,
+    max_video_bit_rate: int,
 ) -> _PreparedVideo:
     backend = _load_video_backend()
     if backend is None:
         if len(data) > max_output_bytes:
             _fail(
                 "video exceeds the inline output limit and no video processing "
-                f"backend is available. {_VIDEO_BACKEND_HINT}",
+                "backend is available; increase max_video_output_bytes or install "
+                f"a video backend. {_VIDEO_BACKEND_HINT}",
                 "video_processing_unavailable",
             )
         return _PreparedVideo(
@@ -839,6 +845,18 @@ def _prepare_video(
             processing="passthrough",
         )
 
+    audio_bit_rate = _VIDEO_AUDIO_BIT_RATE if metadata.audio_codec is not None else 0
+    minimum_bytes = int(
+        metadata.duration_seconds * (_VIDEO_MIN_BIT_RATE + audio_bit_rate) / 8 / 0.88
+    )
+    if minimum_bytes > max_output_bytes:
+        _fail(
+            f"video of {metadata.duration_seconds:.1f}s needs at least "
+            f"{minimum_bytes} bytes at the minimum encode bit rate; increase "
+            "max_video_output_bytes or trim the video",
+            "video_output_too_large",
+        )
+
     for crf in (28, 32, 36):
         transcoded = _transcode_video_once(
             backend,
@@ -847,6 +865,7 @@ def _prepare_video(
             max_output_bytes=max_output_bytes,
             max_edge=max_edge,
             max_fps=max_fps,
+            max_video_bit_rate=max_video_bit_rate,
             crf=crf,
         )
         if len(transcoded) <= max_output_bytes:
@@ -859,7 +878,8 @@ def _prepare_video(
                 processing="normalized",
             )
     _fail(
-        f"video cannot be encoded within the {max_output_bytes}-byte output limit",
+        f"video cannot be encoded within the {max_output_bytes}-byte output limit; "
+        "increase max_video_output_bytes or trim the video",
         "video_output_too_large",
     )
 
@@ -1143,6 +1163,7 @@ def _render_pdf_pages(
     max_image_output_bytes: int,
     max_image_edge: int,
     max_image_pixels: int,
+    max_pdf_render_pixels: int,
 ) -> ToolOutput:
     try:
         document = pdfium.PdfDocument(path)
@@ -1169,7 +1190,7 @@ def _render_pdf_pages(
                 pixel_count = ceil(width * _PDF_RENDER_SCALE) * ceil(
                     height * _PDF_RENDER_SCALE
                 )
-                render_pixel_limit = min(_MAX_PDF_RENDER_PIXELS, max_image_pixels)
+                render_pixel_limit = min(max_pdf_render_pixels, max_image_pixels)
                 if pixel_count > render_pixel_limit:
                     _fail(
                         f"PDF page {page_index + 1} exceeds the render pixel limit",
@@ -1256,10 +1277,17 @@ def _render_pdf_pages(
         document.close()
 
 
-def _truncate_search_line(line: str) -> tuple[str, bool]:
-    if len(line) <= _GREP_MAX_LINE_LENGTH:
+def _search_output_budget_label(max_output_bytes: int) -> str:
+    size_kb = max_output_bytes // 1024
+    if size_kb > 0 and max_output_bytes % 1024 == 0:
+        return f"{size_kb}KB"
+    return f"{max_output_bytes} bytes"
+
+
+def _truncate_search_line(line: str, max_line_length: int) -> tuple[str, bool]:
+    if len(line) <= max_line_length:
         return line, False
-    return f"{line[:_GREP_MAX_LINE_LENGTH]}... [truncated]", True
+    return f"{line[:max_line_length]}... [truncated]", True
 
 
 def _expand_search_glob(pattern: str) -> list[str]:
@@ -1288,12 +1316,12 @@ def _matches_search_glob(relative_path: str, pattern: str) -> bool:
     return any(path.match(candidate) for candidate in candidates)
 
 
-def _truncate_search_output(lines: list[str]) -> tuple[str, bool]:
+def _truncate_search_output(lines: list[str], max_output_bytes: int) -> tuple[str, bool]:
     selected: list[str] = []
     size = 0
     for line in lines:
         encoded_size = len(line.encode("utf-8")) + (1 if selected else 0)
-        if size + encoded_size > _SEARCH_MAX_BYTES:
+        if size + encoded_size > max_output_bytes:
             return "\n".join(selected), True
         selected.append(line)
         size += encoded_size
@@ -1543,7 +1571,11 @@ class FileTools:
         max_video_duration_seconds: float = _DEFAULT_MAX_VIDEO_DURATION_SECONDS,
         max_video_edge: int = _DEFAULT_MAX_VIDEO_EDGE,
         max_video_fps: float = _DEFAULT_MAX_VIDEO_FPS,
+        max_video_bit_rate: int = _DEFAULT_MAX_VIDEO_BIT_RATE,
+        max_pdf_render_pixels: int = _DEFAULT_MAX_PDF_RENDER_PIXELS,
         max_search_files: int = 10_000,
+        max_search_output_bytes: int = _DEFAULT_SEARCH_MAX_BYTES,
+        max_grep_line_length: int = _DEFAULT_GREP_MAX_LINE_LENGTH,
     ) -> None:
         if any(
             limit <= 0
@@ -1557,7 +1589,11 @@ class FileTools:
                 max_video_duration_seconds,
                 max_video_edge,
                 max_video_fps,
+                max_video_bit_rate,
+                max_pdf_render_pixels,
                 max_search_files,
+                max_search_output_bytes,
+                max_grep_line_length,
             )
         ):
             raise ValueError("file tool limits must be positive")
@@ -1574,7 +1610,11 @@ class FileTools:
         self.max_video_duration_seconds = max_video_duration_seconds
         self.max_video_edge = max_video_edge
         self.max_video_fps = max_video_fps
+        self.max_video_bit_rate = max_video_bit_rate
+        self.max_pdf_render_pixels = max_pdf_render_pixels
         self.max_search_files = max_search_files
+        self.max_search_output_bytes = max_search_output_bytes
+        self.max_grep_line_length = max_grep_line_length
         self._mutation_locks = tuple(threading.Lock() for _ in range(64))
         self._io_service = FileIOService(
             lambda *args: self._read(*args),
@@ -1673,6 +1713,7 @@ class FileTools:
                     self.max_image_output_bytes,
                     self.max_image_edge,
                     self.max_image_pixels,
+                    self.max_pdf_render_pixels,
                 )
             return _text_output(_read_pdf_text(path, None))
         if pages:
@@ -1789,6 +1830,7 @@ class FileTools:
                 max_duration_seconds=self.max_video_duration_seconds,
                 max_edge=self.max_video_edge,
                 max_fps=self.max_video_fps,
+                max_video_bit_rate=self.max_video_bit_rate,
             )
             data = prepared_video.data
             delivered_video_metadata = prepared_video.delivered_metadata
@@ -2309,7 +2351,9 @@ class FileTools:
             self._raise_search_failure(stderr, code, "file search backend")
         if not lines:
             return "No files found matching pattern"
-        output, bytes_truncated = _truncate_search_output(lines)
+        output, bytes_truncated = _truncate_search_output(
+            lines, self.max_search_output_bytes
+        )
         notices = []
         if reached_limit:
             notices.append(
@@ -2317,7 +2361,10 @@ class FileTools:
                 f"{effective_limit * 2} for more, or refine pattern"
             )
         if bytes_truncated:
-            notices.append("50KB limit reached")
+            notices.append(
+                f"{_search_output_budget_label(self.max_search_output_bytes)} "
+                "limit reached"
+            )
         return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
 
     def _glob_fallback(
@@ -2341,7 +2388,9 @@ class FileTools:
         lines = lines[:limit]
         if not lines:
             return "No files found matching pattern"
-        output, bytes_truncated = _truncate_search_output(lines)
+        output, bytes_truncated = _truncate_search_output(
+            lines, self.max_search_output_bytes
+        )
         notices = []
         if reached_limit:
             notices.append(
@@ -2349,7 +2398,10 @@ class FileTools:
                 "or refine pattern"
             )
         if bytes_truncated:
-            notices.append("50KB limit reached")
+            notices.append(
+                f"{_search_output_budget_label(self.max_search_output_bytes)} "
+                "limit reached"
+            )
         return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
 
     @tool(
@@ -2490,7 +2542,9 @@ class FileTools:
                     matched_text = lines[line_number - 1]
                 value = matched_text.replace("\r\n", "\n").replace("\r", "")
                 value = value.removesuffix("\n")
-                value, truncated = _truncate_search_line(value)
+                value, truncated = _truncate_search_line(
+                    value, self.max_grep_line_length
+                )
                 lines_truncated |= truncated
                 output_lines.append(f"{relative}:{line_number}: {value}")
                 continue
@@ -2500,12 +2554,16 @@ class FileTools:
             start = max(1, line_number - context)
             end = min(len(lines), line_number + context)
             for current in range(start, end + 1):
-                value, truncated = _truncate_search_line(lines[current - 1])
+                value, truncated = _truncate_search_line(
+                    lines[current - 1], self.max_grep_line_length
+                )
                 lines_truncated |= truncated
                 separator = ":" if current == line_number else "-"
                 output_lines.append(f"{relative}{separator}{current}{separator} {value}")
 
-        output, bytes_truncated = _truncate_search_output(output_lines)
+        output, bytes_truncated = _truncate_search_output(
+            output_lines, self.max_search_output_bytes
+        )
         notices = []
         if reached_limit:
             notices.append(
@@ -2513,10 +2571,14 @@ class FileTools:
                 f"{effective_limit * 2} for more, or refine pattern"
             )
         if bytes_truncated:
-            notices.append("50KB limit reached")
+            notices.append(
+                f"{_search_output_budget_label(self.max_search_output_bytes)} "
+                "limit reached"
+            )
         if lines_truncated:
             notices.append(
-                "Some lines truncated to 500 chars. Use read tool to see full lines"
+                f"Some lines truncated to {self.max_grep_line_length} chars. "
+                "Use read tool to see full lines"
             )
         return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
 
@@ -2651,19 +2713,25 @@ class FileTools:
         for file_path, line_number, matched_text, lines in matches:
             relative = _relative_search_path(file_path, search_root)
             if context == 0:
-                value, truncated = _truncate_search_line(matched_text)
+                value, truncated = _truncate_search_line(
+                    matched_text, self.max_grep_line_length
+                )
                 lines_truncated |= truncated
                 output_lines.append(f"{relative}:{line_number}: {value}")
                 continue
             start = max(1, line_number - context)
             end = min(len(lines), line_number + context)
             for current in range(start, end + 1):
-                value, truncated = _truncate_search_line(lines[current - 1])
+                value, truncated = _truncate_search_line(
+                    lines[current - 1], self.max_grep_line_length
+                )
                 lines_truncated |= truncated
                 separator = ":" if current == line_number else "-"
                 output_lines.append(f"{relative}{separator}{current}{separator} {value}")
 
-        output, bytes_truncated = _truncate_search_output(output_lines)
+        output, bytes_truncated = _truncate_search_output(
+            output_lines, self.max_search_output_bytes
+        )
         notices = []
         if reached_limit:
             notices.append(
@@ -2671,9 +2739,14 @@ class FileTools:
                 "or refine pattern"
             )
         if lines_truncated:
-            notices.append("long lines truncated to 500 characters")
+            notices.append(
+                f"long lines truncated to {self.max_grep_line_length} characters"
+            )
         if bytes_truncated:
-            notices.append("50KB limit reached")
+            notices.append(
+                f"{_search_output_budget_label(self.max_search_output_bytes)} "
+                "limit reached"
+            )
         return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
 
     @staticmethod

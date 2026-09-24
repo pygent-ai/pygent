@@ -38,6 +38,11 @@ class StandardTools:
         max_video_duration_seconds: float = 120,
         max_video_edge: int = 1280,
         max_video_fps: float = 15,
+        max_video_bit_rate: int = 1_000_000,
+        max_pdf_render_pixels: int = 20_000_000,
+        max_fetch_bytes: int = 2 * 1024 * 1024,
+        max_output_bytes: int = 512 * 1024,
+        max_capture_bytes: int = 16 * 1024 * 1024,
         bash_executable: str | None = None,
         bash_timeout: float = 600,
         task_manager: ToolTaskManager | None = None,
@@ -51,6 +56,8 @@ class StandardTools:
             bash_executable=bash_executable,
             timeout=bash_timeout,
             task_manager=task_manager,
+            max_output_bytes=max_output_bytes,
+            max_capture_bytes=max_capture_bytes,
         )
         self.files = FileTools(
             workspace_root=workspace_root,
@@ -63,10 +70,13 @@ class StandardTools:
             max_video_duration_seconds=max_video_duration_seconds,
             max_video_edge=max_video_edge,
             max_video_fps=max_video_fps,
+            max_video_bit_rate=max_video_bit_rate,
+            max_pdf_render_pixels=max_pdf_render_pixels,
         )
         self.web_fetch = WebFetchTools(
             fetcher=web_fetcher,
             resolver=web_resolver,
+            max_fetch_bytes=max_fetch_bytes,
         )
         self.web_search = WebSearchTools(searcher=web_searcher)
         self.toolkit = ToolKit(
