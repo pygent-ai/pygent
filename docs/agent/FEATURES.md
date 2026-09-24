@@ -11,7 +11,7 @@
 7. **共享 Layer 安全**：Agent 可以直接调用并向子 Agent 或 Layer 注入同一 Module；每次调用保持独立运行身份。
 8. **并发责任按执行模式划分**：direct execution 不启用框架级 Execution 容量，调用方自行使用 `asyncio`、服务限流器或外部设施管理 Root 与本地并发；托管执行中的所有 Agent Root 和 Child 受当前 Binding 的 live/runnable 上限、父子深度、fan-out、waiter 和公平调度约束。Agent 不为托管执行私建锁或 semaphore。
 9. **父子 Agent 只在托管执行中继承 Binding**：Binding 是部署与资源治理域，不是 Agent 身份；direct execution 没有 Binding。托管执行中的原始子 Agent 默认继承 Parent Binding，只有需要独立治理边界时才使用预绑定 Child 或 placement policy，包括容量、资源、权限、安全、SLA、服务、部署策略或生命周期隔离。
-10. **运行中投影操作属于 ReAct**：Runtime 只交付 opaque 输入；ReAct 在模型调用前、执行中打断监测及最终返回前按公开协议解释 ToolResult 内容追加、独立 UserMessage 和带 revision 的消息投影替换；声明为立即响应的独立 UserMessage 允许 ReAct 中断进行中的模型或工具步骤。打断只属于 ReAct 内部控制，不终结 Execution，也不改变步数与调用数预算的记账方式。拒绝产生稳定事件，不扩展为 Runtime 业务分支。operation 标识、编码和校验见 Agent SDK。
+10. **运行中投影操作属于 ReAct**：Runtime 只负责可靠交付 opaque 输入，Projection Operation（ToolResult 内容追加、独立 UserMessage、带 revision 的消息投影替换）的解释与应用属于 ReAct；steering 按输入顺序，在当前执行模式允许的最早安全、确定且可重放的边界生效。声明为立即响应的独立 UserMessage 是时机请求：支持安全执行中取消的模式可中断进行中的模型或工具步骤，durable 执行在已开始 effect 的完成边界应用；打断不改变步数与调用数预算的记账方式，也不终结 Execution。拒绝产生稳定事件，不扩展为 Runtime 业务分支。operation 标识、编码、校验、各执行模式的时机保证与事件事实含义见 Agent SDK。
 11. **标准前台 Agent 仍是组合**：`PygentAgent` 只组合标准 ReAct、前台模型、Compressor 和工具 Module。System Prompt 与 Compression Prompt 属于不可变 Agent 定义；Agent 根据上下文窗口触发压缩。Compressor 是普通 Module；框架统一生成 Snapshot，只替换模型消息投影，并保留 pending current 和其他 Context 状态。`PygentAgent` 不负责长期历史的加载或持久化。ReAct 只接受子 model Module 显式返回的单次消息投影替换，要求 projection revision 精确前进并禁止该边界替换 System Prompt 或 tools。
 12. **Reminder 即 Module**：Reminder 是普通 Module，通过声明子 Module 和 `forward()` 显式组合，不引入专有执行协议。
 13. **上下文注入不提升权限**：补充内容按声明类型规范化包装，内容类型与注入位置分离；包装不改变消息角色、System Prompt 或权限。InjectionKind、XML 格式和幂等包装规则由 Agent SDK 定义。

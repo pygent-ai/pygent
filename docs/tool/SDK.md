@@ -483,7 +483,7 @@ ToolCall 是 AIMessage 中的调用请求，不代表已经获得授权或已被
 
 同一 `AIMessage` 内的 `ToolCall.call_id` 必须唯一。重复 ID 的所有调用在 visibility、authorization 和 ToolTask admission 之前明确返回 `error_code="duplicate_call_id"` 的 validation rejection；框架不能依赖 Provider 通常生成唯一 ID，也不能让两个调用共享同一 ToolTask。
 
-ToolTask 的公开快照至少包含 `task_id`、`call_id`、`tool_id`、`version` 和 `state`。ToolResult 至少包含 `call_id`、`status`、可选 `task`、可选的严格 JSON `output`、`error_kind`、`retryable` 与 `side_effect_committed`。`timeout` 或 `unknown` 状态不得默认把 `side_effect_committed` 设为 false。`status="cancelled"` 表示调用未产生最终业务结果即被终止：ReAct 立即响应打断（见 Agent SDK）中未开始或进行中被终止的调用使用该状态，`error_kind="cancelled"`、`error_code="interrupted_by_steering"`、`retryable=False`；未开始的调用 `side_effect_committed=False`，进行中被终止的调用副作用是否已发生未知，记为 `None`。已完成调用保持其真实结果不变。direct 独立任务由显式传入或 Bash 装配对象持有的任务设施承载；自动内存设施不承诺 Runtime 持久恢复。
+ToolTask 的公开快照至少包含 `task_id`、`call_id`、`tool_id`、`version` 和 `state`。ToolResult 至少包含 `call_id`、`status`、可选 `task`、可选的严格 JSON `output`、`error_kind`、`retryable` 与 `side_effect_committed`。`timeout` 或 `unknown` 状态不得默认把 `side_effect_committed` 设为 false。`status="cancelled"` 表示调用未产生最终业务结果即被终止：ReAct 立即响应打断（见 Agent SDK）中未开始或进行中被终止的调用使用该状态，`error_kind="cancelled"`、`error_code="interrupted_by_steering"`、`retryable=False`；未开始的调用 `side_effect_committed=False`，进行中被终止的调用副作用是否已发生未知，记为 `None`。已完成调用保持其真实结果不变。cancelled 结果只出现在支持执行中取消的部署（ephemeral managed）；durable 执行上工具批次完整执行，不产生 cancelled 结果。direct 独立任务由显式传入或 Bash 装配对象持有的任务设施承载；自动内存设施不承诺 Runtime 持久恢复。
 
 同步 Agent-backed Tool 在 managed execution 中可以作为当前 Execution 的结构化 Child；detach 时任务设施创建独立 ToolTask，未配置有限等待时 ToolCallLayer 立即返回 `ToolResult(status="detached", task=<ToolTask 公开快照>)`。该调用自此不再是 Child，但仍受声明的 Binding、资源与 capability 治理。需要故障后重新获得时，由独立 Job 承载该 ToolTask，调用方必须要求并获得相应 durable task capability。
 

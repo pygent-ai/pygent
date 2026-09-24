@@ -24,9 +24,12 @@ from pygent.agent.react_projection_operations import (
 from pygent.core import (
     AIMessage,
     Context,
+    EffectSafety,
     ExecutionInput,
+    ExecutionRequirements,
     Message,
     Module,
+    RecoverySafety,
     ToolMessage,
     UserMessage,
 )
@@ -36,6 +39,7 @@ from pygent.runtime import (
     ExecutionCapacityPolicy,
     ExecutionOptions,
     LocalRuntime,
+    SQLiteHistoryStore,
 )
 from pygent.tool import (
     ExecutorRegistry,
@@ -44,6 +48,7 @@ from pygent.tool import (
     ToolCall,
     ToolCallLayer,
     ToolDefinition,
+    ToolResult,
     ToolSideEffect,
     ToolSpec,
 )
@@ -630,3 +635,172 @@ async def test_replace_and_immediate_apply_in_sequence_order() -> None:
     assert "replaced" in committed
     assert "steered" in committed
     await runtime.close()
+
+
+class DurableGatedModel(Module[Message, AIMessage]):
+    """Gated model with durable-safe requirements for Tier-1 boundary tests."""
+
+    execution_requirements = ExecutionRequirements(
+        recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
+        effect_safety=EffectSafety.EFFECT_FREE,
+    )
+    trusted_live_resource_attributes = ("state",)
+
+    def __init__(
+        self,
+        answers: tuple[AIMessage, ...],
+        *,
+        replace_context: bool = False,
+        gated: bool = True,
+    ):
+        super().__init__()
+        self.state = ModelRunState(answers)
+        self.replace_context = replace_context
+        self.gated = gated
+
+    async def forward(self, message: Message, context: Context):
+        index = len(self.state.messages)
+        self.state.messages.append(message)
+        if index == 0:
+            self.state.entered.set()
+            if self.gated:
+                await self.state.release.wait()
+        answer = self.state.answers[min(index, len(self.state.answers) - 1)]
+        if index == 0 and self.replace_context:
+            context = dataclass_replace(
+                context,
+                messages=(UserMessage(content="compressed"),),
+                projection_revision=context.projection_revision + 1,
+            )
+        return answer, context
+
+
+class _ToolsState:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+
+class DurableGatedTools(Module[AIMessage, ToolMessage]):
+    trusted_live_resource_attributes = ('state',)
+    execution_requirements = ExecutionRequirements(
+        recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
+        effect_safety=EffectSafety.EFFECT_FREE,
+    )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.state = _ToolsState()
+
+    async def forward(self, message: AIMessage, context: Context):
+        self.state.calls += 1
+        self.state.entered.set()
+        await self.state.release.wait()
+        return (
+            ToolMessage(
+                results=tuple(
+                    ToolResult(
+                        call_id=call.call_id,
+                        name=call.name,
+                        status="succeeded",
+                        output={"ok": True},
+                    )
+                    for call in message.tool_calls
+                )
+            ),
+            context,
+        )
+
+
+@pytest.mark.asyncio
+async def test_durable_immediate_voids_answer_at_model_boundary(tmp_path) -> None:
+    # Tier 1: on durable executions the immediate applies at the in-flight
+    # effect's completion boundary -- the model call finishes and commits,
+    # then the returned answer is voided before any tool runs, and the
+    # projection replacement is kept.
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        model = DurableGatedModel(
+            (
+                AIMessage(
+                    content="",
+                    tool_calls=(
+                        ToolCall(call_id="call_1", name="noop", arguments={"value": 1}),
+                    ),
+                ),
+                AIMessage(content="final"),
+            ),
+            replace_context=True,
+        )
+        handle = await runtime.bind(ReActLayer(model=model, tools=EmptyTools())).start(
+            UserMessage(content="initial"), Context(), execution=options()
+        )
+        await model.state.entered.wait()
+        delivery = await handle.send_input(
+            input_id="steer-1",
+            kind=REACT_PROJECTION_OPERATION_KIND,
+            value=steer(SteeringMode.IMMEDIATE),
+        )
+        assert delivery.status == "accepted"
+        await asyncio.sleep(0.2)  # the input lands in the durable inbox
+        model.state.release.set()
+        answer, context = await asyncio.wait_for(handle.result(), timeout=15)
+        assert answer.content == "final"
+        assert [message.content for message in model.state.messages] == [
+            "initial",
+            "new direction",
+        ]
+        committed = [message.content for message in context.messages]
+        assert "compressed" in committed
+        assert "new direction" in committed
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_durable_immediate_during_tool_batch_completes_batch(tmp_path) -> None:
+    # Tier 1: a durable tool batch is never cancelled mid-flight -- it runs
+    # to completion (every effect committed and replayable) and the steering
+    # applies at the next boundary.
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        tools = DurableGatedTools()
+        model = DurableGatedModel(
+            (
+                AIMessage(
+                    content="",
+                    tool_calls=(
+                        ToolCall(call_id="call_1", name="noop", arguments={"value": 1}),
+                    ),
+                ),
+                AIMessage(content="final"),
+            ),
+            gated=False,
+        )
+        handle = await runtime.bind(ReActLayer(model=model, tools=tools)).start(
+            UserMessage(content="initial"), Context(), execution=options()
+        )
+        await tools.state.entered.wait()
+        delivery = await handle.send_input(
+            input_id="steer-1",
+            kind=REACT_PROJECTION_OPERATION_KIND,
+            value=steer(SteeringMode.IMMEDIATE),
+        )
+        assert delivery.status == "accepted"
+        await asyncio.sleep(0.2)
+        tools.state.release.set()
+        answer, context = await asyncio.wait_for(handle.result(), timeout=15)
+        assert answer.content == "final"
+        assert tools.state.calls == 1
+        tool_messages = [
+            message for message in context.messages if isinstance(message, ToolMessage)
+        ]
+        assert len(tool_messages) == 1
+        assert all(
+            result.status == "succeeded" for result in tool_messages[0].results
+        )
+        assert [message.content for message in model.state.messages] == [
+            "initial",
+            "new direction",
+        ]
+        await runtime.close()

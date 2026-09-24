@@ -256,14 +256,23 @@ class ApprovalModule(Module[Message, Message]):
 
 托管 ReAct 固定消费 `react.projection.operation.v2`。开发者通过 `handle.send_input()` 发送由 `encode_react_projection_operation()` 编码的 `StandaloneUserMessage`、`AppendToolResultContent` 或 `ReplaceMessageProjection`；ReAct 在每次模型调用前、执行中打断监测以及最终返回前读取并按 input sequence 应用。`ReplaceMessageProjection` 使用 `Context.projection_revision` 做严格替换，或以 `rebase_appended=True` 保留 base revision 后可以证明为完整 Message 追加的尾部。解码、revision、replacement 或 pending ToolResult 校验失败会发出 `react.projection_operation.rejected`，不会终结 Execution。
 
-`StandaloneUserMessage` 支持投递模式 `mode`，缺省为 `SteeringMode.WAIT`：等待当前模型或工具步骤自然结束，在下一次模型调用前生效；编码中省略 `mode` 的旧 payload 一律按 `wait` 解码。`mode=SteeringMode.IMMEDIATE` 表示立即响应：ReAct 中断进行中的步骤，让该消息尽快成为下一次模型调用的输入，并按以下规则处置被打断的工作：
+`StandaloneUserMessage` 支持投递模式 `mode`，缺省为 `SteeringMode.WAIT`：等待当前模型或工具步骤自然结束，在下一次模型调用前生效；编码中省略 `mode` 的旧 payload 一律按 `wait` 解码。`mode=SteeringMode.IMMEDIATE` 表示立即响应——请求在当前执行模式允许的最早安全、确定且可重放的边界生效，让该消息尽快成为下一次模型调用的输入。各执行模式提供的时机保证：
 
-- 模型调用进行中：取消该调用，不产生 AIMessage；该次调用计入模型调用预算。
+| 执行模式 | `IMMEDIATE` 保证 |
+| --- | --- |
+| Direct execution | Runtime steering 不可用（`send_input` 被拒绝） |
+| Ephemeral managed | 可中断在飞模型调用或工具批次 |
+| Durable managed | 不取消在飞 effect；在当前 effect 完成边界应用 |
+| Remote Worker | 当前按 WAIT 时机应用 |
+
+durable 的边界应用由 journal 中的输入记录派生，恢复重放会复现同一决策，无需重放取消竞态。ephemeral 执行命中的在飞步骤按以下规则处置被打断的工作：
+
+- 模型调用进行中：ephemeral 执行取消该调用，不产生 AIMessage，该次调用计入模型调用预算；durable 执行不取消调用——调用完成后在其返回边界作废答案（投影替换保留），预算照计。
 - 模型已返回 tool_calls：整个 AIMessage 作废，不派发工具、不产生 ToolMessage、不计工具调用预算；模型模块返回的投影替换（如压缩）仍被接受。
-- 工具批次执行中：为每个原始 `call_id` 生成对应 ToolResult，与 AIMessage 一起按原顺序提交进 history。以独立任务 admission 运行且被同步等待的调用（detach 生命周期 + 有限等待的 shell 家族）立即返回 `status="detached"` 结果与已捕获的中间输出，任务不因打断停止；其余调用——包括以同步生命周期执行的 shell 进程——返回 `status="cancelled"`（`error_kind="cancelled"`，未开始调用的 `side_effect_committed=False`，进行中被终止的调用为未知即 `None`）。已 admit 的调用计入工具调用预算。
+- 工具批次执行中：为每个原始 `call_id` 生成对应 ToolResult，与 AIMessage 一起按原顺序提交进 history。以独立任务 admission 运行且被同步等待的调用（detach 生命周期 + 有限等待的 shell 家族）立即返回 `status="detached"` 结果与已捕获的中间输出，任务不因打断停止；其余调用——包括以同步生命周期执行的 shell 进程——返回 `status="cancelled"`（`error_kind="cancelled"`，未开始调用的 `side_effect_committed=False`，进行中被终止的调用为未知即 `None`）。已 admit 的调用计入工具调用预算。durable 执行上工具批次完整执行，不产生 cancelled 结果，steering 在批次结束后的边界应用。
 - 同一批到达的多条 immediate 消息按 input sequence 依次应用，最后一条成为下一次模型调用输入。
 
-打断发出 `react.interrupted` 事件（含打断点与受影响 call_ids）。打断只属于 ReAct 内部控制，不终结 Execution；受影响 ToolMessage 的 `content` 会被 ReAct 追加固定的事实性 `<runtime-context>` 通知（进行中任务的 `task_id` 与中间输出随 ToolResult 呈现，`ToolResult` 值本身不改写；固定文本以公开常量 `TOOL_BATCH_INTERRUPT_NOTICE` 为准）。打断监测自身失败会发出 `react.steering_watch_failed` 并降级为 wait 时机。history-backed durable 执行与远程 Worker 目前不提供执行中打断监测：immediate 输入在这些边界按 wait 时机应用。
+打断发出 `react.interrupted` 事件（含打断点与受影响 call_ids）。`react.interrupted` 表达 ReAct 当前控制流因 immediate steering 被终止或取代；它不保证底层 effect 被物理取消——durable 执行上在飞 effect 会完成并提交，随后才在完成边界应用 steering。打断只属于 ReAct 内部控制，不终结 Execution；受影响 ToolMessage 的 `content` 会被 ReAct 追加固定的事实性 `<runtime-context>` 通知（进行中任务的 `task_id` 与中间输出随 ToolResult 呈现，`ToolResult` 值本身不改写；固定文本以公开常量 `TOOL_BATCH_INTERRUPT_NOTICE` 为准）。打断监测自身失败会发出 `react.steering_watch_failed` 并降级为 wait 时机。
 
 该能力使 `ReActLayer.execution_requirements.effect_safety` 固定为 `MANAGED_EFFECTS`。direct execution 的 receive 固定为空，因此运行中 Projection Operation（含 immediate 打断）只属于 bound/managed ReAct。
 
