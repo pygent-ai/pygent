@@ -720,7 +720,7 @@ def _guarded_event_sink(emit: ToolEventEmitter) -> ToolEventEmitter:
             current = asyncio.current_task()
             if current is not None and current.cancelling() > 0:
                 raise
-        except Exception:  # noqa: BLE001 - observability must not break execution
+        except Exception:  # noqa: BLE001, S110 - observability must not break execution
             pass
 
     return guarded
