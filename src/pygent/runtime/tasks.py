@@ -19,9 +19,12 @@ from pygent.tool import (
     ToolTaskState,
 )
 from pygent.tool.executors import (
+    ToolEventEmitter,
     ToolTaskExecution,
     _cancelled_task_result,
     _execute_with_timeout,
+    _guarded_event_sink,
+    _tool_task_terminal_event,
     result_from_exception,
 )
 
@@ -56,10 +59,15 @@ class DurableToolTaskManager:
     """Durable ToolTask manager with explicit crash recovery semantics."""
 
     def __init__(
-        self, history: SQLiteHistoryStore, registry: ExecutorRegistry
+        self,
+        history: SQLiteHistoryStore,
+        registry: ExecutorRegistry,
+        *,
+        emit: ToolEventEmitter | None = None,
     ) -> None:
         self.history = history
         self.registry = registry
+        self._emit = _guarded_event_sink(emit) if emit is not None else None
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._executions: dict[str, ToolTaskExecution] = {}
         self._lock = asyncio.Lock()
@@ -168,7 +176,9 @@ class DurableToolTaskManager:
                 tool_id=spec.tool_id,
                 tool_version=spec.version,
             )
-            await self._store_job_terminal(stored, result)
+            await self._store_job_terminal(
+                stored, result, attempt=stored.attempt, recovery=True,
+            )
         elif stored.status in (JobState.PENDING.value, JobState.RUNNING.value):
             self._executions[stored.task_id] = execution
             await self._launch_job(
@@ -292,11 +302,24 @@ class DurableToolTaskManager:
             stored.job_id, status=JobState.RUNNING.value, attempt=attempt,
             observation_owner=self._owner_id
         )
+        if self._emit is not None:
+            await self._emit(
+                "tool.task.started",
+                {
+                    "task_id": stored.task_id,
+                    "job_id": stored.job_id,
+                    "call_id": call.call_id,
+                    "tool_id": spec.tool_id,
+                    "attempt": attempt,
+                    "recovery": recovery,
+                },
+            )
         try:
             completed = await _execute_with_timeout(
                 self.registry, spec, call, execution=execution,
                 context=ToolExecutionContext(
                     task_id=stored.task_id, recovery=recovery,
+                    emit=self._emit,
                     publish_output=lambda value: self._publish_output(stored.task_id, value),
                     admitted=True,
                 ),
@@ -321,10 +344,17 @@ class DurableToolTaskManager:
                 result = replace(
                     result, task=replace(task, state=ToolTaskState.UNKNOWN)
                 )
-        await self._store_job_terminal(stored, result)
+        await self._store_job_terminal(
+            stored, result, attempt=attempt, recovery=recovery,
+        )
 
     async def _store_job_terminal(
-        self, stored: StoredJob, result: ToolResult
+        self,
+        stored: StoredJob,
+        result: ToolResult,
+        *,
+        attempt: int | None = None,
+        recovery: bool | None = None,
     ) -> None:
         state = result.task.state if result.task is not None else ToolTaskState.FAILED
         if result.output is not None:
@@ -335,6 +365,11 @@ class DurableToolTaskManager:
             result=tool_result_to_dict(result),
             observation_owner=self._owner_id,
         )
+        event = _tool_task_terminal_event(
+            result, attempt=attempt, recovery=recovery,
+        )
+        if event is not None and self._emit is not None:
+            await self._emit(*event)
 
     async def _launch(
         self,
@@ -369,6 +404,15 @@ class DurableToolTaskManager:
             observation_owner=self._owner_id,
             request=_request_to_dict(spec, call),
         )
+        if self._emit is not None:
+            await self._emit(
+                "tool.task.started",
+                {
+                    "task_id": task_id,
+                    "call_id": call.call_id,
+                    "tool_id": spec.tool_id,
+                },
+            )
         try:
             completed = await _execute_with_timeout(
                 self.registry,
@@ -377,6 +421,7 @@ class DurableToolTaskManager:
                 execution=execution,
                 context=ToolExecutionContext(
                     task_id=task_id,
+                    emit=self._emit,
                     publish_output=lambda value: self._publish_output(task_id, value),
                     admitted=True,
                 ),
@@ -423,6 +468,9 @@ class DurableToolTaskManager:
             request=_request_to_dict(spec, call),
             result=tool_result_to_dict(result),
         )
+        event = _tool_task_terminal_event(result)
+        if event is not None and self._emit is not None:
+            await self._emit(*event)
 
     @staticmethod
     def _snapshot(

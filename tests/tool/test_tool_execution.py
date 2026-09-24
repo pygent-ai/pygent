@@ -511,6 +511,164 @@ async def test_started_detached_write_cancellation_is_unknown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_task_event_sink_receives_lifecycle_and_runner_events() -> None:
+    tool = spec()
+    registry = ExecutorRegistry()
+    handler_started = asyncio.Event()
+    release = asyncio.Event()
+    terminal_seen = asyncio.Event()
+    events: list[tuple[str, dict]] = []
+
+    async def execute(_arguments):
+        handler_started.set()
+        await release.wait()
+        return 4
+
+    async def sink(kind, data):
+        events.append((kind, dict(data)))
+        if kind == "tool.task.completed":
+            terminal_seen.set()
+
+    registry.register(tool.tool_id, tool.version, LocalToolExecutor(execute))
+    manager = InMemoryToolTaskManager(registry, emit=sink)
+    task = await manager.submit(
+        tool,
+        ToolCall(call_id="events", name="double", arguments={"value": 2}),
+    )
+    await handler_started.wait()
+    release.set()
+    result = await manager.get_result(task.task_id, wait=True)
+    assert result is not None
+    assert result.status == "succeeded"
+    await asyncio.wait_for(terminal_seen.wait(), 1)
+
+    kinds = [kind for kind, _ in events]
+    assert kinds.count("tool.task.started") == 1
+    started_event = next(
+        data for kind, data in events if kind == "tool.task.started"
+    )
+    assert started_event["task_id"] == task.task_id
+    assert started_event["call_id"] == "events"
+    assert started_event["tool_id"] == tool.tool_id
+    assert kinds.count("tool.task.completed") == 1
+    completed_event = next(
+        data for kind, data in events if kind == "tool.task.completed"
+    )
+    assert completed_event["task_id"] == task.task_id
+    assert completed_event["status"] == "succeeded"
+    # The runner's call-level events flow through the same sink.
+    assert kinds.count("tool.started") == 1
+    assert kinds.count("tool.completed") == 1
+
+
+@pytest.mark.asyncio
+async def test_task_event_sink_records_cancel_without_start() -> None:
+    tool = spec()
+    registry = ExecutorRegistry()
+    events: list[tuple[str, dict]] = []
+
+    async def sink(kind, data):
+        events.append((kind, dict(data)))
+
+    manager = InMemoryToolTaskManager(registry, emit=sink)
+    task = await manager.prepare(
+        tool,
+        ToolCall(call_id="never-started", name="double", arguments={"value": 2}),
+    )
+    assert await manager.cancel(task.task_id)
+    result = await manager.get_result(task.task_id)
+    assert result is not None
+    assert result.status == "cancelled"
+
+    assert [kind for kind, _ in events] == ["tool.task.cancelled"]
+    cancelled_event = events[0][1]
+    assert cancelled_event["task_id"] == task.task_id
+    assert cancelled_event["call_id"] == "never-started"
+    assert cancelled_event["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_broken_task_event_sink_does_not_fail_the_task() -> None:
+    tool = spec()
+    registry = ExecutorRegistry()
+
+    async def broken_sink(_kind, _data):
+        raise RuntimeError("sink is down")
+
+    registry.register(
+        tool.tool_id,
+        tool.version,
+        LocalToolExecutor(lambda arguments: arguments["value"] * 2),
+    )
+    manager = InMemoryToolTaskManager(registry, emit=broken_sink)
+    task = await manager.submit(
+        tool,
+        ToolCall(call_id="sink-down", name="double", arguments={"value": 2}),
+    )
+    result = await manager.get_result(task.task_id, wait=True)
+    assert result is not None
+    assert result.status == "succeeded"
+    assert result.output == 4
+
+
+@pytest.mark.asyncio
+async def test_task_event_sink_cancellation_does_not_fail_the_task() -> None:
+    tool = spec()
+    registry = ExecutorRegistry()
+
+    async def cancelling_sink(_kind, _data):
+        raise asyncio.CancelledError()
+
+    registry.register(
+        tool.tool_id,
+        tool.version,
+        LocalToolExecutor(lambda arguments: arguments["value"] * 2),
+    )
+    manager = InMemoryToolTaskManager(registry, emit=cancelling_sink)
+    task = await manager.submit(
+        tool,
+        ToolCall(call_id="sink-cancel", name="double", arguments={"value": 2}),
+    )
+    result = await manager.get_result(task.task_id, wait=True)
+    assert result is not None
+    assert result.status == "succeeded"
+    assert result.output == 4
+
+
+@pytest.mark.asyncio
+async def test_detached_event_records_task_id() -> None:
+    tool = spec()
+    registry = ExecutorRegistry()
+    registry.register(
+        tool.tool_id,
+        tool.version,
+        LocalToolExecutor(lambda arguments: arguments["value"] * 2),
+    )
+    manager = InMemoryToolTaskManager(registry)
+    layer = ToolCallLayer(
+        tools=(tool,),
+        authorization=Authorization(detach=True),
+        task_manager=manager,
+    )
+    handle = await layer.start(
+        AIMessage(
+            tool_calls=(ToolCall(call_id="x", name="double", arguments={"value": 2}),)
+        ),
+        context(tool),
+    )
+    message, _ = await handle.result()
+    detached = message.results[0]
+    assert detached.status == "detached"
+    assert detached.task is not None
+    detached_events = [
+        event for event in handle._record.events if event.kind == "tool.detached"
+    ]
+    assert len(detached_events) == 1
+    assert detached_events[0].data["task_id"] == detached.task.task_id
+    await manager.get_result(detached.task.task_id, wait=True)
+
+
+@pytest.mark.asyncio
 async def test_durable_effect_replay_preserves_task_identity_and_skips_executor() -> None:
     tool = spec()
     registry = ExecutorRegistry()

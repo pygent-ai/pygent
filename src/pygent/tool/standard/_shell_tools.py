@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from pygent.core._tool_values import ToolCall
 from pygent.tool._waiting import resolve_wait_timeout
-from pygent.tool.executors import ToolExecutionError, ToolTaskManager
+from pygent.tool.executors import ToolEventEmitter, ToolExecutionError, ToolTaskManager
 from pygent.tool.task_handle import ToolTaskHandle
 
 from . import _process
@@ -39,6 +39,7 @@ class NativeShellTools:
         restrict_to_workspace: bool = True,
         timeout: float = 600,
         task_manager: ToolTaskManager | None = None,
+        task_event_sink: ToolEventEmitter | None = None,
     ) -> None:
         if not isinstance(shell_identity, ShellIdentity):
             raise TypeError("shell_identity must be a ShellIdentity")
@@ -48,6 +49,7 @@ class NativeShellTools:
         self.timeout = configured_timeout
         self._task_manager = task_manager
         self._owns_task_manager = task_manager is None
+        self._task_event_sink = task_event_sink
         self._closed = False
         self.path_context = ToolPathContext.from_workspace_root(
             workspace_root, restrict_to_workspace=restrict_to_workspace
@@ -171,7 +173,9 @@ class NativeShellTools:
         if self._closed:
             raise RuntimeError(f"{type(self).__name__} is closed")
         if self._task_manager is None:
-            self._task_manager = InMemoryToolTaskManager(self.toolkit.build_registry())
+            self._task_manager = InMemoryToolTaskManager(
+                self.toolkit.build_registry(), emit=self._task_event_sink,
+            )
         return self._task_manager
 
     async def aclose(self) -> None:

@@ -171,7 +171,7 @@ async with PowerShellTools(workspace_root=Path.cwd()) as tools:
 
 ### Interactive Terminal 工具
 
-`TerminalTools(workspace_root=..., shell=..., backend="pipe", sandbox=False, timeout=0, task_manager=None, session_store=None)` 提供 `standard.shell.terminal` 与 `standard.shell.terminal_input`。持久会话由显式 ToolTask 承载：`terminal` 以 detach 生命周期 admission 独立任务，session 由该任务的 executor 在任务执行内创建，并在其 driver 的 finally 中唯一释放；`terminal_input(task_id, input)` 按 `task_id` 向会话 stdin 写入一行，同一会话的并发输入在 per-session 锁上串行，保持单一有序输入流。
+`TerminalTools(workspace_root=..., shell=..., backend="pipe", sandbox=False, timeout=0, task_manager=None, session_store=None, task_event_sink=None)` 提供 `standard.shell.terminal` 与 `standard.shell.terminal_input`。持久会话由显式 ToolTask 承载：`terminal` 以 detach 生命周期 admission 独立任务，session 由该任务的 executor 在任务执行内创建，并在其 driver 的 finally 中唯一释放；`terminal_input(task_id, input)` 按 `task_id` 向会话 stdin 写入一行，同一会话的并发输入在 per-session 锁上串行，保持单一有序输入流。
 
 Python 原生调用 `terminal(...)` 返回 `str | ToolTaskHandle`，前台等待语义与 Bash 相同。启动握手在返回前等待三种终局之一：session 注册、任务到达终态、或有界观察超时；任务在创建 session 之前失败时直接传播其 `ToolExecutionError`，不返回指向已死任务的 handle。`terminal_input` 的返回值区分输出观察与执行就绪：`observation.output_quiet_seconds` 是传输层最后一次捕获输出字节以来的秒数；`foreground_active` 与 `waiting_for_input` 在 pipe/pty 后端不可观测，固定为 null。
 
@@ -179,7 +179,7 @@ Python 原生调用 `terminal(...)` 返回 `str | ToolTaskHandle`，前台等待
 
 ### Bash 的有限等待与任务控制
 
-`BashTools(workspace_root=..., timeout=600, task_manager=None)` 的 `timeout` 单位为秒，只控制独立任务的前台等待时长。`standard.shell.bash@3.1.0` 声明 `wait_timeout=600`，没有执行硬超时；模型可传 `timeout` 覆盖本次等待时长，单位同为秒；省略或传 `None` 时使用装配配置。`bash(command, working_directory=None, description=None, is_background=False, timeout=None)` 只提交一次命令。期限内完成返回结果；等待到期或 `is_background=True` 返回同一任务的引用，进程与输出捕获继续由任务管理器持有。
+`BashTools(workspace_root=..., timeout=600, task_manager=None, task_event_sink=None)` 的 `timeout` 单位为秒，只控制独立任务的前台等待时长。`standard.shell.bash@3.1.0` 声明 `wait_timeout=600`，没有执行硬超时；模型可传 `timeout` 覆盖本次等待时长，单位同为秒；省略或传 `None` 时使用装配配置。`bash(command, working_directory=None, description=None, is_background=False, timeout=None)` 只提交一次命令。期限内完成返回结果；等待到期或 `is_background=True` 返回同一任务的引用，进程与输出捕获继续由任务管理器持有。
 
 Python 原生调用返回 `str | ToolTaskHandle`。handle 提供稳定 `task_id`、`snapshot()`、`wait(timeout=None)`、`result()` 和 `cancel()`；`wait()` 到期返回 `None`，取消观察不会取消任务。未传管理器时，BashTools 自动创建并持有本地 `InMemoryToolTaskManager`，应用用异步上下文或 `await tools.aclose()`（也可 `await tools.close()`）关闭。传入的管理器仍由原所有者关闭；已接纳任务不因装配对象关闭而失去执行 owner。
 
@@ -642,9 +642,30 @@ uv run python -m tests.live.multimodal_tool_result_probe --az-only --az-model gl
 ```
 
 进程内独立任务设施可以使用
-`InMemoryToolTaskManager(registry, max_retained_tasks=1024)`。该上限只保留最近完成的
+`InMemoryToolTaskManager(registry, max_retained_tasks=1024, emit=None)`。该上限只保留最近完成的
 task snapshot/result；运行中的任务不会被淘汰，超过窗口的查询返回不存在。需要跨进程
 或长期查询的任务必须使用 durable Job/ToolTask 实现，不能依赖扩大内存窗口模拟持久化。
+
+任务设施支持独立事件 sink：`InMemoryToolTaskManager(registry, emit=...)` 与
+`DurableToolTaskManager(history, registry, emit=...)` 接受一个异步 `emit(kind, data)` 回调。
+`tool.task.started` 表示 admitted ToolTask 进入 RUNNING 生命周期状态；`tool.started` 表示该
+任务内的一次 ToolRunner 调用开始执行——两者属于不同边界，性能统计必须显式选择 ToolTask
+lifecycle（`tool.task.started` → `tool.task.*`）或 invocation（`tool.started` →
+`tool.completed`），不能混用。到达终态时发布 `tool.task.completed` / `tool.task.failed` /
+`tool.task.cancelled` / `tool.task.unknown`，data 携带 `task_id`、`call_id`、`tool_id`、
+`status`；由 durable Job 承载的任务另带 `job_id` 与 `attempt` / `recovery`：crash recovery
+重放会为同一 logical ToolTask 再次发布 `tool.task.started`，观察方必须用 attempt/recovery
+区分 event duplicate、recovery attempt 与新 execution。任务执行内的 runner 级
+`tool.started` / `tool.completed` 等事件也经同一 sink 发布。
+
+该 sink 是 best-effort 的实时观察通道，不是 durable 或权威的 ToolTask 事件流：终态先落库、
+后发布，进程在两者之间崩溃时该事件不会补发，恢复执行也不会重放历史事件。应用不得以
+"收到 tool.task.completed" 判断 durable ToolTask 是否完成，必须以 `get_task` / `get_result`
+/ Job 查询得到的 ToolTask/Job state 为权威，并在需要 durable observation 时对账；真正的
+durable lifecycle subscription 需要独立的事件 journal，再把 sink 作为该事件源的实时投影。
+sink 失败——包括 observer 自身抛出的取消——不会改变任务结果；只有 ToolTask owner 自身的
+取消才照常传播。Bash/PowerShell/Zsh/Terminal 装配对象的 `task_event_sink=...` 只作用于
+自动创建的本地设施；显式传入的 `task_manager` 由其所有者自行配置 sink。
 
 当 Binding 的 durable capability 实际生效时，detach admission 必须按稳定 logical key 原子 get-or-create 一个独立 Job；该 key 绑定 run/Root/Module path、该 Module 在 Execution 内的确定性 occurrence、call 与 idempotency identity，确保 Parent recovery 不会重复创建 Job，同时保证跨轮或重复 Module 调用即使复用 `call_id` 也不会折叠成同一 Job。occurrence 必须由可重放调用顺序派生，不能使用随机数或仅使用参数 hash。返回的 `ToolTask.job_id` 指向该 Job。`JobRef(job_id, task_id)`、`JobSnapshot` 与 `JobState` 都是严格、不可变的公开值：Job 保存 logical key、Binding、ExecutionPlan、resource 与 required-capability 身份以及可移植 ToolSpec/ToolCall 请求，但不保存 callback、handler、registry、连接或 Runtime 对象。
 

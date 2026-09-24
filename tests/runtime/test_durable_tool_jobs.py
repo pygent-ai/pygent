@@ -649,6 +649,71 @@ async def test_running_job_recovery_obeys_idempotency_and_unknown_side_effects(
 
 
 @pytest.mark.asyncio
+async def test_job_recovery_events_carry_attempt_and_recovery_identity(tmp_path):
+    path = tmp_path / "job-events.sqlite3"
+    job_spec = _spec(
+        side_effect=ToolSideEffect.EXTERNAL,
+        idempotency=IdempotencyPolicy.REQUIRES_KEY,
+    )
+    seed_registry = ExecutorRegistry()
+    seed_registry.register(
+        job_spec.tool_id,
+        job_spec.version,
+        LocalToolExecutor(lambda arguments: arguments),
+    )
+    async with SQLiteHistoryStore(path) as history:
+        seed_runtime = LocalRuntime(history=history)
+        manager = _attach(seed_runtime, history, seed_registry)
+        bound = _binding(seed_runtime, job_spec, name="job-events")
+        job_task = await _prepare_job(
+            manager, bound, job_spec, _call(1, key="stable-key")
+        )
+        await history.update_tool_job(
+            job_task.job_id, status=JobState.RUNNING.value
+        )
+        # Model a crashed owner whose persisted lease has expired.
+        await history.renew_tool_observations(manager._owner_id, -1)
+
+    events: list[tuple[str, dict]] = []
+
+    async def sink(kind, data):
+        events.append((kind, dict(data)))
+
+    registry = ExecutorRegistry()
+    registry.register(
+        job_spec.tool_id,
+        job_spec.version,
+        LocalToolExecutor(lambda arguments: "ok"),
+    )
+    async with SQLiteHistoryStore(path) as history:
+        runtime = LocalRuntime(history=history)
+        manager = DurableToolTaskManager(history, registry, emit=sink)
+        runtime.attach_executor_registry(registry)
+        runtime.attach_tool_task_manager(manager)
+        bound = _binding(runtime, job_spec, name="job-events")
+        await runtime.recover_tool_jobs(bound)
+        result = await runtime.get_tool_result(job_task.task_id, wait=True)
+        assert result is not None and result.status == "succeeded"
+
+        started = [data for kind, data in events if kind == "tool.task.started"]
+        completed = [
+            data for kind, data in events if kind == "tool.task.completed"
+        ]
+        assert len(started) == 1
+        assert started[0]["task_id"] == job_task.task_id
+        assert started[0]["job_id"] == job_task.job_id
+        # The recovery attempt carries its physical execution identity.
+        assert started[0]["attempt"] == 2
+        assert started[0]["recovery"] is True
+        assert len(completed) == 1
+        assert completed[0]["task_id"] == job_task.task_id
+        assert completed[0]["status"] == "succeeded"
+        assert completed[0]["attempt"] == 2
+        assert completed[0]["recovery"] is True
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_durable_detached_executor_receives_sqlite_fencing_permit(tmp_path):
     coordinator = SQLiteCapacityCoordinator(tmp_path / "capacity.sqlite3")
     registry = ExecutorRegistry()

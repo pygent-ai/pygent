@@ -368,3 +368,56 @@ async def test_delayed_concurrent_start_cannot_relaunch_completed_task(
         await manager.get_result(task.task_id, wait=True)
         assert calls == 1
         await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("durable", [False, True])
+async def test_task_event_sink_receives_started_and_completed(tmp_path, durable):
+    registry = ExecutorRegistry()
+    events: list[tuple[str, dict]] = []
+    terminal_seen = asyncio.Event()
+
+    async def sink(kind, data):
+        events.append((kind, dict(data)))
+        if kind == "tool.task.completed":
+            terminal_seen.set()
+
+    async with SQLiteHistoryStore(tmp_path / "events.db") as history:
+        manager = (
+            DurableToolTaskManager(history, registry, emit=sink)
+            if durable
+            else InMemoryToolTaskManager(registry, emit=sink)
+        )
+        spec = ToolSpec(
+            tool_id="test",
+            version="1",
+            definition=ToolDefinition(
+                name="test", description="Test", parameters={"type": "object"}
+            ),
+        )
+
+        async def execute(spec, call, context):
+            return {"value": 1}
+
+        task = await manager.submit(
+            spec, ToolCall(call_id="c", name="test", arguments={}), execution=execute
+        )
+        result = await manager.get_result(task.task_id, wait=True)
+        assert result.status == "succeeded"
+        await asyncio.wait_for(terminal_seen.wait(), 1)
+
+        kinds = [kind for kind, _ in events]
+        assert kinds.count("tool.task.started") == 1
+        started_event = next(
+            data for kind, data in events if kind == "tool.task.started"
+        )
+        assert started_event["task_id"] == task.task_id
+        assert started_event["call_id"] == "c"
+        assert started_event["tool_id"] == "test"
+        assert kinds.count("tool.task.completed") == 1
+        completed_event = next(
+            data for kind, data in events if kind == "tool.task.completed"
+        )
+        assert completed_event["task_id"] == task.task_id
+        assert completed_event["status"] == "succeeded"
+        await manager.close()

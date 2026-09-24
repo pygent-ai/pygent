@@ -31,6 +31,7 @@ from pygent.core import active_infrastructure, current_infrastructure
 from pygent.core._tool_values import ToolCall
 from pygent.tool._waiting import resolve_wait_timeout
 from pygent.tool.executors import (
+    ToolEventEmitter,
     ToolExecutionContext,
     ToolExecutionError,
     ToolTaskManager,
@@ -265,6 +266,7 @@ class TerminalTools(NativeShellTools):
         timeout: float = 0,
         task_manager: ToolTaskManager | None = None,
         session_store: TerminalSessionStore | None = None,
+        task_event_sink: ToolEventEmitter | None = None,
     ) -> None:
         # A session is an explicit ToolTask, so the foreground wait only decides
         # how long the starting call observes startup before returning the task
@@ -308,6 +310,7 @@ class TerminalTools(NativeShellTools):
             restrict_to_workspace=restrict_to_workspace,
             timeout=timeout,
             task_manager=task_manager,
+            task_event_sink=task_event_sink,
         )
         if sandbox:
             # Phase 4 contract: never declare "workspace" unless the isolation

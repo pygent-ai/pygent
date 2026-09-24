@@ -304,7 +304,10 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                 "tool.completed" if result.status == "succeeded" else
                 "tool.rejected" if result.status == "rejected" else "tool.failed"
             )
-            await self.emit(kind=event_kind, data={"call_id": call.call_id})
+            event_data: dict[str, JsonValue] = {"call_id": call.call_id}
+            if result.task is not None:
+                event_data["task_id"] = result.task.task_id
+            await self.emit(kind=event_kind, data=event_data)
             return result
         if spec.wait_timeout is not None and cast(FrozenJsonObject, call.arguments).get("is_background") is True:
             return await self._reject_event(call, "background_requires_detach", spec)

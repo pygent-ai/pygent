@@ -696,6 +696,65 @@ def _cancelled_task_result(
     )
 
 
+_TASK_TERMINAL_EVENT_KINDS: Mapping[ToolTaskState, str] = {
+    ToolTaskState.SUCCEEDED: "tool.task.completed",
+    ToolTaskState.FAILED: "tool.task.failed",
+    ToolTaskState.CANCELLED: "tool.task.cancelled",
+    ToolTaskState.UNKNOWN: "tool.task.unknown",
+}
+
+
+def _guarded_event_sink(emit: ToolEventEmitter) -> ToolEventEmitter:
+    """Wrap a task event sink so emission failures never fail the task.
+
+    Owner cancellation still propagates: a CancelledError is re-raised only
+    when the owning task itself is being cancelled. A sink that raises
+    cancellation on its own is treated like any other observer failure, so an
+    observation callback can never decide the ToolTask's outcome.
+    """
+
+    async def guarded(kind: str, data: Mapping[str, JsonValue]) -> None:
+        try:
+            await emit(kind, data)
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                raise
+        except Exception:  # noqa: BLE001 - observability must not break execution
+            pass
+
+    return guarded
+
+
+def _tool_task_terminal_event(
+    result: ToolResult,
+    *,
+    attempt: int | None = None,
+    recovery: bool | None = None,
+) -> tuple[str, dict[str, JsonValue]] | None:
+    task = result.task
+    if task is None:
+        return None
+    kind = _TASK_TERMINAL_EVENT_KINDS.get(task.state)
+    if kind is None:
+        return None
+    data: dict[str, JsonValue] = {
+        "task_id": task.task_id,
+        "call_id": result.call_id,
+        "tool_id": result.tool_id,
+        "status": result.status,
+    }
+    if result.error_kind is not None:
+        data["error_kind"] = result.error_kind
+    if task.job_id is not None:
+        data["job_id"] = task.job_id
+    if attempt is not None:
+        data["attempt"] = attempt
+    if recovery is not None:
+        data["recovery"] = recovery
+    return kind, data
+
+
 class InMemoryToolTaskManager:
     """Explicit process-local detached-task facility for applications and tests.
 
@@ -704,7 +763,11 @@ class InMemoryToolTaskManager:
     """
 
     def __init__(
-        self, registry: ExecutorRegistry, *, max_retained_tasks: int = 1024
+        self,
+        registry: ExecutorRegistry,
+        *,
+        max_retained_tasks: int = 1024,
+        emit: ToolEventEmitter | None = None,
     ) -> None:
         if (
             not isinstance(max_retained_tasks, int)
@@ -714,6 +777,7 @@ class InMemoryToolTaskManager:
             raise ValueError("max_retained_tasks must be a positive integer")
         self._registry = registry
         self._max_retained_tasks = max_retained_tasks
+        self._emit = _guarded_event_sink(emit) if emit is not None else None
         self._snapshots: dict[str, ToolTask] = {}
         self._results: dict[str, ToolResult] = {}
         self._outputs: dict[str, JsonValue] = {}
@@ -784,6 +848,16 @@ class InMemoryToolTaskManager:
         running = replace(snapshot, state=ToolTaskState.RUNNING)
         async with self._lock:
             self._snapshots[snapshot.task_id] = running
+        if self._emit is not None:
+            await self._emit(
+                "tool.task.started",
+                {
+                    "task_id": snapshot.task_id,
+                    "call_id": snapshot.call_id,
+                    "tool_id": snapshot.tool_id,
+                },
+            )
+
         async def publish_output(value: JsonValue) -> None:
             async with self._lock:
                 self._outputs[snapshot.task_id] = freeze_json(value)
@@ -796,6 +870,7 @@ class InMemoryToolTaskManager:
                 execution=execution,
                 context=ToolExecutionContext(
                     task_id=snapshot.task_id,
+                    emit=self._emit,
                     publish_output=publish_output,
                     admitted=True,
                 ),
@@ -825,6 +900,9 @@ class InMemoryToolTaskManager:
             if result.output is not None:
                 self._outputs[snapshot.task_id] = result.output
             self._invocations.pop(snapshot.task_id, None)
+        event = _tool_task_terminal_event(result)
+        if event is not None and self._emit is not None:
+            await self._emit(*event)
 
     def _task_finished(self, _task: asyncio.Task[None]) -> None:
         cleanup = self._cleanup_task
@@ -871,6 +949,7 @@ class InMemoryToolTaskManager:
             return self._snapshots.get(task_id)
 
     async def cancel(self, task_id: str) -> bool:
+        event: tuple[str, dict[str, JsonValue]] | None = None
         async with self._lock:
             task = self._tasks.get(task_id)
             if task is None:
@@ -885,10 +964,16 @@ class InMemoryToolTaskManager:
                 self._snapshots[task_id] = result.task
                 self._results[task_id] = result
                 self._invocations.pop(task_id, None)
-                return True
-            if task.done() and not task.cancelled():
-                return False
-            task.cancel()
+                event = _tool_task_terminal_event(result)
+            else:
+                if task.done() and not task.cancelled():
+                    return False
+                task.cancel()
+        if event is not None:
+            if self._emit is not None:
+                await self._emit(*event)
+            return True
+        assert task is not None
         await asyncio.shield(asyncio.gather(task, return_exceptions=True))
         async with self._lock:
             if task_id not in self._results:
@@ -900,6 +985,9 @@ class InMemoryToolTaskManager:
                 assert result.task is not None
                 self._snapshots[task_id] = result.task
                 self._results[task_id] = result
+                event = _tool_task_terminal_event(result)
+        if event is not None and self._emit is not None:
+            await self._emit(*event)
         return True
 
     async def get_result(

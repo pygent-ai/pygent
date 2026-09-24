@@ -15,7 +15,7 @@ from typing import Annotated, Any, ClassVar
 
 from pydantic import Field
 
-from pygent.tool.executors import ToolTaskManager
+from pygent.tool.executors import ToolEventEmitter, ToolTaskManager
 from pygent.tool.functional import tool
 from pygent.tool.task_handle import ToolTaskHandle
 from pygent.tool.types import IdempotencyPolicy, ToolSideEffect
@@ -115,6 +115,7 @@ class PowerShellTools(NativeShellTools):
         restrict_to_workspace: bool = True,
         timeout: float = 600,
         task_manager: ToolTaskManager | None = None,
+        task_event_sink: ToolEventEmitter | None = None,
     ) -> None:
         identity = ShellResolver(
             "powershell",
@@ -130,6 +131,7 @@ class PowerShellTools(NativeShellTools):
             restrict_to_workspace=restrict_to_workspace,
             timeout=timeout,
             task_manager=task_manager,
+            task_event_sink=task_event_sink,
         )
         self.powershell_executable = identity.executable
 
