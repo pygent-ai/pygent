@@ -151,6 +151,18 @@ class _ManagedScope(ExecutionScope):
             self.record.step_interrupt_event = event
         return event
 
+    def execution_input_event(self) -> asyncio.Event | None:
+        """Return this execution's in-memory input-arrival signal.
+
+        History-backed (durable) executions return ``None``: their inputs are
+        durable and their drains already record deterministic observations, so
+        the watcher keeps its bounded polling cadence there.
+        """
+
+        if self.record.history is not None:
+            return None
+        return self.record.input_inbox.arrival_signal()
+
     async def invoke_module_until(
         self,
         module: ModuleDependency[Any, Any],

@@ -13,9 +13,7 @@ from dataclasses import replace
 from fractions import Fraction
 from io import BytesIO
 from pathlib import Path
-from typing import Any, NoReturn, cast
-
-from PIL import Image, ImageOps, UnidentifiedImageError
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from pygent.tool import MediaBlock, MediaSource
 
@@ -29,6 +27,9 @@ from ._adapter_contracts import (
 from ._media_content import validate_media_bytes
 from .configuration import ModelSpec
 from .types import ModelErrorKind, ModelFailureReason, ModelProviderError
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 MediaResolverLike = MediaResolver | Callable[[MediaSource], bytes]
 
@@ -304,6 +305,8 @@ class DefaultMediaProjector:
 def _project_image(
     block: MediaBlock, data: bytes, plan: MediaProjectionPlan
 ) -> tuple[MediaBlock, tuple[str, ...]]:
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
     try:
         with Image.open(BytesIO(data)) as opened:
             is_animated = bool(getattr(opened, "is_animated", False))
@@ -370,6 +373,8 @@ def _encode_image_with_budget(
     max_bytes: int | None,
     transformations: list[str],
 ) -> tuple[bytes, Image.Image]:
+    from PIL import Image
+
     current = image
     quality = 90
     while True:

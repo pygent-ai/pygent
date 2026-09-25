@@ -19,12 +19,9 @@ from io import BytesIO, TextIOWrapper
 from itertools import islice
 from math import ceil, sqrt
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any, Literal, Never, TextIO
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Never, TextIO
 
-import pypdfium2 as pdfium  # type: ignore[import-untyped]
-from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import Field
-from pypdf import PdfReader
 
 from pygent.core import freeze_json_object
 from pygent.core._tool_values import MediaBlock, MediaSource, ToolResultText
@@ -50,6 +47,9 @@ from ._paths import (
     resolve_file_path,
     resolve_tool_path,
 )
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
 _IMAGE_MIME_TYPES = {
@@ -245,6 +245,8 @@ def _encode_image_under_limit(
     mime_type: str,
     max_output_bytes: int,
 ) -> tuple[bytes, str, tuple[int, int]]:
+    from PIL import Image
+
     output_mime_type = "image/png" if mime_type == "image/gif" else mime_type
     qualities: tuple[int | None, ...]
     if output_mime_type in ("image/jpeg", "image/webp"):
@@ -293,6 +295,8 @@ def _prepare_image(
     max_edge: int,
     max_pixels: int,
 ) -> _PreparedImage:
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -1137,6 +1141,8 @@ def _parse_pdf_page_range(pages: str | None, total_pages: int) -> list[int]:
 
 
 def _read_pdf_text(path: Path, pages: str | None) -> str:
+    from pypdf import PdfReader
+
     try:
         reader = PdfReader(str(path))
         output = []
@@ -1165,6 +1171,8 @@ def _render_pdf_pages(
     max_image_pixels: int,
     max_pdf_render_pixels: int,
 ) -> ToolOutput:
+    import pypdfium2 as pdfium  # type: ignore[import-untyped]
+
     try:
         document = pdfium.PdfDocument(path)
     except Exception as exc:

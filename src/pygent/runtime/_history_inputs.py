@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar, cast
 
@@ -17,9 +17,91 @@ from ._execution_inputs import (
     prepare_execution_input,
     validate_receive,
 )
-from ._history_types import _json, _load
+from ._history_types import HistoryStoreError, _json, _load
 
 _T = TypeVar("_T")
+
+# Reads that observed no input collapse into a single marker row per
+# (execution, module). The marker records the highest receive index already
+# observed as empty, so a replay of that index range returns the recorded empty
+# batch without keeping one row per drain. Only a committed read extends the
+# marker, so a crashed read stays unrecorded and is read again on replay.
+#
+# Invariant: the stored intervals are strictly ascending by ``through`` and each
+# interval records the request shape that observed its index range. Only this
+# module writes them (raise: append or extend the last interval), so any other
+# order means a corrupted or foreign journal and is rejected by
+# ``_decode_empty_ranges`` instead of being repaired.
+_EMPTY_RECEIPT_INDEX = -1
+
+
+def _decode_empty_ranges(
+    marker_json: str, *, execution_id: str, module_path: str
+) -> list[tuple[str, int]]:
+    """Decode one empty-observation marker and enforce its ordering invariant.
+
+    ``_empty_range_verdict`` derives each interval's start from the previous
+    interval's ``through``, so the stored intervals must be strictly ascending.
+    Sorting a malformed marker would have to invent which request shape observed
+    which index, and a wrong answer can silently swallow inputs that were never
+    observed; failing the replay loudly keeps "not observed" distinct from
+    "observed empty".
+    """
+
+    try:
+        payload = json.loads(marker_json)
+        entries = payload["empty_ranges"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HistoryStoreError(
+            "recorded empty execution input receipt is not readable"
+        ) from exc
+    if not isinstance(entries, list) or not entries:
+        raise HistoryStoreError(
+            "recorded empty execution input receipt has no intervals"
+        )
+    ranges: list[tuple[str, int]] = []
+    previous = -1
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise HistoryStoreError(
+                "recorded empty execution input receipt interval is not an object"
+            )
+        request = entry.get("request")
+        through = entry.get("through")
+        if not isinstance(request, str) or not request:
+            raise HistoryStoreError(
+                "recorded empty execution input receipt interval has no request"
+            )
+        if isinstance(through, bool) or not isinstance(through, int):
+            raise HistoryStoreError(
+                "recorded empty execution input receipt interval has no index"
+            )
+        if through <= previous:
+            raise HistoryStoreError(
+                "recorded empty execution input receipt intervals are not ordered"
+            )
+        ranges.append((request, through))
+        previous = through
+    return ranges
+
+
+def _empty_range_verdict(
+    ranges: list[tuple[str, int]], receive_index: int, request_json: str
+) -> bool | None:
+    """Classify one receive against the recorded empty observations.
+
+    ``True`` means the index was already observed as empty under this request
+    shape, ``False`` means it was observed under a different shape, and ``None``
+    means it has not been observed yet. ``ranges`` must be strictly ascending by
+    index, which ``_decode_empty_ranges`` enforces for stored markers.
+    """
+
+    previous = -1
+    for recorded_request, through in ranges:
+        if previous < receive_index <= through:
+            return recorded_request == request_json
+        previous = through
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +240,41 @@ class ExecutionInputHistoryMixin:
             ),
         )
 
+    async def _empty_receipt_ranges(
+        self,
+        db: aiosqlite.Connection,
+        requests: list[_ReceiveInputs],
+        results: Mapping[str, tuple[ExecutionInput, ...]],
+    ) -> dict[tuple[str, str], list[tuple[str, int]]]:
+        """Return the recorded empty observations per execution/module.
+
+        Each entry is ``(request_json, through)`` and covers the receive indexes
+        after the previous entry's ``through`` up to its own, so a replay can
+        tell which request shape observed a given index as empty.
+        """
+
+        outstanding = sorted({
+            (r.execution_id, r.module_path)
+            for r in requests
+            if r.execution_id not in results
+        })
+        if not outstanding:
+            return {}
+        markers = await db.execute_fetchall(
+            "SELECT m.execution_id,m.module_path,m.request_json "
+            "FROM json_each(?) r JOIN execution_input_receives m "
+            "ON m.execution_id=json_extract(r.value,'$[0]') "
+            "AND m.module_path=json_extract(r.value,'$[1]') "
+            "AND m.receive_index=?",
+            (json.dumps(outstanding), _EMPTY_RECEIPT_INDEX),
+        )
+        return {
+            (execution_id, module_path): _decode_empty_ranges(
+                marker_json, execution_id=execution_id, module_path=module_path
+            )
+            for execution_id, module_path, marker_json in markers
+        }
+
     async def _batch_receive_inputs(
         self, db: aiosqlite.Connection, payloads: list[object]
     ) -> list[object]:
@@ -190,7 +307,23 @@ class ExecutionInputHistoryMixin:
             results[execution_id] = tuple(
                 ExecutionInput.from_dict(item) for item in json.loads(batch_json)
             )
-        pending = [r for r in requests if r.execution_id not in results]
+        empty_ranges = await self._empty_receipt_ranges(db, requests, results)
+        pending: list[_ReceiveInputs] = []
+        for request in requests:
+            if request.execution_id in results:
+                continue
+            ranges = empty_ranges.get((request.execution_id, request.module_path), [])
+            verdict = _empty_range_verdict(
+                ranges, request.receive_index, request.request_json
+            )
+            if verdict is None:
+                pending.append(request)
+            elif verdict:
+                results[request.execution_id] = ()
+            else:
+                raise RuntimeError(
+                    "replayed execution input receive changed its request"
+                )
         if not pending:
             return [results[r.execution_id] for r in requests]
         consumers = [
@@ -280,24 +413,61 @@ class ExecutionInputHistoryMixin:
             await db.executemany(
                 "UPDATE execution_inboxes SET sealed=1 WHERE execution_id=?", sealed
             )
-        await db.executemany(
-            "INSERT INTO execution_input_receives VALUES(?,?,?,?,?)",
-            [
-                (
-                    r.execution_id,
-                    r.module_path,
-                    r.receive_index,
-                    r.request_json,
-                    json.dumps(
-                        [item.to_dict() for item in selected[r.execution_id]],
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        ensure_ascii=False,
-                    ),
-                )
-                for r in pending
-            ],
-        )
+        if any(selected[r.execution_id] or r.seal_if_empty for r in pending):
+            await db.executemany(
+                "INSERT INTO execution_input_receives VALUES(?,?,?,?,?)",
+                [
+                    (
+                        r.execution_id,
+                        r.module_path,
+                        r.receive_index,
+                        r.request_json,
+                        json.dumps(
+                            [item.to_dict() for item in selected[r.execution_id]],
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                        ),
+                    )
+                    for r in pending
+                    if selected[r.execution_id] or r.seal_if_empty
+                ],
+            )
+        observed_empty: dict[tuple[str, str], list[tuple[str, int]]] = {}
+        for request in pending:
+            if selected[request.execution_id] or request.seal_if_empty:
+                continue
+            identity = (request.execution_id, request.module_path)
+            ranges = observed_empty.setdefault(
+                identity, list(empty_ranges.get(identity, []))
+            )
+            if ranges and ranges[-1][0] == request.request_json:
+                ranges[-1] = (ranges[-1][0], request.receive_index)
+            else:
+                ranges.append((request.request_json, request.receive_index))
+        if observed_empty:
+            await db.executemany(
+                "INSERT OR REPLACE INTO execution_input_receives VALUES(?,?,?,?,?)",
+                [
+                    (
+                        execution_id,
+                        module_path,
+                        _EMPTY_RECEIPT_INDEX,
+                        json.dumps(
+                            {
+                                "empty_ranges": [
+                                    {"request": request_json, "through": through}
+                                    for request_json, through in ranges
+                                ]
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        "[]",
+                    )
+                    for (execution_id, module_path), ranges in observed_empty.items()
+                ],
+            )
         results.update(
             (execution_id, tuple(items)) for execution_id, items in selected.items()
         )

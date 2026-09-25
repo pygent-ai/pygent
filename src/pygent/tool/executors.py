@@ -13,7 +13,7 @@ from typing import Protocol, TypeAlias, cast, runtime_checkable
 from uuid import uuid4
 
 import httpx
-from jsonschema import ValidationError, validate
+from jsonschema import ValidationError
 
 from pygent.core import (
     Context,
@@ -26,6 +26,7 @@ from pygent.core import (
     thaw_json,
 )
 
+from ._schema import validate_instance
 from .types import (
     ToolCall,
     ToolResult,
@@ -612,9 +613,9 @@ class ToolRunner:
                 output = freeze_json(value)
                 content = ()
             if spec.definition.output_schema is not None:
-                validate(
+                validate_instance(
+                    cast(FrozenJsonObject, spec.definition.output_schema),
                     thaw_json(output),
-                    cast(Mapping[str, object], thaw_json(cast(FrozenJsonObject, spec.definition.output_schema))),
                 )
         except (ValidationError, TypeError, ValueError) as exc:
             result = ToolResult(

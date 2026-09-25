@@ -660,10 +660,10 @@ durable Handle，历史读取必须显式调用 `get_execution_handle()`。恢�
 并发 Execution create/claim/renew/update、effect begin/complete、Inbox receive 和 terminal 操作共享有界物理事务；任一请求失败时整批
 回滚并逐项重试隔离。effect 仍必须在外部操作前提交 started、操作后提交 completed，terminal
 仍在等待此前 Journal 后原子提交事件、Outcome、Snapshot 与 terminal sequence。
-不同 Execution 的 Inbox receive 在同一事务中批量检查回放回执、消费者和顺序游标；同一 Execution 的读取仍按队列顺序裁决。空读回执和封箱仍持久化，返回的 payload 只在按各自 limit 选定后读取。
+不同 Execution 的 Inbox receive 在同一事务中批量检查回放回执、消费者和顺序游标；同一 Execution 的读取仍按队列顺序裁决。空读回执和封箱仍持久化：每个 Execution 与 Module 的空观测可以用等价压缩表示（按输入顺序的索引区间，加上产生该观测的请求形状）代替逐条回执，重放时的判定结果与逐条保存相同；返回的 payload 只在按各自 limit 选定后读取。Journal schema 为 v8。
 默认值适合普通服务，部署者可以按并发量和本地内存预算调整。
 
-所有 managed Handle 都提供 `send_input(input_id=..., kind=..., value=...)`。返回的 `ExecutionInputDelivery.status` 为 `accepted`、`duplicate` 或 `execution_finished`；重复 `input_id` 保留原 sequence。Module 通过 `receive_execution_inputs(kinds=..., limit=16, seal_if_empty=False)` 按 Execution input sequence 获取 opaque 输入。单条输入不设固定字节大小上限；单 Execution 最多 256 条未终结输入、单次 receive 最大 256；每个 kind 只能由一个 Module path 消费。最终消费者使用 `seal_if_empty=True` 原子关闭空 Inbox，避免最后读取和 Execution finalization 之间丢消息。direct Handle 的 send 明确抛出 `DirectExecutionError`，direct Module receive 固定返回空 tuple。
+所有 managed Handle 都提供 `send_input(input_id=..., kind=..., value=...)`。返回的 `ExecutionInputDelivery.status` 为 `accepted`、`duplicate` 或 `execution_finished`；重复 `input_id` 保留原 sequence。Module 通过 `receive_execution_inputs(kinds=..., limit=16, seal_if_empty=False)` 按 Execution input sequence 获取 opaque 输入。单条输入不设固定字节大小上限；单 Execution 最多 256 条未终结输入、单次 receive 最大 256；每个 kind 只能由一个 Module path 消费。最终消费者使用 `seal_if_empty=True` 原子关闭空 Inbox（这次封箱读取按普通回执持久化），避免最后读取和 Execution finalization 之间丢消息。direct Handle 的 send 明确抛出 `DirectExecutionError`，direct Module receive 固定返回空 tuple。
 
 `DurabilityPolicy` 支持 `DISABLED`、`PREFERRED` 和 `REQUIRED`。`LocalRuntime(history=...)` 声明 `durability.sqlite`，但存储能力不等于 Module 恢复资格。`RecoverySafety` 与 `EffectSafety` 都是严格、不可变、可哈希的声明；普通 Module 默认两者均为 `UNDECLARED`。required 会逐个验证 ExecutionPlan 节点，缺 capability、未声明 boundary retry、存在未验证 effect 时都在 bind 阶段拒绝。preferred 可以降级，但必须由 `bound.durability` 报告 effective/missing capability、`recovery_undeclared_modules`、`effect_unverified_modules`、recovery/checkpoint/replay、事件重连、容量 scope 与降级原因。只有 SQLite 可用且整张图合格时才报告 `module_boundary_retry`；否则即使事件历史可重连，也只报告 `run_history_only`，且 `recover()` 拒绝。
 

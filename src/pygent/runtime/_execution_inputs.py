@@ -50,6 +50,12 @@ class MemoryExecutionInbox:
     receives: dict[tuple[str, int], tuple[ExecutionInput, ...]] = field(default_factory=dict)
     sealed: bool = False
     next_sequence: int = 0
+    # Signals that this in-memory inbox accepted an input, so a steering watcher
+    # can wait for delivery instead of polling a receive on every step boundary.
+    arrival: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def arrival_signal(self) -> asyncio.Event:
+        return self.arrival
 
     async def send(
         self, execution_id: str, *, input_id: str, kind: str, value: JsonValue
@@ -72,6 +78,7 @@ class MemoryExecutionInbox:
             self.next_sequence += 1
             self.inputs.append(item)
             self.by_id[input_id] = item
+            self.arrival.set()
             return ExecutionInputDelivery("accepted", execution_id, input_id, item.sequence)
 
     async def receive(

@@ -31,6 +31,7 @@ from pygent.tool import (
     ToolResultJson,
     ToolResultText,
 )
+from pygent.tool._schema import validate_instance
 
 from ._adapter_contracts import (
     MediaResolver,
@@ -716,7 +717,7 @@ def _validate_structured_output(request: ModelProviderRequest, content: str) -> 
         return content
     try:
         value = json.loads(content)
-        jsonschema.validate(value, cast(FrozenJsonObject, schema).to_dict())
+        validate_instance(cast(FrozenJsonObject, schema), value)
     except (json.JSONDecodeError, jsonschema.ValidationError) as exc:
         raise ModelProviderError(
             ModelErrorKind.INVALID_RESPONSE,

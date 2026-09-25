@@ -32,6 +32,7 @@ from pygent.core import (
     RecoverySafety,
     ToolMessage,
     UserMessage,
+    current_infrastructure,
 )
 from pygent.runtime import (
     CapacityPolicy,
@@ -41,6 +42,7 @@ from pygent.runtime import (
     LocalRuntime,
     SQLiteHistoryStore,
 )
+from pygent.runtime._execution_inputs import MemoryExecutionInbox
 from pygent.tool import (
     ExecutorRegistry,
     LocalToolExecutor,
@@ -804,3 +806,205 @@ async def test_durable_immediate_during_tool_batch_completes_batch(tmp_path) -> 
             "new direction",
         ]
         await runtime.close()
+
+
+# ---------------------------------------------------------------------------
+# Input-arrival signalling of the steering watcher
+# ---------------------------------------------------------------------------
+
+
+class _ArrivalSignalInfrastructure:
+    """Execution infrastructure proxy with a chosen input-arrival signal.
+
+    The watcher reads ``step_interrupt_event()`` and ``execution_input_event()``
+    from whatever ``active_infrastructure()`` returns, so a proxy can present a
+    runtime that has no arrival signal (``"hidden"``, the pre-arrival polling
+    contract) or whose signal never fires (``"dead"``, a lost wakeup) while every
+    other call still reaches the real execution scope.
+    """
+
+    def __init__(self, mode: str) -> None:
+        self.mode = mode
+        self.dead = asyncio.Event()
+
+    @staticmethod
+    def _inner():
+        return current_infrastructure()
+
+    def __getattr__(self, name: str):
+        if name == "execution_input_event" and self.mode == "hidden":
+            raise AttributeError(name)
+        return getattr(self._inner(), name)
+
+    def step_interrupt_event(self):
+        return self._inner().step_interrupt_event()
+
+    def execution_input_event(self):
+        if self.mode == "dead":
+            return self.dead
+        return self._inner().execution_input_event()
+
+
+async def _interrupt_with_immediate(
+    model: SteeringTestModel, handle, *, input_id: str
+) -> float:
+    """Deliver an immediate while the first (blocking) model call is in flight.
+
+    Returns the seconds between the delivery and the completed run.
+    """
+
+    await model.state.entered.wait()
+    started = time.perf_counter()
+    delivery = await handle.send_input(
+        input_id=input_id,
+        kind=REACT_PROJECTION_OPERATION_KIND,
+        value=steer(SteeringMode.IMMEDIATE),
+    )
+    assert delivery.status == "accepted"
+    answer, _ = await asyncio.wait_for(handle.result(), timeout=15)
+    assert answer.content == "final"
+    return time.perf_counter() - started
+
+
+@pytest.mark.asyncio
+async def test_steering_input_is_not_lost_at_clear_receive_and_wait_boundaries(
+    monkeypatch,
+) -> None:
+    # Boundary 1: delivered while the watcher waits for a delivery signal, so it
+    # must be absorbed and abort the in-flight model call.
+    model = SteeringTestModel((AIMessage(content="stale"), AIMessage(content="final")))
+    runtime = LocalRuntime()
+    handle = await bind(runtime, ReActLayer(model=model, tools=EmptyTools())).start(
+        UserMessage(content="initial"), Context(), execution=options()
+    )
+    await _interrupt_with_immediate(model, handle, input_id="wait-boundary")
+    assert model.state.aborted is True
+    assert [message.content for message in model.state.messages] == [
+        "initial",
+        "new direction",
+    ]
+    await runtime.close()
+
+    # Boundary 2: delivered from inside the first inbox receive, i.e. at the
+    # receive boundary the watcher clears and re-reads around. The input is
+    # consumed by the next drain, so the model call itself is not interrupted.
+    model = SteeringTestModel(
+        (AIMessage(content="stale"), AIMessage(content="final")), gated=True
+    )
+    runtime = LocalRuntime()
+    handle = await bind(runtime, ReActLayer(model=model, tools=EmptyTools())).start(
+        UserMessage(content="initial"), Context(), execution=options()
+    )
+    delivered = False
+    original_receive = MemoryExecutionInbox.receive
+
+    async def receive_after_delivery(self, **kwargs):
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            await handle.send_input(
+                input_id="receive-boundary",
+                kind=REACT_PROJECTION_OPERATION_KIND,
+                value=steer(SteeringMode.IMMEDIATE),
+            )
+        return await original_receive(self, **kwargs)
+
+    monkeypatch.setattr(MemoryExecutionInbox, "receive", receive_after_delivery)
+    await model.state.entered.wait()
+    model.state.release.set()
+    await asyncio.wait_for(handle.result(), timeout=15)
+    monkeypatch.undo()
+    assert delivered is True
+    assert (
+        sum(1 for message in model.state.messages if message.content == "new direction")
+        == 1
+    )
+    await runtime.close()
+
+    # Boundary 3: delivered before the first drain observes the inbox.
+    model = SteeringTestModel(
+        (AIMessage(content="stale"), AIMessage(content="final")), gated=True
+    )
+    runtime = LocalRuntime()
+    handle = await bind(runtime, ReActLayer(model=model, tools=EmptyTools())).start(
+        UserMessage(content="initial"), Context(), execution=options()
+    )
+    delivery = await handle.send_input(
+        input_id="early-boundary",
+        kind=REACT_PROJECTION_OPERATION_KIND,
+        value=steer(SteeringMode.IMMEDIATE),
+    )
+    assert delivery.status == "accepted"
+    await model.state.entered.wait()
+    model.state.release.set()
+    await asyncio.wait_for(handle.result(), timeout=15)
+    assert (
+        sum(1 for message in model.state.messages if message.content == "new direction")
+        == 1
+    )
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_steering_without_arrival_signal_polls_and_still_interrupts(
+    monkeypatch,
+) -> None:
+    # A runtime that only exposes the step-interrupt channel keeps the bounded
+    # polling cadence and must still deliver and interrupt.
+    monkeypatch.setattr(
+        "pygent.agent.react.active_infrastructure",
+        lambda: _ArrivalSignalInfrastructure("hidden"),
+    )
+    model = SteeringTestModel((AIMessage(content="stale"), AIMessage(content="final")))
+    runtime = LocalRuntime()
+    handle = await bind(runtime, ReActLayer(model=model, tools=EmptyTools())).start(
+        UserMessage(content="initial"), Context(), execution=options()
+    )
+    elapsed = await _interrupt_with_immediate(model, handle, input_id="polling")
+    assert model.state.aborted is True
+    assert [message.content for message in model.state.messages] == [
+        "initial",
+        "new direction",
+    ]
+    assert elapsed < 1.0
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_steering_lost_wakeup_falls_back_and_delivers_exactly_once(
+    monkeypatch,
+) -> None:
+    # A delivery signal that never fires costs the bounded fallback wait, and the
+    # input must still be delivered exactly once.
+    monkeypatch.setattr(
+        "pygent.agent.react.active_infrastructure",
+        lambda: _ArrivalSignalInfrastructure("dead"),
+    )
+    model = SteeringTestModel((AIMessage(content="stale"), AIMessage(content="final")))
+    runtime = LocalRuntime()
+    handle = await bind(runtime, ReActLayer(model=model, tools=EmptyTools())).start(
+        UserMessage(content="initial"), Context(), execution=options()
+    )
+    elapsed = await _interrupt_with_immediate(model, handle, input_id="lost-wakeup")
+    assert model.state.aborted is True
+    assert [message.content for message in model.state.messages] == [
+        "initial",
+        "new direction",
+    ]
+    assert elapsed >= 0.5
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_steering_arrival_wakes_watcher_without_polling_delay() -> None:
+    # The delivery signal, not the fallback timeout, is what makes the watcher
+    # prompt: a broken signal would delay this by the bounded fallback wait.
+    model = SteeringTestModel((AIMessage(content="stale"), AIMessage(content="final")))
+    runtime = LocalRuntime()
+    handle = await bind(runtime, ReActLayer(model=model, tools=EmptyTools())).start(
+        UserMessage(content="initial"), Context(), execution=options()
+    )
+    elapsed = await _interrupt_with_immediate(model, handle, input_id="prompt-wakeup")
+    assert model.state.aborted is True
+    assert elapsed < 0.5
+    await runtime.close()

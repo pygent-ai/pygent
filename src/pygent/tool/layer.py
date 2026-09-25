@@ -10,10 +10,7 @@ from dataclasses import replace
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from jsonschema import (  # type: ignore[import-untyped]
-    Draft202012Validator,
-    ValidationError,
-)
+from jsonschema import ValidationError
 
 from pygent.core import (
     AIMessage,
@@ -39,6 +36,7 @@ from pygent.core._tool_values import (
     _tool_result_content_to_value,
 )
 
+from ._schema import validate_draft202012
 from .executors import (
     ExecutorRegistry,
     ToolExecutionContext,
@@ -246,12 +244,10 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             return await self._reject_event(call, "tool_version_mismatch", spec)
 
         try:
-            Draft202012Validator(
-                cast(
-                    dict[str, Any],
-                    thaw_json(cast(FrozenJsonObject, spec.definition.parameters)),
-                )
-            ).validate(thaw_json(cast(FrozenJsonObject, call.arguments)))
+            validate_draft202012(
+                cast(FrozenJsonObject, spec.definition.parameters),
+                thaw_json(cast(FrozenJsonObject, call.arguments)),
+            )
             spec.resolve_wait_timeout(cast(FrozenJsonObject, call.arguments))
         except (ValidationError, ValueError) as exc:
             await self.emit(
@@ -741,12 +737,10 @@ def _result_from_replayed_effect(
         raise TypeError("replayed tool content must be an array")
     content = tuple(_tool_result_content_from_value(item) for item in raw_content)
     if spec.definition.output_schema is not None:
-        Draft202012Validator(
-            cast(
-                dict[str, Any],
-                thaw_json(cast(FrozenJsonObject, spec.definition.output_schema)),
-            )
-        ).validate(thaw_json(output))
+        validate_draft202012(
+            cast(FrozenJsonObject, spec.definition.output_schema),
+            thaw_json(output),
+        )
     return ToolResult(
         call_id=call.call_id,
         name=call.name,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 import pytest
@@ -19,6 +20,7 @@ from pygent.runtime import (
     CapacityScope,
     ExecutionCapacityPolicy,
     ExecutionOptions,
+    HistoryStoreError,
     LocalRuntime,
     SQLiteHistoryStore,
 )
@@ -307,8 +309,10 @@ async def test_sqlite_receives_batch_queries_and_keep_empty_receipts(tmp_path):
         )
         await store._db().set_trace_callback(None)
         assert (
+            # Receipt, empty-observation and inbox lookups are batched, so the
+            # query count stays bounded instead of scaling with the batch.
             len([q for q in queries if q.startswith("SELECT") and "json_each" in q])
-            == 3
+            == 4
         )
         assert (
             await store._db().execute_fetchall(
@@ -498,3 +502,277 @@ async def test_sqlite_stale_receive_cannot_consume_or_seal_and_valid_peer_surviv
             assert [i.input_id for i in await _receive(store, "stale")] == [
                 "still-open"
             ]
+
+
+# ---------------------------------------------------------------------------
+# Compressed empty observations (marker rows) and schema versioning
+# ---------------------------------------------------------------------------
+
+
+def _request_shape(*, kinds=("a", "b"), limit=16, seal=False):
+    """Mirror the persisted receive request so markers can be asserted exactly."""
+
+    return json.dumps(
+        {"kinds": list(kinds), "limit": limit, "seal_if_empty": seal},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+async def _empty_markers(store):
+    """Return the compressed empty-observation marker rows, payload included."""
+
+    rows = await store._db().execute_fetchall(
+        "SELECT execution_id,module_path,request_json FROM execution_input_receives "
+        "WHERE receive_index=-1 ORDER BY execution_id,module_path"
+    )
+    return [(row[0], row[1], row[2]) for row in rows]
+
+
+def _empty_ranges(request_json):
+    return [
+        (entry["request"], entry["through"])
+        for entry in json.loads(request_json)["empty_ranges"]
+    ]
+
+
+async def _receipt_count(store):
+    rows = await store._db().execute_fetchall(
+        "SELECT COUNT(*) FROM execution_input_receives"
+    )
+    return int(rows[0][0])
+
+
+@pytest.mark.asyncio
+async def test_sqlite_empty_marker_ranges_survive_shape_changes_and_interleaving(
+    tmp_path,
+):
+    async with SQLiteHistoryStore(tmp_path / "ranges.sqlite3") as store:
+        await _create_inbox_execution(store, "one")
+        assert await _receive(store, "one") == ()
+        assert await _receive(store, "one", index=1) == ()
+        await store.send_execution_input("one", input_id="m1", kind="a", value=1)
+        assert [i.input_id for i in await _receive(store, "one", index=2)] == ["m1"]
+        assert await _receive(store, "one", index=3) == ()
+        assert await _receive(store, "one", index=4, limit=1) == ()
+
+        markers = await _empty_markers(store)
+        assert [(execution_id, module_path) for execution_id, module_path, _ in markers] == [
+            ("one", "root")
+        ]
+        assert _empty_ranges(markers[0][2]) == [
+            (_request_shape(), 3),
+            (_request_shape(limit=1), 4),
+        ]
+        assert await _receipt_count(store) == 2
+
+        # Replay: recorded receipts win, marker intervals answer the empty reads,
+        # and a different request shape for an observed index is still rejected.
+        assert await _receive(store, "one", index=0) == ()
+        assert await _receive(store, "one", index=1) == ()
+        assert [i.input_id for i in await _receive(store, "one", index=2)] == ["m1"]
+        assert await _receive(store, "one", index=3) == ()
+        assert await _receive(store, "one", index=4, limit=1) == ()
+        with pytest.raises(RuntimeError):
+            await _receive(store, "one", index=1, limit=1)
+        with pytest.raises(RuntimeError):
+            await _receive(store, "one", index=2, limit=1)
+        assert await _receipt_count(store) == 2
+
+
+@pytest.mark.asyncio
+async def test_sqlite_empty_marker_replays_across_reopen_and_interleaves_with_receipts(
+    tmp_path,
+):
+    path = tmp_path / "reopen.sqlite3"
+    async with SQLiteHistoryStore(path) as store:
+        await _create_inbox_execution(store, "one")
+        assert await _receive(store, "one") == ()
+        assert await _receive(store, "one", index=1) == ()
+        await store.send_execution_input("one", input_id="m1", kind="a", value=1)
+        assert [i.input_id for i in await _receive(store, "one", index=2)] == ["m1"]
+        assert await _receive(store, "one", index=3) == ()
+    async with SQLiteHistoryStore(path) as reopened:
+        markers = await _empty_markers(reopened)
+        assert [(execution_id, module_path) for execution_id, module_path, _ in markers] == [
+            ("one", "root")
+        ]
+        assert _empty_ranges(markers[0][2]) == [(_request_shape(), 3)]
+        assert await _receive(reopened, "one", index=0) == ()
+        assert await _receive(reopened, "one", index=1) == ()
+        assert [i.input_id for i in await _receive(reopened, "one", index=2)] == ["m1"]
+        assert await _receive(reopened, "one", index=3) == ()
+        assert await _receipt_count(reopened) == 2
+
+
+@pytest.mark.asyncio
+async def test_sqlite_uncommitted_empty_observation_is_not_replayed_as_empty(
+    tmp_path, monkeypatch
+):
+    async with SQLiteHistoryStore(tmp_path / "uncommitted.sqlite3") as store:
+        await _create_inbox_execution(store, "one")
+        original = store._batch_receive_inputs
+        failing = True
+
+        async def fail_after_staging(db, payloads):
+            result = await original(db, payloads)
+            if failing:
+                raise HistoryStoreError("injected after the empty observation staged")
+            return result
+
+        monkeypatch.setattr(store, "_batch_receive_inputs", fail_after_staging)
+        with pytest.raises(HistoryStoreError):
+            await _receive(store, "one")
+        assert await _empty_markers(store) == []
+        assert await _receipt_count(store) == 0
+
+        # A read that never committed must be read again, not replayed as empty.
+        monkeypatch.undo()
+        await store.send_execution_input("one", input_id="after", kind="a", value=1)
+        assert [i.input_id for i in await _receive(store, "one")] == ["after"]
+
+
+@pytest.mark.asyncio
+async def test_sqlite_empty_marker_is_isolated_per_execution_and_module(tmp_path):
+    async with SQLiteHistoryStore(tmp_path / "isolated-markers.sqlite3") as store:
+        for identity in ("A", "B"):
+            await _create_inbox_execution(store, identity)
+        for index in range(3):
+            assert await _receive(store, "A", module="m1", kinds=("a",), index=index) == ()
+        for index in range(2):
+            assert await _receive(store, "A", module="m2", kinds=("b",), index=index) == ()
+        assert await _receive(store, "B", module="m1", kinds=("a",), index=0) == ()
+
+        markers = {
+            (execution_id, module_path): _empty_ranges(request_json)
+            for execution_id, module_path, request_json in await _empty_markers(store)
+        }
+        assert set(markers) == {("A", "m1"), ("A", "m2"), ("B", "m1")}
+        assert markers[("A", "m1")] == [(_request_shape(kinds=("a",)), 2)]
+        assert markers[("A", "m2")] == [(_request_shape(kinds=("b",)), 1)]
+        assert markers[("B", "m1")] == [(_request_shape(kinds=("a",)), 0)]
+
+        # A marker answers only its own execution and module: these indexes were
+        # never observed there, so they are read live and extend that marker.
+        assert await _receive(store, "A", module="m2", kinds=("b",), index=2) == ()
+        assert await _receive(store, "B", module="m1", kinds=("a",), index=1) == ()
+        markers = {
+            (execution_id, module_path): _empty_ranges(request_json)
+            for execution_id, module_path, request_json in await _empty_markers(store)
+        }
+        assert markers[("A", "m2")] == [(_request_shape(kinds=("b",)), 2)]
+        assert markers[("A", "m1")] == [(_request_shape(kinds=("a",)), 2)]
+        assert markers[("B", "m1")] == [(_request_shape(kinds=("a",)), 1)]
+
+
+@pytest.mark.asyncio
+async def test_sqlite_empty_marker_then_seal_keeps_send_closed_and_replays_on_reopen(
+    tmp_path,
+):
+    path = tmp_path / "marker-seal.sqlite3"
+    async with SQLiteHistoryStore(path) as store:
+        await _create_inbox_execution(store, "one")
+        assert await _receive(store, "one", kinds=("a",)) == ()
+        assert await _receive(store, "one", kinds=("a",), index=1, seal=True) == ()
+        assert (
+            await store.send_execution_input("one", input_id="late", kind="a", value=1)
+        ).status == "execution_finished"
+        rows = await store._db().execute_fetchall(
+            "SELECT receive_index,batch_json FROM execution_input_receives "
+            "ORDER BY receive_index"
+        )
+        assert [(int(index), batch) for index, batch in rows] == [(-1, "[]"), (1, "[]")]
+        assert _empty_ranges((await _empty_markers(store))[0][2]) == [
+            (_request_shape(kinds=("a",)), 0)
+        ]
+    async with SQLiteHistoryStore(path) as reopened:
+        assert await _receive(reopened, "one", kinds=("a",)) == ()
+        assert await _receive(reopened, "one", kinds=("a",), index=1, seal=True) == ()
+        assert await _receipt_count(reopened) == 2
+        assert (
+            await reopened.send_execution_input(
+                "one", input_id="later", kind="a", value=1
+            )
+        ).status == "execution_finished"
+
+
+@pytest.mark.asyncio
+async def test_sqlite_journal_schema_is_v8(tmp_path):
+    path = tmp_path / "version.sqlite3"
+    async with SQLiteHistoryStore(path) as store:
+        await _create_inbox_execution(store, "one")
+        assert await _receive(store, "one") == ()
+        rows = await store._db().execute_fetchall("PRAGMA user_version")
+        assert int(rows[0][0]) == 8
+
+    # The journal reopens with the same schema and keeps replaying its recorded
+    # observations.
+    async with SQLiteHistoryStore(path) as reopened:
+        rows = await reopened._db().execute_fetchall("PRAGMA user_version")
+        assert int(rows[0][0]) == 8
+        assert _empty_ranges((await _empty_markers(reopened))[0][2]) == [
+            (_request_shape(), 0)
+        ]
+        assert await _receive(reopened, "one") == ()
+
+
+def test_empty_range_verdict_depends_on_ascending_intervals() -> None:
+    from pygent.runtime._history_inputs import _empty_range_verdict
+
+    ascending = [(_request_shape(limit=1), 1), (_request_shape(), 3)]
+    # Index 1 was observed under the limit=1 shape, so replaying it under the
+    # default shape is a changed request.
+    assert _empty_range_verdict(ascending, 1, _request_shape()) is False
+    # Swapping the intervals flips the same query to "observed empty" because the
+    # verdict derives each start from the previous `through`. That is why a marker
+    # with unordered intervals is rejected instead of being sorted.
+    assert _empty_range_verdict(list(reversed(ascending)), 1, _request_shape()) is True
+
+
+@pytest.mark.asyncio
+async def test_sqlite_disordered_empty_marker_is_rejected_not_repaired(tmp_path):
+    async with SQLiteHistoryStore(tmp_path / "disordered.sqlite3") as store:
+        await _create_inbox_execution(store, "one")
+        assert await _receive(store, "one") == ()
+        assert await _receive(store, "one", index=1) == ()
+        await store._db().execute(
+            "UPDATE execution_input_receives SET request_json=? "
+            "WHERE receive_index=-1",
+            (
+                json.dumps(
+                    {
+                        "empty_ranges": [
+                            {"request": _request_shape(limit=1), "through": 1},
+                            {"request": _request_shape(), "through": 0},
+                        ]
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ),
+        )
+        await store._db().commit()
+        with pytest.raises(HistoryStoreError):
+            await _receive(store, "one", index=2)
+
+        # The same observations in the ascending order this writer produces still
+        # replay: the rejection is about unordered data, not about the format.
+        await store._db().execute(
+            "UPDATE execution_input_receives SET request_json=? "
+            "WHERE receive_index=-1",
+            (
+                json.dumps(
+                    {
+                        "empty_ranges": [
+                            {"request": _request_shape(), "through": 0},
+                            {"request": _request_shape(limit=1), "through": 1},
+                        ]
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ),
+        )
+        await store._db().commit()
+        assert await _receive(store, "one", index=0) == ()
+        assert await _receive(store, "one", index=1, limit=1) == ()

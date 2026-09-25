@@ -33,6 +33,9 @@ from .reminder import InjectionKind, format_context
 _INJECTION_KINDS = frozenset(kind.value for kind in InjectionKind)
 
 _STEERING_POLL_SECONDS = 0.05
+# Backstop for runtimes that cannot signal input arrival; delivery-driven waits
+# wake immediately, so this only bounds a missed signal.
+_STEERING_IDLE_WAIT_SECONDS = 1.0
 
 TOOL_BATCH_INTERRUPT_NOTICE = (
     "Tool batch interrupted by a new user message. Completed calls keep "
@@ -169,23 +172,55 @@ class ReActLayer(Module[UserMessage, AIMessage]):
         event = getter() if callable(getter) else None
         return event if isinstance(event, asyncio.Event) else None
 
+    @staticmethod
+    def _input_arrival_event(infrastructure: object) -> asyncio.Event | None:
+        getter = getattr(infrastructure, "execution_input_event", None)
+        event = getter() if callable(getter) else None
+        return event if isinstance(event, asyncio.Event) else None
+
+    @staticmethod
+    async def _wait_for_steering(
+        state: _SteeringState, arrival: asyncio.Event | None
+    ) -> None:
+        """Wait for the run to finish or for a delivered input."""
+
+        waiters = [asyncio.ensure_future(state.finished_event.wait())]
+        if arrival is not None:
+            # The delivery signal is authoritative for in-memory executions; the
+            # timeout only bounds the damage of a missed signal.
+            waiters.append(asyncio.ensure_future(arrival.wait()))
+        try:
+            await asyncio.wait(
+                waiters,
+                timeout=(
+                    _STEERING_IDLE_WAIT_SECONDS
+                    if arrival is not None
+                    else _STEERING_POLL_SECONDS
+                ),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for waiter in waiters:
+                if not waiter.done():
+                    waiter.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
+
     async def _watch_steering(self, state: _SteeringState) -> None:
         assert state.event is not None
+        arrival = self._input_arrival_event(active_infrastructure())
         try:
             while not state.finished_event.is_set():
+                if arrival is not None:
+                    # Consume the signal first: a delivery after this point sets
+                    # it again, and one before it is served by the receive below.
+                    arrival.clear()
                 inputs = await self.receive_execution_inputs(
                     kinds=(REACT_PROJECTION_OPERATION_KIND,),
                     limit=16,
                     seal_if_empty=False,
                 )
                 if not inputs:
-                    try:
-                        await asyncio.wait_for(
-                            state.finished_event.wait(),
-                            timeout=_STEERING_POLL_SECONDS,
-                        )
-                    except TimeoutError:
-                        pass
+                    await self._wait_for_steering(state, arrival)
                     continue
                 for item in inputs:
                     try:

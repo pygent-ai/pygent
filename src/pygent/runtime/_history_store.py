@@ -140,10 +140,13 @@ class SQLiteHistoryStore(
                 )
             ).fetchall()
         }
-        if tables and user_version != 7:
+        # Journal schema v8: empty inbox observations are persisted as one
+        # compressed marker row per execution/module (see docs/runtime/SDK.md).
+        if tables and user_version != 8:
             await self.close()
             raise HistoryStoreError(
-                "SQLite history schema is incompatible; this Runtime requires schema v7"
+                "SQLite history schema is incompatible; this Runtime requires "
+                "schema v8"
             )
         await self._connection.executescript(
             """
@@ -281,7 +284,7 @@ class SQLiteHistoryStore(
             "ON executions(binding_id,identity,idempotency_key) "
             "WHERE idempotency_key IS NOT NULL"
         )
-        await self._connection.execute("PRAGMA user_version=7")
+        await self._connection.execute("PRAGMA user_version=8")
         await self._connection.commit()
         return self
 

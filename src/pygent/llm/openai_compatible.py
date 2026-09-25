@@ -35,6 +35,7 @@ from pygent.tool import (
     ToolResultJson,
     ToolResultText,
 )
+from pygent.tool._schema import validate_instance
 
 from ._adapter_contracts import (
     MediaResolver,
@@ -569,11 +570,9 @@ class OpenAICompatibleAdapter:
         if request.generation.response_schema is not None:
             try:
                 value = _decode_json(content)
-                jsonschema.validate(
+                validate_instance(
+                    cast(FrozenJsonObject, request.generation.response_schema),
                     value,
-                    _schema_projection(
-                        cast(FrozenJsonObject, request.generation.response_schema)
-                    ),
                 )
                 content = _wire_json(value)
             except (json.JSONDecodeError, jsonschema.ValidationError) as exc:

@@ -16,6 +16,7 @@ from pygent.core import (
     freeze_json_object,
 )
 from pygent.tool import ToolCall, ToolDefinition
+from pygent.tool._schema import validate_instance
 
 from ._adapter_contracts import (
     EventSink,
@@ -218,9 +219,8 @@ class ModelStreamAccumulator:
             return
         try:
             value = _decode_json(content)
-            jsonschema.validate(
-                value,
-                freeze_json_object(self.generation.response_schema).to_dict(),
+            validate_instance(
+                freeze_json_object(self.generation.response_schema), value
             )
             self.text_parts[:] = [_wire_json(value)]
         except (json.JSONDecodeError, jsonschema.ValidationError):
