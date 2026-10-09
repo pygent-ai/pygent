@@ -36,7 +36,7 @@ from pygent.core._tool_values import (
     _tool_result_content_to_value,
 )
 
-from ._schema import validate_draft202012
+from ._schema_validation import validate_tool_value
 from .executors import (
     ExecutorRegistry,
     ToolExecutionContext,
@@ -244,9 +244,10 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             return await self._reject_event(call, "tool_version_mismatch", spec)
 
         try:
-            validate_draft202012(
+            validate_tool_value(
                 cast(FrozenJsonObject, spec.definition.parameters),
-                thaw_json(cast(FrozenJsonObject, call.arguments)),
+                cast(FrozenJsonObject, call.arguments),
+                draft202012=True,
             )
             spec.resolve_wait_timeout(cast(FrozenJsonObject, call.arguments))
         except (ValidationError, ValueError) as exc:
@@ -737,9 +738,10 @@ def _result_from_replayed_effect(
         raise TypeError("replayed tool content must be an array")
     content = tuple(_tool_result_content_from_value(item) for item in raw_content)
     if spec.definition.output_schema is not None:
-        validate_draft202012(
+        validate_tool_value(
             cast(FrozenJsonObject, spec.definition.output_schema),
-            thaw_json(output),
+            output,
+            draft202012=True,
         )
     return ToolResult(
         call_id=call.call_id,

@@ -24,7 +24,36 @@ from pygent.runtime import (
     LocalRuntime,
     SQLiteHistoryStore,
 )
-from pygent.runtime._execution_inputs import ExecutionInputConsumerError
+from pygent.runtime._execution_inputs import (
+    ExecutionInputConsumerError,
+    MemoryExecutionInbox,
+)
+
+
+@pytest.mark.asyncio
+async def test_memory_inbox_notifies_only_accepted_matching_inputs() -> None:
+    inbox = MemoryExecutionInbox()
+    seen = []
+    listener = seen.append
+    await inbox.add_input_listener("steering", listener)
+    await inbox.send("execution", input_id="other", kind="other", value={})
+    assert not seen
+    await inbox.send("execution", input_id="steer", kind="steering", value={})
+    assert len(seen) == 1
+    await inbox.send("execution", input_id="steer", kind="steering", value={})
+    assert len(seen) == 1
+
+    received = await inbox.receive(
+        module_path="agent",
+        receive_index=0,
+        kinds=("steering",),
+        limit=16,
+        seal_if_empty=False,
+    )
+    assert [item.input_id for item in received] == ["steer"]
+    await inbox.remove_input_listener("steering", listener)
+    await inbox.send("execution", input_id="second", kind="steering", value={})
+    assert len(seen) == 1
 
 
 class InputReceiver(Module[UserMessage, AIMessage]):

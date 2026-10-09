@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from .executors import (
     AgentToolExecutor,
     ExecutorRegistry,
@@ -15,19 +17,6 @@ from .executors import (
 )
 from .functional import ToolExecutorFactory, ToolKit, tool
 from .layer import ToolCallLayer, TrustedAuthorizationAdapter
-from .standard import (
-    BashTools,
-    FileTools,
-    PowerShellTools,
-    ShellIdentity,
-    StandardTools,
-    TerminalSessionStore,
-    TerminalTools,
-    WebFetchTools,
-    WebSearchTools,
-    ZshTools,
-    describe_shell_environment,
-)
 from .task_handle import ToolTaskHandle
 from .types import (
     IdempotencyPolicy,
@@ -47,6 +36,47 @@ from .types import (
     ToolTask,
     ToolTaskState,
 )
+
+if TYPE_CHECKING:
+    from .standard import (
+        BashTools,
+        FileTools,
+        PowerShellTools,
+        ShellIdentity,
+        StandardTools,
+        TerminalSessionStore,
+        TerminalTools,
+        WebFetchTools,
+        WebSearchTools,
+        ZshTools,
+        describe_shell_environment,
+    )
+
+_STANDARD_EXPORTS = frozenset(
+    {
+        "BashTools",
+        "FileTools",
+        "PowerShellTools",
+        "ShellIdentity",
+        "StandardTools",
+        "TerminalSessionStore",
+        "TerminalTools",
+        "WebFetchTools",
+        "WebSearchTools",
+        "ZshTools",
+        "describe_shell_environment",
+    }
+)
+
+
+def __getattr__(name: str) -> object:
+    if name in _STANDARD_EXPORTS:
+        from . import standard
+
+        value = getattr(standard, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "AgentToolExecutor",

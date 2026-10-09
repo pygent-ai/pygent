@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from pygent.core import (
@@ -48,6 +49,9 @@ class MemoryExecutionInbox:
     consumers: dict[str, str] = field(default_factory=dict)
     cursors: dict[str, int] = field(default_factory=dict)
     receives: dict[tuple[str, int], tuple[ExecutionInput, ...]] = field(default_factory=dict)
+    input_listeners: dict[str, list[Callable[[JsonValue], None]]] = field(
+        default_factory=dict
+    )
     sealed: bool = False
     next_sequence: int = 0
     # Signals that this in-memory inbox accepted an input, so a steering watcher
@@ -79,7 +83,29 @@ class MemoryExecutionInbox:
             self.inputs.append(item)
             self.by_id[input_id] = item
             self.arrival.set()
-            return ExecutionInputDelivery("accepted", execution_id, input_id, item.sequence)
+            listeners = tuple(self.input_listeners.get(kind, ()))
+            delivery = ExecutionInputDelivery(
+                "accepted", execution_id, input_id, item.sequence
+            )
+        for listener in listeners:
+            listener(frozen)
+        return delivery
+
+    async def add_input_listener(
+        self, kind: str, listener: Callable[[JsonValue], None]
+    ) -> None:
+        async with self.lock:
+            self.input_listeners.setdefault(kind, []).append(listener)
+
+    async def remove_input_listener(
+        self, kind: str, listener: Callable[[JsonValue], None]
+    ) -> None:
+        async with self.lock:
+            listeners = self.input_listeners.get(kind)
+            if listeners is not None:
+                listeners.remove(listener)
+                if not listeners:
+                    del self.input_listeners[kind]
 
     async def receive(
         self,

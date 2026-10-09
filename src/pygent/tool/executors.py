@@ -26,7 +26,7 @@ from pygent.core import (
     thaw_json,
 )
 
-from ._schema import validate_instance
+from ._schema_validation import validate_tool_value
 from .types import (
     ToolCall,
     ToolResult,
@@ -606,16 +606,28 @@ class ToolRunner:
                 tool_id=spec.tool_id, tool_version=spec.version,
             )
         try:
+            output: object
             if type(value) is ToolOutput:
                 output = value.output
                 content = value.content
             else:
-                output = freeze_json(value)
+                output = value
                 content = ()
+            result = ToolResult(
+                call_id=call.call_id,
+                name=call.name,
+                status="succeeded",
+                task=task,
+                output=cast(JsonValue, output),
+                content=content,
+                side_effect_committed=True,
+                tool_id=spec.tool_id,
+                tool_version=spec.version,
+            )
             if spec.definition.output_schema is not None:
-                validate_instance(
+                validate_tool_value(
                     cast(FrozenJsonObject, spec.definition.output_schema),
-                    thaw_json(output),
+                    result.output,
                 )
         except (ValidationError, TypeError, ValueError) as exc:
             result = ToolResult(
@@ -627,17 +639,6 @@ class ToolRunner:
             )
             await emit("tool.failed", {"call_id": call.call_id, "error_kind": "validation_error"})
             return result
-        result = ToolResult(
-            call_id=call.call_id,
-            name=call.name,
-            status="succeeded",
-            task=task,
-            output=output,
-            content=content,
-            side_effect_committed=True,
-            tool_id=spec.tool_id,
-            tool_version=spec.version,
-        )
         await emit("tool.completed", {"call_id": call.call_id})
         return result
 

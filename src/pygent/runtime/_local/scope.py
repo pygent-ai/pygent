@@ -7,7 +7,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from typing import Any, cast
 
 from pygent.core import (
@@ -66,6 +66,8 @@ class _ManagedScope(ExecutionScope):
         self._paths = {id(module): path for path, module in record.graph.items()}
         self._parallel_tasks: set[asyncio.Task[Any]] = set()
         self._dependency_paths = _collect_dependency_paths(record.graph["root"])
+        self._reusable_interrupt_waiter: asyncio.Task[bool] | None = None
+        self._interrupt_listener_count = 0
 
     @property
     def deadline(self) -> float | None:
@@ -133,6 +135,27 @@ class _ManagedScope(ExecutionScope):
             limit=limit,
             seal_if_empty=seal_if_empty,
         )
+
+    async def add_execution_input_listener(
+        self, kind: str, listener: Callable[[JsonValue], None]
+    ) -> None:
+        self._require_owner_task()
+        await self.record.input_inbox.add_input_listener(kind, listener)
+        self._interrupt_listener_count += 1
+
+    async def remove_execution_input_listener(
+        self, kind: str, listener: Callable[[JsonValue], None]
+    ) -> None:
+        self._require_owner_task()
+        await self.record.input_inbox.remove_input_listener(kind, listener)
+        self._interrupt_listener_count -= 1
+        if self._interrupt_listener_count == 0:
+            waiter = self._reusable_interrupt_waiter
+            self._reusable_interrupt_waiter = None
+            if waiter is not None:
+                waiter.cancel()
+                with suppress(asyncio.CancelledError):
+                    await waiter
 
     def step_interrupt_event(self) -> asyncio.Event | None:
         """Return this execution's cooperative step-interrupt signal.
@@ -261,7 +284,17 @@ class _ManagedScope(ExecutionScope):
         ``gather_until``.
         """
 
-        waiter = asyncio.create_task(abort.wait())
+        reusable = (
+            self._interrupt_listener_count > 0
+            and abort is self.record.step_interrupt_event
+        )
+        if reusable:
+            waiter = self._reusable_interrupt_waiter
+            if waiter is None or waiter.done():
+                waiter = asyncio.create_task(abort.wait())
+                self._reusable_interrupt_waiter = waiter
+        else:
+            waiter = asyncio.create_task(abort.wait())
         interrupted = False
         try:
             pending = set(tasks)
@@ -304,7 +337,8 @@ class _ManagedScope(ExecutionScope):
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
         finally:
-            waiter.cancel()
+            if not reusable:
+                waiter.cancel()
 
     async def gather(
         self, operations: tuple[Callable[[], Awaitable[Any]], ...]

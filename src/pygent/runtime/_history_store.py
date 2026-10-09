@@ -66,7 +66,7 @@ class SQLiteHistoryStore(
         *,
         max_event_batch_size: int = 64,
         max_pending_event_batches: int = 16,
-        max_transaction_batch_size: int = 64,
+        max_transaction_batch_size: int = 512,
         max_pending_transactions: int = 1024,
         timeout_seconds: float = 30.0,
     ) -> None:

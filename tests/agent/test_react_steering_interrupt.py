@@ -434,8 +434,9 @@ async def test_voided_tool_calls_keep_model_projection_replacement(
     import pygent.agent.react as react_module
 
     class CompletedRaceState(react_module._SteeringState):
-        def absorb(self, item, operation):
-            self.pending.append((item, operation))
+        def signal_immediate_input(self):
+            # Force the model effect to complete before the boundary receive.
+            return None
 
     monkeypatch.setattr(react_module, "_SteeringState", CompletedRaceState)
     model = GatedModelWithReplacement(
@@ -460,7 +461,7 @@ async def test_voided_tool_calls_keep_model_projection_replacement(
         value=steer(SteeringMode.IMMEDIATE),
     )
     assert delivery.status == "accepted"
-    await asyncio.sleep(0.2)  # let the watcher absorb into pending
+    await asyncio.sleep(0.2)  # allow the input to commit before model completion
     model.state.release.set()
 
     collected: list[object] = []
@@ -832,6 +833,8 @@ class _ArrivalSignalInfrastructure:
         return current_infrastructure()
 
     def __getattr__(self, name: str):
+        if name in {"add_execution_input_listener", "remove_execution_input_listener"}:
+            raise AttributeError(name)
         if name == "execution_input_event" and self.mode == "hidden":
             raise AttributeError(name)
         return getattr(self._inner(), name)

@@ -344,10 +344,14 @@ class ExecutionInputHistoryMixin:
                 raise ExecutionInputConsumerError(
                     f"execution input kind {kind!r} is owned by {owner!r}"
                 )
-        await db.executemany(
-            "INSERT OR IGNORE INTO execution_inboxes(execution_id,next_sequence,sealed) VALUES(?,0,0)",
-            [(r.execution_id,) for r in pending],
-        )
+        sealing = [(r.execution_id,) for r in pending if r.seal_if_empty]
+        if sealing:
+            # Empty non-sealing receives only claim their consumer and record
+            # the receipt. Sending an input creates the inbox on demand.
+            await db.executemany(
+                "INSERT OR IGNORE INTO execution_inboxes(execution_id,next_sequence,sealed) VALUES(?,0,0)",
+                sealing,
+            )
         await db.executemany(
             "INSERT OR IGNORE INTO execution_input_consumers"
             "(execution_id,kind,module_path,last_sequence) VALUES(?,?,?,-1)",

@@ -419,7 +419,7 @@ def _project_video(
     block: MediaBlock, data: bytes, plan: MediaProjectionPlan
 ) -> tuple[MediaBlock, tuple[str, ...]]:
     try:
-        import av  # type: ignore[import-untyped]
+        import av  # type: ignore[import-not-found,import-untyped]
     except (ImportError, OSError):
         _projection_error(
             "video projection requires the optional video backend",

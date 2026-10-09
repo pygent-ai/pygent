@@ -1,6 +1,7 @@
 """Bounded ReAct composition with managed runtime context inputs."""
 
 import asyncio
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from typing import cast
@@ -11,6 +12,7 @@ from pygent.core import (
     EffectSafety,
     ExecutionInput,
     ExecutionRequirements,
+    JsonValue,
     Message,
     Module,
     RecoverySafety,
@@ -68,6 +70,7 @@ class _SteeringState:
     __slots__ = (
         "event",
         "finished_event",
+        "listener_mode",
         "pending",
         "tool_batch_interrupted",
     )
@@ -77,6 +80,7 @@ class _SteeringState:
         self.finished_event = asyncio.Event()
         self.pending: list[tuple[ExecutionInput, ReActProjectionOperation]] = []
         self.tool_batch_interrupted = False
+        self.listener_mode = False
 
     def absorb(self, item: ExecutionInput, operation: ReActProjectionOperation) -> None:
         self.pending.append((item, operation))
@@ -98,6 +102,10 @@ class _SteeringState:
             and operation.mode is SteeringMode.IMMEDIATE
             for _, operation in self.pending
         )
+
+    def signal_immediate_input(self) -> None:
+        if self.event is not None:
+            self.event.set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +161,33 @@ class ReActLayer(Module[UserMessage, AIMessage]):
             # worker): steering applies at the wait-mode drain points only.
             return await self._run_react(message, context, state, infrastructure)
         assert infrastructure is not None
+
+        add_listener = getattr(infrastructure, "add_execution_input_listener", None)
+        remove_listener = getattr(
+            infrastructure, "remove_execution_input_listener", None
+        )
+        if callable(add_listener) and callable(remove_listener):
+            state.listener_mode = True
+
+            def signal_immediate(value: JsonValue) -> None:
+                if (
+                    isinstance(value, Mapping)
+                    and value.get("type") == "standalone_user_message"
+                    and value.get("mode") == SteeringMode.IMMEDIATE.value
+                ):
+                    state.signal_immediate_input()
+
+            await add_listener(REACT_PROJECTION_OPERATION_KIND, signal_immediate)
+            try:
+                async def run_with_listener() -> tuple[AIMessage, Context]:
+                    return await self._run_react(
+                        message, context, state, infrastructure
+                    )
+
+                results = await infrastructure.gather((run_with_listener,))
+                return results[0]
+            finally:
+                await remove_listener(REACT_PROJECTION_OPERATION_KIND, signal_immediate)
 
         async def run() -> tuple[AIMessage, Context]:
             try:
@@ -254,6 +289,7 @@ class ReActLayer(Module[UserMessage, AIMessage]):
         steps = 0
         model_calls = 0
         tool_calls = 0
+        has_inbox = getattr(infrastructure, "managed_execution_id", None) is not None
         current: Message = message
         if message.kind in _INJECTION_KINDS:
             current = replace(
@@ -268,18 +304,23 @@ class ReActLayer(Module[UserMessage, AIMessage]):
         ]
 
         while True:
-            outcome = await self._drain_projection_operations(
-                history,
-                current,
-                current_committed=current_committed,
-                entry_revision=entry_revision,
-                changes=changes,
-                seal_if_empty=False,
-                prelude=state.take_pending(),
-            )
-            history = outcome.history
-            current = outcome.current
-            current_committed = outcome.current_committed
+            if state.listener_mode and state.event is not None:
+                # Clear before the receive: a later accepted input can then
+                # signal the next in-flight step without being lost.
+                state.event.clear()
+            if has_inbox:
+                outcome = await self._drain_projection_operations(
+                    history,
+                    current,
+                    current_committed=current_committed,
+                    entry_revision=entry_revision,
+                    changes=changes,
+                    seal_if_empty=False,
+                    prelude=state.take_pending(),
+                )
+                history = outcome.history
+                current = outcome.current
+                current_committed = outcome.current_committed
             _admit("max_steps", used=steps, requested=1, limit=self.max_steps)
             _admit(
                 "max_model_calls",
@@ -287,7 +328,11 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                 requested=1,
                 limit=self.max_model_calls,
             )
-            if state.event is not None and not state.has_pending_immediate():
+            if (
+                state.event is not None
+                and not state.listener_mode
+                and not state.has_pending_immediate()
+            ):
                 # Pending steering has been applied; the next in-flight step
                 # must not be aborted by an already-handled interrupt. An
                 # immediate absorbed while this drain was running keeps its
@@ -322,29 +367,33 @@ class ReActLayer(Module[UserMessage, AIMessage]):
             # ephemeral executions it merges watcher-pending operations. An
             # immediate applied here supersedes the returned answer before
             # any tool runs.
-            outcome = await self._drain_projection_operations(
-                history,
-                current,
-                current_committed=current_committed,
-                entry_revision=entry_revision,
-                changes=changes,
-                seal_if_empty=False,
-                prelude=state.take_pending(),
-                immediates_only=True,
-            )
-            history = outcome.history
-            current = outcome.current
-            current_committed = outcome.current_committed
-            state.pending.extend(outcome.unapplied)
-            if outcome.applied_immediate:
-                await self.emit(
-                    kind="react.interrupted",
-                    data={
-                        "point": "model_returned",
-                        "call_ids": tuple(call.call_id for call in answer.tool_calls),
-                    },
+            final_answer = not answer.tool_calls
+            boundary_sealed = not has_inbox
+            if has_inbox:
+                outcome = await self._drain_projection_operations(
+                    history,
+                    current,
+                    current_committed=current_committed,
+                    entry_revision=entry_revision,
+                    changes=changes,
+                    seal_if_empty=final_answer,
+                    prelude=state.take_pending(),
+                    immediates_only=True,
                 )
-                continue
+                history = outcome.history
+                current = outcome.current
+                current_committed = outcome.current_committed
+                state.pending.extend(outcome.unapplied)
+                if outcome.applied_immediate:
+                    await self.emit(
+                        kind="react.interrupted",
+                        data={
+                            "point": "model_returned",
+                            "call_ids": tuple(call.call_id for call in answer.tool_calls),
+                        },
+                    )
+                    continue
+                boundary_sealed = final_answer and not outcome.received_any
 
             calls_this_turn = len(answer.tool_calls)
             if calls_this_turn == 0:
@@ -354,7 +403,7 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                 changes.append((history.projection_revision, "append", answer))
                 current = answer
                 current_committed = True
-                while True:
+                while not boundary_sealed:
                     outcome = await self._drain_projection_operations(
                         history,
                         current,
@@ -394,7 +443,7 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                         "call_ids": tuple(call.call_id for call in answer.tool_calls),
                     },
                 )
-                if not state.has_pending_immediate():
+                if not state.listener_mode and not state.has_pending_immediate():
                     # Immediates absorbed while the batch ran stay pending for
                     # the next drain; their interrupt signal survives until
                     # they are consumed.
@@ -597,6 +646,15 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                     projection_revision=history.projection_revision + 1,
                 )
                 changes.append((history.projection_revision, "replace", None))
+            if seal_if_empty and applied_immediate:
+                return _DrainOutcome(
+                    history=history,
+                    current=current,
+                    current_committed=current_committed,
+                    received_any=received_any,
+                    applied_immediate=True,
+                    unapplied=tuple(unapplied),
+                )
 
 
     async def _reject_projection_operation(
