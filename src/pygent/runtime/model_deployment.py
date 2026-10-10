@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import uuid
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
@@ -392,23 +393,44 @@ class InMemoryModelDeploymentStore:
 class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
     """SQLite-backed profile and admission store with an in-memory live cache."""
 
-    def __init__(self, path: str | Path, *, namespace_id: str | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        namespace_id: str | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> None:
         super().__init__()
         self.path = str(path)
         if namespace_id is not None and (
             not isinstance(namespace_id, str) or not namespace_id
         ):
             raise ValueError("namespace_id must be non-empty when provided")
+        if (
+            not isinstance(timeout_seconds, (int, float))
+            or isinstance(timeout_seconds, bool)
+            or not timeout_seconds > 0
+            or not math.isfinite(timeout_seconds)
+        ):
+            raise ValueError("timeout_seconds must be a finite positive number")
         self.namespace_id = namespace_id or (
             "sqlite:" + hashlib.sha256(str(Path(path).resolve()).encode()).hexdigest()
         )
         self._db: aiosqlite.Connection | None = None
         self._sqlite_write_lock = asyncio.Lock()
+        self._timeout_seconds = float(timeout_seconds)
 
     async def open(self) -> Self:
         if self._db is not None:
             return self
-        self._db = await aiosqlite.connect(self.path)
+        self._db = await aiosqlite.connect(self.path, timeout=self._timeout_seconds)
+        # SQLite has no cross-process fairness of its own: without an explicit
+        # busy handler, a write that arrives while another runtime process holds
+        # the WAL write lock fails after sqlite3's implicit 5s default instead
+        # of waiting out a normal concurrent commit.
+        await self._db.execute(
+            f"PRAGMA busy_timeout={int(self._timeout_seconds * 1000)}"
+        )
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(
             """
