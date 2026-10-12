@@ -2484,7 +2484,7 @@ async def test_grep_limit_notice_matches_legacy_output(tmp_path):
 @pytest.mark.asyncio
 async def test_grep_crlf_context_matches_legacy_output(tmp_path):
     (tmp_path / "crlf.txt").write_bytes(
-        "first\r\nneedle second\r\nthird\r\nfourth\r\n".encode("utf-8")
+        b"first\r\nneedle second\r\nthird\r\nfourth\r\n"
     )
     tools = FileTools(workspace_root=tmp_path)
 
