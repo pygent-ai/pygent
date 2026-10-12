@@ -23,6 +23,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+      - name: Install ripgrep for the search tool tests
+        uses: taiki-e/install-action@v2
+        with:
+          tool: ripgrep@15.1.0
       - run: uv sync --all-extras --locked
       - run: uv run pytest -q
       - run: uv run ruff check src tests examples
