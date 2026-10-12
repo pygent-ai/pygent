@@ -1011,3 +1011,306 @@ async def test_steering_arrival_wakes_watcher_without_polling_delay() -> None:
     assert model.state.aborted is True
     assert elapsed < 0.5
     await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_listener_immediate_consumed_at_boundary_drain_keeps_next_step(
+    monkeypatch,
+) -> None:
+    # A delivery accepted inside the loop-entry clear-to-drain window fires its
+    # listener before the boundary drain consumes and applies it. The stale
+    # signal must be reconciled after that drain instead of aborting the next
+    # (not yet started) model step.
+    from pygent.runtime._local.scope import _ManagedScope
+
+    model = SteeringTestModel(
+        (AIMessage(content="stale"), AIMessage(content="final")),
+        first_call_delay=0.05,
+    )
+    runtime = LocalRuntime()
+    react = ReActLayer(model=model, tools=EmptyTools())
+
+    original = _ManagedScope.receive_execution_inputs
+    injected = {"done": False}
+
+    async def deliver_inside_window(self, module, *, kinds, limit, seal_if_empty):
+        if not injected["done"]:
+            injected["done"] = True
+            # The observable state of a send whose commit+listener block ran
+            # after the loop's event.clear() but before this receive; reachable
+            # in production when this receive suspends on a contended inbox
+            # lock while the sender holds it.
+            await self.record.input_inbox.send(
+                self.record.execution_id,
+                input_id="steer-window",
+                kind=REACT_PROJECTION_OPERATION_KIND,
+                value=steer(SteeringMode.IMMEDIATE),
+            )
+        return await original(
+            self, module, kinds=kinds, limit=limit, seal_if_empty=seal_if_empty
+        )
+
+    monkeypatch.setattr(
+        _ManagedScope, "receive_execution_inputs", deliver_inside_window
+    )
+
+    handle = await bind(runtime, react).start(
+        UserMessage(content="initial"), Context(), execution=options()
+    )
+
+    collected: list[object] = []
+
+    async def observe() -> None:
+        async with handle.subscribe(after=None) as events:
+            async for event in events:
+                collected.append(event)
+
+    (answer, _), _ = await asyncio.gather(handle.result(), observe())
+    await runtime.close()
+
+    # The immediate applied exactly once and the run answered without any
+    # aborted step: nothing was in flight when it applied.
+    assert answer.content == "stale"
+    assert [message.content for message in model.state.messages] == ["new direction"]
+    assert model.state.aborted is False
+    assert [
+        event for event in collected if getattr(event, "kind", None) == "react.interrupted"
+    ] == []
+
+
+class _SlowEveryCallModel(SteeringTestModel):
+    """Delays every call, so a pending interrupt can always win the race.
+
+    ``SteeringTestModel`` only delays its first call; later calls return
+    immediately and a completed call legitimately keeps its result instead
+    of being aborted. Tests that assert an aborted step for a specific
+    delivery need every in-flight step to be interruptible.
+    """
+
+    async def forward(self, message: Message, context: Context):
+        index = len(self.state.messages)
+        self.state.messages.append(message)
+        self.state.entered.set()
+        try:
+            await asyncio.sleep(self.first_call_delay)
+        except asyncio.CancelledError:
+            self.state.aborted = True
+            raise
+        return self.state.answers[min(index, len(self.state.answers) - 1)], context
+
+
+def _patch_first_receive(monkeypatch, deliver) -> None:
+    """Let ``deliver(scope, receive)`` wrap the run loop's first drain receive.
+
+    Inputs sent before ``receive()`` are consumed and applied by that drain;
+    inputs sent after it stay unconsumed and their signals must survive the
+    drain-following reconciliation.
+    """
+    from pygent.runtime._local.scope import _ManagedScope
+
+    original = _ManagedScope.receive_execution_inputs
+    injected = {"done": False}
+
+    async def patched(self, module, *, kinds, limit, seal_if_empty):
+        if not injected["done"]:
+            injected["done"] = True
+
+            async def receive():
+                return await original(
+                    self, module, kinds=kinds, limit=limit, seal_if_empty=seal_if_empty
+                )
+
+            return await deliver(self, receive)
+        return await original(
+            self, module, kinds=kinds, limit=limit, seal_if_empty=seal_if_empty
+        )
+
+    monkeypatch.setattr(_ManagedScope, "receive_execution_inputs", patched)
+
+
+async def _deliver_inbox_input(scope, input_id: str, mode, content: str = "new direction"):
+    return await scope.record.input_inbox.send(
+        scope.record.execution_id,
+        input_id=input_id,
+        kind=REACT_PROJECTION_OPERATION_KIND,
+        value=steer(mode, content),
+    )
+
+
+async def _run_with_collected_events(handle) -> tuple[object, list[object]]:
+    collected: list[object] = []
+
+    async def observe() -> None:
+        async with handle.subscribe(after=None) as events:
+            async for event in events:
+                collected.append(event)
+
+    (answer, _), _ = await asyncio.gather(handle.result(), observe())
+    return answer, collected
+
+
+def _interrupted_points(collected: list[object]) -> list[str | None]:
+    return [
+        dict(getattr(event, "data", {})).get("point")
+        for event in collected
+        if getattr(event, "kind", None) == "react.interrupted"
+    ]
+
+
+def _rejected_input_ids(collected: list[object]) -> list[str | None]:
+    return [
+        dict(getattr(event, "data", {})).get("input_id")
+        for event in collected
+        if getattr(event, "kind", None) == "react.projection_operation.rejected"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_listener_multi_immediate_spanning_drain_applies_once_aborts_once(
+    monkeypatch,
+) -> None:
+    # Two immediates straddle a boundary drain: the first arrives while the
+    # model step is in flight and is consumed by the drain that follows it;
+    # the second is accepted after that drain returns (in its
+    # receive-to-reconcile window) and stays unconsumed. Each input must
+    # abort exactly one model step and apply exactly once — no lost and no
+    # duplicate interrupts across the pair.
+    model = _SlowEveryCallModel(
+        (AIMessage(content="stale"), AIMessage(content="final")),
+        first_call_delay=0.05,
+    )
+    runtime = LocalRuntime()
+
+    injected = {"done": False}
+    original_drain = ReActLayer._drain_projection_operations
+
+    async def deliver_second_after_consuming_drain(self, *args, **kwargs):
+        outcome = await original_drain(self, *args, **kwargs)
+        # Fire only on the drain that consumed the first immediate: the loop
+        # drains until empty, so "after the drain" must mean after the drain
+        # that actually consumed, not after the first (empty) one.
+        if not injected["done"] and outcome.consumed_immediates > 0:
+            injected["done"] = True
+            second = await _deliver_inbox_input(
+                current_infrastructure(),
+                "steer-second",
+                SteeringMode.IMMEDIATE,
+                "second direction",
+            )
+            assert second.status == "accepted"
+        return outcome
+
+    monkeypatch.setattr(
+        ReActLayer, "_drain_projection_operations", deliver_second_after_consuming_drain
+    )
+    handle = await bind(runtime, ReActLayer(model=model, tools=EmptyTools())).start(
+        UserMessage(content="initial"), Context(), execution=options()
+    )
+    await model.state.entered.wait()
+    first = await handle.send_input(
+        input_id="steer-first",
+        kind=REACT_PROJECTION_OPERATION_KIND,
+        value=steer(SteeringMode.IMMEDIATE, "first direction"),
+    )
+    assert first.status == "accepted"
+    answer, collected = await _run_with_collected_events(handle)
+    await runtime.close()
+
+    assert answer.content == "final"
+    assert [message.content for message in model.state.messages] == [
+        "initial",
+        "first direction",
+        "second direction",
+    ]
+    assert model.state.aborted is True
+    assert _interrupted_points(collected) == ["model", "model"]
+
+
+@pytest.mark.asyncio
+async def test_listener_immediate_after_receive_keeps_signal_for_one_abort(
+    monkeypatch,
+) -> None:
+    # The delivery lands after the drain's receive returned (the
+    # receive-to-reconcile window): the input is unconsumed, so its signal
+    # must survive reconciliation and abort exactly one model step, then the
+    # input applies exactly once at the next drain.
+    model = SteeringTestModel(
+        (AIMessage(content="stale"), AIMessage(content="final")),
+        first_call_delay=0.05,
+    )
+    runtime = LocalRuntime()
+
+    def deliver(scope, receive):
+        async def run():
+            received = await receive()
+            delivery = await _deliver_inbox_input(
+                scope, "steer-late", SteeringMode.IMMEDIATE
+            )
+            assert delivery.status == "accepted"
+            return received
+
+        return run()
+
+    _patch_first_receive(monkeypatch, deliver)
+    handle = await bind(runtime, ReActLayer(model=model, tools=EmptyTools())).start(
+        UserMessage(content="initial"), Context(), execution=options()
+    )
+    answer, collected = await _run_with_collected_events(handle)
+    await runtime.close()
+
+    assert answer.content == "final"
+    assert [message.content for message in model.state.messages] == [
+        "initial",
+        "new direction",
+    ]
+    assert model.state.aborted is True
+    assert _interrupted_points(collected) == ["model"]
+
+
+@pytest.mark.asyncio
+async def test_listener_mixed_inputs_reconcile_without_stale_signal(monkeypatch) -> None:
+    # A decode-failing immediate (its listener still fires) and a duplicated
+    # input id must not leave a stale interrupt signal behind: the rejected
+    # input's signal is reconciled by its consumption, the duplicate never
+    # signals (send returns "duplicate" before notifying), and only the valid
+    # immediate's message reaches the model without any aborted step.
+    model = SteeringTestModel((AIMessage(content="stale"),), first_call_delay=0.05)
+    runtime = LocalRuntime()
+
+    def deliver(scope, receive):
+        async def run():
+            malformed = await scope.record.input_inbox.send(
+                scope.record.execution_id,
+                input_id="steer-bad",
+                kind=REACT_PROJECTION_OPERATION_KIND,
+                value={"type": "standalone_user_message", "mode": "immediate"},
+            )
+            assert malformed.status == "accepted"
+            wait_first = await _deliver_inbox_input(
+                scope, "steer-wait", SteeringMode.WAIT, "hold on"
+            )
+            assert wait_first.status == "accepted"
+            wait_again = await _deliver_inbox_input(
+                scope, "steer-wait", SteeringMode.WAIT, "hold on"
+            )
+            assert wait_again.status == "duplicate"
+            valid = await _deliver_inbox_input(
+                scope, "steer-ok", SteeringMode.IMMEDIATE, "real direction"
+            )
+            assert valid.status == "accepted"
+            return await receive()
+
+        return run()
+
+    _patch_first_receive(monkeypatch, deliver)
+    handle = await bind(runtime, ReActLayer(model=model, tools=EmptyTools())).start(
+        UserMessage(content="initial"), Context(), execution=options()
+    )
+    answer, collected = await _run_with_collected_events(handle)
+    await runtime.close()
+
+    assert answer.content == "stale"
+    assert [message.content for message in model.state.messages] == ["real direction"]
+    assert model.state.aborted is False
+    assert _interrupted_points(collected) == []
+    assert _rejected_input_ids(collected) == ["steer-bad"]

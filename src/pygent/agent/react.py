@@ -59,6 +59,16 @@ class ReActBudgetExceeded(RuntimeError):
         )
 
 
+def _is_immediate_value(value: JsonValue) -> bool:
+    """Whether a raw projection-operation value requests immediate steering."""
+
+    return (
+        isinstance(value, Mapping)
+        and value.get("type") == "standalone_user_message"
+        and value.get("mode") == SteeringMode.IMMEDIATE.value
+    )
+
+
 class _SteeringState:
     """Per-call steering absorption shared by the run loop and its watcher.
 
@@ -70,6 +80,8 @@ class _SteeringState:
     __slots__ = (
         "event",
         "finished_event",
+        "immediate_consumptions",
+        "immediate_signals",
         "listener_mode",
         "pending",
         "tool_batch_interrupted",
@@ -81,6 +93,15 @@ class _SteeringState:
         self.pending: list[tuple[ExecutionInput, ReActProjectionOperation]] = []
         self.tool_batch_interrupted = False
         self.listener_mode = False
+        # In listener mode the interrupt event is set by the delivery listener
+        # and cleared by whoever consumes the signaled input. The counters
+        # reconcile the two: every listener signal is matched by exactly one
+        # consumed immediate-shaped input, so a signal that outlives its
+        # input's consumption (a delivery accepted inside the loop-entry
+        # clear-to-drain window) is recognized and dropped instead of
+        # aborting one already-served model step.
+        self.immediate_signals = 0
+        self.immediate_consumptions = 0
 
     def absorb(self, item: ExecutionInput, operation: ReActProjectionOperation) -> None:
         self.pending.append((item, operation))
@@ -89,7 +110,7 @@ class _SteeringState:
             and operation.mode is SteeringMode.IMMEDIATE
             and self.event is not None
         ):
-            self.event.set()
+            self.signal_immediate_input()
 
     def take_pending(self) -> list[tuple[ExecutionInput, ReActProjectionOperation]]:
         taken = self.pending
@@ -105,6 +126,7 @@ class _SteeringState:
 
     def signal_immediate_input(self) -> None:
         if self.event is not None:
+            self.immediate_signals += 1
             self.event.set()
 
 
@@ -118,6 +140,7 @@ class _DrainOutcome:
     received_any: bool
     applied_immediate: bool
     unapplied: tuple[tuple[ExecutionInput, ReActProjectionOperation], ...]
+    consumed_immediates: int = 0
 
 
 class ReActLayer(Module[UserMessage, AIMessage]):
@@ -170,11 +193,7 @@ class ReActLayer(Module[UserMessage, AIMessage]):
             state.listener_mode = True
 
             def signal_immediate(value: JsonValue) -> None:
-                if (
-                    isinstance(value, Mapping)
-                    and value.get("type") == "standalone_user_message"
-                    and value.get("mode") == SteeringMode.IMMEDIATE.value
-                ):
+                if _is_immediate_value(value):
                     state.signal_immediate_input()
 
             await add_listener(REACT_PROJECTION_OPERATION_KIND, signal_immediate)
@@ -279,6 +298,28 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                 )
             return
 
+    @staticmethod
+    def _reconcile_listener_signal(
+        state: _SteeringState, outcome: _DrainOutcome
+    ) -> None:
+        """Drop a listener signal whose input the drain already consumed.
+
+        A delivery accepted inside the loop-entry clear-to-drain window fires
+        its listener before the drain consumes the input, so the surviving
+        event would otherwise abort one already-served model step. A signal
+        for an input accepted after the drain stays set: its consumption is
+        still ahead of it.
+        """
+
+        if not state.listener_mode or state.event is None:
+            return
+        state.immediate_consumptions += outcome.consumed_immediates
+        if (
+            state.event.is_set()
+            and state.immediate_consumptions >= state.immediate_signals
+        ):
+            state.event.clear()
+
     async def _run_react(
         self,
         message: UserMessage,
@@ -321,6 +362,7 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                 history = outcome.history
                 current = outcome.current
                 current_committed = outcome.current_committed
+                self._reconcile_listener_signal(state, outcome)
             _admit("max_steps", used=steps, requested=1, limit=self.max_steps)
             _admit(
                 "max_model_calls",
@@ -384,6 +426,7 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                 current = outcome.current
                 current_committed = outcome.current_committed
                 state.pending.extend(outcome.unapplied)
+                self._reconcile_listener_signal(state, outcome)
                 if outcome.applied_immediate:
                     await self.emit(
                         kind="react.interrupted",
@@ -416,6 +459,7 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                     history = outcome.history
                     current = outcome.current
                     current_committed = outcome.current_committed
+                    self._reconcile_listener_signal(state, outcome)
                     if not outcome.received_any:
                         break
                 if isinstance(current, AIMessage):
@@ -518,6 +562,7 @@ class ReActLayer(Module[UserMessage, AIMessage]):
     ) -> _DrainOutcome:
         received_any = prelude is not None and bool(prelude)
         applied_immediate = False
+        consumed_immediates = 0
         unapplied: list[tuple[ExecutionInput, ReActProjectionOperation]] = []
         pending: list[tuple[ExecutionInput, ReActProjectionOperation]] = (
             list(prelude) if prelude else []
@@ -526,6 +571,9 @@ class ReActLayer(Module[UserMessage, AIMessage]):
             if pending:
                 batch = pending
                 pending = []
+                consumed_immediates += sum(
+                    1 for item, _ in batch if _is_immediate_value(item.value)
+                )
             else:
                 inputs = await self.receive_execution_inputs(
                     kinds=(REACT_PROJECTION_OPERATION_KIND,),
@@ -540,10 +588,17 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                         received_any=received_any,
                         applied_immediate=applied_immediate,
                         unapplied=tuple(unapplied),
+                        consumed_immediates=consumed_immediates,
                     )
                 received_any = True
                 batch = []
                 for item in inputs:
+                    if _is_immediate_value(item.value):
+                        # Counted even when decoding fails below: the delivery
+                        # listener already signaled this input, so its signal
+                        # must be reconciled whichever way the drain disposes
+                        # of it.
+                        consumed_immediates += 1
                     try:
                         operation = decode_react_projection_operation(item.value)
                     except (TypeError, ValueError, KeyError):
@@ -654,6 +709,7 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                     received_any=received_any,
                     applied_immediate=True,
                     unapplied=tuple(unapplied),
+                    consumed_immediates=consumed_immediates,
                 )
 
 

@@ -966,7 +966,14 @@ def _read_search_line_windows(
     try:
         with stream:
             decoder = codecs.getincrementaldecoder(encoding)(errors="replace")
-            buffer = ""
+            # Only the first `max_line_length` characters of a line can reach
+            # the output, so the scan retains at most one capped line prefix.
+            # Without this bound a file with no newline at all would make the
+            # carried text grow to the whole decoded file even though every
+            # rendered line is truncated on capture.
+            keep = max_line_length + 1
+            prefix = ""
+            line_overflow = False
             line_number = 0
             range_index = 0
 
@@ -986,21 +993,66 @@ def _read_search_line_windows(
                     captured[line_number] = value
                 return True
 
+            def finalize(piece: str) -> bool:
+                """Complete the carried line with `piece` and take it.
+
+                Returns False when every requested range is satisfied, so the
+                scan may stop before EOF.
+                """
+                nonlocal prefix, line_overflow, line_number
+                line_number += 1
+                if line_overflow:
+                    # The line tail (including a trailing CR) cannot affect
+                    # what `_truncate_search_line` keeps or reports.
+                    line = prefix
+                else:
+                    line = (prefix + piece).removesuffix("\r")
+                prefix = ""
+                line_overflow = False
+                return take(line)
+
+            def carry(piece: str) -> None:
+                """Carry one unterminated-line piece, bounded to the cap."""
+                nonlocal prefix, line_overflow
+                if line_overflow:
+                    return
+                if strip_lone_cr:
+                    piece = piece.replace("\r", "")
+                prefix += piece
+                if len(prefix) > keep:
+                    prefix = prefix[:keep]
+                    line_overflow = True
+
+            def carry_needed() -> bool:
+                nonlocal range_index
+                while (
+                    range_index < len(merged)
+                    and line_number + 1 > merged[range_index][1]
+                ):
+                    range_index += 1
+                return (
+                    range_index < len(merged)
+                    and line_number + 1 >= merged[range_index][0]
+                )
+
             eof = False
             while not eof:
                 chunk = stream.read(_SEARCH_READ_CHUNK_BYTES)
                 if chunk == b"":
                     eof = True
-                buffer += decoder.decode(chunk, eof)
-                while "\n" in buffer:
-                    line_number += 1
-                    line, buffer = buffer.split("\n", 1)
-                    if line.endswith("\r"):
-                        line = line[:-1]
-                    if not take(line):
-                        return captured, None, truncated
-            line_number += 1
-            take(buffer)
+                pieces = decoder.decode(chunk, eof).split("\n")
+                for position, piece in enumerate(pieces):
+                    if position + 1 < len(pieces):
+                        if not finalize(piece):
+                            return captured, None, truncated
+                    elif eof:
+                        # The tail line's take() result is intentionally
+                        # unused: reaching EOF always reports the line count.
+                        finalize(piece)
+                    elif carry_needed():
+                        carry(piece)
+                    # Else the partial line is outside every remaining range;
+                    # keep scanning for newlines without retaining content.
         return captured, line_number, truncated
     except OSError:
         return None, None, False
@@ -2744,12 +2796,25 @@ class FileTools:
 
         reached_limit = False
         truncated = False
+        line_limit_hit = False
         process = await self._start_search_process(executable, arguments, cwd=cwd)
         assert process.stderr is not None
         stderr_task = asyncio.create_task(process.stderr.read())
         try:
             assert process.stdout is not None
-            while raw_line := await process.stdout.readline():
+            while True:
+                try:
+                    raw_line = await process.stdout.readline()
+                except ValueError:
+                    # One JSON output line exceeded the stream limit (a matched
+                    # line larger than _SEARCH_STREAM_LIMIT). rg keeps writing
+                    # into the full pipe, so it must be stopped before the
+                    # stderr drain below; the search degrades to partial
+                    # results instead of failing wholesale.
+                    line_limit_hit = True
+                    break
+                if not raw_line:
+                    break
                 try:
                     event = json.loads(raw_line)
                 except (UnicodeDecodeError, json.JSONDecodeError):
@@ -2783,6 +2848,8 @@ class FileTools:
                     reached_limit = True
                     await _terminate_search_process(process, stderr_task)
                     break
+            if line_limit_hit:
+                await _terminate_search_process(process, stderr_task)
             stderr = await stderr_task
             code = await process.wait()
         except BaseException:
@@ -2791,9 +2858,32 @@ class FileTools:
                 await stderr_task
             raise
 
+        if line_limit_hit:
+            limit_label = f"{_SEARCH_STREAM_LIMIT // (1024 * 1024)} MiB"
+            if not matches:
+                raise ToolExecutionError(
+                    f"search stopped: a matched line exceeded the {limit_label} "
+                    "stream limit; narrow the search or read the file directly",
+                    kind="filesystem_error",
+                    code="search_backend_failed",
+                    side_effect_committed=False,
+                )
+            notice = (
+                "search incomplete: a matched line exceeded the "
+                f"{limit_label} stream limit"
+            )
+            if notice not in notices:
+                notices.append(notice)
+            # An oversized line ends the second encoding pass too: rescanning
+            # the tree cannot bring back output the stream cannot carry.
+            return True, truncated
+
         if not reached_limit and code not in (0, 1):
-            # `matches` accumulates across passes, so an earlier pass's results
-            # still count here; only a backend error with nothing collected is fatal.
+            # The encoding passes scan the same tree independently, so one
+            # pass's failure never invalidates another pass's matches: every
+            # collected match is worth returning. A backend error is fatal
+            # only when there is nothing to show; otherwise the notice below
+            # keeps the exit code and the backend's own diagnostic visible.
             if matches:
                 _add_partial_search_notice(notices, stderr, code, "ripgrep")
             else:

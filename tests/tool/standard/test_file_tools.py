@@ -1542,6 +1542,272 @@ async def test_grep_result_limit_drains_buffered_backend_output(tmp_path, monkey
     assert started[0].returncode is not None
 
 
+class _OversizedLineBackend:
+    """Fake search backend serving match lines, then hitting the stream limit.
+
+    ``readline`` raises the same ``ValueError`` a real stream raises when one
+    output line grows past the subprocess stream limit.
+    """
+
+    def __init__(self, match_lines: list[bytes]) -> None:
+        self._pending = list(match_lines)
+        self.returncode: int | None = None
+        self.stdout = self
+        self.stderr = self
+        self.killed = False
+
+    async def readline(self) -> bytes:
+        if not self._pending:
+            raise ValueError("Separator is not found, and chunk exceed the limit")
+        return self._pending.pop(0)
+
+    async def read(self) -> bytes:
+        return b""
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        return 0
+
+
+def _match_event(path, line_number: int, text: str) -> bytes:
+    return (
+        json.dumps(
+            {
+                "type": "match",
+                "data": {
+                    "path": {"text": str(path)},
+                    "line_number": line_number,
+                    "lines": {"text": text},
+                },
+            }
+        )
+        + "\n"
+    ).encode()
+
+
+class _ScriptedSearchBackend:
+    """Fake search backend serving scripted stdout lines, then an exit code.
+
+    Unlike ``_OversizedLineBackend`` it ends the stream normally (EOF) and
+    reports a scripted exit code and stderr, which is how the partial-success
+    and multi-pass error paths are exercised deterministically.
+    """
+
+    def __init__(self, match_lines: list[bytes], code: int, stderr: bytes = b"") -> None:
+        self._pending = list(match_lines)
+        self._code = code
+        self._stderr = stderr
+        self.returncode: int | None = None
+        self.stdout = self
+        self.stderr = self
+        self.killed = False
+
+    async def readline(self) -> bytes:
+        if not self._pending:
+            return b""
+        return self._pending.pop(0)
+
+    async def read(self) -> bytes:
+        return self._stderr
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = self._code
+
+    async def wait(self) -> int:
+        return self._code
+
+
+def _start_scripted_backends(monkeypatch, backends: list[_ScriptedSearchBackend]) -> None:
+    async def start_scripted(*_args, **_kwargs):
+        return backends.pop(0)
+
+    monkeypatch.setattr(
+        FileTools, "_start_search_process", staticmethod(start_scripted)
+    )
+
+
+@pytest.mark.asyncio
+async def test_grep_partial_matches_with_backend_error_keeps_results_and_notice(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "readable.txt").write_text("needle\n", encoding="utf-8")
+    monkeypatch.setattr(file_module, "_search_executable", lambda *_names: "rg")
+    _start_scripted_backends(
+        monkeypatch,
+        [
+            _ScriptedSearchBackend(
+                [_match_event(tmp_path / "readable.txt", 1, "needle\n")],
+                code=2,
+                stderr=b"rg: secret.txt: Permission denied (os error 13)\n",
+            )
+        ],
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(
+        tools.grep, pattern="needle", path=str(tmp_path)
+    )
+
+    # The readable file's match is kept and the degraded scan is surfaced.
+    assert "readable.txt:1: needle" in output
+    assert (
+        "search incomplete: ripgrep exited with code 2; "
+        "rg: secret.txt: Permission denied (os error 13)" in output
+    )
+
+
+@pytest.mark.asyncio
+async def test_grep_second_pass_error_keeps_first_pass_results_and_reports(
+    tmp_path, monkeypatch
+):
+    # A failing encoding pass must not mask or discard another pass's matches:
+    # the passes scan the same tree independently. The notice preserves the
+    # failed pass's exit code and its own diagnostic.
+    (tmp_path / "readable.txt").write_text("needle\n", encoding="utf-8")
+    monkeypatch.setattr(file_module, "_search_executable", lambda *_names: "rg")
+    _start_scripted_backends(
+        monkeypatch,
+        [
+            _ScriptedSearchBackend(
+                [_match_event(tmp_path / "readable.txt", 1, "needle\n")], code=0
+            ),
+            _ScriptedSearchBackend(
+                [],
+                code=2,
+                stderr=b"error: unexpected argument '--encoding' found\n",
+            ),
+        ],
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    # A non-ASCII pattern is what schedules the second encoding pass.
+    output = await succeeded(
+        tools.grep, pattern="needle中文", path=str(tmp_path)
+    )
+
+    assert "readable.txt:1: needle" in output
+    assert (
+        "search incomplete: ripgrep exited with code 2; "
+        "error: unexpected argument '--encoding' found" in output
+    )
+
+
+@pytest.mark.asyncio
+async def test_grep_backend_error_without_matches_fails_with_stderr(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(file_module, "_search_executable", lambda *_names: "rg")
+    _start_scripted_backends(
+        monkeypatch,
+        [
+            _ScriptedSearchBackend(
+                [], code=2, stderr=b"error: regex parse error\n"
+            )
+        ],
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(tools.grep, {"pattern": "needle", "path": str(tmp_path)})
+
+    assert result.error_code == "search_backend_failed"
+    assert "regex parse error" in result.error
+
+
+@pytest.mark.asyncio
+async def test_grep_identical_pass_errors_dedupe_the_notice(tmp_path, monkeypatch):
+    (tmp_path / "readable.txt").write_text("needle\n", encoding="utf-8")
+    monkeypatch.setattr(file_module, "_search_executable", lambda *_names: "rg")
+    stderr = b"rg: secret.txt: Permission denied (os error 13)\n"
+    _start_scripted_backends(
+        monkeypatch,
+        [
+            _ScriptedSearchBackend(
+                [_match_event(tmp_path / "readable.txt", 1, "needle\n")],
+                code=2,
+                stderr=stderr,
+            ),
+            _ScriptedSearchBackend([], code=2, stderr=stderr),
+        ],
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(
+        tools.grep, pattern="needle中文", path=str(tmp_path)
+    )
+
+    assert "readable.txt:1: needle" in output
+    assert output.count("search incomplete: ripgrep exited with code 2") == 1
+    assert output.count("Permission denied") == 1
+
+
+@pytest.mark.asyncio
+async def test_grep_keeps_matches_when_output_line_exceeds_stream_limit(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "example.txt").write_text("needle\n", encoding="utf-8")
+    monkeypatch.setattr(file_module, "_search_executable", lambda *_names: "rg")
+    backend = _OversizedLineBackend(
+        [_match_event(tmp_path / "example.txt", 1, "needle\n")]
+    )
+
+    async def start_oversized_backend(*_args, **_kwargs):
+        return backend
+
+    monkeypatch.setattr(
+        FileTools, "_start_search_process", staticmethod(start_oversized_backend)
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", path=str(tmp_path))
+
+    assert "example.txt:1: needle" in output
+    assert (
+        "search incomplete: a matched line exceeded the 16 MiB stream limit" in output
+    )
+    assert backend.killed is True
+
+
+@pytest.mark.asyncio
+async def test_grep_oversized_line_without_matches_reports_backend_error(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "example.txt").write_text("needle\n", encoding="utf-8")
+    monkeypatch.setattr(file_module, "_search_executable", lambda *_names: "rg")
+
+    async def start_oversized_backend(*_args, **_kwargs):
+        return _OversizedLineBackend([])
+
+    monkeypatch.setattr(
+        FileTools, "_start_search_process", staticmethod(start_oversized_backend)
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await invoke_tool(tools.grep, {"pattern": "needle", "path": str(tmp_path)})
+
+    assert result.error_code == "search_backend_failed"
+    assert "stream limit" in result.error
+
+
+@pytest.mark.asyncio
+async def test_grep_real_oversized_single_line_file_reports_backend_error(tmp_path):
+    if file_module._search_executable("rg") is None:
+        pytest.skip("ripgrep is required for the stream-limit path")
+    (tmp_path / "huge.txt").write_bytes(b"needle " + b"x" * (20 * 1024 * 1024))
+    tools = FileTools(workspace_root=tmp_path)
+
+    result = await asyncio.wait_for(
+        invoke_tool(tools.grep, {"pattern": "needle", "path": str(tmp_path)}),
+        timeout=30,
+    )
+
+    assert result.error_code == "search_backend_failed"
+    assert "16 MiB stream limit" in result.error
+
+
 @pytest.mark.asyncio
 async def test_cancelled_grep_fallback_joins_its_worker_thread(tmp_path, monkeypatch):
     (tmp_path / "example.txt").write_text("text\n", encoding="utf-8")
@@ -2084,6 +2350,88 @@ def test_read_search_line_windows_reports_binary_and_missing_files(tmp_path):
     assert file_module._read_search_line_windows(
         tmp_path / "missing.txt", [(1, 1)], "utf-8", 500, strip_lone_cr=False
     ) == (None, None, False)
+
+
+def test_read_search_line_windows_bounds_memory_without_newlines(tmp_path):
+    import tracemalloc
+
+    target = tmp_path / "huge.txt"
+    target.write_bytes(b"x" * (8 * 1024 * 1024))
+
+    tracemalloc.start()
+    lines, total, truncated = file_module._read_search_line_windows(
+        target, [(1, 1)], "utf-8", 500, strip_lone_cr=False
+    )
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert lines == {1: "x" * 500 + "... [truncated]"}
+    assert total == 1
+    assert truncated is True
+    # The scan retains one capped line prefix, not the decoded file.
+    assert peak < 4 * 1024 * 1024
+
+
+def test_read_search_line_windows_skips_unneeded_lines_without_retaining(tmp_path):
+    import tracemalloc
+
+    target = tmp_path / "late.txt"
+    target.write_bytes(b"y" * (1024 * 1024) + b"\nneedle\n")
+
+    tracemalloc.start()
+    lines, total, truncated = file_module._read_search_line_windows(
+        target, [(2, 2)], "utf-8", 10, strip_lone_cr=False
+    )
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert lines == {2: "needle"}
+    assert total == 3
+    assert truncated is False
+    assert peak < 4 * 1024 * 1024
+
+
+def test_read_search_line_windows_truncates_line_spanning_read_chunks(tmp_path):
+    target = tmp_path / "spanning.txt"
+    target.write_bytes(b"x" * 300_000 + b"\ntail\n")
+
+    lines, total, truncated = file_module._read_search_line_windows(
+        target, [(1, 1)], "utf-8", 12, strip_lone_cr=False
+    )
+
+    # Line 1 is captured truncated; the scan stops at line 2 because every
+    # requested range is already satisfied.
+    assert lines == {1: "x" * 12 + "... [truncated]"}
+    assert total is None
+    assert truncated is True
+
+
+@pytest.mark.parametrize(
+    ("body", "max_len", "strip", "expected_line_1"),
+    [
+        # Exactly max_line_length + 1 chars ending in CR: the CR strip keeps
+        # the line at the limit, so nothing is truncated.
+        (b"a" * 20 + b"\r\ntail\n", 20, False, "a" * 20),
+        # max_line_length + 2 chars: truncated to the limit.
+        (b"a" * 21 + b"\r\ntail\n", 20, False, "a" * 20 + "... [truncated]"),
+        # Lone-CR stripping happens before truncation.
+        (b"a\rb" * 15 + b"\ntail\n", 20, True, "ab" * 10 + "... [truncated]"),
+        # A CR-heavy line stays bounded by the replaced length.
+        (b"\r" * 40 + b"x" * 5 + b"\ntail\n", 20, True, "x" * 5),
+    ],
+)
+def test_read_search_line_windows_truncation_boundaries(
+    tmp_path, body, max_len, strip, expected_line_1
+):
+    target = tmp_path / "edges.txt"
+    target.write_bytes(body)
+
+    lines, _, truncated = file_module._read_search_line_windows(
+        target, [(1, 2)], "utf-8", max_len, strip_lone_cr=strip
+    )
+
+    assert lines == {1: expected_line_1, 2: "tail"}
+    assert truncated is (expected_line_1.endswith("... [truncated]"))
 
 
 @pytest.mark.asyncio

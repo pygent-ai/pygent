@@ -88,7 +88,14 @@ class MemoryExecutionInbox:
                 "accepted", execution_id, input_id, item.sequence
             )
         for listener in listeners:
-            listener(frozen)
+            try:
+                listener(frozen)
+            except Exception:  # noqa: BLE001, S110 - listeners are notification-only
+                # The input is already accepted and committed; a broken listener
+                # must not turn the accepted delivery into an exception (callers
+                # retrying with fresh input ids would duplicate the input) and
+                # must not suppress the remaining listeners for this delivery.
+                pass
         return delivery
 
     async def add_input_listener(

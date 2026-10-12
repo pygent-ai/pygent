@@ -56,6 +56,48 @@ async def test_memory_inbox_notifies_only_accepted_matching_inputs() -> None:
     assert len(seen) == 1
 
 
+@pytest.mark.asyncio
+async def test_memory_inbox_listener_error_keeps_accepted_delivery() -> None:
+    inbox = MemoryExecutionInbox()
+    seen = []
+
+    def broken(value: object) -> None:
+        seen.append("broken")
+        raise RuntimeError("listener boom")
+
+    def working(value: object) -> None:
+        seen.append("working")
+
+    await inbox.add_input_listener("steering", broken)
+    await inbox.add_input_listener("steering", working)
+
+    delivery = await inbox.send("execution", input_id="steer", kind="steering", value={})
+    assert delivery.status == "accepted"
+    # The broken listener must not suppress the remaining listeners.
+    assert seen == ["broken", "working"]
+
+    # The accepted input stays consumable despite the listener failure.
+    received = await inbox.receive(
+        module_path="agent",
+        receive_index=0,
+        kinds=("steering",),
+        limit=16,
+        seal_if_empty=False,
+    )
+    assert [item.input_id for item in received] == ["steer"]
+
+    # Retrying with the same id stays idempotent ("duplicate", no re-notify).
+    seen.clear()
+    delivery = await inbox.send("execution", input_id="steer", kind="steering", value={})
+    assert delivery.status == "duplicate"
+    assert seen == []
+
+    # A retry with a fresh id is accepted only once and notified once.
+    delivery = await inbox.send("execution", input_id="steer-2", kind="steering", value={})
+    assert delivery.status == "accepted"
+    assert seen == ["broken", "working"]
+
+
 class InputReceiver(Module[UserMessage, AIMessage]):
     trusted_live_resource_attributes = ("state",)
 
