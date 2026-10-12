@@ -1081,12 +1081,21 @@ def result_from_exception(
         if spec.side_effect in (ToolSideEffect.WRITE, ToolSideEffect.EXTERNAL)
         else "failed"
     )
+    # Exception text may carry sensitive internals from write/external backends;
+    # side-effect-free tools already surface full messages via ToolExecutionError,
+    # so keep the same diagnosability for unclassified failures there.
+    detail = (
+        ""
+        if spec.side_effect in (ToolSideEffect.WRITE, ToolSideEffect.EXTERNAL)
+        else str(exc).strip()
+    )
+    error = f"tool executor failed: {detail}" if detail else "tool executor failed"
     return ToolResult(
         call_id=call.call_id,
         name=call.name,
         status=unknown_status,
         task=task,
-        error="tool executor failed",
+        error=error,
         error_kind="executor_error",
         error_code=type(exc).__name__,
         retryable=False,

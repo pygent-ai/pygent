@@ -1979,3 +1979,308 @@ async def test_grep_default_output_budget_notice_is_unchanged(tmp_path):
     output = await succeeded(tools.grep, pattern="needle", path=str(tmp_path))
 
     assert output == "notes.txt:1: needle here"
+
+
+def test_read_search_line_windows_captures_ranges_and_reports_total(tmp_path):
+    target = tmp_path / "data.txt"
+    target.write_text("l1\nl2\nl3\n", encoding="utf-8")
+
+    lines, total, truncated = file_module._read_search_line_windows(
+        target, [(2, 3)], "utf-8", 500, strip_lone_cr=False
+    )
+
+    assert lines == {2: "l2", 3: "l3"}
+    assert total == 4  # split-on-newline keeps the trailing empty element
+    assert truncated is False
+
+
+def test_read_search_line_windows_stops_once_all_ranges_are_satisfied(tmp_path):
+    target = tmp_path / "data.txt"
+    target.write_text("l1\nl2\nl3\n", encoding="utf-8")
+
+    lines, total, _ = file_module._read_search_line_windows(
+        target, [(1, 1)], "utf-8", 500, strip_lone_cr=False
+    )
+
+    assert lines == {1: "l1"}
+    assert total is None
+
+
+def test_read_search_line_windows_clamps_ranges_at_eof(tmp_path):
+    target = tmp_path / "data.txt"
+    target.write_text("l1\nl2\nl3\n", encoding="utf-8")
+
+    lines, total, _ = file_module._read_search_line_windows(
+        target, [(5, 6)], "utf-8", 500, strip_lone_cr=False
+    )
+
+    assert lines == {}
+    assert total == 4
+
+
+def test_read_search_line_windows_preserves_lone_cr_unless_stripped(tmp_path):
+    target = tmp_path / "data.txt"
+    target.write_bytes(b"x\r\na\rb\r\ny\r\n")
+
+    lines, total, _ = file_module._read_search_line_windows(
+        target, [(1, 3)], "utf-8", 500, strip_lone_cr=False
+    )
+
+    assert lines == {1: "x", 2: "a\rb", 3: "y"}
+    assert total == 4
+
+    stripped, _, _ = file_module._read_search_line_windows(
+        target, [(2, 2)], "utf-8", 500, strip_lone_cr=True
+    )
+
+    assert stripped == {2: "ab"}
+
+
+def test_read_search_line_windows_truncates_on_capture(tmp_path):
+    target = tmp_path / "data.txt"
+    target.write_text("needle " + "z" * 700 + "\n", encoding="utf-8")
+
+    lines, total, truncated = file_module._read_search_line_windows(
+        target, [(1, 1)], "utf-8", 500, strip_lone_cr=False
+    )
+
+    assert lines == {1: "needle " + "z" * 493 + "... [truncated]"}
+    assert total == 2
+    assert truncated is True
+
+
+def test_read_search_line_windows_decodes_utf16_with_bom(tmp_path):
+    target = tmp_path / "data.txt"
+    target.write_bytes("第一行 needle\n第二行\n".encode("utf-16"))
+
+    lines, total, _ = file_module._read_search_line_windows(
+        target, [(1, 2)], "utf-16", 500, strip_lone_cr=False
+    )
+
+    assert lines == {1: "第一行 needle", 2: "第二行"}
+    assert total == 3
+
+
+def test_read_search_line_windows_survives_chunk_boundary(tmp_path):
+    target = tmp_path / "data.txt"
+    # A three-byte UTF-8 character straddles the 256KiB read boundary.
+    target.write_bytes(("x" * 262_143 + "中" + "\ntail needle\n").encode("utf-8"))
+
+    lines, total, _ = file_module._read_search_line_windows(
+        target, [(1, 2)], "utf-8", 10**6, strip_lone_cr=False
+    )
+
+    assert lines == {1: "x" * 262_143 + "中", 2: "tail needle"}
+    assert total == 3
+
+
+def test_read_search_line_windows_reports_binary_and_missing_files(tmp_path):
+    binary = tmp_path / "bin.dat"
+    binary.write_bytes(b"needle\x00binary")
+
+    assert file_module._read_search_line_windows(
+        binary, [(1, 1)], None, 500, strip_lone_cr=False
+    ) == (None, None, False)
+    assert file_module._read_search_line_windows(
+        tmp_path / "missing.txt", [(1, 1)], "utf-8", 500, strip_lone_cr=False
+    ) == (None, None, False)
+
+
+@pytest.mark.asyncio
+async def test_grep_context_output_matches_legacy_renderer(tmp_path):
+    content = "".join(
+        f"line{i} " + ("needle" if i % 3 == 0 else "x") + "\n" for i in range(1, 21)
+    )
+    (tmp_path / "d.txt").write_text(content, encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", context=2)
+
+    assert output == 'd.txt-1- line1 x\nd.txt-2- line2 x\nd.txt:3: line3 needle\nd.txt-4- line4 x\nd.txt-5- line5 x\nd.txt-4- line4 x\nd.txt-5- line5 x\nd.txt:6: line6 needle\nd.txt-7- line7 x\nd.txt-8- line8 x\nd.txt-7- line7 x\nd.txt-8- line8 x\nd.txt:9: line9 needle\nd.txt-10- line10 x\nd.txt-11- line11 x\nd.txt-10- line10 x\nd.txt-11- line11 x\nd.txt:12: line12 needle\nd.txt-13- line13 x\nd.txt-14- line14 x\nd.txt-13- line13 x\nd.txt-14- line14 x\nd.txt:15: line15 needle\nd.txt-16- line16 x\nd.txt-17- line17 x\nd.txt-16- line16 x\nd.txt-17- line17 x\nd.txt:18: line18 needle\nd.txt-19- line19 x\nd.txt-20- line20 x'
+
+
+@pytest.mark.asyncio
+async def test_grep_gbk_matches_match_legacy_output(tmp_path):
+    (tmp_path / "g.txt").write_bytes('第一行 中文内容\nerror 发生在第二行\n第三行 plain\nerror again 第四行\n第五行\n'.encode("gbk"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    assert await succeeded(tools.grep, pattern="error") == 'g.txt:2: error 发生在第二行\ng.txt:4: error again 第四行'
+    assert await succeeded(tools.grep, pattern="error", context=2) == 'g.txt-1- 第一行 中文内容\ng.txt:2: error 发生在第二行\ng.txt-3- 第三行 plain\ng.txt-4- error again 第四行\ng.txt-2- error 发生在第二行\ng.txt-3- 第三行 plain\ng.txt:4: error again 第四行\ng.txt-5- 第五行\ng.txt-6- '
+
+
+@pytest.mark.asyncio
+async def test_grep_non_ascii_pattern_matches_legacy_output(tmp_path):
+    (tmp_path / "u8.txt").write_text(
+        "搜索目标在这里\nplain line\n另一个 搜索 点\n", encoding="utf-8"
+    )
+    (tmp_path / "g.txt").write_bytes('第一行 中文内容\nerror 发生在第二行\n第三行 plain\nerror again 第四行\n第五行\n'.encode("gbk"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="搜索")
+
+    assert output == 'u8.txt:1: 搜索目标在这里\nu8.txt:3: 另一个 搜索 点'
+
+
+@pytest.mark.asyncio
+async def test_grep_limit_notice_matches_legacy_output(tmp_path):
+    (tmp_path / "m.txt").write_text(
+        "".join(f"hit{i} needle\n" for i in range(100)), encoding="utf-8"
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", limit=5)
+
+    assert output == 'm.txt:1: hit0 needle\nm.txt:2: hit1 needle\nm.txt:3: hit2 needle\nm.txt:4: hit3 needle\nm.txt:5: hit4 needle\n\n[5 matches limit reached. Use limit=10 for more, or refine pattern]'
+
+
+@pytest.mark.asyncio
+async def test_grep_crlf_context_matches_legacy_output(tmp_path):
+    (tmp_path / "crlf.txt").write_bytes(
+        "first\r\nneedle second\r\nthird\r\nfourth\r\n".encode("utf-8")
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", context=1)
+
+    assert output == 'crlf.txt-1- first\ncrlf.txt:2: needle second\ncrlf.txt-3- third'
+
+
+@pytest.mark.asyncio
+async def test_grep_utf16_matches_match_legacy_output(tmp_path):
+    (tmp_path / "u16.txt").write_bytes(
+        "english needle line\n第二行 needle\n".encode("utf-16")
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle")
+
+    assert output == 'u16.txt:1: english needle line\nu16.txt:2: 第二行 needle'
+
+
+@pytest.mark.asyncio
+async def test_grep_context_clamp_matches_legacy_output(tmp_path):
+    (tmp_path / "s.txt").write_text("needle one\ntwo\nthree\n", encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", context=5)
+
+    assert output == 's.txt:1: needle one\ns.txt-2- two\ns.txt-3- three\ns.txt-4- '
+
+
+@pytest.mark.asyncio
+async def test_grep_no_trailing_newline_matches_legacy_output(tmp_path):
+    (tmp_path / "t.txt").write_text("one\ntwo\nneedle last", encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", context=1)
+
+    assert output == 't.txt-2- two\nt.txt:3: needle last'
+
+
+@pytest.mark.asyncio
+async def test_grep_binary_file_matches_legacy_output(tmp_path):
+    (tmp_path / "bin.dat").write_bytes(
+        b"needle before NUL\x00\x01\x02garbage needle after\n"
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle")
+
+    assert output == 'No matches found'
+
+
+@pytest.mark.asyncio
+async def test_grep_backslash_pattern_error_matches_legacy_behavior(tmp_path):
+    (tmp_path / "p1.txt").write_text(
+        "path C:\\Users\\demo found\nother line\n", encoding="utf-8"
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    with pytest.raises(file_module.ToolExecutionError, match="regex parse error"):
+        await tools.grep(pattern="C:\\Users")
+
+
+@pytest.mark.asyncio
+async def test_grep_small_budget_cut_matches_legacy_output(tmp_path):
+    (tmp_path / "m.txt").write_text(
+        "".join(f"row{i:03d} needle tail\n" for i in range(30)), encoding="utf-8"
+    )
+    tools = FileTools(workspace_root=tmp_path, max_search_output_bytes=300)
+
+    output = await succeeded(tools.grep, pattern="needle")
+
+    assert output == 'm.txt:1: row000 needle tail\nm.txt:2: row001 needle tail\nm.txt:3: row002 needle tail\nm.txt:4: row003 needle tail\nm.txt:5: row004 needle tail\nm.txt:6: row005 needle tail\nm.txt:7: row006 needle tail\nm.txt:8: row007 needle tail\nm.txt:9: row008 needle tail\nm.txt:10: row009 needle tail\n\n[300 bytes limit reached]'
+
+
+@pytest.mark.asyncio
+async def test_grep_lone_cr_lines_match_legacy_output(tmp_path):
+    cr = "\r"
+    long_line = "0123456789" + cr + "a" * 289 + cr + "b" * 310 + " needle"
+    content = "first" + cr + "needle mid" + cr + "\n" + long_line + "\nlast\n"
+    (tmp_path / "k.txt").write_bytes(content.encode("gbk"))
+    tools = FileTools(workspace_root=tmp_path)
+
+    assert await succeeded(tools.grep, pattern="needle") == 'k.txt:1: firstneedle mid\nk.txt:2: 0123456789aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb... [truncated]\n\n[Some lines truncated to 500 chars. Use read tool to see full lines]'
+    assert await succeeded(tools.grep, pattern="needle", context=2) == 'k.txt:1: first\rneedle mid\nk.txt-2- 0123456789\raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\rbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb... [truncated]\nk.txt-3- last\nk.txt-1- first\rneedle mid\nk.txt:2: 0123456789\raaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\rbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb... [truncated]\nk.txt-3- last\nk.txt-4- \n\n[Some lines truncated to 500 chars. Use read tool to see full lines]'
+
+
+@pytest.mark.asyncio
+async def test_grep_long_line_context_matches_legacy_output(tmp_path):
+    (tmp_path / "w.txt").write_text(
+        "head\nneedle " + "z" * 700 + "\ntail\n", encoding="utf-8"
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", context=1)
+
+    assert output == 'w.txt-1- head\nw.txt:2: needle zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz... [truncated]\nw.txt-3- tail\n\n[Some lines truncated to 500 chars. Use read tool to see full lines]'
+
+
+@pytest.mark.asyncio
+async def test_grep_disjoint_deep_ranges_match_legacy_output(tmp_path):
+    lines = [f"row{i:04d} filler" for i in range(1, 2001)]
+    lines[4] = "row0005 needle alpha"
+    lines[999] = "row1000 needle beta"
+    lines[1999] = "row2000 needle gamma"
+    (tmp_path / "e.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", context=2)
+
+    assert output == 'e.txt-3- row0003 filler\ne.txt-4- row0004 filler\ne.txt:5: row0005 needle alpha\ne.txt-6- row0006 filler\ne.txt-7- row0007 filler\ne.txt-998- row0998 filler\ne.txt-999- row0999 filler\ne.txt:1000: row1000 needle beta\ne.txt-1001- row1001 filler\ne.txt-1002- row1002 filler\ne.txt-1998- row1998 filler\ne.txt-1999- row1999 filler\ne.txt:2000: row2000 needle gamma\ne.txt-2001- '
+
+
+@pytest.mark.asyncio
+async def test_grep_overlapping_windows_match_legacy_output(tmp_path):
+    content = "".join(
+        f"line{i} " + ("needle" if i in (10, 11, 12) else "x") + "\n"
+        for i in range(1, 16)
+    )
+    (tmp_path / "f.txt").write_text(content, encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", context=2)
+
+    assert output == 'f.txt-8- line8 x\nf.txt-9- line9 x\nf.txt:10: line10 needle\nf.txt-11- line11 needle\nf.txt-12- line12 needle\nf.txt-9- line9 x\nf.txt-10- line10 needle\nf.txt:11: line11 needle\nf.txt-12- line12 needle\nf.txt-13- line13 x\nf.txt-10- line10 needle\nf.txt-11- line11 needle\nf.txt:12: line12 needle\nf.txt-13- line13 x\nf.txt-14- line14 x'
+
+
+@pytest.mark.asyncio
+async def test_grep_utf16_context_matches_legacy_output(tmp_path):
+    (tmp_path / "u16.txt").write_bytes(
+        "第一行 needle\n第二行 plain\n第三行 needle\n".encode("utf-16")
+    )
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", context=1)
+
+    assert output == 'u16.txt:1: 第一行 needle\nu16.txt-2- 第二行 plain\nu16.txt-2- 第二行 plain\nu16.txt:3: 第三行 needle\nu16.txt-4- '
+
+
+@pytest.mark.asyncio
+async def test_grep_eof_clamp_matches_legacy_output(tmp_path):
+    (tmp_path / "h.txt").write_text("needle first\ntwo", encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle", context=3)
+
+    assert output == 'h.txt:1: needle first\nh.txt-2- two'

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import fnmatch
 import json
 import os
@@ -87,6 +88,10 @@ _EXIF_ORIENTATION_TAG = 274
 _TEXT_SNIFF_BYTES = 64 * 1024
 _DEFAULT_SEARCH_MAX_BYTES = 50 * 1024
 _DEFAULT_GREP_MAX_LINE_LENGTH = 500
+# Subprocess StreamReaders default to a 64KiB per-line limit; a single rg
+# --json match event carries the full source line and exceeds it on long lines.
+_SEARCH_STREAM_LIMIT = 16 * 1024 * 1024
+_SEARCH_READ_CHUNK_BYTES = 256 * 1024
 _CRLF = "\r\n"
 _WRITE_TOOL_DESCRIPTION = (
     "Create a new UTF-8 file or completely replace an existing file.\n\n"
@@ -926,14 +931,79 @@ def _read_text_document(path: Path, errors: str) -> str | None:
     return data.decode(encoding, errors=errors)
 
 
-def _read_search_lines(path: Path) -> list[str] | None:
-    """Decode a matched file into the lines ripgrep numbered, or None if binary."""
+def _read_search_line_windows(
+    path: Path,
+    ranges: list[tuple[int, int]],
+    encoding: str | None,
+    max_line_length: int,
+    strip_lone_cr: bool,
+) -> tuple[dict[int, str] | None, int | None, bool]:
+    """Stream only the lines a search needs, truncated on capture.
 
+    Returns ``(lines, total, truncated)``.  ``lines`` maps 1-based line numbers
+    to their truncated content and is ``None`` when the file is unreadable or
+    binary.  ``total`` is the ``split("\\n")`` line count, reported only when
+    EOF was reached; ``None`` means every requested line was captured.  Line
+    numbering and content follow ``text.replace("\\r\\n", "\\n").split("\\n")``;
+    ``strip_lone_cr`` additionally drops the lone carriage returns that the
+    context=0 rendering would otherwise strip after truncation.
+    """
+
+    if encoding is None:
+        return None, None, False
     try:
-        text = _read_text_document(path, errors="replace")
+        stream = path.open("rb")
     except OSError:
-        return None
-    return None if text is None else text.replace("\r\n", "\n").split("\n")
+        return None, None, False
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    captured: dict[int, str] = {}
+    truncated = False
+    try:
+        with stream:
+            decoder = codecs.getincrementaldecoder(encoding)(errors="replace")
+            buffer = ""
+            line_number = 0
+            range_index = 0
+
+            def take(line: str) -> bool:
+                nonlocal truncated, range_index
+                while range_index < len(merged) and line_number > merged[range_index][1]:
+                    range_index += 1
+                if range_index == len(merged):
+                    return False
+                if line_number >= merged[range_index][0]:
+                    if strip_lone_cr:
+                        line = line.replace("\r", "")
+                    value, line_truncated = _truncate_search_line(
+                        line, max_line_length
+                    )
+                    truncated |= line_truncated
+                    captured[line_number] = value
+                return True
+
+            eof = False
+            while not eof:
+                chunk = stream.read(_SEARCH_READ_CHUNK_BYTES)
+                if chunk == b"":
+                    eof = True
+                buffer += decoder.decode(chunk, eof)
+                while "\n" in buffer:
+                    line_number += 1
+                    line, buffer = buffer.split("\n", 1)
+                    if line.endswith("\r"):
+                        line = line[:-1]
+                    if not take(line):
+                        return captured, None, truncated
+            line_number += 1
+            take(buffer)
+        return captured, line_number, truncated
+    except OSError:
+        return None, None, False
 
 
 def _normalize_crlf(text: str) -> tuple[str, list[int]]:
@@ -1334,6 +1404,25 @@ def _truncate_search_output(lines: list[str], max_output_bytes: int) -> tuple[st
         selected.append(line)
         size += encoded_size
     return "\n".join(selected), False
+
+
+def _add_partial_search_notice(
+    notices: list[str], stderr: bytes, code: int, backend: str
+) -> None:
+    """Record a partial search failure without discarding collected results.
+
+    rg exits 2 when some files could not be read while the rest of the tree
+    was still searched; that is a degraded success, not a failed search.
+    """
+    message = stderr.decode("utf-8", errors="replace").strip()
+    entries = [line.strip() for line in message.splitlines() if line.strip()]
+    notice = f"search incomplete: {backend} exited with code {code}"
+    if entries:
+        notice += f"; {entries[0]}"
+        if len(entries) > 1:
+            notice += f" (+{len(entries) - 1} more)"
+    if notice not in notices:
+        notices.append(notice)
 
 
 def _search_executable(*names: str) -> str | None:
@@ -2355,14 +2444,19 @@ class FileTools:
                 await stderr_task
             raise
 
+        notices: list[str] = []
         if not reached_limit and code not in (0, 1):
-            self._raise_search_failure(stderr, code, "file search backend")
+            if lines:
+                _add_partial_search_notice(
+                    notices, stderr, code, "file search backend"
+                )
+            else:
+                self._raise_search_failure(stderr, code, "file search backend")
         if not lines:
             return "No files found matching pattern"
         output, bytes_truncated = _truncate_search_output(
             lines, self.max_search_output_bytes
         )
-        notices = []
         if reached_limit:
             notices.append(
                 f"{effective_limit} results limit reached. Use limit="
@@ -2506,6 +2600,7 @@ class FileTools:
         matches: list[tuple[Path, int, str]] = []
         seen: set[tuple[Path, int]] = set()
         reached_limit = False
+        notices: list[str] = []
         passes: list[list[str]] = [[]]
         if not pattern.isascii() or "\\" in pattern:
             # ripgrep only sniffs a byte-order mark, so a pattern that can match
@@ -2513,8 +2608,9 @@ class FileTools:
             # is decoded with that code page first.  The extra pass cannot
             # invent matches: it only reaches text really encoded that way.
             passes.append(["--encoding", "gb18030"])
+        lines_truncated = False
         for encoding_arguments in passes:
-            reached_limit = await self._run_ripgrep_pass(
+            reached_limit, pass_truncated = await self._run_ripgrep_pass(
                 executable,
                 [*arguments, *encoding_arguments, "--", pattern, search_target],
                 cwd=process_cwd,
@@ -2525,54 +2621,88 @@ class FileTools:
                 code_pages=code_pages,
                 seen=seen,
                 matches=matches,
+                notices=notices,
             )
+            lines_truncated |= pass_truncated
             if reached_limit:
                 break
 
         if not matches:
             return "No matches found"
 
-        file_cache: dict[Path, list[str] | None] = {}
-        output_lines: list[str] = []
-        lines_truncated = False
-        for file_path, line_number, matched_text in matches:
-            relative = _relative_search_path(file_path, search_root)
-            lines: list[str] | None = None
+        # Windows of lines each match needs from its file: context around the
+        # match, or the match line itself when the file must be re-decoded.
+        # ripgrep decodes every file as UTF-8, so a matched file that is really
+        # cp936/GB18030 or UTF-16 must be read again here with its code page.
+        needed: dict[Path, list[tuple[int, int]]] = {}
+        last_use: dict[Path, int] = {}
+        for index, (file_path, line_number, _text) in enumerate(matches):
             page = _file_text_encoding(file_path, code_pages)
-            if context or (page is not None and not page.startswith("utf-8")):
-                # ripgrep decodes every file as UTF-8, so a matched file that is
-                # really cp936/GB18030 or UTF-16 must be decoded again here.
-                if file_path not in file_cache:
-                    file_cache[file_path] = _read_search_lines(file_path)
-                lines = file_cache[file_path]
             if context == 0:
-                if lines is not None and 0 < line_number <= len(lines):
-                    matched_text = lines[line_number - 1]
-                value = matched_text.replace("\r\n", "\n").replace("\r", "")
-                value = value.removesuffix("\n")
-                value, truncated = _truncate_search_line(
-                    value, self.max_grep_line_length
+                if page is not None and not page.startswith("utf-8"):
+                    needed.setdefault(file_path, []).append((line_number, line_number))
+                    last_use[file_path] = index
+            else:
+                needed.setdefault(file_path, []).append(
+                    (max(1, line_number - context), line_number + context)
                 )
-                lines_truncated |= truncated
-                output_lines.append(f"{relative}:{line_number}: {value}")
-                continue
-            if not lines:
-                output_lines.append(f"{relative}:{line_number}: (unable to read file)")
-                continue
-            start = max(1, line_number - context)
-            end = min(len(lines), line_number + context)
-            for current in range(start, end + 1):
-                value, truncated = _truncate_search_line(
-                    lines[current - 1], self.max_grep_line_length
+                last_use[file_path] = index
+
+        windows: dict[Path, dict[int, str] | None] = {}
+        totals: dict[Path, int | None] = {}
+        output_lines: list[str] = []
+        output_bytes = 0
+
+        def emit(line: str) -> None:
+            nonlocal output_bytes
+            output_bytes += len(line.encode("utf-8")) + (1 if output_lines else 0)
+            output_lines.append(line)
+
+        for index, (file_path, line_number, matched_text) in enumerate(matches):
+            relative = _relative_search_path(file_path, search_root)
+            if file_path in needed and file_path not in windows:
+                captured, total, read_truncated = _read_search_line_windows(
+                    file_path,
+                    needed[file_path],
+                    _file_text_encoding(file_path, code_pages),
+                    self.max_grep_line_length,
+                    strip_lone_cr=context == 0,
                 )
-                lines_truncated |= truncated
-                separator = ":" if current == line_number else "-"
-                output_lines.append(f"{relative}{separator}{current}{separator} {value}")
+                lines_truncated |= read_truncated
+                windows[file_path] = captured
+                totals[file_path] = total
+            if context == 0:
+                captured = windows.get(file_path)
+                if captured is not None:
+                    matched_text = captured.get(line_number, matched_text)
+                emit(f"{relative}:{line_number}: {matched_text}")
+            else:
+                captured = windows.get(file_path)
+                if captured is None:
+                    emit(f"{relative}:{line_number}: (unable to read file)")
+                else:
+                    total = totals.get(file_path)
+                    start = max(1, line_number - context)
+                    end = (
+                        line_number + context
+                        if total is None
+                        else min(total, line_number + context)
+                    )
+                    for current in range(start, end + 1):
+                        separator = ":" if current == line_number else "-"
+                        emit(
+                            f"{relative}{separator}{current}{separator} "
+                            f"{captured[current]}"
+                        )
+            if last_use.get(file_path) == index:
+                windows.pop(file_path, None)
+                totals.pop(file_path, None)
+            if output_bytes >= self.max_search_output_bytes:
+                break
 
         output, bytes_truncated = _truncate_search_output(
             output_lines, self.max_search_output_bytes
         )
-        notices = []
         if reached_limit:
             notices.append(
                 f"{effective_limit} matches limit reached. Use limit="
@@ -2603,10 +2733,17 @@ class FileTools:
         code_pages: dict[Path, str | None],
         seen: set[tuple[Path, int]],
         matches: list[tuple[Path, int, str]],
-    ) -> bool:
-        """Collect matches from one ripgrep invocation into matches."""
+        notices: list[str],
+    ) -> tuple[bool, bool]:
+        """Collect matches from one ripgrep invocation into matches.
+
+        Captured line text is normalized and truncated here so the matches
+        list never retains full-length lines.  Returns whether the limit
+        stopped the pass and whether any captured line was truncated.
+        """
 
         reached_limit = False
+        truncated = False
         process = await self._start_search_process(executable, arguments, cwd=cwd)
         assert process.stderr is not None
         stderr_task = asyncio.create_task(process.stderr.read())
@@ -2634,9 +2771,13 @@ class FileTools:
                     continue
                 if (candidate, line_number) in seen:
                     continue
-                matches.append(
-                    (candidate, line_number, line_text if isinstance(line_text, str) else "")
+                text = line_text if isinstance(line_text, str) else ""
+                text = text.replace("\r\n", "\n").replace("\r", "").removesuffix("\n")
+                text, text_truncated = _truncate_search_line(
+                    text, self.max_grep_line_length
                 )
+                truncated |= text_truncated
+                matches.append((candidate, line_number, text))
                 seen.add((candidate, line_number))
                 if len(matches) >= limit:
                     reached_limit = True
@@ -2651,8 +2792,13 @@ class FileTools:
             raise
 
         if not reached_limit and code not in (0, 1):
-            self._raise_search_failure(stderr, code, "ripgrep")
-        return reached_limit
+            # `matches` accumulates across passes, so an earlier pass's results
+            # still count here; only a backend error with nothing collected is fatal.
+            if matches:
+                _add_partial_search_notice(notices, stderr, code, "ripgrep")
+            else:
+                self._raise_search_failure(stderr, code, "ripgrep")
+        return reached_limit, truncated
 
     def _grep_fallback(
         self,
@@ -2772,6 +2918,7 @@ class FileTools:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                limit=_SEARCH_STREAM_LIMIT,
             )
         except OSError as exc:
             raise ToolExecutionError(
