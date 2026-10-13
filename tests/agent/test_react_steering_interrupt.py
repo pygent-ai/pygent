@@ -27,6 +27,7 @@ from pygent.core import (
     EffectSafety,
     ExecutionInput,
     ExecutionRequirements,
+    JsonValue,
     Message,
     Module,
     RecoverySafety,
@@ -45,6 +46,7 @@ from pygent.runtime import (
 from pygent.runtime._execution_inputs import MemoryExecutionInbox
 from pygent.tool import (
     ExecutorRegistry,
+    InMemoryToolTaskManager,
     LocalToolExecutor,
     ToolAuthorizationDecision,
     ToolCall,
@@ -53,6 +55,7 @@ from pygent.tool import (
     ToolResult,
     ToolSideEffect,
     ToolSpec,
+    ToolTaskState,
 )
 
 
@@ -125,7 +128,7 @@ def options() -> ExecutionOptions:
     return ExecutionOptions(deadline=time.monotonic() + 30)
 
 
-def steer(mode: SteeringMode, content: str = "new direction") -> dict:
+def steer(mode: SteeringMode, content: str = "new direction") -> JsonValue:
     operation = StandaloneUserMessage(UserMessage(content=content), mode=mode)
     return encode_react_projection_operation(operation)
 
@@ -136,6 +139,15 @@ def _allow(request, context) -> ToolAuthorizationDecision:
         allowed=True,
         reason_code="allowed",
         lifecycle="sync",
+    )
+
+
+def _detach_allow(request, context) -> ToolAuthorizationDecision:
+    return ToolAuthorizationDecision(
+        call_id=request.call.call_id,
+        allowed=True,
+        reason_code="allowed",
+        lifecycle="detach",
     )
 
 
@@ -340,6 +352,93 @@ async def test_immediate_message_interrupts_tool_batch_and_keeps_finished_result
     assert results["slow"].status == "cancelled"
     assert results["slow"].error_code == "interrupted_by_steering"
     assert TOOL_BATCH_INTERRUPT_NOTICE in tool_messages[0].content
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_immediate_message_interrupting_detached_tool_yields_task_snapshot() -> None:
+    tool = ToolSpec(
+        tool_id="shell.sleep",
+        version="1",
+        definition=ToolDefinition(
+            name="sleep",
+            description="long running command",
+            parameters={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        ),
+        side_effect=ToolSideEffect.WRITE,
+        wait_timeout=600.0,
+        wait_timeout_parameter="timeout",
+    )
+    registry = ExecutorRegistry()
+    task_started = asyncio.Event()
+
+    async def sleep_cmd(arguments):
+        task_started.set()
+        await asyncio.sleep(30)
+        return "done"
+
+    registry.register(tool.tool_id, tool.version, LocalToolExecutor(sleep_cmd))
+    manager = InMemoryToolTaskManager(registry)
+    tools = ToolCallLayer(
+        tools=(tool,),
+        authorization_adapter=_detach_allow,
+        executor_registry=registry,
+        task_manager=manager,
+    )
+    model = SteeringTestModel(
+        (
+            AIMessage(
+                content="",
+                tool_calls=(ToolCall(call_id="slow", name="sleep", arguments={}),),
+            ),
+            AIMessage(content="final"),
+        ),
+        first_call_delay=0.0,
+    )
+    runtime = LocalRuntime()
+    runtime.attach_executor_registry(registry)
+    runtime.attach_tool_task_manager(manager)
+    handle = await bind(runtime, ReActLayer(model=model, tools=tools)).start(
+        UserMessage(content="initial"),
+        Context(
+            tools=(tool.definition,),
+            metadata={"permissions": ["tool:use"]},
+        ),
+        execution=options(),
+    )
+    await task_started.wait()
+    await asyncio.sleep(0.05)  # let the layer reach its admitted-task wait
+    delivery = await handle.send_input(
+        input_id="steer-1",
+        kind=REACT_PROJECTION_OPERATION_KIND,
+        value=steer(SteeringMode.IMMEDIATE),
+    )
+    assert delivery.status == "accepted"
+    answer, context = await handle.result()
+    assert answer.content == "final"
+
+    tool_messages = [
+        message for message in context.messages if isinstance(message, ToolMessage)
+    ]
+    assert len(tool_messages) == 1
+    result = tool_messages[0].results[0]
+    assert result.status == "detached"
+    assert result.task is not None
+    assert result.task.call_id == "slow"
+    assert result.task.state == ToolTaskState.RUNNING
+    assert TOOL_BATCH_INTERRUPT_NOTICE in tool_messages[0].content
+
+    # The reported task_id stays usable for tool_task_get-style recovery.
+    admitted = await manager.get_task(result.task.task_id)
+    assert admitted is not None and admitted.state == ToolTaskState.RUNNING
+    by_call = await manager.get_task_by_call("slow")
+    assert by_call is not None and by_call.task_id == result.task.task_id
+
+    assert await manager.cancel(result.task.task_id) is True
     await runtime.close()
 
 

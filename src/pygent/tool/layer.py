@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any, Protocol, cast
@@ -211,16 +211,16 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             if not interrupted:
                 results = raw
             else:
-                results = tuple(
+                results = tuple([
                     raw[index]
                     if completed[index]
-                    else self._cancelled_result(
+                    else await self._interrupted_call_result(
                         call,
                         specs_by_name.get(call.name),
                         started[index],
                     )
                     for index, call in enumerate(message.tool_calls)
-                )
+                ])
         else:
             results = (
                 await gather(operations)
@@ -326,54 +326,50 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             tool_version=None if spec is None else spec.version,
         )
 
-    async def _wait_tool_task_until(
-        self,
-        infrastructure: Any,
-        manager: ToolTaskManager,
-        call: ToolCall,
-        spec: ToolSpec,
-        task: ToolTask,
-        timeout: float,
-    ) -> ToolResult | None:
-        """Wait for one admitted task, returning early on a steering interrupt.
+    async def _interrupted_call_result(
+        self, call: ToolCall, spec: ToolSpec | None, started: bool
+    ) -> ToolResult:
+        """Build the result for a call the steering interrupt caught mid-flight.
 
-        On interrupt the admitted task keeps running; the caller receives the
-        current detached snapshot instead of the final result.
+        The batch wait cancels the in-flight operation, which may already have
+        admitted a detached ToolTask. That task keeps running, so report its
+        current snapshot as a detached result and let the agent reach it by
+        task_id. Calls without a salvageable admitted task stay cancelled.
         """
-
-        interrupt_getter = getattr(infrastructure, "step_interrupt_event", None)
-        interrupt_event = (
-            interrupt_getter() if callable(interrupt_getter) else None
+        infrastructure = current_infrastructure()
+        manager = (
+            cast(ToolTaskManager | None, infrastructure.resolve_tool_task_manager())
+            or self.task_manager
         )
-        if interrupt_event is None:
-            return await infrastructure.wait_tool_task(task.task_id, timeout)
-        wait_task = asyncio.create_task(
-            infrastructure.wait_tool_task(task.task_id, timeout)
+        if manager is None:
+            return self._cancelled_result(call, spec, started)
+        # Optional manager capability, probed like the runtime probes
+        # ``prepare_job`` on durable task managers.
+        find = cast(
+            Callable[[str], Awaitable[ToolTask | None]] | None,
+            getattr(manager, "get_task_by_call", None),
         )
-        abort_task = asyncio.create_task(interrupt_event.wait())
-        try:
-            await asyncio.wait(
-                {wait_task, abort_task}, return_when=asyncio.FIRST_COMPLETED
-            )
-            if wait_task.done():
-                return wait_task.result()
-            snapshot = await manager.get_task(task.task_id) or task
-            output = await manager.get_output(task.task_id)
-            return ToolResult(
-                call_id=call.call_id,
-                name=call.name,
-                status="detached",
-                task=snapshot,
-                output=output,
-                side_effect_committed=None,
-                tool_id=spec.tool_id,
-                tool_version=spec.version,
-            )
-        finally:
-            abort_task.cancel()
-            if not wait_task.done():
-                wait_task.cancel()
-                await asyncio.gather(wait_task, return_exceptions=True)
+        if find is None:
+            return self._cancelled_result(call, spec, started)
+        task = await find(call.call_id)
+        if (
+            task is None
+            or task.state == ToolTaskState.PENDING
+            or (spec is not None and task.tool_id != spec.tool_id)
+        ):
+            return self._cancelled_result(call, spec, started)
+        snapshot = await manager.get_task(task.task_id) or task
+        output = await manager.get_output(task.task_id)
+        return ToolResult(
+            call_id=call.call_id,
+            name=call.name,
+            status="detached",
+            task=snapshot,
+            output=output,
+            side_effect_committed=None,
+            tool_id=snapshot.tool_id,
+            tool_version=snapshot.version,
+        )
 
     async def _reject_event(
         self, call: ToolCall, reason: str, spec: ToolSpec | None = None
@@ -633,14 +629,10 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             timeout = spec.resolve_wait_timeout(cast(FrozenJsonObject, call.arguments))
             assert timeout is not None
             if infrastructure.managed_execution_id is not None:
-                final = await self._wait_tool_task_until(
-                    infrastructure,
-                    manager,
-                    call,
-                    spec,
-                    task,
-                    timeout,
-                )
+                # A steering interrupt cancels this wait at the batch level;
+                # the interrupted batch rebuilds the detached snapshot from the
+                # task manager (see _interrupted_call_result).
+                final = await infrastructure.wait_tool_task(task.task_id, timeout)
             else:
                 final = await ToolTaskHandle(manager, task.task_id).wait(timeout)
             if isinstance(final, ToolResult):

@@ -950,6 +950,20 @@ class InMemoryToolTaskManager:
         async with self._lock:
             return self._snapshots.get(task_id)
 
+    async def get_task_by_call(self, call_id: str) -> ToolTask | None:
+        """Return the newest task admitted for ``call_id``, if any.
+
+        Optional capability (probed with ``getattr``, like ``prepare_job``):
+        lets the tool layer attribute an interrupted batch call to its
+        admitted task even though the admitting coroutine was cancelled.
+        """
+        async with self._lock:
+            found: ToolTask | None = None
+            for snapshot in self._snapshots.values():
+                if snapshot.call_id == call_id:
+                    found = snapshot
+            return found
+
     async def cancel(self, task_id: str) -> bool:
         event: tuple[str, dict[str, JsonValue]] | None = None
         async with self._lock:
