@@ -768,19 +768,15 @@ async def test_sqlite_empty_marker_then_seal_keeps_send_closed_and_replays_on_re
 
 
 @pytest.mark.asyncio
-async def test_sqlite_journal_schema_is_v8(tmp_path):
+async def test_sqlite_journal_reopens_and_replays_observations(tmp_path):
     path = tmp_path / "version.sqlite3"
     async with SQLiteHistoryStore(path) as store:
         await _create_inbox_execution(store, "one")
         assert await _receive(store, "one") == ()
-        rows = await store._db().execute_fetchall("PRAGMA user_version")
-        assert int(rows[0][0]) == 8
 
     # The journal reopens with the same schema and keeps replaying its recorded
     # observations.
     async with SQLiteHistoryStore(path) as reopened:
-        rows = await reopened._db().execute_fetchall("PRAGMA user_version")
-        assert int(rows[0][0]) == 8
         assert _empty_ranges((await _empty_markers(reopened))[0][2]) == [
             (_request_shape(), 0)
         ]

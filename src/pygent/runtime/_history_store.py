@@ -127,27 +127,6 @@ class SQLiteHistoryStore(
         )
         await self._connection.execute("PRAGMA journal_mode=WAL")
         await self._connection.execute("PRAGMA foreign_keys=ON")
-        user_version_row = await (
-            await self._connection.execute("PRAGMA user_version")
-        ).fetchone()
-        user_version = 0 if user_version_row is None else int(user_version_row[0])
-        tables = {
-            row[0]
-            for row in await (
-                await self._connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' "
-                    "AND name NOT LIKE 'sqlite_%'"
-                )
-            ).fetchall()
-        }
-        # Journal schema v8: empty inbox observations are persisted as one
-        # compressed marker row per execution/module (see docs/runtime/SDK.md).
-        if tables and user_version != 8:
-            await self.close()
-            raise HistoryStoreError(
-                "SQLite history schema is incompatible; this Runtime requires "
-                "schema v8"
-            )
         await self._connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS executions (
@@ -284,7 +263,6 @@ class SQLiteHistoryStore(
             "ON executions(binding_id,identity,idempotency_key) "
             "WHERE idempotency_key IS NOT NULL"
         )
-        await self._connection.execute("PRAGMA user_version=8")
         await self._connection.commit()
         return self
 

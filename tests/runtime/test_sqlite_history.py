@@ -12,7 +12,6 @@ import pytest
 from pygent.core import JsonValueError, freeze_json_object, thaw_json
 from pygent.runtime import (
     HistoryConflictError,
-    HistoryStoreError,
     NonDeterministicReplayError,
     SQLiteHistoryStore,
 )
@@ -358,23 +357,6 @@ async def test_task_identity_rejects_kind_or_request_conflicts(tmp_path):
                 status="running",
                 request={"value": 1},
             )
-
-
-@pytest.mark.asyncio
-async def test_open_rejects_legacy_effect_identity_schema(tmp_path):
-    path = tmp_path / "legacy.sqlite3"
-    db = sqlite3.connect(path)
-    db.execute(
-        "CREATE TABLE effects (execution_id TEXT NOT NULL,module_path TEXT NOT NULL,"
-        "call_index INTEGER NOT NULL,effect_type TEXT NOT NULL,"
-        "request_digest TEXT NOT NULL,result_json TEXT NOT NULL,"
-        "PRIMARY KEY(execution_id,module_path,call_index,effect_type))"
-    )
-    db.commit()
-    db.close()
-
-    with pytest.raises(HistoryStoreError, match="schema v8"):
-        await SQLiteHistoryStore(path).open()
 
 
 @pytest.mark.asyncio

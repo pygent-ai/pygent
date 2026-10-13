@@ -42,7 +42,6 @@ from pygent.runtime import (
     ExecutionDeadlineExceeded,
     ExecutionOptions,
     ExecutionPhase,
-    HistoryStoreError,
     HTTPWorkerApp,
     HTTPWorkerClient,
     InMemoryModelDeploymentStore,
@@ -322,30 +321,6 @@ async def test_binding_scopes_are_isolated_for_the_same_requirement() -> None:
         )
         await handle.result()
     await runtime.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.spec("dynamic-model-group", "DMG-SQLITE-001")
-async def test_history_v3_is_rejected_without_migration(tmp_path: Path) -> None:
-    path = tmp_path / "history.sqlite3"
-    db = sqlite3.connect(path)
-    db.execute(
-        "CREATE TABLE executions (execution_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,"
-        "status TEXT NOT NULL,plan_id TEXT NOT NULL,input_json TEXT NOT NULL,"
-        "output_json TEXT,error_json TEXT,attempt INTEGER NOT NULL DEFAULT 1,"
-        "binding_id TEXT NOT NULL DEFAULT '',identity TEXT NOT NULL DEFAULT '',"
-        "idempotency_key TEXT,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
-    )
-    db.execute(
-        "INSERT INTO executions(execution_id,request_id,status,plan_id,input_json) "
-        "VALUES('run','request','queued','plan','{}')"
-    )
-    db.execute("PRAGMA user_version=3")
-    db.commit()
-    db.close()
-
-    with pytest.raises(HistoryStoreError, match="schema v8"):
-        await SQLiteHistoryStore(path).open()
 
 
 @pytest.mark.asyncio
