@@ -16,6 +16,7 @@
 | ExecutionPlan 稳定身份、placement、部署 manifest/artifact resolver 与 durability capability | `tests/runtime/test_execution_plan.py`、`tests/runtime/test_http_worker.py`、`tests/runtime/test_durability_eligibility.py` |
 | SQLite effect 的 `started/completed/unknown`、安全重放、任务恢复、HTTP Worker/SSE | `tests/integration/test_durable_effect_replay.py`、`tests/runtime/test_public_infrastructure.py`、`tests/runtime/test_durable_runtime.py`、`tests/runtime/test_sqlite_history.py`、`tests/runtime/test_http_worker.py` |
 | durable Tool Job occurrence 身份、原子 admission、owner claim、恢复资格与计划/版本/capability 校验 | `tests/runtime/test_durable_tool_jobs.py`、`tests/runtime/test_durable_tool_tasks.py`、`tests/runtime/test_http_worker.py` |
+| Execution 终结受 deadline 加显式 cleanup grace 约束、claim 释放有独立硬上限且失败如实记录不顶替已提交终态、未确认提交 fail-closed | `tests/runtime/test_http_worker.py`、`tests/runtime/test_execution_ownership.py` |
 | REQUIRED durability 的逐节点 recovery/effect 资格与明确降级报告 | `tests/runtime/test_durability_eligibility.py` |
 | 内置与用户 Infrastructure Module 共用 effect/resource/resolver SPI | `tests/runtime/test_public_infrastructure.py` |
 | LLM model/retry/fallback、托管有限 deadline、stream/usage/工具定义投影 | `tests/llm/`、`tests/runtime/test_execution_plan.py` |

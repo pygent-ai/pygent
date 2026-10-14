@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -108,6 +109,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
         model_deployment_store: ModelDeploymentStore | None = None,
         deployment_namespace: str = "default",
         max_retained_executions: int = 1024,
+        cleanup_budget_seconds: float = 10.0,
         context_codecs: tuple[ContextCodec, ...] = (),
     ) -> None:
         wire_values = (input_schema, output_schema, serializer)
@@ -123,8 +125,16 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
             or max_retained_executions <= 0
         ):
             raise ValueError("max_retained_executions must be a positive integer")
+        if (
+            not isinstance(cleanup_budget_seconds, (int, float))
+            or isinstance(cleanup_budget_seconds, bool)
+            or not math.isfinite(cleanup_budget_seconds)
+            or cleanup_budget_seconds <= 0
+        ):
+            raise ValueError("cleanup_budget_seconds must be a positive finite number")
         self._closed = False
         self.max_retained_executions = max_retained_executions
+        self.cleanup_budget_seconds = cleanup_budget_seconds
         self._binding_states: dict[object, _BindingState] = {}
         self._shared_resource_gates: dict[
             tuple[str, str], tuple[CapacityPolicy, _ResourceGate]

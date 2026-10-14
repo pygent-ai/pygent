@@ -38,6 +38,7 @@ from pygent.runtime import (
     LocalRuntime,
     SQLiteHistoryStore,
 )
+from pygent.runtime._history_types import HistoryStoreError
 from pygent.runtime._worker_handle import RemoteExecutionHandle
 from pygent.runtime._worker_protocol import (
     WorkerDeploymentManifest,
@@ -1630,3 +1631,152 @@ async def test_poll_failure_fails_closed_without_shared_durable_claim(tmp_path):
     assert {item.trace_id for item in captured} == {"root-1"}
     assert {item.parent_execution_id for item in captured} == {"parent-1"}
     assert {item.attempt for item in captured} == {4}
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_journal_commit_stays_unknown_then_converges(
+    tmp_path, monkeypatch
+):
+    finalize_started = asyncio.Event()
+    allow_finalize = asyncio.Event()
+    async with SQLiteHistoryStore(tmp_path / "worker.sqlite3") as history:
+        original_finalize = history._finalize_worker_job
+
+        async def slow_finalize(**kwargs):
+            finalize_started.set()
+            await allow_finalize.wait()
+            return await original_finalize(**kwargs)
+
+        monkeypatch.setattr(history, "_finalize_worker_job", slow_finalize)
+
+        async def handler(invocation, event_sink):
+            await asyncio.sleep(0.5)
+
+        worker = HTTPWorkerApp(handler, history=history, cleanup_budget_seconds=0.2)
+        registry = WorkerRegistry()
+        registry.publish("service", (WorkerTarget("worker", "http://worker"),))
+        async with HTTPWorkerClient(
+            registry, transport=httpx.ASGITransport(app=worker.app)
+        ) as client:
+            ref = await client.start(
+                "service",
+                {},
+                request_id="request-unconfirmed-commit",
+                plan_id=_PLAN_ID,
+                graph_hash=_GRAPH_HASH,
+                deadline=monotonic() + 0.1,
+            )
+            await asyncio.wait_for(finalize_started.wait(), timeout=2)
+            with pytest.raises(WorkerRemoteError) as raised:
+                await client.result(ref, deadline=monotonic() + 3)
+            assert raised.value.kind == "persistence_error"
+            assert raised.value.failure.outcome_unknown
+
+            run = worker.executions[ref.execution_id]
+            assert isinstance(run.journal_error, HistoryStoreError)
+            done, _ = await asyncio.wait({run.task}, timeout=3)
+            assert done
+            assert isinstance(run.task.exception(), HistoryStoreError)
+            assert isinstance(run.task.exception().__context__, TimeoutError)
+
+            allow_finalize.set()
+            for _ in range(200):
+                if run.terminal:
+                    break
+                await asyncio.sleep(0.02)
+            assert run.terminal and run.status == "failed"
+            with pytest.raises(WorkerRemoteError) as converged:
+                await client.result(ref)
+            assert converged.value.kind == "timeout"
+            assert not converged.value.failure.outcome_unknown
+        await worker.close()
+
+
+@pytest.mark.asyncio
+async def test_claim_release_failure_does_not_clobber_committed_success(
+    tmp_path, monkeypatch
+):
+    release_started = asyncio.Event()
+    allow_release = asyncio.Event()
+    async with SQLiteHistoryStore(tmp_path / "worker.sqlite3") as history:
+        original_release = history.release_execution_claim
+
+        async def blocked_release(**kwargs):
+            release_started.set()
+            await allow_release.wait()
+            return await original_release(**kwargs)
+
+        monkeypatch.setattr(history, "release_execution_claim", blocked_release)
+
+        async def handler(invocation, event_sink):
+            return {"ok": True}
+
+        worker = HTTPWorkerApp(handler, history=history, cleanup_budget_seconds=0.2)
+        registry = WorkerRegistry()
+        registry.publish("service", (WorkerTarget("worker", "http://worker"),))
+        async with HTTPWorkerClient(
+            registry, transport=httpx.ASGITransport(app=worker.app)
+        ) as client:
+            ref = await client.start(
+                "service",
+                {},
+                request_id="request-release-clobber",
+                plan_id=_PLAN_ID,
+                graph_hash=_GRAPH_HASH,
+            )
+            result = await asyncio.wait_for(client.result(ref), timeout=3)
+            assert thaw_json(result) == {"ok": True}
+
+            run = worker.executions[ref.execution_id]
+            assert run.terminal and run.status == "succeeded"
+            assert run.task is not None and run.task.done()
+            assert run.task.exception() is None
+            assert isinstance(run.release_error, HistoryStoreError)
+            assert run.journal_error is None
+        allow_release.set()
+        await worker.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_timeout_survives_slow_claim_release(tmp_path, monkeypatch):
+    release_started = asyncio.Event()
+    allow_release = asyncio.Event()
+    async with SQLiteHistoryStore(tmp_path / "worker.sqlite3") as history:
+        original_release = history.release_execution_claim
+
+        async def blocked_release(**kwargs):
+            release_started.set()
+            await allow_release.wait()
+            return await original_release(**kwargs)
+
+        monkeypatch.setattr(history, "release_execution_claim", blocked_release)
+
+        async def handler(invocation, event_sink):
+            await asyncio.sleep(0.5)
+
+        worker = HTTPWorkerApp(handler, history=history, cleanup_budget_seconds=0.2)
+        registry = WorkerRegistry()
+        registry.publish("service", (WorkerTarget("worker", "http://worker"),))
+        async with HTTPWorkerClient(
+            registry, transport=httpx.ASGITransport(app=worker.app)
+        ) as client:
+            ref = await client.start(
+                "service",
+                {},
+                request_id="request-timeout-cause",
+                plan_id=_PLAN_ID,
+                graph_hash=_GRAPH_HASH,
+                deadline=monotonic() + 0.1,
+            )
+            with pytest.raises(WorkerRemoteError) as raised:
+                await client.result(ref, deadline=monotonic() + 3)
+            assert raised.value.kind == "timeout"
+            assert not raised.value.failure.outcome_unknown
+
+            run = worker.executions[ref.execution_id]
+            assert run.terminal and run.status == "failed"
+            assert run.journal_error is None
+            assert isinstance(run.release_error, HistoryStoreError)
+            assert isinstance(run.task.exception(), TimeoutError)
+        allow_release.set()
+        await worker.close()

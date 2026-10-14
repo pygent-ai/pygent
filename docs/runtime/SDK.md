@@ -593,7 +593,7 @@ result = await runtime.deliver_external(
 
 ## Deadline 与取消
 
-Root deadline 从 `start()` 被调用时开始，覆盖提交、history/store 初始化、Binding 与计划准备、模型 profile admission、资源与容量排队、`forward()`、清理和 finalization。Runtime 内部每一个 await 都必须使用剩余预算并同时响应 Execution cancellation 与 Runtime shutdown。终态提交可以使用有硬上限的 cleanup grace 完成记录，但不得继续业务执行。持久化设施不可用时不得伪造提交成功；保留已经提交的恢复事实并通过现有错误通道暴露失败。cleanup grace 不替代资源级关闭的 join 与回收责任。
+Root deadline 从 `start()` 被调用时开始，覆盖提交、history/store 初始化、Binding 与计划准备、模型 profile admission、资源与容量排队、`forward()`、清理和 finalization。Runtime 内部每一个 await 都必须使用剩余预算并同时响应 Execution cancellation 与 Runtime shutdown。终态提交可以使用有硬上限的 cleanup grace 完成记录，但不得继续业务执行；claim 释放等回收责任有独立于该 grace 的硬上限预算，回收失败必须如实记录，不得顶替已提交的终态。持久化设施不可用时不得伪造提交成功；保留已经提交的恢复事实并通过现有错误通道暴露失败。cleanup grace 不替代资源级关闭的 join 与回收责任。
 
 配置与 profile 发布不是 Execution 的隐藏前置步骤；它们使用 `ensure_profile(..., deadline=...)` 的独立控制面预算。业务请求只读取并 pin 已发布快照。
 

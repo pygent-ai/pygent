@@ -322,7 +322,7 @@ class _LifecycleMixin:
                 await self._await_with_deadline(record, asyncio.shield(preparation))
             except BaseException:
                 try:
-                    await self._wait_cleanup(preparation, record)
+                    await self._wait_release(preparation)
                 except BaseException as exc:
                     record._mark_journal_failed(exc)
                     raise
@@ -590,11 +590,15 @@ class _LifecycleMixin:
     async def _wait_cleanup(
         self, task: asyncio.Task[Any], record: _ExecutionRecord
     ) -> Any:
-        if record.cleanup_deadline is None:
-            record.cleanup_deadline = (
-                record.deadline if record.deadline is not None else time.monotonic()
-            ) + 1.0
-        return await wait_cleanup(task, record.cleanup_deadline)
+        # The execution deadline bounds finalization; the grace only extends
+        # the commit past expiry (runtime principles 13 and 21).
+        deadline = (
+            record.deadline if record.deadline is not None else time.monotonic()
+        ) + self.cleanup_budget_seconds
+        return await wait_cleanup(task, deadline)
+
+    async def _wait_release(self, task: asyncio.Task[Any]) -> Any:
+        return await wait_cleanup(task, time.monotonic() + self.cleanup_budget_seconds)
 
     async def _finalize_root(self, record: _ExecutionRecord, **kwargs: Any) -> None:
         record.phase = ExecutionPhase.FINALIZING
@@ -677,7 +681,13 @@ class _LifecycleMixin:
         task = track_cleanup(
             self._cleanup_tasks, release(), f"pygent-release-{record.execution_id}"
         )
-        await self._wait_cleanup(task, record)
+        try:
+            await self._wait_release(task)
+        except BaseException as exc:
+            # A release failure must not replace the execution outcome: the
+            # terminal state is either committed or already journaled as
+            # unconfirmed, and a second terminal signal would contradict it.
+            record.release_error = exc
 
     async def _await_with_deadline(self, record: _ExecutionRecord, awaitable: Any) -> Any:
         return await self._await_until(record.deadline, awaitable)

@@ -508,7 +508,9 @@ async def test_deadline_bounds_finalization_and_close_joins_pending_commit(tmp_p
             return AIMessage(content="done"), context
 
     async with GatedHistory(tmp_path / "slow.sqlite3") as store:
-        runtime = LocalRuntime(history=store)
+        # An explicit small grace keeps the deadline-bound finalization cutoff
+        # inside the wait_for window below.
+        runtime = LocalRuntime(history=store, cleanup_budget_seconds=0.5)
         handle = await runtime.bind(Echo()).start(
             UserMessage(content="hello"),
             Context(),

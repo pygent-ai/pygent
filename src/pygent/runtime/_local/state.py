@@ -82,7 +82,7 @@ class _ExecutionRecord:
     input_inbox: MemoryExecutionInbox = field(default_factory=MemoryExecutionInbox)
     runnable_held: bool = False
     deadline_fired: bool = False
-    cleanup_deadline: float | None = None
+    release_error: BaseException | None = None
     finalization_task: asyncio.Task[None] | None = None
     preparation_task: asyncio.Task[None] | None = None
     history: SQLiteHistoryStore | None = None

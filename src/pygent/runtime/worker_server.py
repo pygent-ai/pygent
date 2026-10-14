@@ -65,7 +65,7 @@ class _ServerExecution:
     finalizing: bool = False
     journal_error: BaseException | None = None
     finalization_task: asyncio.Task[None] | None = None
-    cleanup_deadline: float | None = None
+    release_error: BaseException | None = None
     next_event_index: int = 0
 
 
@@ -79,6 +79,7 @@ class HTTPWorkerApp:
         capabilities: tuple[str, ...] = ("local", "sse"),
         max_retained_events: int = 1024,
         max_retained_executions: int = 1024,
+        cleanup_budget_seconds: float = 10.0,
         history: SQLiteHistoryStore | None = None,
         model_store_namespace: str | None = None,
     ) -> None:
@@ -86,6 +87,13 @@ class HTTPWorkerApp:
             raise ValueError("max_retained_events must be positive")
         if max_retained_executions <= 0:
             raise ValueError("max_retained_executions must be positive")
+        if (
+            not isinstance(cleanup_budget_seconds, (int, float))
+            or isinstance(cleanup_budget_seconds, bool)
+            or not math.isfinite(cleanup_budget_seconds)
+            or cleanup_budget_seconds <= 0
+        ):
+            raise ValueError("cleanup_budget_seconds must be a positive finite number")
         if any(not isinstance(item, str) or not item for item in capabilities):
             raise ValueError("Worker capabilities must be non-empty strings")
         if len(capabilities) != len(set(capabilities)):
@@ -105,6 +113,7 @@ class HTTPWorkerApp:
         self.capabilities = tuple(advertised_capabilities)
         self.max_retained_events = max_retained_events
         self.max_retained_executions = max_retained_executions
+        self.cleanup_budget_seconds = cleanup_budget_seconds
         self.history = history
         self.executions: dict[str, _ServerExecution] = {}
         self._cleanup_tasks: set[asyncio.Task[Any]] = set()
@@ -634,7 +643,17 @@ class HTTPWorkerApp:
                             release(),
                             f"pygent-worker-claim-release-{run.execution_id}",
                         )
-                        await wait_cleanup(release_task, self._cleanup_deadline(run))
+                        try:
+                            await wait_cleanup(
+                                release_task,
+                                monotonic() + self.cleanup_budget_seconds,
+                            )
+                        except BaseException as exc:
+                            # A release failure must not replace the execution
+                            # outcome: the terminal state is either committed or
+                            # already journaled as unconfirmed, and a second
+                            # terminal signal would contradict the journal.
+                            run.release_error = exc
                     async with run.condition:
                         run.condition.notify_all()
 
@@ -692,22 +711,22 @@ class HTTPWorkerApp:
                     commit(),
                     f"pygent-worker-finalize-{run.execution_id}",
                 )
-                await wait_cleanup(run.finalization_task, self._cleanup_deadline(run))
+                # The invocation deadline bounds finalization; the grace only
+                # extends the commit past expiry (runtime principles 13 and 21).
+                await wait_cleanup(
+                    run.finalization_task,
+                    (
+                        run.invocation.deadline
+                        if run.invocation.deadline is not None
+                        else monotonic()
+                    )
+                    + self.cleanup_budget_seconds,
+                )
         except BaseException as exc:
             run.journal_error = exc
             async with run.condition:
                 run.condition.notify_all()
             raise
-
-    @staticmethod
-    def _cleanup_deadline(run: _ServerExecution) -> float:
-        if run.cleanup_deadline is None:
-            run.cleanup_deadline = (
-                run.invocation.deadline
-                if run.invocation.deadline is not None
-                else monotonic()
-            ) + 1.0
-        return run.cleanup_deadline
 
     @staticmethod
     def _status(run: _ServerExecution) -> str:
@@ -758,6 +777,11 @@ class HTTPWorkerApp:
             "last_sequence": run.next_event_index - 1,
             "terminal_sequence": run.next_event_index - 1 if run.terminal else None,
         }
+        if run.release_error is not None:
+            metadata["release_error"] = _worker_failure(
+                "persistence_error",
+                "Worker claim release did not complete",
+            ).to_dict()
         if run.journal_error is not None:
             return JSONResponse(
                 {
