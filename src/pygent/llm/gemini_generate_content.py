@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from typing import Self, cast
+from typing import Literal, Self, cast
 from urllib.parse import quote
 
 import httpx
@@ -899,7 +899,7 @@ def _media_block_from_inline(inline: object) -> MediaBlock:
     if media_type not in ("image", "video", "audio"):
         raise TypeError
     return MediaBlock(
-        media_type=media_type,
+        media_type=cast(Literal["image", "video", "audio"], media_type),
         mime_type=base_mime_type,
         source=MediaSource(kind="inline", base64_data=data),
         mime_parameters=parameters.strip() or None,

@@ -501,12 +501,12 @@ def message_from_dict(value: object) -> Message:
             media = data.get("media", [])
             if not isinstance(media, (list, tuple)):
                 raise TypeError
-            blocks: list[MediaBlock] = []
+            assistant_blocks: list[MediaBlock] = []
             for item in media:
                 block = _tool_result_content_from_value(item)
                 if type(block) is not MediaBlock:
                     raise TypeError
-                blocks.append(block)
+                assistant_blocks.append(block)
             raw_continuation = data["continuation"]
             continuation = None
             if raw_continuation is not None:
@@ -527,7 +527,7 @@ def message_from_dict(value: object) -> Message:
                 )
             return AIMessage(
                 **kwargs,
-                media=tuple(blocks),
+                media=tuple(assistant_blocks),
                 tool_calls=tuple(_tool_call_from_dict(item) for item in calls),
                 usage=_object(data["usage"], "Message.usage"),
                 continuation=continuation,

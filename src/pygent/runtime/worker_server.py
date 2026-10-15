@@ -648,7 +648,7 @@ class HTTPWorkerApp:
                                 release_task,
                                 monotonic() + self.cleanup_budget_seconds,
                             )
-                        except BaseException as exc:
+                        except BaseException as exc:  # noqa: BLE001 - swallow to protect the execution outcome
                             # A release failure must not replace the execution
                             # outcome: the terminal state is either committed or
                             # already journaled as unconfirmed, and a second

@@ -314,20 +314,20 @@ def _project_message(
             content = f"{content}\n{note}" if content else note
         return replace(message, content=content, media=())
     if isinstance(message, UserMessage) and message.media:
-        notes: list[str] = []
+        user_notes: list[str] = []
         for block in message.media:
-            reason = _delivery_reason(block, model=model, adapter=adapter)
-            if reason is None:  # pragma: no cover - fallback implies delivery gaps
-                reason = ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED
-            notes.append(
+            delivery_reason = _delivery_reason(block, model=model, adapter=adapter)
+            if delivery_reason is None:  # pragma: no cover - fallback implies delivery gaps
+                delivery_reason = ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED
+            user_notes.append(
                 json.dumps(
-                    _not_viewed_media_value(block, reason),
+                    _not_viewed_media_value(block, delivery_reason),
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )
             )
         content = message.content
-        for note in notes:
+        for note in user_notes:
             content = f"{content}\n{note}" if content else note
         return replace(message, content=content, media=())
     if not isinstance(message, ToolMessage):

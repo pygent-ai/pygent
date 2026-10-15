@@ -446,7 +446,7 @@ class DefaultModelInvoker:
                 model_group, message, context
             ):
                 adapter, _client = self._resolve(entry)
-                gaps = set(
+                missing_gaps = set(
                     media_delivery_gaps(
                         media,
                         model=entry.spec,
@@ -460,7 +460,7 @@ class DefaultModelInvoker:
                         adapter=adapter,
                     )
                 )
-                assessed.append((entry, tuple(sorted(gaps))))
+                assessed.append((entry, tuple(sorted(missing_gaps))))
             compatible = tuple(item for item in assessed if not item[1])
             if compatible:
                 compatible_keys = frozenset(entry.key for entry, _gaps in compatible)
