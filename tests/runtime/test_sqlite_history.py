@@ -18,6 +18,7 @@ from pygent.runtime import (
 from pygent.runtime._history_types import (
     _json_frozen,
     _json_frozen_object,
+    _lock_primary_code,
     _prepare_json,
     effect_digest,
 )
@@ -891,3 +892,69 @@ def test_canonical_encoder_keeps_each_concurrent_traversal_independent():
     with ThreadPoolExecutor(max_workers=4) as executor:
         actual = list(executor.map(_json_frozen, values))
     assert actual == [json.dumps(thaw_json(v), sort_keys=True, separators=(",", ":")) for v in values]
+
+
+def test_lock_primary_code_classifies_only_transient_lock_failures():
+    busy_snapshot = sqlite3.OperationalError("database is locked")
+    busy_snapshot.sqlite_errorcode = 517  # SQLITE_BUSY_SNAPSHOT
+    assert _lock_primary_code(busy_snapshot) == 5
+    locked = sqlite3.OperationalError("database table is locked")
+    locked.sqlite_errorcode = 6  # SQLITE_LOCKED
+    assert _lock_primary_code(locked) == 6
+    constraint = sqlite3.IntegrityError("UNIQUE constraint failed")
+    constraint.sqlite_errorcode = 2067  # SQLITE_CONSTRAINT_UNIQUE
+    assert _lock_primary_code(constraint) is None
+    assert _lock_primary_code(sqlite3.OperationalError("no extended code")) is None
+    assert _lock_primary_code(RuntimeError("not sqlite")) is None
+
+
+@pytest.mark.asyncio
+async def test_lock_contention_write_retries_until_holder_releases(tmp_path):
+    path = tmp_path / "lock-retry.sqlite3"
+    async with SQLiteHistoryStore(path, timeout_seconds=0.5) as store:
+        await store.begin_execution(
+            execution_id="exec-lock",
+            request_id="req-lock",
+            plan_id="plan",
+            input={},
+            trace_id="trace",
+        )
+        holder = sqlite3.connect(path, timeout=0.5, isolation_level=None)
+        holder.execute("PRAGMA busy_timeout=200")
+        holder.execute("BEGIN IMMEDIATE")
+        holder.execute("CREATE TABLE IF NOT EXISTS lock_probe(id INTEGER PRIMARY KEY)")
+
+        async def release_soon() -> None:
+            await asyncio.sleep(1.2)
+            holder.execute("COMMIT")
+            holder.close()
+
+        releaser = asyncio.create_task(release_soon())
+        try:
+            await store.update_execution("exec-lock", status="running")
+            stored = await store.get_execution("exec-lock")
+            assert stored is not None and stored.status == "running"
+        finally:
+            await asyncio.gather(releaser, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_lock_retry_exhaustion_raises_enriched_error(tmp_path, monkeypatch):
+    import pygent.runtime._history_types as history_types
+
+    monkeypatch.setattr(history_types, "_LOCK_RETRY_DEADLINE_SECONDS", 0.05)
+    monkeypatch.setattr(history_types, "_LOCK_RETRY_MAX_ATTEMPTS", 2)
+    path = tmp_path / "lock-exhaust.sqlite3"
+    async with SQLiteHistoryStore(path, timeout_seconds=0.2) as store:
+        holder = sqlite3.connect(path, timeout=0.2, isolation_level=None)
+        holder.execute("PRAGMA busy_timeout=50")
+        holder.execute("BEGIN IMMEDIATE")
+        holder.execute("CREATE TABLE IF NOT EXISTS lock_probe(id INTEGER PRIMARY KEY)")
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="still lock-blocked") as excinfo:
+                await store.update_execution("missing-exec", status="running")
+            assert getattr(excinfo.value, "sqlite_errorcode", None) == 5
+            assert "SQLITE_BUSY" in str(excinfo.value)
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()

@@ -17,6 +17,7 @@ from ._history_types import (
     StoredTask,
     _json,
     _load,
+    _lock_retry,
     _serialized_access,
 )
 
@@ -87,6 +88,7 @@ class JobHistoryMixin:
         row = await cursor.fetchone()
         return None if row is None else _load(row[0])
 
+    @_lock_retry
     @_serialized_access
     async def finalize_lost_tool_owner(self, task_id: str, result: object, *, job: bool) -> bool:
         """Fence a lost observation owner and preserve its last output atomically."""
@@ -111,6 +113,7 @@ class JobHistoryMixin:
             await db.rollback()
             raise
 
+    @_lock_retry
     @_serialized_access
     async def _finalize_worker_job(
         self,
@@ -148,6 +151,7 @@ class JobHistoryMixin:
             await db.rollback()
             raise
 
+    @_lock_retry
     @_serialized_access
     async def put_task(
         self,
@@ -261,6 +265,7 @@ class JobHistoryMixin:
         assert stored is not None
         return stored
 
+    @_lock_retry
     @_serialized_access
     async def update_tool_job(
         self,

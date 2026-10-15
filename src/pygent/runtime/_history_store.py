@@ -19,7 +19,7 @@ from ._history_executions import ExecutionHistoryMixin
 from ._history_inputs import ExecutionInputHistoryMixin
 from ._history_jobs import JobHistoryMixin
 from ._history_ownership import WriteAuthority, validate_writers, write_authority
-from ._history_types import HistoryStoreError
+from ._history_types import HistoryStoreError, _lock_retry
 
 _T = TypeVar("_T")
 
@@ -442,6 +442,7 @@ class SQLiteHistoryStore(
                     # Observe unused receipts without scheduling a callback per writer.
                     receipt.exception()
 
+    @_lock_retry
     async def _commit_event_batch(self, batch: list[_QueuedEvent]) -> None:
         db = self._db()
         async with self._write_lock:
@@ -542,6 +543,7 @@ class SQLiteHistoryStore(
             else:
                 self._finish_transaction_results(batch, results)
 
+    @_lock_retry
     async def _run_transaction_batch(
         self, batch: list[_TransactionRequest]
     ) -> list[object]:

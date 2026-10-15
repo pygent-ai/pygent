@@ -27,6 +27,8 @@ from pygent.llm import (
 )
 from pygent.llm._model_spec_codec import model_entry_from_value, model_entry_value
 
+from ._history_types import _lock_retry
+
 _AsyncMethodT = TypeVar(
     "_AsyncMethodT", bound=Callable[..., Coroutine[Any, Any, Any]]
 )
@@ -538,6 +540,7 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
         await db.commit()
         return result
 
+    @_lock_retry
     @_sqlite_serialized
     async def ensure_profile(
         self, snapshot: ModelProfileSnapshot, *, make_default: bool
@@ -581,6 +584,7 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
             self._defaults[(key[0], key[1])] = key[2]
         return result
 
+    @_lock_retry
     @_sqlite_serialized
     async def set_default(self, scope_id: str, group_name: str, profile: str) -> None:
         db = self._connection()
@@ -646,6 +650,7 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
         ).fetchall()
         return tuple(str(row[0]) for row in rows)
 
+    @_lock_retry
     @_sqlite_serialized
     async def retire(self, scope_id: str, group_name: str, profile: str, replacement_default: str | None = None) -> None:
         db = self._connection()
@@ -704,6 +709,7 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
         if replacing_default and replacement_default is not None:
             self._defaults[(scope_id, group_name)] = replacement_default
 
+    @_lock_retry
     @_sqlite_serialized
     async def admit(self, scope_id: str, requirements: tuple[str, ...], selections: Mapping[str, str | None], *, admission_id: str | None = None) -> ModelAdmission:
         db = self._connection()

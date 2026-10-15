@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import random
+import sqlite3
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from functools import wraps
-from typing import Concatenate, Literal, ParamSpec, Protocol, TypeVar
+from typing import Any, Concatenate, Literal, ParamSpec, Protocol, TypeVar, cast
 
 import aiosqlite
 
@@ -192,6 +195,81 @@ def _serialized_access(
     return wrapped
 
 
+# SQLITE_BUSY/SQLITE_LOCKED primary codes; extended variants (517
+# SQLITE_BUSY_SNAPSHOT, 261 SQLITE_BUSY_RECOVERY, 518 SQLITE_LOCKED_SHAREDCACHE)
+# collapse onto these through & 0xFF. Other OperationalErrors are not transient.
+_LOCK_RETRY_PRIMARY_CODES = frozenset({5, 6})
+_LOCK_RETRY_BASE_DELAY = 0.05
+_LOCK_RETRY_MAX_DELAY = 1.0
+_LOCK_RETRY_MAX_ATTEMPTS = 5
+_LOCK_RETRY_DEADLINE_SECONDS = 60.0
+
+
+def _lock_primary_code(exc: BaseException) -> int | None:
+    code = getattr(exc, "sqlite_errorcode", None)
+    if not isinstance(code, int):
+        return None
+    primary = code & 0xFF
+    return primary if primary in _LOCK_RETRY_PRIMARY_CODES else None
+
+
+async def _retry_store_lock(
+    store: Any, operation: Callable[[], Awaitable[_R]]
+) -> _R:
+    """Run one transaction attempt, retrying while SQLite reports lock contention.
+
+    ``operation`` must be a full transaction boundary that rolls back before
+    raising, so a retry re-enters cleanly and revalidates fencing inside its
+    own transaction. Sleeping happens outside the store serialization lock.
+    """
+
+    deadline = time.monotonic() + _LOCK_RETRY_DEADLINE_SECONDS
+    attempt = 0
+    while True:
+        try:
+            return await operation()
+        except sqlite3.OperationalError as exc:
+            if _lock_primary_code(exc) is None:
+                raise
+            attempt += 1
+            if attempt >= _LOCK_RETRY_MAX_ATTEMPTS or time.monotonic() >= deadline:
+                enriched = sqlite3.OperationalError(
+                    f"{getattr(store, 'path', 'history store')} write still "
+                    f"lock-blocked after {attempt} attempt(s): "
+                    f"{getattr(exc, 'sqlite_errorname', None) or exc}"
+                )
+                code = getattr(exc, "sqlite_errorcode", None)
+                if isinstance(code, int):
+                    enriched.sqlite_errorcode = code
+                name = getattr(exc, "sqlite_errorname", None)
+                if isinstance(name, str):
+                    enriched.sqlite_errorname = name
+                raise enriched from exc
+            await asyncio.sleep(
+                min(_LOCK_RETRY_BASE_DELAY * 2 ** (attempt - 1), _LOCK_RETRY_MAX_DELAY)
+                * (1.0 + random.random())
+            )
+
+
+_LockRetryMethodT = TypeVar(
+    "_LockRetryMethodT", bound=Callable[..., Awaitable[Any]]
+)
+
+
+def _lock_retry(method: _LockRetryMethodT) -> _LockRetryMethodT:
+    """Retry a whole transaction method while SQLite reports lock contention.
+
+    Must be the outermost decorator: retries must sleep without holding the
+    store serialization lock, and each attempt re-acquires it.
+    """
+
+    @wraps(method)
+    async def wrapped(self: Any, /, *args: Any, **kwargs: Any) -> Any:
+        return await _retry_store_lock(self, lambda: method(self, *args, **kwargs))
+
+    return cast(_LockRetryMethodT, wrapped)
+
+
 def _execution_write(
     method: Callable[Concatenate[_WriterT, _P], Awaitable[_R]],
 ) -> Callable[Concatenate[_WriterT, _P], Awaitable[_R]]:
@@ -205,16 +283,20 @@ def _execution_write(
         if not isinstance(execution_id, str):
             raise TypeError("execution write requires an execution identity")
         authority = write_authority(execution_id)
-        async with self._write_lock:
-            db = self._db()
-            await db.execute("BEGIN IMMEDIATE")
-            try:
-                await validate_writers(db, (authority,))
-                result = await method(self, *args, **kwargs)
-                await db.commit()
-                return result
-            except BaseException:
-                await db.rollback()
-                raise
+
+        async def attempt() -> _R:
+            async with self._write_lock:
+                db = self._db()
+                await db.execute("BEGIN IMMEDIATE")
+                try:
+                    await validate_writers(db, (authority,))
+                    result = await method(self, *args, **kwargs)
+                    await db.commit()
+                    return result
+                except BaseException:
+                    await db.rollback()
+                    raise
+
+        return await _retry_store_lock(self, attempt)
 
     return wrapped
