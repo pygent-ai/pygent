@@ -42,6 +42,8 @@ from ._continuation import (
 )
 from ._media_projection import DefaultMediaProjector
 from ._media_routing import (
+    assistant_media_blocks,
+    assistant_media_replay_gaps,
     media_delivery_gaps,
     pending_media_blocks,
     project_media_for_model,
@@ -423,10 +425,16 @@ class DefaultModelInvoker:
         event_sink: EventSink | None = None,
     ) -> AsyncIterator[ModelProviderStreamPart]:
         _validate_deadline(deadline)
+        if generation.response_schema is not None and generation.output_modalities:
+            raise ModelCallError(
+                "generation.response_schema cannot be combined with media output",
+                kind=ModelErrorKind.INVALID_REQUEST,
+            )
         attempts: list[ModelAttempt] = []
         last_kind = ModelErrorKind.UNKNOWN
         media = pending_media_blocks(message, context)
-        if not media:
+        replay_media = assistant_media_blocks(context)
+        if not media and not replay_media:
             attempt_plans: Iterator[tuple[ModelEntry, Message, Context]] = (
                 (entry, message, item)
                 for entry, item in _model_attempt_plans(model_group, message, context)
@@ -438,17 +446,21 @@ class DefaultModelInvoker:
                 model_group, message, context
             ):
                 adapter, _client = self._resolve(entry)
-                assessed.append(
-                    (
-                        entry,
-                        media_delivery_gaps(
-                            media,
-                            model=entry.spec,
-                            adapter=adapter,
-                            projector=self._media_projector,
-                        ),
+                gaps = set(
+                    media_delivery_gaps(
+                        media,
+                        model=entry.spec,
+                        adapter=adapter,
+                        projector=self._media_projector,
+                    )
+                ) | set(
+                    assistant_media_replay_gaps(
+                        replay_media,
+                        model=entry.spec,
+                        adapter=adapter,
                     )
                 )
+                assessed.append((entry, tuple(sorted(gaps))))
             compatible = tuple(item for item in assessed if not item[1])
             if compatible:
                 compatible_keys = frozenset(entry.key for entry, _gaps in compatible)
@@ -599,6 +611,12 @@ class DefaultModelInvoker:
                             part_payload.update(
                                 {"model_key": model_key, "attempt": number}
                             )
+                            if part.kind in (
+                                ModelProviderStreamKind.MEDIA,
+                                ModelProviderStreamKind.MEDIA_DELTA,
+                            ):
+                                part_payload["provider"] = model.provider
+                                part_payload["model_id"] = model.model_id
                             part = ModelProviderStreamPart(part.kind, part_payload)
                         if part.kind == ModelProviderStreamKind.USAGE:
                             raw_usage = cast(FrozenJsonObject, part.data).to_dict()
@@ -608,6 +626,8 @@ class DefaultModelInvoker:
                         emitted = emitted or part.kind in {
                             ModelProviderStreamKind.REASONING,
                             ModelProviderStreamKind.TEXT,
+                            ModelProviderStreamKind.MEDIA,
+                            ModelProviderStreamKind.MEDIA_DELTA,
                             ModelProviderStreamKind.TOOL_CALL,
                         }
                         completed = (
@@ -860,8 +880,14 @@ def _missing_capabilities(
     missing: list[str] = []
     if "text" not in capabilities.modalities.input:
         missing.append("modalities.input.text")
-    if "text" not in capabilities.modalities.output:
-        missing.append("modalities.output.text")
+    requested_output = generation.output_modalities
+    if requested_output:
+        for modality in requested_output:
+            if modality not in capabilities.modalities.output:
+                missing.append(f"modalities.output.{modality}")
+    else:
+        if "text" not in capabilities.modalities.output:
+            missing.append("modalities.output.text")
     if tools and not capabilities.tools.call:
         missing.append("tools.call")
     choice = generation.tool_choice

@@ -6,6 +6,7 @@ import json
 from dataclasses import replace
 
 from pygent.core import (
+    AIMessage,
     Context,
     Message,
     ToolMessage,
@@ -24,6 +25,7 @@ from ._adapter_contracts import (
     MediaProjectionTrace,
     MediaProjector,
     ModelProviderAdapter,
+    ModelProviderAssistantMediaReplay,
     ModelProviderMediaDeliveryValidator,
 )
 from .configuration import ModelSpec
@@ -38,6 +40,39 @@ def pending_media_blocks(
         for candidate in (*context.messages, message)
         for block in _message_media_blocks(candidate)
     )
+
+
+def assistant_media_blocks(context: Context) -> tuple[MediaBlock, ...]:
+    """Collect media blocks carried by historical assistant messages."""
+
+    return tuple(
+        block
+        for message in context.messages
+        if isinstance(message, AIMessage)
+        for block in message.media
+    )
+
+
+def assistant_media_replay_gaps(
+    blocks: tuple[MediaBlock, ...],
+    *,
+    model: ModelSpec,
+    adapter: ModelProviderAdapter,
+) -> tuple[str, ...]:
+    """Return route gaps for replaying assistant media to one model."""
+
+    gaps: set[str] = set()
+    for block in blocks:
+        if block.media_type not in model.capabilities.modalities.input:
+            gaps.add(f"modalities.input.{block.media_type}")
+        if isinstance(adapter, ModelProviderAssistantMediaReplay):
+            gaps.update(
+                f"assistant_media_replay.{gap}"
+                for gap in adapter.assistant_media_gaps(block, model)
+            )
+        else:
+            gaps.add("assistant_media_replay.protocol")
+    return tuple(sorted(gaps))
 
 
 def _message_media_blocks(message: Message) -> tuple[MediaBlock, ...]:
@@ -260,6 +295,24 @@ def _project_message(
     model: ModelSpec,
     adapter: ModelProviderAdapter,
 ) -> Message:
+    if isinstance(message, AIMessage) and message.media:
+        notes: list[str] = []
+        for block in message.media:
+            if block.media_type not in model.capabilities.modalities.input:
+                reason = ModelFailureReason.MODEL_INPUT_MODALITY_UNSUPPORTED
+            else:
+                reason = ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED
+            notes.append(
+                json.dumps(
+                    _not_viewed_media_value(block, reason),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        content = message.content
+        for note in notes:
+            content = f"{content}\n{note}" if content else note
+        return replace(message, content=content, media=())
     if isinstance(message, UserMessage) and message.media:
         notes: list[str] = []
         for block in message.media:
@@ -358,6 +411,8 @@ def _media_reference(block: MediaBlock) -> str:
 
 
 __all__ = [
+    "assistant_media_blocks",
+    "assistant_media_replay_gaps",
     "media_delivery_gaps",
     "pending_media_blocks",
     "project_media_for_model",

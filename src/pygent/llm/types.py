@@ -62,6 +62,7 @@ class ModelFailureReason(str, Enum):
     MEDIA_TOO_LARGE = "media_too_large"
     MEDIA_CONTENT_INVALID = "media_content_invalid"
     STREAM_INCOMPLETE = "stream_incomplete"
+    OUTPUT_MEDIA_NOT_PRODUCED = "output_media_not_produced"
     OUTPUT_LIMIT_REACHED = "output_limit_reached"
     UNKNOWN_PROVIDER_FAILURE = "unknown_provider_failure"
 
@@ -91,6 +92,7 @@ class ModelResourceOwnership(str, Enum):
 
 
 _OVERRIDABLE_GENERATION_FIELDS = frozenset({"temperature", "max_output_tokens"})
+_OUTPUT_MODALITIES = frozenset({"image", "audio", "video"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,6 +366,7 @@ class GenerationConfig:
     response_schema: JsonObjectInput | None = None
     response_schema_name: str = "response"
     tool_choice: str | None = None
+    output_modalities: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.temperature is not None and (
@@ -388,6 +391,17 @@ class GenerationConfig:
             not isinstance(self.tool_choice, str) or not self.tool_choice
         ):
             raise ValueError("tool_choice must be non-empty when provided")
+        output_modalities = tuple(self.output_modalities)
+        if any(
+            not isinstance(value, str) or value not in _OUTPUT_MODALITIES
+            for value in output_modalities
+        ):
+            raise ValueError(
+                "output_modalities must contain only image, audio, or video values"
+            )
+        if len(output_modalities) != len(set(output_modalities)):
+            raise ValueError("output_modalities contains duplicates")
+        object.__setattr__(self, "output_modalities", output_modalities)
         if self.response_schema is not None:
             object.__setattr__(
                 self, "response_schema", freeze_json_object(self.response_schema)

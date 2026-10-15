@@ -347,7 +347,38 @@ def test_gemini_structured_output_rejects_schema_mismatch() -> None:
     assert raised.value.reason_code is ModelFailureReason.GENERATION_SCHEMA_INVALID
 
 
-def test_gemini_rejects_non_text_response_parts() -> None:
+def test_gemini_decodes_inline_image_response_parts() -> None:
+    response = GeminiGenerateContentAdapter().parse_response(
+        _request(),
+        freeze_json_object(
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [
+                                {"text": "here you go"},
+                                {
+                                    "inlineData": {
+                                        "mimeType": "image/png",
+                                        "data": "cG5n",
+                                    }
+                                },
+                            ],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert response.message.content == "here you go"
+    assert [block.media_type for block in response.message.media] == ["image"]
+    assert response.message.media[0].source.base64_data == "cG5n"
+
+
+def test_gemini_rejects_unsupported_inline_media_types() -> None:
     with pytest.raises(ModelProviderError) as raised:
         GeminiGenerateContentAdapter().parse_response(
             _request(),
@@ -360,7 +391,7 @@ def test_gemini_rejects_non_text_response_parts() -> None:
                                 "parts": [
                                     {
                                         "inlineData": {
-                                            "mimeType": "image/png",
+                                            "mimeType": "application/octet-stream",
                                             "data": "opaque",
                                         }
                                     }

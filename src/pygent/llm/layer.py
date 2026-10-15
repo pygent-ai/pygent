@@ -28,8 +28,11 @@ from pygent.core import (
     freeze_json,
     thaw_json,
 )
-from pygent.core._tool_values import _tool_result_content_to_value
-from pygent.tool import ToolCall, ToolDefinition
+from pygent.core._tool_values import (
+    _tool_result_content_from_value,
+    _tool_result_content_to_value,
+)
+from pygent.tool import MediaBlock, ToolCall, ToolDefinition
 
 from ._adapter_contracts import ModelInvoker, ModelRequestMediaTokenEstimator
 from ._media_routing import pending_media_blocks
@@ -295,6 +298,9 @@ def _message_effect_value(message: Message) -> dict[str, object]:
                 "data": thaw_json(cast(JsonValue, message.continuation.data)),
             }
         )
+        value["media"] = [
+            _tool_result_content_to_value(block) for block in message.media
+        ]
         value["tool_calls"] = [
             {
                 "call_id": call.call_id,
@@ -419,6 +425,11 @@ def _model_effect_request(
     )
 
 
+_EFFECT_MESSAGE_FIELDS = frozenset(
+    {"role", "content", "slot", "metadata", "media", "tool_calls", "continuation"}
+)
+
+
 def _message_from_effect(value: JsonValue) -> AIMessage:
     decoded = thaw_json(value)
     if not isinstance(decoded, Mapping):
@@ -432,6 +443,21 @@ def _message_from_effect(value: JsonValue) -> AIMessage:
     raw_message = decoded.get("message")
     if not isinstance(raw_message, Mapping):
         raise TypeError("replayed model effect message must be a JSON object")
+    unknown_fields = set(raw_message) - _EFFECT_MESSAGE_FIELDS
+    if unknown_fields:
+        raise TypeError(
+            "replayed model effect message has unknown fields: "
+            + ", ".join(sorted(unknown_fields))
+        )
+    raw_media = raw_message.get("media", [])
+    if not isinstance(raw_media, list):
+        raise TypeError("replayed model media must be an array")
+    media: list[MediaBlock] = []
+    for item in raw_media:
+        block = _tool_result_content_from_value(item)
+        if type(block) is not MediaBlock:
+            raise TypeError("replayed model media contains an invalid block")
+        media.append(block)
     raw_calls = raw_message.get("tool_calls", [])
     if not isinstance(raw_calls, list):
         raise TypeError("replayed model tool_calls must be an array")
@@ -487,6 +513,7 @@ def _message_from_effect(value: JsonValue) -> AIMessage:
         content=cast(str, raw_message.get("content", "")),
         slot=cast(str | None, raw_message.get("slot")),
         metadata=cast(Mapping[str, object], metadata),
+        media=tuple(media),
         tool_calls=tuple(calls),
         usage=cast(Mapping[str, object], usage),
         continuation=continuation,

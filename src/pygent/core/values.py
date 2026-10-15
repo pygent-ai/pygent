@@ -124,6 +124,9 @@ def _sorted_json_value(value: object) -> object:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AIMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
+    """One assistant turn; media blocks follow the text content."""
+
+    media: tuple[MediaBlock, ...] = ()
     tool_calls: tuple[ToolCall, ...] = ()
     usage: JsonObjectInput = ()
     continuation: ModelContinuation | None = field(default=None, repr=False)
@@ -131,6 +134,10 @@ class AIMessage(Message, _framework_token=_MESSAGE_SUBCLASS_TOKEN):
 
     def __post_init__(self) -> None:
         Message.__post_init__(self)
+        media = tuple(self.media)
+        if any(type(block) is not MediaBlock for block in media):
+            raise TypeError("AIMessage.media must contain only MediaBlock values")
+        object.__setattr__(self, "media", media)
         tool_calls = tuple(self.tool_calls)
         if any(type(call) is not ToolCall for call in tool_calls):
             raise TypeError("AIMessage.tool_calls must contain only ToolCall values")

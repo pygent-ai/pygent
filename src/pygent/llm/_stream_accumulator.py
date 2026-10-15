@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -15,7 +17,8 @@ from pygent.core import (
     ModelContinuation,
     freeze_json_object,
 )
-from pygent.tool import ToolCall, ToolDefinition
+from pygent.core._tool_values import MediaBlockType
+from pygent.tool import MediaBlock, MediaSource, ToolCall, ToolDefinition
 from pygent.tool._schema import validate_instance
 
 from ._adapter_contracts import (
@@ -47,12 +50,25 @@ from .types import (
 
 
 @dataclass(slots=True)
+class _MediaShardBuffer:
+    """Per-item buffer for one media item assembled from stream fragments."""
+
+    media_type: str
+    mime_type: str
+    mime_parameters: str
+    fragments: list[str] = field(default_factory=list)
+    expected_fragment: int = 0
+
+
+@dataclass(slots=True)
 class ModelStreamAccumulator:
     """Own mutable stream reduction state while the invoker owns iteration."""
 
     generation: GenerationConfig
     tools: tuple[ToolDefinition, ...]
     text_parts: list[str] = field(default_factory=list)
+    media: list[MediaBlock] = field(default_factory=list)
+    media_shards: dict[int, _MediaShardBuffer] = field(default_factory=dict)
     usage: FrozenJsonObject = field(default_factory=freeze_json_object)
     calls: dict[int, dict[str, str]] = field(default_factory=dict)
     selected_model_key: str | None = None
@@ -60,6 +76,8 @@ class ModelStreamAccumulator:
     finish_reason: str = "other"
     provider_request_id: str | None = None
     continuation: ModelContinuation | None = None
+    media_provider: str | None = None
+    media_model_id: str | None = None
 
     async def consume(
         self, part: ModelProviderStreamPart, event_sink: EventSink | None
@@ -70,6 +88,7 @@ class ModelStreamAccumulator:
             if not isinstance(public_output, bool):
                 raise TypeError("model stream reset public_output must be a bool")
             self.text_parts.clear()
+            self.media.clear()
             self.usage = freeze_json_object()
             self.calls.clear()
             self.selected_model_key = None
@@ -77,6 +96,9 @@ class ModelStreamAccumulator:
             self.finish_reason = "other"
             self.provider_request_id = None
             self.continuation = None
+            self.media_provider = None
+            self.media_model_id = None
+            self.media_shards.clear()
             if public_output:
                 await _emit(
                     event_sink,
@@ -112,6 +134,31 @@ class ModelStreamAccumulator:
             if isinstance(value, str):
                 self.text_parts.append(value)
             await _emit(event_sink, ModelEventKind.TEXT_DELTA, data)
+        elif part.kind == ModelProviderStreamKind.MEDIA:
+            block = _media_block_from_part(data)
+            provider = data.get("provider")
+            model_id = data.get("model_id")
+            if self.media_provider is None and isinstance(provider, str):
+                self.media_provider = provider
+            if self.media_model_id is None and isinstance(model_id, str):
+                self.media_model_id = model_id
+            index = len(self.media)
+            self.media.append(block)
+            await _emit(
+                event_sink,
+                ModelEventKind.MEDIA,
+                {
+                    "media_index": index,
+                    "media_type": block.media_type,
+                    "mime_type": block.mime_type,
+                    "mime_parameters": block.mime_parameters or "",
+                    "sha256": block.source.sha256,
+                    "size_bytes": block.source.size_bytes,
+                    "data": data["data"],
+                },
+            )
+        elif part.kind == ModelProviderStreamKind.MEDIA_DELTA:
+            await self._consume_media_delta(data, event_sink)
         elif part.kind == ModelProviderStreamKind.TOOL_CALL:
             await self._consume_tool_call(data, event_sink)
         elif part.kind == ModelProviderStreamKind.USAGE:
@@ -128,6 +175,120 @@ class ModelStreamAccumulator:
             raw_request_id = data.get("provider_request_id")
             if isinstance(raw_request_id, str) and raw_request_id:
                 self.provider_request_id = raw_request_id
+
+    async def _consume_media_delta(
+        self, data: FrozenJsonObject, event_sink: EventSink | None
+    ) -> None:
+        """Merge one transport media fragment into its media item buffer."""
+
+        media_index = data.get("media_index")
+        fragment_index = data.get("fragment_index")
+        final = data.get("final")
+        media_type = data.get("media_type")
+        mime_type = data.get("mime_type")
+        mime_parameters = data.get("mime_parameters", "")
+        base64_data = data.get("data")
+        if (
+            not isinstance(media_index, int)
+            or isinstance(media_index, bool)
+            or media_index < 0
+        ):
+            raise TypeError("model media delta requires a non-negative media index")
+        if (
+            not isinstance(fragment_index, int)
+            or isinstance(fragment_index, bool)
+            or fragment_index < 0
+        ):
+            raise TypeError(
+                "model media delta requires a non-negative fragment index"
+            )
+        if not isinstance(final, bool):
+            raise TypeError("model media delta requires a final flag")
+        if media_type not in ("image", "video", "audio"):
+            raise TypeError("model media delta has an unsupported media type")
+        if not isinstance(mime_type, str) or not mime_type:
+            raise TypeError("model media delta requires a mime type")
+        if not isinstance(base64_data, str):
+            raise TypeError("model media delta requires base64 data")
+        # An empty data payload is the final=True completion marker; the
+        # fragments joined so far form the media content.
+        if base64_data and not mime_type.startswith(f"{media_type}/"):
+            raise TypeError("model media delta mime type does not match its type")
+        if not isinstance(mime_parameters, str):
+            raise TypeError("model media delta mime_parameters must be a string")
+
+        provider = data.get("provider")
+        model_id = data.get("model_id")
+        if self.media_provider is None and isinstance(provider, str):
+            self.media_provider = provider
+        if self.media_model_id is None and isinstance(model_id, str):
+            self.media_model_id = model_id
+
+        buffer = self.media_shards.get(media_index)
+        if buffer is None:
+            buffer = _MediaShardBuffer(
+                media_type=cast(str, media_type),
+                mime_type=mime_type,
+                mime_parameters=mime_parameters,
+            )
+            self.media_shards[media_index] = buffer
+        if (
+            buffer.media_type != media_type
+            or buffer.mime_type != mime_type
+            or buffer.mime_parameters != mime_parameters
+        ):
+            raise TypeError("model media delta does not match its media item")
+        if fragment_index != buffer.expected_fragment:
+            raise TypeError(
+                "model media delta arrived out of order for its media item"
+            )
+        buffer.fragments.append(base64_data)
+        buffer.expected_fragment += 1
+
+        await _emit(
+            event_sink,
+            ModelEventKind.MEDIA_DELTA,
+            {
+                "media_index": media_index,
+                "fragment_index": fragment_index,
+                "media_type": media_type,
+                "mime_type": mime_type,
+                "data": base64_data,
+                "final": final,
+            },
+        )
+        if not final:
+            return
+
+        try:
+            joined = b"".join(
+                base64.b64decode(fragment, validate=True)
+                for fragment in buffer.fragments
+            )
+        except (binascii.Error, ValueError) as exc:
+            raise TypeError("model media delta fragments are not valid base64") from exc
+        block = MediaBlock(
+            media_type=cast(MediaBlockType, media_type),
+            mime_type=mime_type,
+            source=MediaSource.inline(joined),
+            mime_parameters=buffer.mime_parameters or None,
+        )
+        del self.media_shards[media_index]
+        index = len(self.media)
+        self.media.append(block)
+        await _emit(
+            event_sink,
+            ModelEventKind.MEDIA,
+            {
+                "media_index": index,
+                "media_type": block.media_type,
+                "mime_type": block.mime_type,
+                "mime_parameters": block.mime_parameters or "",
+                "sha256": block.source.sha256,
+                "size_bytes": block.source.size_bytes,
+                "data": base64.b64encode(joined).decode("ascii"),
+            },
+        )
 
     async def _consume_tool_call(
         self, data: FrozenJsonObject, event_sink: EventSink | None
@@ -164,6 +325,13 @@ class ModelStreamAccumulator:
         )
 
     async def finish(self, event_sink: EventSink | None) -> ModelProviderResponse:
+        if self.media_shards:
+            # The provider stream ended without finalizing media it started
+            # delivering; completing the call here would silently drop it.
+            raise ModelCallError(
+                "model stream ended with incomplete media",
+                kind=ModelErrorKind.INVALID_RESPONSE,
+            )
         content = "".join(self.text_parts)
         await self._validate_content(content, event_sink)
         content = "".join(self.text_parts)
@@ -175,6 +343,23 @@ class ModelStreamAccumulator:
             )
         if self.finish_reason == "other":
             self.finish_reason = "tool_calls" if tool_calls else "stop"
+        if (
+            self.media
+            and self.generation.response_schema is not None
+            and self.media_provider is not None
+            and self.media_model_id is not None
+        ):
+            # Media arrived although the request declared a JSON text schema.
+            await _emit(
+                event_sink,
+                ModelEventKind.CAPABILITY_WARNING,
+                {
+                    "model_key": self.selected_model_key,
+                    "provider": self.media_provider,
+                    "model_id": self.media_model_id,
+                    "missing_capabilities": ("structured_output.media_present",),
+                },
+            )
         await _emit(
             event_sink,
             ModelEventKind.USAGE,
@@ -203,6 +388,7 @@ class ModelStreamAccumulator:
         return ModelProviderResponse(
             message=AIMessage(
                 content=content,
+                media=tuple(self.media),
                 tool_calls=tuple(tool_calls),
                 metadata={"model_key": self.selected_model_key},
                 continuation=self.continuation,
@@ -279,6 +465,31 @@ class ModelStreamAccumulator:
                     reason_code=ModelFailureReason.TOOL_CALL_INVALID,
                 )
         return tool_calls
+
+
+def _media_block_from_part(data: FrozenJsonObject) -> MediaBlock:
+    """Build one validated complete media block from a provider media part."""
+
+    media_type = data.get("media_type")
+    mime_type = data.get("mime_type")
+    mime_parameters = data.get("mime_parameters", "")
+    base64_data = data.get("data")
+    if media_type not in ("image", "video", "audio"):
+        raise TypeError("model media stream part has an unsupported media type")
+    if not isinstance(mime_type, str) or not mime_type:
+        raise TypeError("model media stream part requires a mime type")
+    if not isinstance(base64_data, str) or not base64_data:
+        raise TypeError("model media stream part requires base64 data")
+    if not mime_type.startswith(f"{media_type}/"):
+        raise TypeError("model media stream part mime type does not match its type")
+    if not isinstance(mime_parameters, str):
+        raise TypeError("model media stream part mime_parameters must be a string")
+    return MediaBlock(
+        media_type=cast(MediaBlockType, media_type),
+        mime_type=mime_type,
+        source=MediaSource(kind="inline", base64_data=base64_data),
+        mime_parameters=mime_parameters or None,
+    )
 
 
 __all__ = ["ModelStreamAccumulator"]

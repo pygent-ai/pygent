@@ -171,6 +171,15 @@ class GeminiGenerateContentAdapter:
     ) -> tuple[str, ...]:
         return _gemini_media_delivery_gaps(block, model)
 
+    def assistant_media_gaps(
+        self, block: MediaBlock, model: ModelSpec
+    ) -> tuple[str, ...]:
+        if block.media_type != "image":
+            return ("media_transport.model",)
+        if block.mime_type not in _GEMINI_IMAGE_MIME_TYPES:
+            return ("media_transport.mime_type",)
+        return ()
+
     def estimate_media_input_tokens(
         self, block: MediaBlock, model: ModelSpec
     ) -> int | None:
@@ -180,26 +189,58 @@ class GeminiGenerateContentAdapter:
 
     def validate_model(self, model: ModelSpec) -> None:
         options = cast(FrozenJsonObject, model.provider_options)
-        unknown = set(options) - {"thinking_config"}
+        unknown = set(options) - {"thinking_config", "speech_config"}
         if unknown:
             raise ValueError(
                 "unknown Gemini provider options: " + ", ".join(sorted(unknown))
             )
         thinking = options.get("thinking_config")
         if thinking is None:
-            return
-        if not isinstance(thinking, FrozenJsonObject):
+            pass
+        elif not isinstance(thinking, FrozenJsonObject):
             raise TypeError("thinking_config must be an object")
-        if set(thinking) - {"include_thoughts", "thinking_budget"}:
+        elif set(thinking) - {"include_thoughts", "thinking_budget"}:
             raise ValueError("thinking_config has unknown fields")
-        include = thinking.get("include_thoughts")
-        if include is not None and not isinstance(include, bool):
-            raise TypeError("thinking_config.include_thoughts must be a bool")
-        budget = thinking.get("thinking_budget")
-        if budget is not None and (
-            not isinstance(budget, int) or isinstance(budget, bool) or budget < -1
-        ):
-            raise ValueError("thinking_config.thinking_budget must be at least -1")
+        else:
+            include = thinking.get("include_thoughts")
+            if include is not None and not isinstance(include, bool):
+                raise TypeError(
+                    "thinking_config.include_thoughts must be a bool"
+                )
+            budget = thinking.get("thinking_budget")
+            if budget is not None and (
+                not isinstance(budget, int) or isinstance(budget, bool) or budget < -1
+            ):
+                raise ValueError(
+                    "thinking_config.thinking_budget must be an integer >= -1"
+                )
+        speech = options.get("speech_config")
+        if speech is None:
+            return
+        if not isinstance(speech, FrozenJsonObject):
+            raise TypeError("speech_config must be an object")
+        if set(speech) - {"voice_config"}:
+            raise ValueError("speech_config has unknown fields")
+        voice_config = speech.get("voice_config")
+        if not isinstance(voice_config, FrozenJsonObject):
+            raise TypeError("speech_config.voice_config must be an object")
+        if set(voice_config) - {"prebuilt_voice_config"}:
+            raise ValueError("speech_config.voice_config has unknown fields")
+        prebuilt = voice_config.get("prebuilt_voice_config")
+        if not isinstance(prebuilt, FrozenJsonObject):
+            raise TypeError(
+                "speech_config.voice_config.prebuilt_voice_config must be an object"
+            )
+        if set(prebuilt) - {"voice_name"}:
+            raise ValueError(
+                "speech_config.voice_config.prebuilt_voice_config has unknown fields"
+            )
+        voice_name = prebuilt.get("voice_name")
+        if not isinstance(voice_name, str) or not voice_name:
+            raise ValueError(
+                "speech_config.voice_config.prebuilt_voice_config.voice_name "
+                "must be a non-empty string"
+            )
 
     def build_request(self, request: ModelProviderRequest) -> FrozenJsonObject:
         try:
@@ -225,6 +266,17 @@ class GeminiGenerateContentAdapter:
                 generation["maxOutputTokens"] = request.generation.max_output_tokens
             if request.generation.temperature is not None:
                 generation["temperature"] = request.generation.temperature
+            if request.generation.output_modalities:
+                # Gemini image models require TEXT in responseModalities when
+                # images are enabled; without it every text-only turn fails
+                # with finishReason NO_IMAGE.
+                modalities = [
+                    modality.upper()
+                    for modality in request.generation.output_modalities
+                ]
+                if "IMAGE" in modalities and "TEXT" not in modalities:
+                    modalities.append("TEXT")
+                generation["responseModalities"] = modalities
             if request.generation.response_schema is not None:
                 generation["responseMimeType"] = "application/json"
                 generation["responseJsonSchema"] = thaw_json(
@@ -239,6 +291,17 @@ class GeminiGenerateContentAdapter:
                 if "thinking_budget" in thinking:
                     projected["thinkingBudget"] = thinking["thinking_budget"]
                 generation["thinkingConfig"] = projected
+            speech = options.get("speech_config")
+            if isinstance(speech, FrozenJsonObject):
+                voice_config = cast(FrozenJsonObject, speech["voice_config"])
+                prebuilt = cast(FrozenJsonObject, voice_config["prebuilt_voice_config"])
+                generation["speechConfig"] = {
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {
+                            "voiceName": cast(str, prebuilt["voice_name"]),
+                        }
+                    }
+                }
             if generation:
                 body["generationConfig"] = generation
             if request.tools:
@@ -279,7 +342,7 @@ class GeminiGenerateContentAdapter:
             parts = content.get("parts")
             if not isinstance(parts, list):
                 raise TypeError
-            text, calls, continuation_parts = _decode_parts(parts)
+            text, calls, media, continuation_parts = _decode_parts(parts)
             text = _validate_structured_output(request, text)
             usage = _usage(body.get("usageMetadata"))
         except ModelProviderError:
@@ -304,6 +367,7 @@ class GeminiGenerateContentAdapter:
         return ModelProviderResponse(
             message=AIMessage(
                 content=text,
+                media=media,
                 tool_calls=calls,
                 metadata={"model_key": request.model_key},
                 continuation=continuation,
@@ -334,6 +398,40 @@ class _GeminiStreamDecoder:
         self._continuation_parts: list[dict[str, object]] = []
         self._has_thought_signature = False
         self._tool_index = 0
+        # Streaming audio arrives as consecutive inlineData fragments of one
+        # progressive item; the finish reason is the completion boundary.
+        # Fragment content is buffered only by the accumulator; the decoder
+        # tracks just the open item and its fragment order.
+        self._audio_open = False
+        self._audio_fragment_count = 0
+        self._audio_media_index = 0
+        self._audio_mime_type = ""
+        self._audio_mime_parameters = ""
+
+    def _finalize_audio(
+        self, parts: list[ModelProviderStreamPart]
+    ) -> None:
+        """Close the open streaming audio item with an empty final marker."""
+
+        if not self._audio_open:
+            return
+        parts.append(
+            ModelProviderStreamPart(
+                "media_delta",
+                {
+                    "media_index": self._audio_media_index,
+                    "fragment_index": self._audio_fragment_count,
+                    "media_type": "audio",
+                    "mime_type": self._audio_mime_type,
+                    "mime_parameters": self._audio_mime_parameters,
+                    "data": "",
+                    "final": True,
+                },
+            )
+        )
+        self._audio_open = False
+        self._audio_fragment_count = 0
+        self._audio_media_index += 1
 
     def feed(self, payload: FrozenJsonObject) -> tuple[ModelProviderStreamPart, ...]:
         try:
@@ -369,6 +467,56 @@ class _GeminiStreamDecoder:
                         raise TypeError
                     if text:
                         parts.append(ModelProviderStreamPart("text", {"text": text}))
+                elif "inlineData" in raw:
+                    block = _media_block_from_inline(raw["inlineData"])
+                    if block.media_type == "audio":
+                        if self._audio_open and (
+                            self._audio_mime_type != block.mime_type
+                            or self._audio_mime_parameters
+                            != (block.mime_parameters or "")
+                        ):
+                            # A different audio format starts a new item.
+                            self._finalize_audio(parts)
+                        if not self._audio_open:
+                            self._audio_open = True
+                            self._audio_mime_type = block.mime_type
+                            self._audio_mime_parameters = (
+                                block.mime_parameters or ""
+                            )
+                        parts.append(
+                            ModelProviderStreamPart(
+                                "media_delta",
+                                {
+                                    "media_index": self._audio_media_index,
+                                    "fragment_index": self._audio_fragment_count,
+                                    "media_type": "audio",
+                                    "mime_type": block.mime_type,
+                                    "mime_parameters": (
+                                        block.mime_parameters or ""
+                                    ),
+                                    "data": cast(
+                                        str, block.source.base64_data
+                                    ),
+                                    "final": False,
+                                },
+                            )
+                        )
+                        self._audio_fragment_count += 1
+                    else:
+                        self._finalize_audio(parts)
+                        parts.append(
+                            ModelProviderStreamPart(
+                                "media",
+                                {
+                                    "media_type": block.media_type,
+                                    "mime_type": block.mime_type,
+                                    "mime_parameters": (
+                                        block.mime_parameters or ""
+                                    ),
+                                    "data": block.source.base64_data,
+                                },
+                            )
+                        )
                 elif "functionCall" in raw:
                     call = raw["functionCall"]
                     if not isinstance(call, Mapping):
@@ -402,10 +550,13 @@ class _GeminiStreamDecoder:
                         )
                     )
                     self._tool_index += 1
+                else:
+                    raise TypeError
             usage = _usage(body.get("usageMetadata"))
             if usage:
                 parts.append(ModelProviderStreamPart("usage", usage))
             if finish is not None:
+                self._finalize_audio(parts)
                 if self._has_thought_signature:
                     parts.append(
                         ModelProviderStreamPart(
@@ -479,8 +630,12 @@ def _content(
             model=model,
         ):
             parts = _continuation_parts(continuation)
-            replay_text, replay_calls, _ = _decode_parts(parts)
-            if replay_text != message.content or replay_calls != message.tool_calls:
+            replay_text, replay_calls, replay_media, _ = _decode_parts(parts)
+            if (
+                replay_text != message.content
+                or replay_calls != message.tool_calls
+                or replay_media != message.media
+            ):
                 raise ValueError(
                     "Gemini continuation does not match the assistant message"
                 )
@@ -498,6 +653,16 @@ def _content(
             for block in message.media
         )
     if isinstance(message, AIMessage):
+        if message.media:
+            parts.extend(
+                _inline_data_part(
+                    block,
+                    model=model,
+                    capabilities=capabilities,
+                    media_resolver=media_resolver,
+                )
+                for block in message.media
+            )
         parts.extend(
             {
                 "functionCall": {
@@ -664,9 +829,10 @@ def _candidate(body: Mapping[str, object]) -> Mapping[str, object]:
 
 def _decode_parts(
     parts: Sequence[object],
-) -> tuple[str, tuple[ToolCall, ...], list[dict[str, object]]]:
+) -> tuple[str, tuple[ToolCall, ...], tuple[MediaBlock, ...], list[dict[str, object]]]:
     text: list[str] = []
     calls: list[ToolCall] = []
+    media: list[MediaBlock] = []
     originals: list[dict[str, object]] = []
     has_thought_signature = False
     for raw in parts:
@@ -685,6 +851,8 @@ def _decode_parts(
             if not isinstance(value, str):
                 raise TypeError
             text.append(value)
+        elif "inlineData" in raw:
+            media.append(_media_block_from_inline(raw["inlineData"]))
         elif "functionCall" in raw:
             call = raw["functionCall"]
             if not isinstance(call, Mapping):
@@ -708,7 +876,34 @@ def _decode_parts(
         else:
             raise TypeError
     continuation = originals if has_thought_signature else []
-    return "".join(text), tuple(calls), continuation
+    return "".join(text), tuple(calls), tuple(media), continuation
+
+
+def _media_block_from_inline(inline: object) -> MediaBlock:
+    """Build one validated media block from a Gemini inlineData part."""
+
+    if not isinstance(inline, Mapping):
+        raise TypeError
+    mime_type = inline.get("mimeType")
+    data = inline.get("data")
+    if not isinstance(mime_type, str) or not mime_type:
+        raise TypeError
+    if not isinstance(data, str) or not data:
+        raise TypeError
+    # Gemini reports transport parameters on audio mime types (for example
+    # "audio/l16; rate=24000; channels=1"); the base type normalizes into
+    # mime_type and the parameters stay on the block for playback.
+    base_mime_type, _, parameters = mime_type.partition(";")
+    base_mime_type = base_mime_type.strip().lower()
+    media_type = base_mime_type.split("/", 1)[0]
+    if media_type not in ("image", "video", "audio"):
+        raise TypeError
+    return MediaBlock(
+        media_type=media_type,
+        mime_type=base_mime_type,
+        source=MediaSource(kind="inline", base64_data=data),
+        mime_parameters=parameters.strip() or None,
+    )
 
 
 def _validate_structured_output(request: ModelProviderRequest, content: str) -> str:
@@ -750,6 +945,14 @@ def _raise_for_safety(value: object) -> None:
             ModelErrorKind.INVALID_RESPONSE,
             "Gemini generation was blocked by content policy",
             reason_code=ModelFailureReason.CONTENT_POLICY_REJECTED,
+        )
+    if value == "NO_IMAGE":
+        # Image-output models report this finish reason when the response
+        # contains no image part; the candidate carries no content at all.
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_RESPONSE,
+            "Gemini image generation completed without an image",
+            reason_code=ModelFailureReason.OUTPUT_MEDIA_NOT_PRODUCED,
         )
 
 

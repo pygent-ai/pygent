@@ -249,6 +249,8 @@ class ModelEventKind(str, Enum):
     OUTPUT_RESET = "model.output.reset"
     REASONING_DELTA = "model.reasoning.delta"
     TEXT_DELTA = "model.text.delta"
+    MEDIA = "model.media"
+    MEDIA_DELTA = "model.media.delta"
     TOOL_CALL_STARTED = "model.tool_call.started"
     TOOL_CALL_DELTA = "model.tool_call.delta"
     TOOL_CALL_COMPLETED = "model.tool_call.completed"
@@ -266,6 +268,8 @@ class ModelProviderStreamKind(str, Enum):
     RESET = "reset"
     REASONING = "reasoning"
     TEXT = "text"
+    MEDIA = "media"
+    MEDIA_DELTA = "media_delta"
     TOOL_CALL = "tool_call"
     USAGE = "usage"
     FINISH = "finish"
@@ -450,6 +454,20 @@ class ModelProviderMediaDeliveryValidator(Protocol):
 
 
 @runtime_checkable
+class ModelProviderAssistantMediaReplay(Protocol):
+    """Optional provider support for replaying assistant media in history.
+
+    Adapters implement this when their wire protocol can encode media blocks
+    inside historical assistant messages. Adapters without it fall back to the
+    invoker's not-viewed media projection.
+    """
+
+    def assistant_media_gaps(
+        self, block: MediaBlock, model: ModelSpec
+    ) -> tuple[str, ...]: ...
+
+
+@runtime_checkable
 class ModelRequestMediaTokenEstimator(Protocol):
     """Optional invoker media estimate aligned with its real request routing."""
 
@@ -608,6 +626,25 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
         ModelEventKind.OUTPUT_RESET: common_attempt,
         ModelEventKind.REASONING_DELTA: common_attempt | {"text"},
         ModelEventKind.TEXT_DELTA: common_attempt | {"text"},
+        ModelEventKind.MEDIA: common_attempt
+        | {
+            "media_index",
+            "media_type",
+            "mime_type",
+            "mime_parameters",
+            "sha256",
+            "size_bytes",
+            "data",
+        },
+        ModelEventKind.MEDIA_DELTA: common_attempt
+        | {
+            "media_index",
+            "fragment_index",
+            "media_type",
+            "mime_type",
+            "data",
+            "final",
+        },
         ModelEventKind.TOOL_CALL_STARTED: common_attempt | {"item_id", "index"},
         ModelEventKind.TOOL_CALL_DELTA: common_attempt
         | {
@@ -665,6 +702,43 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
         raise ValueError("attempt must be a positive integer")
     if kind in (ModelEventKind.REASONING_DELTA, ModelEventKind.TEXT_DELTA):
         _require_string(data, "text", allow_empty=False)
+    elif kind is ModelEventKind.MEDIA:
+        if data["media_type"] not in ("image", "video", "audio"):
+            raise ValueError("media event media_type is unsupported")
+        _require_string(data, "mime_type", allow_empty=False)
+        _require_string(data, "mime_parameters", allow_empty=True)
+        _require_string(data, "data", allow_empty=False)
+        _require_string(data, "sha256", allow_empty=False)
+        media_index = data["media_index"]
+        if (
+            not isinstance(media_index, int)
+            or isinstance(media_index, bool)
+            or media_index < 0
+        ):
+            raise ValueError("media event media_index must be a non-negative integer")
+        size_bytes = data["size_bytes"]
+        if (
+            not isinstance(size_bytes, int)
+            or isinstance(size_bytes, bool)
+            or size_bytes <= 0
+        ):
+            raise ValueError("media event size_bytes must be a positive integer")
+    elif kind is ModelEventKind.MEDIA_DELTA:
+        if data["media_type"] not in ("image", "video", "audio"):
+            raise ValueError("media delta event media_type is unsupported")
+        _require_string(data, "mime_type", allow_empty=False)
+        # final=True markers close the item with an empty data payload.
+        _require_string(data, "data", allow_empty=True)
+        for key in ("media_index", "fragment_index"):
+            value = data[key]
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+            ):
+                raise ValueError(f"media delta event {key} must be a non-negative integer")
+        if not isinstance(data["final"], bool):
+            raise ValueError("media delta event final must be a bool")
     elif kind is ModelEventKind.REQUEST_PREPARED:
         _require_string(data, "request_id")
         digest = data["request_digest"]
@@ -732,6 +806,7 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
             "response_schema",
             "response_schema_name",
             "tool_choice",
+            "output_modalities",
         }:
             raise ValueError("prepared generation fields do not match the contract")
         revision = request["projection_revision"]

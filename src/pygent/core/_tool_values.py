@@ -51,7 +51,7 @@ ToolResultStatus = Literal[
     "succeeded", "rejected", "failed", "cancelled", "unknown", "detached"
 ]
 MediaSourceKind = Literal["resource", "url", "inline"]
-MediaBlockType = Literal["image", "video"]
+MediaBlockType = Literal["image", "video", "audio"]
 MediaBlockDetail = Literal["auto", "low", "high"]
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -268,12 +268,13 @@ class MediaBlock:
     duration_seconds: float | None = None
     fps: float | None = None
     has_audio: bool | None = None
+    mime_parameters: str | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         raise TypeError("MediaBlock cannot be subclassed")
 
     def __post_init__(self) -> None:
-        if self.media_type not in ("image", "video"):
+        if self.media_type not in ("image", "video", "audio"):
             raise ValueError(f"unsupported media block type: {self.media_type!r}")
         if not isinstance(self.mime_type, str):
             raise TypeError("media mime_type must be a string")
@@ -308,12 +309,25 @@ class MediaBlock:
                 raise ValueError(f"media {name} must be a positive finite number")
         if self.has_audio is not None and not isinstance(self.has_audio, bool):
             raise TypeError("media has_audio must be a bool")
-        if self.media_type != "video" and any(
+        if self.media_type == "image" and any(
             value is not None
             for value in (self.duration_seconds, self.fps, self.has_audio)
         ):
-            raise ValueError("duration, fps, and audio metadata require video media")
+            raise ValueError(
+                "duration, fps, and audio metadata require video or audio media"
+            )
+        if self.media_type == "audio" and any(
+            value is not None for value in (self.fps, self.has_audio)
+        ):
+            raise ValueError("fps and audio-track metadata require video media")
         object.__setattr__(self, "mime_type", mime_type)
+        if self.mime_parameters is not None:
+            if (
+                not isinstance(self.mime_parameters, str)
+                or not self.mime_parameters.strip()
+            ):
+                raise ValueError("media mime_parameters must be a non-empty string")
+            object.__setattr__(self, "mime_parameters", self.mime_parameters.strip())
         if self.media_type == "image" and self.width is None:
             dimensions = _inline_image_dimensions(self.source)
             if dimensions is not None:
@@ -341,6 +355,7 @@ def _tool_result_content_to_value(value: ToolResultContent) -> dict[str, object]
             "duration_seconds": value.duration_seconds,
             "fps": value.fps,
             "has_audio": value.has_audio,
+            "mime_parameters": value.mime_parameters,
             "source": {
                 "kind": source.kind,
                 "uri": source.uri,
@@ -405,6 +420,7 @@ def _tool_result_content_from_value(value: object) -> ToolResultContent:
         "duration_seconds",
         "fps",
         "has_audio",
+        "mime_parameters",
     }
     if (
         block_type == "media"
@@ -434,6 +450,7 @@ def _tool_result_content_from_value(value: object) -> ToolResultContent:
             duration_seconds=cast(float | None, block.get("duration_seconds")),
             fps=cast(float | None, block.get("fps")),
             has_audio=cast(bool | None, block.get("has_audio")),
+            mime_parameters=cast(str | None, block.get("mime_parameters")),
         )
     raise TypeError("unsupported ToolResult content block")
 

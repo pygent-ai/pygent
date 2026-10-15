@@ -521,6 +521,13 @@ class OpenAICompatibleAdapter:
                 content = raw_message
                 raw_tool_calls: object = []
             elif isinstance(raw_message, dict):
+                if raw_message.get("audio") is not None:
+                    raise ModelProviderError(
+                        ModelErrorKind.INVALID_RESPONSE,
+                        "provider returned audio output which this protocol "
+                        "adapter does not support",
+                        reason_code=ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED,
+                    )
                 reasoning_content = raw_message.get("reasoning_content")
                 if reasoning_content is not None and not isinstance(
                     reasoning_content, str
@@ -636,6 +643,13 @@ class OpenAICompatibleAdapter:
                 delta = {}
             if not isinstance(delta, dict):
                 raise TypeError
+            if delta.get("audio") is not None:
+                raise ModelProviderError(
+                    ModelErrorKind.INVALID_RESPONSE,
+                    "provider returned audio output which this protocol "
+                    "adapter does not support",
+                    reason_code=ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED,
+                )
             if delta.get("reasoning_content") is not None and not isinstance(
                 delta["reasoning_content"], str
             ):

@@ -78,6 +78,7 @@ def _request_projection(request: ModelProviderRequest) -> dict[str, object]:
             ),
             "response_schema_name": generation.response_schema_name,
             "tool_choice": generation.tool_choice,
+            "output_modalities": list(generation.output_modalities),
         },
         "projection_revision": request.context.projection_revision,
         "media_projections": [
@@ -113,6 +114,7 @@ def _message_projection(message: Message) -> dict[str, object]:
     if isinstance(message, UserMessage):
         value["media"] = [_content_projection(block) for block in message.media]
     elif isinstance(message, AIMessage):
+        value["media"] = [_content_projection(block) for block in message.media]
         value["continuation_digest"] = _continuation_digest(message.continuation)
         value["tool_calls"] = [
             {
@@ -157,6 +159,7 @@ def _content_projection(value: ToolResultContent) -> dict[str, object]:
             "type": "media",
             "media_type": value.media_type,
             "mime_type": value.mime_type,
+            "mime_parameters": value.mime_parameters,
             "detail": value.detail,
             "width": value.width,
             "height": value.height,
