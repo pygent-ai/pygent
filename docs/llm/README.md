@@ -5,6 +5,7 @@
 工具结果中的图片和视频如何独立检查模型模态与协议 tool-message 能力，以及如何编码到
 Provider wire，见[多模态工具结果 Proposal](../tool/MULTIMODAL_TOOL_RESULTS_PROPOSAL.md)。
 当前 OpenAI Chat Completions compatible Adapter 的显式装配方式见 [LLM SDK](SDK.md#多模态工具消息)。
+多模态链路的已知降级点与恢复条件登记在[多模态降级清单](MULTIMODAL_DEGRADATIONS.md)。
 
 ## 配置边界
 

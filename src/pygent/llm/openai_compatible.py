@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import math
@@ -185,6 +187,16 @@ def _validate_openai_provider_options(model: ModelSpec) -> None:
         value = options[key]
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"provider option {key!r} must be a positive integer")
+    audio_options = options.get("audio")
+    if audio_options is not None:
+        if not isinstance(audio_options, Mapping):
+            raise ValueError("provider option 'audio' must be an object")
+        for key in ("voice", "format"):
+            value = audio_options.get(key)
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    f"provider option 'audio.{key}' must be a non-empty string"
+                )
     policy = provider_protocol_policy(model.provider, model.protocol)
     if policy.validate_options is not None:
         policy.validate_options(options)
@@ -491,6 +503,14 @@ class OpenAICompatibleAdapter:
                 "tool_choice requires at least one visible tool",
             )
         body.update(options.to_dict())
+        audio_params = _audio_request_params(request)
+        if audio_params is not None:
+            body.update(audio_params)
+        else:
+            # Audio wire parameters are meaningful only for audio-output
+            # turns; stale options would be rejected by strict endpoints.
+            body.pop("modalities", None)
+            body.pop("audio", None)
         return freeze_json_object(body)
 
     def parse_response(
@@ -517,11 +537,13 @@ class OpenAICompatibleAdapter:
             )
             raw_message = choice.get("message")
             reasoning_content: object = None
+            media_blocks: tuple[MediaBlock, ...] = ()
             if isinstance(raw_message, str):
                 content = raw_message
                 raw_tool_calls: object = []
             elif isinstance(raw_message, dict):
-                if raw_message.get("audio") is not None:
+                raw_audio = raw_message.get("audio")
+                if raw_audio is not None and not _audio_declared(request.model):
                     raise ModelProviderError(
                         ModelErrorKind.INVALID_RESPONSE,
                         "provider returned audio output which this protocol "
@@ -541,6 +563,13 @@ class OpenAICompatibleAdapter:
                 if content_value is None and "text" in choice:
                     content_value = choice["text"]
                 content = _decode_text_content(content_value)
+                if raw_audio is not None:
+                    audio_block, transcript = _decode_chat_audio(
+                        raw_audio, request
+                    )
+                    media_blocks = (audio_block,)
+                    if transcript and not content:
+                        content = transcript
                 raw_tool_calls = raw_message.get("tool_calls")
                 if (
                     raw_tool_calls is None
@@ -601,6 +630,7 @@ class OpenAICompatibleAdapter:
             )
         message = AIMessage(
             content=content,
+            media=media_blocks,
             tool_calls=tool_calls,
             metadata={"model_key": request.model_key},
             continuation=continuation,
@@ -643,7 +673,7 @@ class OpenAICompatibleAdapter:
                 delta = {}
             if not isinstance(delta, dict):
                 raise TypeError
-            if delta.get("audio") is not None:
+            if delta.get("audio") is not None and not _audio_declared(request.model):
                 raise ModelProviderError(
                     ModelErrorKind.INVALID_RESPONSE,
                     "provider returned audio output which this protocol "
@@ -772,45 +802,116 @@ class _OpenAIStreamDecoder:
         self._completed = False
         self._reasoning_parts: list[str] = []
         self._continuation_emitted = False
+        self._audio_open = False
+        self._audio_fragment_count = 0
+        self._audio_mime_type = ""
 
-    def feed(self, payload: FrozenJsonObject) -> tuple[ModelProviderStreamPart, ...]:
-        parts = self._adapter._decode_stream_payload(self._request, payload)
-        body = payload.to_dict()
-        choices = body.get("choices")
-        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-            delta = choices[0].get("delta")
-            if isinstance(delta, dict):
-                reasoning_content = delta.get("reasoning_content")
-                if isinstance(reasoning_content, str) and reasoning_content:
-                    self._reasoning_parts.append(reasoning_content)
-        if (
-            self._reasoning_parts
-            and not self._continuation_emitted
-            and any(part.kind == ModelProviderStreamKind.FINISH for part in parts)
-        ):
-            continuation = ModelProviderStreamPart(
-                "continuation",
+    def _finalize_audio(self, parts: list[ModelProviderStreamPart]) -> None:
+        """Close the open streaming audio item with an empty final marker."""
+
+        if not self._audio_open:
+            return
+        parts.append(
+            ModelProviderStreamPart(
+                "media_delta",
                 {
-                    "model_key": self._request.model_key,
-                    "provider": self._request.model.provider,
-                    "model_id": self._request.model.model_id,
-                    "protocol": self._adapter.protocol,
-                    "data": {
-                        "version": 1,
-                        "reasoning_content": "".join(self._reasoning_parts),
-                    },
+                    "media_index": 0,
+                    "fragment_index": self._audio_fragment_count,
+                    "media_type": "audio",
+                    "mime_type": self._audio_mime_type,
+                    "mime_parameters": "",
+                    "data": "",
+                    "final": True,
                 },
             )
-            finish_index = next(
+        )
+        self._audio_open = False
+
+    def feed(self, payload: FrozenJsonObject) -> tuple[ModelProviderStreamPart, ...]:
+        parts = list(self._adapter._decode_stream_payload(self._request, payload))
+        body = payload.to_dict()
+        choices = body.get("choices")
+        choice = (
+            choices[0]
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+            else None
+        )
+        delta = choice.get("delta") if isinstance(choice, dict) else None
+        if not isinstance(delta, dict):
+            delta = {}
+        raw_audio = delta.get("audio")
+        if raw_audio is not None and _audio_declared(self._request.model):
+            if not isinstance(raw_audio, dict):
+                raise ModelProviderError(
+                    ModelErrorKind.INVALID_RESPONSE,
+                    "provider audio stream event must be an object",
+                    reason_code=ModelFailureReason.STREAM_EVENT_INVALID,
+                )
+            chunk = raw_audio.get("data")
+            if not isinstance(chunk, str) or not chunk:
+                raise ModelProviderError(
+                    ModelErrorKind.INVALID_RESPONSE,
+                    "provider audio stream event has no base64 data",
+                    reason_code=ModelFailureReason.MEDIA_CONTENT_INVALID,
+                )
+            if not self._audio_open:
+                try:
+                    sniff_source = base64.b64decode(chunk, validate=True)
+                except (ValueError, binascii.Error) as exc:
+                    raise ModelProviderError(
+                        ModelErrorKind.INVALID_RESPONSE,
+                        "provider audio stream event contains invalid base64 data",
+                        reason_code=ModelFailureReason.MEDIA_CONTENT_INVALID,
+                    ) from exc
+                self._audio_mime_type = _chat_audio_mime(sniff_source, self._request)
+                self._audio_open = True
+            parts.append(
+                ModelProviderStreamPart(
+                    "media_delta",
+                    {
+                        "media_index": 0,
+                        "fragment_index": self._audio_fragment_count,
+                        "media_type": "audio",
+                        "mime_type": self._audio_mime_type,
+                        "mime_parameters": "",
+                        "data": chunk,
+                        "final": False,
+                    },
+                )
+            )
+            self._audio_fragment_count += 1
+        if isinstance(delta, dict):
+            reasoning_content = delta.get("reasoning_content")
+            if isinstance(reasoning_content, str) and reasoning_content:
+                self._reasoning_parts.append(reasoning_content)
+        finish_index = next(
+            (
                 index
                 for index, part in enumerate(parts)
                 if part.kind == ModelProviderStreamKind.FINISH
-            )
-            parts = (*parts[:finish_index], continuation, *parts[finish_index:])
-            self._continuation_emitted = True
-        if any(part.kind == ModelProviderStreamKind.FINISH for part in parts):
+            ),
+            None,
+        )
+        if finish_index is not None:
+            self._finalize_audio(parts)
+            if self._reasoning_parts and not self._continuation_emitted:
+                continuation = ModelProviderStreamPart(
+                    "continuation",
+                    {
+                        "model_key": self._request.model_key,
+                        "provider": self._request.model.provider,
+                        "model_id": self._request.model.model_id,
+                        "protocol": self._adapter.protocol,
+                        "data": {
+                            "version": 1,
+                            "reasoning_content": "".join(self._reasoning_parts),
+                        },
+                    },
+                )
+                parts = (*parts[:finish_index], continuation, *parts[finish_index:])
+                self._continuation_emitted = True
             self._completed = True
-        return parts
+        return tuple(parts)
 
     def finish(self) -> tuple[ModelProviderStreamPart, ...]:
         if not self._completed:
@@ -930,6 +1031,113 @@ def _normalize_openai_error(error: BaseException) -> ModelErrorKind:
     if isinstance(error, httpx.TransportError):
         return ModelErrorKind.UNAVAILABLE
     return ModelErrorKind.UNKNOWN
+
+
+def _audio_declared(model: ModelSpec) -> bool:
+    return "audio" in model.capabilities.modalities.output
+
+
+def _audio_request_params(request: ModelProviderRequest) -> dict[str, object] | None:
+    """Encode the audio-output request parameters for declared audio models.
+
+    Audio generation is an explicit per-turn opt-in via
+    ``GenerationConfig.output_modalities``; the voice/format wire parameters
+    come from ``provider_options.audio`` configured at assembly time.
+    """
+
+    if "audio" not in request.generation.output_modalities:
+        return None
+    if not _audio_declared(request.model):
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "model does not declare audio output",
+            reason_code=ModelFailureReason.MEDIA_TRANSPORT_UNSUPPORTED,
+        )
+    options = cast(FrozenJsonObject, request.model.provider_options)
+    audio_options = options.get("audio")
+    if not isinstance(audio_options, Mapping):
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "audio output requires provider_options audio voice and format",
+        )
+    voice = audio_options.get("voice")
+    audio_format = audio_options.get("format")
+    if not isinstance(voice, str) or not voice or not isinstance(audio_format, str) or not audio_format:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_REQUEST,
+            "audio output requires provider_options audio voice and format",
+        )
+    return {
+        "modalities": ["text", "audio"],
+        "audio": {"voice": voice, "format": audio_format},
+    }
+
+
+def _sniffed_audio_mime(data: bytes) -> str | None:
+    if data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WAVE":
+        return "audio/wav"
+    if data.startswith((b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")):
+        return "audio/mpeg"
+    if data.startswith(b"OggS"):
+        return "audio/ogg"
+    if data.startswith(b"fLaC"):
+        return "audio/flac"
+    return None
+
+
+def _chat_audio_mime(data: bytes, request: ModelProviderRequest) -> str:
+    sniffed = _sniffed_audio_mime(data)
+    if sniffed is not None:
+        return sniffed
+    options = cast(FrozenJsonObject, request.model.provider_options)
+    audio_options = options.get("audio")
+    audio_format = (
+        audio_options.get("format")
+        if isinstance(audio_options, Mapping)
+        else None
+    )
+    if isinstance(audio_format, str) and audio_format:
+        return f"audio/{audio_format}"
+    return "audio/wav"
+
+
+def _decode_chat_audio(
+    raw_audio: object, request: ModelProviderRequest
+) -> tuple[MediaBlock, str]:
+    if not isinstance(raw_audio, Mapping):
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_RESPONSE,
+            "provider returned an invalid audio output object",
+            reason_code=ModelFailureReason.COMPLETION_SHAPE_INVALID,
+        )
+    encoded = raw_audio.get("data")
+    if not isinstance(encoded, str) or not encoded:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_RESPONSE,
+            "provider audio output has no base64 data",
+            reason_code=ModelFailureReason.MEDIA_CONTENT_INVALID,
+        )
+    try:
+        data = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_RESPONSE,
+            "provider audio output contains invalid base64 data",
+            reason_code=ModelFailureReason.MEDIA_CONTENT_INVALID,
+        ) from exc
+    if not data:
+        raise ModelProviderError(
+            ModelErrorKind.INVALID_RESPONSE,
+            "provider audio output is empty",
+            reason_code=ModelFailureReason.MEDIA_CONTENT_INVALID,
+        )
+    transcript = raw_audio.get("transcript")
+    block = MediaBlock(
+        media_type="audio",
+        mime_type=_chat_audio_mime(data, request),
+        source=MediaSource(kind="inline", base64_data=encoded),
+    )
+    return block, (transcript if isinstance(transcript, str) else "")
 
 
 def _encode_messages(
