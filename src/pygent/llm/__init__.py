@@ -70,6 +70,11 @@ from .openai_compatible import (
     OpenAICompatibleClient,
     openai_compatible_adapters,
 )
+from .openai_images import (
+    OpenAIImagesAdapter,
+    OpenAIImagesClient,
+    openai_images_adapters,
+)
 from .openai_responses import (
     OpenAIResponsesAdapter,
     OpenAIResponsesClient,
@@ -175,6 +180,8 @@ __all__ = [
     "ModelVideoInputCapabilities",
     "OpenAICompatibleAdapter",
     "OpenAICompatibleClient",
+    "OpenAIImagesAdapter",
+    "OpenAIImagesClient",
     "OpenAIResponsesAdapter",
     "OpenAIResponsesClient",
     "ProjectedMedia",
@@ -186,5 +193,6 @@ __all__ = [
     "anthropic_messages_adapters",
     "gemini_generate_content_adapters",
     "openai_compatible_adapters",
+    "openai_images_adapters",
     "openai_responses_adapters",
 ]

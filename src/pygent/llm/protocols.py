@@ -8,6 +8,7 @@ class BuiltinModelProtocol(StrEnum):
 
     OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
     OPENAI_RESPONSES = "openai_responses"
+    OPENAI_IMAGES = "openai_images"
     ANTHROPIC_MESSAGES = "anthropic_messages"
     GEMINI_GENERATE_CONTENT = "gemini_generate_content"
 

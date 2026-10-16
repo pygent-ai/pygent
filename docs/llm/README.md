@@ -45,12 +45,13 @@ Provider 是 Connection 上的开放字符串。Provider preset 只提供 UI/配
 
 - `OPENAI_CHAT_COMPLETIONS`：`openai_chat_completions`；
 - `OPENAI_RESPONSES`：`openai_responses`；
+- `OPENAI_IMAGES`：`openai_images`；
 - `ANTHROPIC_MESSAGES`：`anthropic_messages`；
 - `GEMINI_GENERATE_CONTENT`：`gemini_generate_content`。
 
 `ModelSpec.protocol` 仍保存开放字符串，第三方 Adapter 可以定义自己的 protocol。内置 Provider 目录按 protocol 提供 Connection 默认值，当前覆盖 DeepSeek、Anthropic、OpenAI、Google Gemini、Alibaba Cloud Model Studio、智谱、Moonshot、MiniMax、火山引擎和 xAI；Alibaba Cloud Token Plan 作为独立 Provider。一个 Provider 可以提供多个协议，例如 OpenAI 同时提供 Chat Completions 与 Responses，DeepSeek、Moonshot、MiniMax 和 Token Plan 同时提供 OpenAI Chat Completions 与 Anthropic Messages。UI 选择 Provider 时把需要的 protocol endpoint 填入 Connection；目录只提供 base URL、credential 环境变量名和表单 schema，不提供或读取真实 API key。
 
-内置能力目录按 `(provider, model_id, protocol)` 区分同一模型的不同服务与协议。目录中的模型身份和能力来自对应官方 Provider 资料；网关别名和外部搜索服务不进入生产目录。OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Gemini Generate Content 由内置 Adapter 执行；仅进入目录但没有内置 Adapter 的媒体协议，需要应用自行装配对应 Adapter 后才能调用。
+内置能力目录按 `(provider, model_id, protocol)` 区分同一模型的不同服务与协议。目录中的模型身份和能力来自对应官方 Provider 资料；网关别名和外部搜索服务不进入生产目录。OpenAI Chat Completions、OpenAI Responses、OpenAI Images、Anthropic Messages 与 Gemini Generate Content 由内置 Adapter 执行；仅进入目录但没有内置 Adapter 的媒体协议，需要应用自行装配对应 Adapter 后才能调用。
 
 Provider 私有生成语义放在 `ModelSpec.provider_options`。连接、secret、认证头、代理、TLS、retry、deadline、stream 开关和框架保留请求字段不能放入其中。第三方 Adapter 只有实现 `ModelProviderSpecValidator` 才能接受非空选项。
 

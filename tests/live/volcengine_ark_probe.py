@@ -1,14 +1,15 @@
-"""Explicit, sanitized live verification for Volcengine Ark video generation models.
+"""Explicit, sanitized live verification for Volcengine Ark media generation models.
 
-This script intentionally uses the raw Ark contents/generations/tasks protocol for
-catalog-only modalities. It is not a Pygent Adapter and is not collected as a
-pytest test module.
+This script intentionally uses the raw Ark contents/generations/tasks and
+images/generations protocols for catalog-only modalities. It is not a Pygent
+Adapter and is not collected as a pytest test module.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -25,7 +26,12 @@ _VIDEO_MODELS = (
     "doubao-seedance-2-0-260128",
     "doubao-seedance-2-5-260628",
 )
+_IMAGE_MODELS = (
+    "doubao-seedream-5-0-260128",
+    "doubao-seedream-5-0-pro-260628",
+)
 _PROMPT = "A single blue square slowly moves across a plain white background."
+_IMAGE_PROMPT = "A single blue square on a plain white background."
 _MAX_VIDEO_BYTES = 100 * 1024 * 1024
 
 
@@ -96,7 +102,13 @@ def _is_video(value: bytes) -> bool:
     return len(value) >= 12 and value[4:8] == b"ftyp"
 
 
-class ArkVideoProbeRunner:
+def _is_image(value: bytes) -> bool:
+    return value.startswith((b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")) or (
+        len(value) >= 12 and value[:4] == b"RIFF" and value[8:12] == b"WEBP"
+    )
+
+
+class ArkProbeRunner:
     def __init__(
         self,
         *,
@@ -115,6 +127,44 @@ class ArkVideoProbeRunner:
     @property
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._api_key}"}
+
+    async def probe(self, model_id: str, protocol: str) -> ProbeResult:
+        if protocol == "ark_video_generation":
+            return await self.probe_video(model_id)
+        if protocol == "openai_images":
+            return await self.probe_image(model_id)
+        raise ValueError(f"unsupported probe protocol: {protocol!r}")
+
+    async def probe_image(self, model_id: str) -> ProbeResult:
+        protocol = "openai_images"
+        try:
+            response = await self._client.post(
+                f"{self._root}/images/generations",
+                headers=self._headers,
+                json={
+                    "model": model_id,
+                    "prompt": _IMAGE_PROMPT,
+                    "response_format": "b64_json",
+                    "size": "2k",
+                },
+                timeout=120,
+            )
+            body = _json(response)
+            data = body.get("data")
+            if not isinstance(data, list) or not data:
+                raise _ProbeFailure("invalid_response")
+            item = data[0]
+            if not isinstance(item, dict):
+                raise _ProbeFailure("invalid_response")
+            encoded = item.get("b64_json")
+            if not isinstance(encoded, str) or not encoded:
+                raise _ProbeFailure("invalid_response")
+            media = base64.b64decode(encoded, validate=True)
+            if not media or not _is_image(media):
+                raise _ProbeFailure("invalid_response")
+            return _passed(model_id, protocol)
+        except (_ProbeFailure, httpx.HTTPError, TimeoutError) as exc:
+            return _failed(model_id, protocol, exc)
 
     async def probe_video(self, model_id: str) -> ProbeResult:
         protocol = "ark_video_generation"
@@ -195,13 +245,19 @@ async def _main(env_file: Path, models: tuple[str, ...]) -> int:
         result = ProbeResult("configuration", "environment", "failed", "missing_credential")
         print(json.dumps(summarize_result(result), separators=(",", ":")))
         return 1
+    inventory = {
+        **{model_id: "ark_video_generation" for model_id in _VIDEO_MODELS},
+        **{model_id: "openai_images" for model_id in _IMAGE_MODELS},
+    }
     async with httpx.AsyncClient() as client:
-        runner = ArkVideoProbeRunner(
+        runner = ArkProbeRunner(
             client=client,
             api_key=os.environ["ARK_API_KEY"],
             base_url=os.environ.get("ARK_API_BASE", _ARK_ROOT),
         )
-        results = [await runner.probe_video(model_id) for model_id in models]
+        results = [
+            await runner.probe(model_id, inventory[model_id]) for model_id in models
+        ]
     for result in results:
         print(
             json.dumps(
@@ -225,9 +281,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         action="append",
-        choices=_VIDEO_MODELS,
+        choices=(*_VIDEO_MODELS, *_IMAGE_MODELS),
         help="restrict the probe to one catalog model; repeatable",
     )
     arguments = parser.parse_args()
-    selected = tuple(arguments.model) if arguments.model else _VIDEO_MODELS
+    selected = (
+        tuple(arguments.model)
+        if arguments.model
+        else (*_VIDEO_MODELS, *_IMAGE_MODELS)
+    )
     sys.exit(asyncio.run(_main(arguments.env_file, selected)))

@@ -1493,7 +1493,7 @@
       "canonical_model_id": "doubao-seedream-5-0-260128",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "openai_images",
           "required_scenarios": [
             "image_output",
             "image_edit"
@@ -1509,7 +1509,7 @@
       "canonical_model_id": "doubao-seedream-5-0-pro-260628",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "openai_images",
           "required_scenarios": [
             "image_output",
             "image_edit"

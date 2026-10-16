@@ -265,10 +265,10 @@ def test_builtin_manifest_preserves_advertised_protocol_counts() -> None:
         for route in manifest.routes
         for requirements in route.protocols
     ]
-    assert protocol_names.count("openai_chat_completions") == 197
+    assert protocol_names.count("openai_chat_completions") == 195
     assert protocol_names.count("openai_audio_speech") == 1
     assert protocol_names.count("openai_embeddings") == 3
-    assert protocol_names.count("openai_images") == 3
+    assert protocol_names.count("openai_images") == 5
     assert protocol_names.count("openai_realtime") == 2
     assert protocol_names.count("anthropic_messages") == 47
     assert protocol_names.count("gemini_generate_content") == 28
@@ -296,6 +296,15 @@ def test_seedance_routes_use_the_official_ark_protocol() -> None:
     ):
         assert [item.protocol for item in routes[model_id].protocols] == [
             "ark_video_generation"
+        ]
+
+
+def test_seedream_routes_use_the_official_images_protocol() -> None:
+    routes = {route.route_id: route for route in load_manifest().routes}
+
+    for model_id in ("doubao-seedream-5-0-260128", "doubao-seedream-5-0-pro-260628"):
+        assert [item.protocol for item in routes[model_id].protocols] == [
+            "openai_images"
         ]
 
 

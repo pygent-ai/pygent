@@ -609,17 +609,52 @@ def test_builtin_token_plan_specialized_capability_record_is_complete(
 
 
 @pytest.mark.parametrize(
-    "model_id",
-    ["doubao-seedance-2-0-260128", "doubao-seedance-2-5-260628"],
+    (
+        "model_id",
+        "protocol",
+        "input_modalities",
+        "output_modalities",
+    ),
+    [
+        (
+            "doubao-seedance-2-0-260128",
+            "ark_video_generation",
+            ("text",),
+            ("video",),
+        ),
+        (
+            "doubao-seedance-2-5-260628",
+            "ark_video_generation",
+            ("text",),
+            ("video",),
+        ),
+        (
+            "doubao-seedream-5-0-260128",
+            "openai_images",
+            ("text", "image"),
+            ("image",),
+        ),
+        (
+            "doubao-seedream-5-0-pro-260628",
+            "openai_images",
+            ("text", "image"),
+            ("image",),
+        ),
+    ],
 )
-def test_builtin_volcengine_video_capability_record_is_complete(model_id: str) -> None:
+def test_builtin_volcengine_media_capability_record_is_complete(
+    model_id: str,
+    protocol: str,
+    input_modalities: tuple[str, ...],
+    output_modalities: tuple[str, ...],
+) -> None:
     capabilities = ModelCapabilityCatalog.builtin().models[
-        ("volcengine", model_id, "ark_video_generation")
+        ("volcengine", model_id, protocol)
     ]
 
     assert capabilities.to_mapping() == _complete_capability_mapping(
-        input_modalities=("text",),
-        output_modalities=("video",),
+        input_modalities=input_modalities,
+        output_modalities=output_modalities,
         streaming_output=(),
         tools=False,
         json_object=False,

@@ -63,7 +63,6 @@ def builtin_probe_registry() -> ProbeRegistry:
             ("openai_chat_completions", Scenario.IMAGE_OUTPUT): image_output_probe,
             ("openai_chat_completions", Scenario.IMAGE_EDIT): image_edit_probe,
             ("openai_chat_completions", Scenario.VIDEO_INPUT): video_input_probe,
-            ("openai_chat_completions", Scenario.VIDEO_OUTPUT): video_output_probe,
             ("openai_chat_completions", Scenario.AUDIO_OUTPUT): audio_output_probe,
             ("openai_chat_completions", Scenario.AUDIO_INPUT): audio_input_probe,
             ("openai_chat_completions", Scenario.SEARCH): search_probe,

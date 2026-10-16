@@ -816,6 +816,22 @@ class DefaultModelInvoker:
                         ),
                     },
                 )
+            for block in response.message.media:
+                if block.source.kind != "inline" or not block.source.base64_data:
+                    raise ModelProviderError(
+                        ModelErrorKind.INVALID_RESPONSE,
+                        "non-stream media output must carry inline media data",
+                        reason_code=ModelFailureReason.MEDIA_CONTENT_INVALID,
+                    )
+                yield ModelProviderStreamPart(
+                    "media",
+                    {
+                        "media_type": block.media_type,
+                        "mime_type": block.mime_type,
+                        "mime_parameters": block.mime_parameters or "",
+                        "data": block.source.base64_data,
+                    },
+                )
             yield ModelProviderStreamPart(
                 "finish",
                 {

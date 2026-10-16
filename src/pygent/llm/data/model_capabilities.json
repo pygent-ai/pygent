@@ -9066,7 +9066,7 @@
     {
       "provider": "volcengine",
       "model_id": "doubao-seedream-5-0-260128",
-      "protocol": "openai_chat_completions",
+      "protocol": "openai_images",
       "capabilities": {
         "modalities": {
           "input": [
@@ -9102,7 +9102,7 @@
     {
       "provider": "volcengine",
       "model_id": "doubao-seedream-5-0-pro-260628",
-      "protocol": "openai_chat_completions",
+      "protocol": "openai_images",
       "capabilities": {
         "modalities": {
           "input": [

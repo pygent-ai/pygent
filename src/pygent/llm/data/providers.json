@@ -283,6 +283,24 @@
             "additionalProperties": true
           }
         },
+        "openai_images": {
+          "protocol": "openai_images",
+          "base_url": "https://api.openai.com/v1",
+          "authentication": "bearer",
+          "api_key_env": "OPENAI_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "size": {
+                "type": "string"
+              },
+              "quality": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
         "openai_responses": {
           "protocol": "openai_responses",
           "base_url": "https://api.openai.com/v1",
@@ -721,6 +739,24 @@
               "max_completion_tokens": {
                 "type": "integer",
                 "minimum": 1
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "openai_images": {
+          "protocol": "openai_images",
+          "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+          "authentication": "bearer",
+          "api_key_env": "ARK_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "size": {
+                "type": "string"
+              },
+              "watermark": {
+                "type": "boolean"
               }
             },
             "additionalProperties": true
