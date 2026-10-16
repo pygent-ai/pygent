@@ -279,6 +279,7 @@ def _clients(connection: LiveConnection) -> Mapping[str, LiveProbeClient]:
             "gemini_generate_content": gemini,
             "serpapi_search": search,
             "dashscope_multimodal_generation": dashscope,
+            "ark_video_generation": openai,
         }
     )
 

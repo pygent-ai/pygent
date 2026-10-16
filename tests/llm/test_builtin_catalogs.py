@@ -608,6 +608,28 @@ def test_builtin_token_plan_specialized_capability_record_is_complete(
     )
 
 
+@pytest.mark.parametrize(
+    "model_id",
+    ["doubao-seedance-2-0-260128", "doubao-seedance-2-5-260628"],
+)
+def test_builtin_volcengine_video_capability_record_is_complete(model_id: str) -> None:
+    capabilities = ModelCapabilityCatalog.builtin().models[
+        ("volcengine", model_id, "ark_video_generation")
+    ]
+
+    assert capabilities.to_mapping() == _complete_capability_mapping(
+        input_modalities=("text",),
+        output_modalities=("video",),
+        streaming_output=(),
+        tools=False,
+        json_object=False,
+        json_schema=False,
+        reasoning=False,
+        context_tokens=None,
+        max_output_tokens=None,
+    )
+
+
 def test_builtin_model_capabilities_use_provider_model_protocol_key() -> None:
     catalog = ModelCapabilityCatalog.builtin()
 

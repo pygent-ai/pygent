@@ -8996,7 +8996,7 @@
     {
       "provider": "volcengine",
       "model_id": "doubao-seedance-2-0-260128",
-      "protocol": "openai_chat_completions",
+      "protocol": "ark_video_generation",
       "capabilities": {
         "modalities": {
           "input": [
@@ -9031,7 +9031,7 @@
     {
       "provider": "volcengine",
       "model_id": "doubao-seedance-2-5-260628",
-      "protocol": "openai_chat_completions",
+      "protocol": "ark_video_generation",
       "capabilities": {
         "modalities": {
           "input": [

@@ -265,7 +265,7 @@ def test_builtin_manifest_preserves_advertised_protocol_counts() -> None:
         for route in manifest.routes
         for requirements in route.protocols
     ]
-    assert protocol_names.count("openai_chat_completions") == 200
+    assert protocol_names.count("openai_chat_completions") == 197
     assert protocol_names.count("openai_audio_speech") == 1
     assert protocol_names.count("openai_embeddings") == 3
     assert protocol_names.count("openai_images") == 3
@@ -274,6 +274,7 @@ def test_builtin_manifest_preserves_advertised_protocol_counts() -> None:
     assert protocol_names.count("gemini_generate_content") == 28
     assert protocol_names.count("serpapi_search") == 7
     assert protocol_names.count("dashscope_multimodal_generation") == 2
+    assert protocol_names.count("ark_video_generation") == 3
 
 
 def test_qwen_image_routes_use_the_official_dashscope_protocol() -> None:
@@ -282,6 +283,19 @@ def test_qwen_image_routes_use_the_official_dashscope_protocol() -> None:
     for model_id in ("qwen-image-3.0", "qwen-image-edit"):
         assert [item.protocol for item in routes[model_id].protocols] == [
             "dashscope_multimodal_generation"
+        ]
+
+
+def test_seedance_routes_use_the_official_ark_protocol() -> None:
+    routes = {route.route_id: route for route in load_manifest().routes}
+
+    for model_id in (
+        "doubao-seedance-2-0-260128",
+        "doubao-seedance-2-5-260628",
+        "doubao-seedance-2.0",
+    ):
+        assert [item.protocol for item in routes[model_id].protocols] == [
+            "ark_video_generation"
         ]
 
 

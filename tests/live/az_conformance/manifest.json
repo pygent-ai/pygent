@@ -1448,7 +1448,7 @@
       "canonical_model_id": "doubao-seedance-2-0-260128",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "ark_video_generation",
           "required_scenarios": [
             "video_output"
           ]
@@ -1463,7 +1463,7 @@
       "canonical_model_id": "doubao-seedance-2-5-260628",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "ark_video_generation",
           "required_scenarios": [
             "video_output"
           ]
@@ -1478,7 +1478,7 @@
       "canonical_model_id": "doubao-seedance-2-0-260128",
       "protocols": [
         {
-          "protocol": "openai_chat_completions",
+          "protocol": "ark_video_generation",
           "required_scenarios": [
             "video_output"
           ]

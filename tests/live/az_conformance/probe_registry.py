@@ -109,6 +109,10 @@ def builtin_probe_registry() -> ProbeRegistry:
                 "dashscope_multimodal_generation",
                 Scenario.IMAGE_EDIT,
             ): dashscope_image_edit_probe,
+            (
+                "ark_video_generation",
+                Scenario.VIDEO_OUTPUT,
+            ): video_output_probe,
         }
     )
 
