@@ -38,6 +38,7 @@ class JobHistoryMixin:
         if row is None or row[0] != owner_id:
             raise HistoryConflictError("tool task writer no longer owns its observation lease")
 
+    @_lock_retry
     @_serialized_access
     async def admit_tool_observation(
         self, task_id: str, owner_id: str, lease_ttl: float, *, replace_owner: bool = False
@@ -45,6 +46,7 @@ class JobHistoryMixin:
         """Acquire a new observation or atomically take over an expired owner."""
         db = self._db()
         try:
+            await db.execute("BEGIN IMMEDIATE")
             cursor = await db.execute(
                 "INSERT OR IGNORE INTO tool_task_observations(task_id,owner_id,expires_at) "
                 "VALUES(?,?,unixepoch('subsec')+?) " + (
@@ -62,24 +64,37 @@ class JobHistoryMixin:
             await db.rollback()
             raise
 
+    @_lock_retry
     @_serialized_access
     async def renew_tool_observations(self, owner_id: str, lease_ttl: float) -> None:
-        await self._db().execute(
-            "UPDATE tool_task_observations SET expires_at=unixepoch('subsec')+? WHERE owner_id=?",
-            (lease_ttl, owner_id),
-        )
-        await self._db().commit()
+        db = self._db()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            await db.execute(
+                "UPDATE tool_task_observations SET expires_at=unixepoch('subsec')+? WHERE owner_id=?",
+                (lease_ttl, owner_id),
+            )
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
 
+    @_lock_retry
     @_serialized_access
     async def put_tool_output(self, task_id: str, owner_id: str, output: object) -> None:
-        cursor = await self._db().execute(
-            "UPDATE tool_task_observations SET output_json=? WHERE task_id=? AND owner_id=?",
-            (_json(output), task_id, owner_id),
-        )
-        if cursor.rowcount != 1:
-            await self._db().rollback()
-            raise HistoryConflictError("tool output owner is no longer current")
-        await self._db().commit()
+        db = self._db()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "UPDATE tool_task_observations SET output_json=? WHERE task_id=? AND owner_id=?",
+                (_json(output), task_id, owner_id),
+            )
+            if cursor.rowcount != 1:
+                raise HistoryConflictError("tool output owner is no longer current")
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
 
     async def get_tool_output(self, task_id: str) -> JsonValue:
         cursor = await self._db().execute(
@@ -199,6 +214,7 @@ class JobHistoryMixin:
             await db.rollback()
             raise
 
+    @_lock_retry
     @_serialized_access
     async def create_tool_job(
         self,
@@ -221,6 +237,7 @@ class JobHistoryMixin:
         request_json = _json(request)
         capabilities_json = _json(list(required_capabilities))
         try:
+            await db.execute("BEGIN IMMEDIATE")
             await db.execute(
                 "INSERT INTO jobs(job_id,task_id,logical_key,status,binding_id,plan_id,"
                 "resource_key,required_capabilities_json,request_json) "

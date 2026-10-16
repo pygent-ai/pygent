@@ -425,7 +425,7 @@ async def test_deployment_store_write_waits_out_short_lock_contention(
 
 
 @pytest.mark.asyncio
-async def test_deployment_store_write_fails_promptly_when_busy_timeout_is_exceeded(
+async def test_deployment_store_write_retries_past_busy_timeout_until_holder_releases(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "models.sqlite3"
@@ -438,19 +438,19 @@ async def test_deployment_store_write_fails_promptly_when_busy_timeout_is_exceed
     holder.start()
     try:
         assert acquired.wait(5.0)
-        with pytest.raises(
-            sqlite3.OperationalError, match="database is locked"
-        ):
-            await store.ensure_scope("ns", "binding", "digest")
-        # Fails at the configured timeout, not after the 5s default.
+        # Every attempt fails at the configured 0.3s busy timeout; the retry
+        # layer reopens the transaction until the holder commits.
+        scope_id = await store.ensure_scope("ns", "binding", "digest")
+        assert scope_id
+        assert time.monotonic() - started >= 1.5
         assert time.monotonic() - started < 5.0
     finally:
         holder.join(10.0)
         await store.close()
-    # Once the holder commits, the same write succeeds (contention only).
+    # Once the holder commits, an unrelated scope registers outright.
     reopened = await SQLiteModelDeploymentStore(path, timeout_seconds=0.3).open()
     try:
-        scope_id = await reopened.ensure_scope("ns", "binding", "digest")
+        scope_id = await reopened.ensure_scope("ns2", "binding2", "digest2")
         assert scope_id
     finally:
         await reopened.close()

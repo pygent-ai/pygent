@@ -18,6 +18,7 @@ from ._history_types import (
     _execution_write,
     _json,
     _load,
+    _lock_retry,
     _prepare_json,
     _serialized_access,
 )
@@ -222,15 +223,22 @@ class ExecutionHistoryMixin:
         )
         return valid
 
+    @_lock_retry
     async def release_execution_claim(
         self, *, execution_id: str, owner_id: str, fencing_token: int
     ) -> None:
         async with self._write_lock:
-            await self._db().execute(
-                "DELETE FROM execution_claims WHERE execution_id=? AND owner_id=? AND fencing_token=?",
-                (execution_id, owner_id, fencing_token),
-            )
-            await self._db().commit()
+            db = self._db()
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    "DELETE FROM execution_claims WHERE execution_id=? AND owner_id=? AND fencing_token=?",
+                    (execution_id, owner_id, fencing_token),
+                )
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
 
     async def create_execution(
         self,

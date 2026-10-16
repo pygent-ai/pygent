@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import random
 import sqlite3
 import threading
 import time
@@ -23,6 +24,13 @@ from typing import Any, cast
 
 from pygent.core import CapacityPermit
 
+from ._history_types import (
+    _LOCK_RETRY_BASE_DELAY,
+    _LOCK_RETRY_DEADLINE_SECONDS,
+    _LOCK_RETRY_MAX_ATTEMPTS,
+    _LOCK_RETRY_MAX_DELAY,
+    _lock_primary_code,
+)
 from .api import CapacityPolicy, ExecutionAdmissionError, ExecutionCapacityPolicy
 
 _SUBMISSION_LOCKS: weakref.WeakKeyDictionary[
@@ -512,15 +520,34 @@ class SQLiteCapacityCoordinator:
             )
 
     def _transaction(self, operation: Any) -> Any:
-        with self._transaction_lock, self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                result = operation(connection)
-            except BaseException:
-                connection.execute("ROLLBACK")
-                raise
-            connection.execute("COMMIT")
-            return result
+        """Run one write transaction, retrying transient SQLite lock contention.
+
+        Every attempt reopens BEGIN IMMEDIATE and re-runs ``operation`` inside
+        it.  Sleeping happens outside the per-path writer lock, so waiters
+        never block other in-process submissions.
+        """
+        deadline = time.monotonic() + _LOCK_RETRY_DEADLINE_SECONDS
+        attempt = 0
+        while True:
+            retry_delay: float | None = None
+            with self._transaction_lock, self._connect() as connection:
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                    result = operation(connection)
+                    connection.execute("COMMIT")
+                    return result
+                except BaseException as exc:
+                    connection.rollback()
+                    if _lock_primary_code(exc) is None:
+                        raise
+                    attempt += 1
+                    if attempt >= _LOCK_RETRY_MAX_ATTEMPTS or time.monotonic() >= deadline:
+                        raise
+                    retry_delay = min(
+                        _LOCK_RETRY_BASE_DELAY * 2 ** (attempt - 1),
+                        _LOCK_RETRY_MAX_DELAY,
+                    ) * (1.0 + random.random())
+            time.sleep(cast(float, retry_delay))
 
     def _prepare(
         self,
@@ -673,15 +700,17 @@ class SQLiteCapacityCoordinator:
         return self._transaction(operation)
 
     def _delete_waiter(self, owner_key: str, waiter_id: str) -> None:
-        with self._transaction_lock, self._connect() as connection:
+        def operation(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "DELETE FROM pygent_capacity_waiters "
                 "WHERE owner_key = ? AND waiter_id = ?",
                 (owner_key, waiter_id),
             )
 
+        self._transaction(operation)
+
     def _renew_lease(self, owner_key: str, lease_id: str, fence: int) -> bool:
-        with self._transaction_lock, self._connect() as connection:
+        def operation(connection: sqlite3.Connection) -> bool:
             cursor = connection.execute(
                 "UPDATE pygent_capacity_leases SET expires_at = ? "
                 "WHERE owner_key = ? AND lease_id = ? AND fence = ?",
@@ -689,13 +718,17 @@ class SQLiteCapacityCoordinator:
             )
             return cursor.rowcount == 1
 
+        return cast(bool, self._transaction(operation))
+
     def _delete_lease(self, owner_key: str, lease_id: str, fence: int) -> None:
-        with self._transaction_lock, self._connect() as connection:
+        def operation(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "DELETE FROM pygent_capacity_leases "
                 "WHERE owner_key = ? AND lease_id = ? AND fence = ?",
                 (owner_key, lease_id, fence),
             )
+
+        self._transaction(operation)
 
     def _schedule_release(self, owner_key: str, lease_id: str, fence: int) -> None:
         async def release() -> None:

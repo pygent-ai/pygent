@@ -488,30 +488,37 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
             raise RuntimeError("SQLiteModelDeploymentStore is not open")
         return self._db
 
+    @_lock_retry
     @_sqlite_serialized
     async def ensure_scope(self, namespace: str, binding_name: str, policy_digest: str) -> str:
         db = self._connection()
-        row = await (
-            await db.execute(
-                "SELECT scope_id,policy_digest FROM pygent_model_scopes "
-                "WHERE namespace=? AND binding_name=?",
-                (namespace, binding_name),
-            )
-        ).fetchone()
-        if row is not None:
-            if str(row[1]) != policy_digest:
-                raise ModelDeploymentConflictError(
-                    "Binding scope already exists with a different policy"
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            row = await (
+                await db.execute(
+                    "SELECT scope_id,policy_digest FROM pygent_model_scopes "
+                    "WHERE namespace=? AND binding_name=?",
+                    (namespace, binding_name),
                 )
-            scope_id = str(row[0])
-            self._scopes[(namespace, binding_name)] = (scope_id, policy_digest)
-            return scope_id
-        scope_id = str(uuid.uuid4())
-        await db.execute(
-            "INSERT OR IGNORE INTO pygent_model_scopes(namespace,binding_name,scope_id,policy_digest) VALUES(?,?,?,?)",
-            (namespace, binding_name, scope_id, policy_digest),
-        )
-        await db.commit()
+            ).fetchone()
+            if row is not None:
+                if str(row[1]) != policy_digest:
+                    raise ModelDeploymentConflictError(
+                        "Binding scope already exists with a different policy"
+                    )
+                scope_id = str(row[0])
+                await db.commit()
+                self._scopes[(namespace, binding_name)] = (scope_id, policy_digest)
+                return scope_id
+            scope_id = str(uuid.uuid4())
+            await db.execute(
+                "INSERT OR IGNORE INTO pygent_model_scopes(namespace,binding_name,scope_id,policy_digest) VALUES(?,?,?,?)",
+                (namespace, binding_name, scope_id, policy_digest),
+            )
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
         row = await (
             await db.execute(
                 "SELECT scope_id,policy_digest FROM pygent_model_scopes "
@@ -528,17 +535,23 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
         self._scopes[(namespace, binding_name)] = (resolved, policy_digest)
         return resolved
 
+    @_lock_retry
     @_sqlite_serialized
     async def publish(self, snapshot: ModelProfileSnapshot) -> ModelProfileSnapshot:
-        result = await super().publish(snapshot)
         db = self._connection()
-        await db.execute(
-            "INSERT INTO pygent_model_profiles(scope_id,group_name,profile,snapshot_json,retired) VALUES(?,?,?,?,0) "
-            "ON CONFLICT(scope_id,group_name,profile) DO UPDATE SET snapshot_json=excluded.snapshot_json,retired=0",
-            (snapshot.deployment_scope_id, snapshot.group_name, snapshot.profile, _canonical(_snapshot_value(snapshot))),
-        )
-        await db.commit()
-        return result
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await db.execute(
+                "INSERT INTO pygent_model_profiles(scope_id,group_name,profile,snapshot_json,retired) VALUES(?,?,?,?,0) "
+                "ON CONFLICT(scope_id,group_name,profile) DO UPDATE SET snapshot_json=excluded.snapshot_json,retired=0",
+                (snapshot.deployment_scope_id, snapshot.group_name, snapshot.profile, _canonical(_snapshot_value(snapshot))),
+            )
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
+        # Refresh the in-memory cache only after the durable write committed.
+        return await super().publish(snapshot)
 
     @_lock_retry
     @_sqlite_serialized
@@ -793,18 +806,27 @@ class SQLiteModelDeploymentStore(InMemoryModelDeploymentStore):
             raise ValueError("stored model admission identity does not match its key")
         return admission
 
+    @_lock_retry
     @_sqlite_serialized
     async def release_admission(self, admission_id: str, *, recoverable: bool = False) -> None:
-        await super().release_admission(admission_id, recoverable=recoverable)
         db = self._connection()
-        if recoverable:
-            await db.execute(
-                "UPDATE pygent_model_admissions SET recoverable=1 WHERE admission_id=?",
-                (admission_id,),
-            )
-        else:
-            await db.execute("DELETE FROM pygent_model_admissions WHERE admission_id=?", (admission_id,))
-        await db.commit()
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            if recoverable:
+                await db.execute(
+                    "UPDATE pygent_model_admissions SET recoverable=1 WHERE admission_id=?",
+                    (admission_id,),
+                )
+            else:
+                await db.execute(
+                    "DELETE FROM pygent_model_admissions WHERE admission_id=?", (admission_id,)
+                )
+            await db.commit()
+        except BaseException:
+            await db.rollback()
+            raise
+        # Drop the in-memory admission only after the durable write committed.
+        await super().release_admission(admission_id, recoverable=recoverable)
 
     async def close(self) -> None:
         if self._db is not None:

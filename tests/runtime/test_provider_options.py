@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -358,3 +360,54 @@ async def test_worker_requires_provider_options_capability_at_admission() -> Non
     assert MODEL_PROVIDER_OPTIONS_CAPABILITY in worker.capabilities
     await worker.close()
     await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_deployment_publish_retries_until_holder_releases(tmp_path: Path) -> None:
+    path = tmp_path / "publish-retry.sqlite3"
+    store = await SQLiteModelDeploymentStore(path, timeout_seconds=0.3).open()
+    acquired = threading.Event()
+
+    def hold() -> None:
+        conn = sqlite3.connect(path, timeout=0.3, isolation_level=None)
+        conn.execute("PRAGMA busy_timeout=100")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS lock_probe(id INTEGER PRIMARY KEY)"
+        )
+        acquired.set()
+        time.sleep(1.2)
+        conn.execute("COMMIT")
+        conn.close()
+
+    snapshot = build_snapshot(
+        scope_id="scope",
+        requirement=_requirement(),
+        profile="quality",
+        models=(model_entry("main", "deepseek", "deepseek-v4-flash"),),
+        resources=None,
+    )
+    holder = threading.Thread(target=hold)
+    started = time.monotonic()
+    holder.start()
+    try:
+        assert acquired.wait(5.0)
+        published = await store.publish(snapshot)
+        assert published is snapshot
+        # The in-memory cache is refreshed only after the durable write
+        # committed, and the durable write survived the contention.
+        assert store._profiles[("scope", "assistant", "quality")] is snapshot
+        # A single attempt cannot succeed while the holder keeps the write
+        # lock, so completing the publish required the retry.
+        assert time.monotonic() - started >= 1.2
+    finally:
+        holder.join(10.0)
+        await store.close()
+    assert not holder.is_alive()
+
+    reopened = await SQLiteModelDeploymentStore(path).open()
+    try:
+        current = await reopened.current("scope", "assistant", "quality")
+        assert current.digest == snapshot.digest
+    finally:
+        await reopened.close()

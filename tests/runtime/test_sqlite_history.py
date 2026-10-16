@@ -14,6 +14,7 @@ from pygent.runtime import (
     HistoryConflictError,
     NonDeterministicReplayError,
     SQLiteHistoryStore,
+    SQLiteModelDeploymentStore,
 )
 from pygent.runtime._history_types import (
     _json_frozen,
@@ -108,7 +109,7 @@ async def test_write_waits_out_short_lock_contention(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_write_fails_promptly_when_busy_timeout_is_exceeded(tmp_path):
+async def test_write_retries_past_busy_timeout_until_holder_releases(tmp_path):
     path = tmp_path / "history.sqlite3"
     async with SQLiteHistoryStore(path, timeout_seconds=0.3) as store:
         acquired = threading.Event()
@@ -119,16 +120,15 @@ async def test_write_fails_promptly_when_busy_timeout_is_exceeded(tmp_path):
         holder.start()
         try:
             assert acquired.wait(5.0)
-            with pytest.raises(
-                sqlite3.OperationalError, match="database is locked"
-            ):
-                await store.admit_tool_observation("task-1", "owner-1", 60.0)
-            # Fails at the configured timeout, not after the 5s default.
+            # Every attempt fails at the configured 0.3s busy timeout; the
+            # retry layer reopens the transaction until the holder commits.
+            assert await store.admit_tool_observation("task-1", "owner-1", 60.0)
+            assert time.monotonic() - started >= 1.5
             assert time.monotonic() - started < 5.0
         finally:
             holder.join(10.0)
-        # Once the holder commits, the same write succeeds (contention only).
-        assert await store.admit_tool_observation("task-1", "owner-1", 60.0)
+        # Once the holder commits, an unrelated admission succeeds outright.
+        assert await store.admit_tool_observation("task-2", "owner-2", 60.0)
 
 
 def test_validated_json_object_serialization_reuses_frozen_children():
@@ -958,3 +958,128 @@ async def test_lock_retry_exhaustion_raises_enriched_error(tmp_path, monkeypatch
         finally:
             holder.execute("ROLLBACK")
             holder.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_task_writes_retry_until_holder_releases(tmp_path):
+    path = tmp_path / "tool-retry.sqlite3"
+    async with SQLiteHistoryStore(path, timeout_seconds=0.3) as store:
+        acquired = threading.Event()
+
+        def hold() -> None:
+            conn = sqlite3.connect(path, timeout=0.3, isolation_level=None)
+            conn.execute("PRAGMA busy_timeout=100")
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS lock_probe(id INTEGER PRIMARY KEY)"
+            )
+            acquired.set()
+            time.sleep(1.2)
+            conn.execute("COMMIT")
+            conn.close()
+
+        holder = threading.Thread(target=hold)
+        started = time.monotonic()
+        holder.start()
+        try:
+            assert acquired.wait(5.0)
+            assert await store.admit_tool_observation("task-r", "owner-r", 60.0)
+            await store.create_tool_job(
+                job_id="job-r",
+                task_id="task-j",
+                logical_key="logical-r",
+                binding_id="binding",
+                plan_id="plan",
+                resource_key=None,
+                required_capabilities=(),
+                request={"kind": "probe"},
+                observation_owner="owner-j",
+            )
+            await store.put_tool_output("task-j", "owner-j", {"ok": True})
+            await store.renew_tool_observations("owner-r", 60.0)
+            # A single attempt cannot succeed while the holder keeps the
+            # write lock, so completing these writes required the retry.
+            assert time.monotonic() - started >= 1.2
+        finally:
+            holder.join(10.0)
+    assert not holder.is_alive()
+
+
+@pytest.mark.asyncio
+async def test_model_store_writes_retry_until_holder_releases(tmp_path):
+    path = tmp_path / "deploy-retry.sqlite3"
+    store = await SQLiteModelDeploymentStore(path, timeout_seconds=0.3).open()
+    acquired = threading.Event()
+
+    def hold() -> None:
+        conn = sqlite3.connect(path, timeout=0.3, isolation_level=None)
+        conn.execute("PRAGMA busy_timeout=100")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS lock_probe(id INTEGER PRIMARY KEY)"
+        )
+        acquired.set()
+        time.sleep(1.2)
+        conn.execute("COMMIT")
+        conn.close()
+
+    holder = threading.Thread(target=hold)
+    started = time.monotonic()
+    holder.start()
+    try:
+        assert acquired.wait(5.0)
+        scope_id = await store.ensure_scope("ns", "binding", "digest")
+        admission = await store.admit(scope_id, (), {})
+        await store.release_admission(admission.admission_id)
+        # A single attempt cannot succeed while the holder keeps the write
+        # lock, so completing these writes required the retry.
+        assert time.monotonic() - started >= 1.2
+    finally:
+        holder.join(10.0)
+        await store.close()
+    assert not holder.is_alive()
+
+
+@pytest.mark.asyncio
+async def test_release_execution_claim_retries_until_holder_releases(tmp_path):
+    path = tmp_path / "claim-release-retry.sqlite3"
+    async with SQLiteHistoryStore(path, timeout_seconds=0.3) as store:
+        token = await store.claim_execution(
+            execution_id="exec-rel", owner_id="owner", lease_ttl=60.0
+        )
+        assert token is not None
+        acquired = threading.Event()
+
+        def hold() -> None:
+            conn = sqlite3.connect(path, timeout=0.3, isolation_level=None)
+            conn.execute("PRAGMA busy_timeout=100")
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS lock_probe(id INTEGER PRIMARY KEY)"
+            )
+            acquired.set()
+            time.sleep(1.2)
+            conn.execute("COMMIT")
+            conn.close()
+
+        holder = threading.Thread(target=hold)
+        started = time.monotonic()
+        holder.start()
+        try:
+            assert acquired.wait(5.0)
+            await store.release_execution_claim(
+                execution_id="exec-rel", owner_id="owner", fencing_token=token
+            )
+            # A single attempt cannot succeed while the holder keeps the
+            # write lock, so completing the release required the retry.
+            assert time.monotonic() - started >= 1.2
+        finally:
+            holder.join(10.0)
+        # The claim row is actually gone: a fresh claim succeeds outright.
+        assert (
+            await store.claim_execution(
+                execution_id="exec-rel", owner_id="owner2", lease_ttl=60.0
+            )
+            is not None
+        )
+    assert not holder.is_alive()

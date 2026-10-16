@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 import time
 
@@ -862,3 +863,34 @@ async def test_detached_tasks_share_binding_tool_capacity_and_cancel_queue_clean
     assert third_result is not None and third_result.status == "succeeded"
     assert peak_inflight == 1
     await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_capacity_transaction_retries_until_holder_releases(tmp_path):
+    coordinator = SQLiteCapacityCoordinator(tmp_path / "cap-retry.sqlite3")
+    acquired = threading.Event()
+
+    def hold() -> None:
+        conn = sqlite3.connect(coordinator.path, timeout=5.0, isolation_level=None)
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS lock_probe(id INTEGER PRIMARY KEY)"
+        )
+        acquired.set()
+        time.sleep(5.5)
+        conn.execute("COMMIT")
+        conn.close()
+
+    holder = threading.Thread(target=hold)
+    started = time.monotonic()
+    holder.start()
+    try:
+        assert acquired.wait(5.0)
+        # BEGIN IMMEDIATE fails once per attempt after the hardcoded 5s busy
+        # timeout; the retry loop must absorb it and finish once the holder
+        # commits instead of surfacing "database is locked" to the acquirer.
+        await asyncio.to_thread(coordinator._ensure_policy, "owner", "hash")
+        assert time.monotonic() - started >= 5.5
+    finally:
+        holder.join(10.0)
+    assert not holder.is_alive()
