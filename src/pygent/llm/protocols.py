@@ -11,6 +11,7 @@ class BuiltinModelProtocol(StrEnum):
     OPENAI_IMAGES = "openai_images"
     ANTHROPIC_MESSAGES = "anthropic_messages"
     GEMINI_GENERATE_CONTENT = "gemini_generate_content"
+    ARK_VIDEO_GENERATION = "ark_video_generation"
 
 
 __all__ = ["BuiltinModelProtocol"]

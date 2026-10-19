@@ -48,7 +48,8 @@ Provider 是 Connection 上的开放字符串。Provider preset 只提供 UI/配
 - `OPENAI_RESPONSES`：`openai_responses`；
 - `OPENAI_IMAGES`：`openai_images`；
 - `ANTHROPIC_MESSAGES`：`anthropic_messages`；
-- `GEMINI_GENERATE_CONTENT`：`gemini_generate_content`。
+- `GEMINI_GENERATE_CONTENT`：`gemini_generate_content`；
+- `ARK_VIDEO_GENERATION`：`ark_video_generation`（任务型视频生成：create → poll → download，无流式）。
 
 `ModelSpec.protocol` 仍保存开放字符串，第三方 Adapter 可以定义自己的 protocol。内置 Provider 目录按 protocol 提供 Connection 默认值，当前覆盖 DeepSeek、Anthropic、OpenAI、Google Gemini、Alibaba Cloud Model Studio、智谱、Moonshot、MiniMax、火山引擎和 xAI；Alibaba Cloud Token Plan 作为独立 Provider。一个 Provider 可以提供多个协议，例如 OpenAI 同时提供 Chat Completions 与 Responses，DeepSeek、Moonshot、MiniMax 和 Token Plan 同时提供 OpenAI Chat Completions 与 Anthropic Messages。UI 选择 Provider 时把需要的 protocol endpoint 填入 Connection；目录只提供 base URL、credential 环境变量名和表单 schema，不提供或读取真实 API key。
 

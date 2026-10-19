@@ -175,6 +175,9 @@ def test_builtin_provider_catalog_has_official_multi_provider_connections() -> N
     assert catalog.providers["minimax"].protocols["anthropic_messages"].base_url == (
         "https://api.minimax.io/anthropic"
     )
+    assert catalog.providers["volcengine"].protocols[
+        "ark_video_generation"
+    ].base_url == ("https://ark.cn-beijing.volces.com/api/v3")
 
 
 def test_builtin_catalog_projects_every_official_manifest_model() -> None:

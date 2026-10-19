@@ -761,6 +761,53 @@
             },
             "additionalProperties": true
           }
+        },
+        "ark_video_generation": {
+          "protocol": "ark_video_generation",
+          "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+          "authentication": "bearer",
+          "api_key_env": "ARK_API_KEY",
+          "provider_options_schema": {
+            "type": "object",
+            "properties": {
+              "poll_interval_seconds": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "poll_timeout_seconds": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "max_output_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "duration": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "ratio": {
+                "type": "string"
+              },
+              "resolution": {
+                "type": "string"
+              },
+              "watermark": {
+                "type": "boolean"
+              },
+              "seed": {
+                "type": "integer"
+              },
+              "camerafixed": {
+                "type": "boolean"
+              },
+              "framespersecond": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": true
+          }
         }
       }
     },

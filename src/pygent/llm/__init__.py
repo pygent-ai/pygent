@@ -28,6 +28,11 @@ from .anthropic_messages import (
     AnthropicMessagesClient,
     anthropic_messages_adapters,
 )
+from .ark_video import (
+    ArkVideoAdapter,
+    ArkVideoClient,
+    ark_video_adapters,
+)
 from .catalog import ModelCatalog, ModelInfo
 from .catalogs import (
     CapabilityPreset,
@@ -108,6 +113,8 @@ from .types import (
 __all__ = [
     "AnthropicMessagesAdapter",
     "AnthropicMessagesClient",
+    "ArkVideoAdapter",
+    "ArkVideoClient",
     "BuiltinModelProtocol",
     "CapabilityPreset",
     "CapabilityPresetCatalog",
@@ -191,6 +198,7 @@ __all__ = [
     "ResolvedModelConnection",
     "RetryPolicy",
     "anthropic_messages_adapters",
+    "ark_video_adapters",
     "gemini_generate_content_adapters",
     "openai_compatible_adapters",
     "openai_images_adapters",

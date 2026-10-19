@@ -57,3 +57,15 @@
   同日 `gpt-audio` 的 `audio_output` / `audio_input` 均通过。探针请求构造
   与 Pygent codec 无关，属网关路由侧问题。
 - **恢复条件**：AZ 网关路由修复，或获得 DASHSCOPE 官方 key 直测后修正声明。
+
+## 7. 已恢复：`ark_video_generation` 内置 Client/Adapter（2026-10-19）
+
+- **现状**：t2v 文生视频已按第 5 项的路径落地——`ArkVideoClient` 在
+  `invoke` 内封装 create → poll → download 完整任务生命周期，结果视频
+  下载后转 inline（受 `max_output_bytes` 限制，默认 100MB），任务失败
+  依据 Ark `error.code` 明确报错。任务创建后的一切失败均为不可重试
+  kind，轮询/下载的瞬时传输错误在客户端轮询窗口内消化，外层
+  `RetryPolicy` 不会为已存在的任务重建第二次计费任务。
+- **仍受限**：i2v/r2v 图像输入未接（adapter `media_transport` 为空，
+  媒体输入预检降级为 not_viewed 注记）；远端任务取消不止损（见第 4 项）；
+  inline 视频会整体进入事件与历史（见第 3 项体积边界）。
