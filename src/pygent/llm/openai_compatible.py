@@ -908,7 +908,7 @@ class _OpenAIStreamDecoder:
                         },
                     },
                 )
-                parts = (*parts[:finish_index], continuation, *parts[finish_index:])
+                parts = [*parts[:finish_index], continuation, *parts[finish_index:]]
                 self._continuation_emitted = True
             self._completed = True
         return tuple(parts)
