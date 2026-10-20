@@ -20,19 +20,18 @@ from pygent.core import (
     FrozenJsonObject,
     JsonValue,
     Message,
-    ModelContinuation,
+    MessageProfile,
     Module,
     RecoverySafety,
-    ToolMessage,
     current_infrastructure,
     freeze_json,
+    message_fields_expected_keys,
+    message_from_fields,
+    project_message_fields,
     thaw_json,
 )
-from pygent.core._tool_values import (
-    _tool_result_content_from_value,
-    _tool_result_content_to_value,
-)
-from pygent.tool import MediaBlock, ToolCall, ToolDefinition
+from pygent.core._tool_values import _tool_result_content_from_value
+from pygent.tool import MediaBlock, ToolDefinition
 
 from ._adapter_contracts import ModelInvoker, ModelRequestMediaTokenEstimator
 from ._media_routing import pending_media_blocks
@@ -280,71 +279,7 @@ class ModelCallLayer(Module[Message, AIMessage]):
 
 
 def _message_effect_value(message: Message) -> dict[str, object]:
-    value: dict[str, object] = {
-        "role": message.role,
-        "content": message.content,
-        "slot": message.slot,
-        "metadata": thaw_json(cast(JsonValue, message.metadata)),
-    }
-    if isinstance(message, AIMessage):
-        value["continuation"] = (
-            None
-            if message.continuation is None
-            else {
-                "model_key": message.continuation.model_key,
-                "provider": message.continuation.provider,
-                "model_id": message.continuation.model_id,
-                "protocol": message.continuation.protocol,
-                "data": thaw_json(cast(JsonValue, message.continuation.data)),
-            }
-        )
-        value["media"] = [
-            _tool_result_content_to_value(block) for block in message.media
-        ]
-        value["tool_calls"] = [
-            {
-                "call_id": call.call_id,
-                "name": call.name,
-                "arguments": thaw_json(cast(JsonValue, call.arguments)),
-                "tool_id": call.tool_id,
-                "tool_version": call.tool_version,
-                "idempotency_key": call.idempotency_key,
-            }
-            for call in message.tool_calls
-        ]
-    elif isinstance(message, ToolMessage):
-        value["results"] = [
-            {
-                "call_id": result.call_id,
-                "name": result.name,
-                "status": result.status,
-                "output": thaw_json(result.output),
-                "content": [
-                    _tool_result_content_to_value(item) for item in result.content
-                ],
-                "error": result.error,
-                "error_kind": result.error_kind,
-                "error_code": result.error_code,
-                "retryable": result.retryable,
-                "side_effect_committed": result.side_effect_committed,
-                "tool_id": result.tool_id,
-                "tool_version": result.tool_version,
-                "task": (
-                    None
-                    if result.task is None
-                    else {
-                        "task_id": result.task.task_id,
-                        "call_id": result.task.call_id,
-                        "tool_id": result.task.tool_id,
-                        "version": result.task.version,
-                        "state": result.task.state.value,
-                        "metadata": thaw_json(cast(JsonValue, result.task.metadata)),
-                    }
-                ),
-            }
-            for result in message.results
-        ]
-    return value
+    return project_message_fields(message, MessageProfile.EFFECT)
 
 
 def _model_effect_request(
@@ -429,6 +364,13 @@ _EFFECT_MESSAGE_FIELDS = frozenset(
     {"role", "content", "slot", "metadata", "media", "tool_calls", "continuation"}
 )
 
+# The replayed-effect decoder's strict field set must stay identical to the
+# field set the unified core decoder derives for assistant messages under the
+# layer effect profile.
+assert _EFFECT_MESSAGE_FIELDS == message_fields_expected_keys(
+    "assistant", MessageProfile.EFFECT, None
+)
+
 
 def _message_from_effect(value: JsonValue) -> AIMessage:
     decoded = thaw_json(value)
@@ -452,32 +394,19 @@ def _message_from_effect(value: JsonValue) -> AIMessage:
     raw_media = raw_message.get("media", [])
     if not isinstance(raw_media, list):
         raise TypeError("replayed model media must be an array")
-    media: list[MediaBlock] = []
     for item in raw_media:
         block = _tool_result_content_from_value(item)
         if type(block) is not MediaBlock:
             raise TypeError("replayed model media contains an invalid block")
-        media.append(block)
     raw_calls = raw_message.get("tool_calls", [])
     if not isinstance(raw_calls, list):
         raise TypeError("replayed model tool_calls must be an array")
-    calls: list[ToolCall] = []
     for raw_call in raw_calls:
         if not isinstance(raw_call, Mapping):
             raise TypeError("replayed model tool call must be a JSON object")
         arguments = raw_call.get("arguments", {})
         if not isinstance(arguments, Mapping):
             raise TypeError("replayed tool arguments must be a JSON object")
-        calls.append(
-            ToolCall(
-                call_id=cast(str, raw_call.get("call_id")),
-                name=cast(str, raw_call.get("name")),
-                arguments=cast(Mapping[str, Any], arguments),
-                tool_id=cast(str | None, raw_call.get("tool_id")),
-                tool_version=cast(str | None, raw_call.get("tool_version")),
-                idempotency_key=cast(str | None, raw_call.get("idempotency_key")),
-            )
-        )
     metadata = raw_message.get("metadata", {})
     if not isinstance(metadata, Mapping):
         raise TypeError("replayed model metadata must be a JSON object")
@@ -487,7 +416,6 @@ def _message_from_effect(value: JsonValue) -> AIMessage:
     if "continuation" not in raw_message:
         raise TypeError("replayed model continuation field is required")
     raw_continuation = raw_message["continuation"]
-    continuation = None
     if raw_continuation is not None:
         if not isinstance(raw_continuation, Mapping):
             raise TypeError("replayed model continuation must be a JSON object")
@@ -502,22 +430,16 @@ def _message_from_effect(value: JsonValue) -> AIMessage:
         continuation_data = raw_continuation["data"]
         if not isinstance(continuation_data, Mapping):
             raise TypeError("replayed model continuation data must be a JSON object")
-        continuation = ModelContinuation(
-            model_key=cast(str, raw_continuation["model_key"]),
-            provider=cast(str, raw_continuation["provider"]),
-            model_id=cast(str, raw_continuation["model_id"]),
-            protocol=cast(str, raw_continuation["protocol"]),
-            data=cast(Mapping[str, object], continuation_data),
-        )
-    return AIMessage(
-        content=cast(str, raw_message.get("content", "")),
-        slot=cast(str | None, raw_message.get("slot")),
-        metadata=cast(Mapping[str, object], metadata),
-        media=tuple(media),
-        tool_calls=tuple(calls),
-        usage=cast(Mapping[str, object], usage),
-        continuation=continuation,
+    # The replayed turn is always the assistant response; the recorded role
+    # value is not consulted.  Usage lives on the effect envelope, outside the
+    # projected message body, so it is re-attached after the core decode.
+    message = cast(
+        AIMessage,
+        message_from_fields(
+            {**raw_message, "role": "assistant"}, MessageProfile.EFFECT
+        ),
     )
+    return replace(message, usage=cast(Mapping[str, object], usage))
 
 
 __all__ = ["ModelCallLayer"]

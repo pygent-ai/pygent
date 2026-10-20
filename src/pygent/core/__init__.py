@@ -1,3 +1,9 @@
+from ._message_fields import (
+    MessageProfile,
+    message_fields_expected_keys,
+    message_from_fields,
+    project_message_fields,
+)
 from ._module_contracts import (
     CapacityPermit,
     DirectExecutionError,
@@ -97,6 +103,7 @@ __all__ = [
     "JsonValue",
     "JsonValueError",
     "Message",
+    "MessageProfile",
     "ModelContinuation",
     "Module",
     "ModuleDependency",
@@ -113,5 +120,8 @@ __all__ = [
     "freeze_json",
     "freeze_json_object",
     "independent_execution",
+    "message_fields_expected_keys",
+    "message_from_fields",
+    "project_message_fields",
     "thaw_json",
 ]

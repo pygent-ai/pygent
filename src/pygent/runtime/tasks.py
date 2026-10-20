@@ -7,6 +7,12 @@ from dataclasses import replace
 from uuid import uuid4
 
 from pygent.core import FrozenJsonObject, JsonValue, freeze_json
+from pygent.core._message_fields import (
+    _tool_call_from_dict,
+    _tool_call_to_dict,
+    _tool_spec_from_dict,
+    _tool_spec_to_dict,
+)
 from pygent.tool import (
     ExecutorRegistry,
     IdempotencyPolicy,
@@ -32,11 +38,6 @@ from ._history_store import SQLiteHistoryStore
 from ._history_types import StoredJob
 from .api import JobSnapshot, JobState
 from .codec import (
-    WireCodecError,
-    _tool_call_from_dict,
-    _tool_call_to_dict,
-    _tool_spec_from_dict,
-    _tool_spec_to_dict,
     tool_result_from_dict,
     tool_result_to_dict,
 )
@@ -51,7 +52,10 @@ def _request_from_dict(value: object) -> tuple[ToolSpec, ToolCall]:
         raise TypeError("durable ToolTask request is invalid")
     try:
         return _tool_spec_from_dict(value["spec"]), _tool_call_from_dict(value["call"])
-    except (KeyError, WireCodecError) as exc:
+    except (KeyError, TypeError, ValueError) as exc:
+        # Core decode helpers raise the former wire error texts as ValueError
+        # (WireCodecError is a subclass); the ToolSpec permissions guard
+        # raises TypeError, so decode failures all still convert uniformly.
         raise TypeError("durable ToolTask request is invalid") from exc
 
 

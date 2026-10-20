@@ -8,19 +8,15 @@ import uuid
 from typing import cast
 
 from pygent.core import (
-    AIMessage,
     JsonValue,
     Message,
+    MessageProfile,
     ModelContinuation,
-    ToolMessage,
-    UserMessage,
+    project_message_fields,
     thaw_json,
 )
-from pygent.tool import (
-    MediaBlock,
-    ToolResultContent,
-    ToolResultJson,
-    ToolResultText,
+from pygent.core._message_fields import (
+    _continuation_digest as _core_continuation_digest,
 )
 
 from ._adapter_contracts import ModelProviderRequest
@@ -105,94 +101,11 @@ def _request_projection(request: ModelProviderRequest) -> dict[str, object]:
 
 
 def _message_projection(message: Message) -> dict[str, object]:
-    value: dict[str, object] = {
-        "role": message.role,
-        "content": message.content,
-        "kind": message.kind,
-        "slot": message.slot,
-    }
-    if isinstance(message, UserMessage):
-        value["media"] = [_content_projection(block) for block in message.media]
-    elif isinstance(message, AIMessage):
-        value["media"] = [_content_projection(block) for block in message.media]
-        value["continuation_digest"] = _continuation_digest(message.continuation)
-        value["tool_calls"] = [
-            {
-                "call_id": call.call_id,
-                "name": call.name,
-                "arguments": thaw_json(cast(JsonValue, call.arguments)),
-                "tool_id": call.tool_id,
-                "tool_version": call.tool_version,
-                "idempotency_key": call.idempotency_key,
-            }
-            for call in message.tool_calls
-        ]
-    elif isinstance(message, ToolMessage):
-        value["results"] = [
-            {
-                "call_id": result.call_id,
-                "name": result.name,
-                "status": result.status,
-                "output": thaw_json(result.output),
-                "content": [_content_projection(item) for item in result.content],
-                "error": result.error,
-                "error_kind": result.error_kind,
-                "error_code": result.error_code,
-                "retryable": result.retryable,
-                "side_effect_committed": result.side_effect_committed,
-                "tool_id": result.tool_id,
-                "tool_version": result.tool_version,
-            }
-            for result in message.results
-        ]
-    return value
-
-
-def _content_projection(value: ToolResultContent) -> dict[str, object]:
-    if type(value) is ToolResultText:
-        return {"type": "text", "text": value.text}
-    if type(value) is ToolResultJson:
-        return {"type": "json", "value": thaw_json(value.value)}
-    if type(value) is MediaBlock:
-        source = value.source
-        return {
-            "type": "media",
-            "media_type": value.media_type,
-            "mime_type": value.mime_type,
-            "mime_parameters": value.mime_parameters,
-            "detail": value.detail,
-            "width": value.width,
-            "height": value.height,
-            "duration_seconds": value.duration_seconds,
-            "fps": value.fps,
-            "has_audio": value.has_audio,
-            "source": {
-                "kind": source.kind,
-                "uri": source.uri,
-                "url": source.url,
-                "sha256": source.sha256,
-                "size_bytes": source.size_bytes,
-            },
-        }
-    raise TypeError("unsupported ToolResult content subtype")
+    return project_message_fields(message, MessageProfile.SNAPSHOT)
 
 
 def _continuation_digest(continuation: ModelContinuation | None) -> str | None:
-    if continuation is None:
-        return None
-    encoded = json.dumps(
-        {
-            "model_key": continuation.model_key,
-            "provider": continuation.provider,
-            "model_id": continuation.model_id,
-            "protocol": continuation.protocol,
-            "data": thaw_json(cast(JsonValue, continuation.data)),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    return _core_continuation_digest(continuation)
 
 
 __all__ = ["prepared_request_event"]

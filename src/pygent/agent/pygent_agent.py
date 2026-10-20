@@ -16,15 +16,16 @@ from pygent.core import (
     ExecutionRequirements,
     JsonValue,
     Message,
+    MessageProfile,
     Module,
     RecoverySafety,
     ToolMessage,
     UserMessage,
+    project_message_fields,
     thaw_json,
 )
-from pygent.core._tool_values import _tool_result_content_to_value
 from pygent.llm._media_tokens import generic_media_input_tokens
-from pygent.tool import MediaBlock, ToolDefinition, ToolResultContent
+from pygent.tool import MediaBlock, ToolDefinition
 
 from .react import ReActLayer
 
@@ -432,42 +433,7 @@ def _ceil_div(numerator: int, denominator: int) -> int:
 
 
 def _message_projection(message: Message) -> dict[str, object]:
-    value: dict[str, object] = {
-        "role": message.role,
-        "content": message.content,
-        "kind": message.kind,
-        "slot": message.slot,
-    }
-    if isinstance(message, AIMessage):
-        value["tool_calls"] = [
-            {
-                "call_id": call.call_id,
-                "name": call.name,
-                "arguments": thaw_json(cast(JsonValue, call.arguments)),
-            }
-            for call in message.tool_calls
-        ]
-    elif isinstance(message, ToolMessage):
-        value["results"] = [
-            {
-                "call_id": result.call_id,
-                "name": result.name,
-                "status": result.status,
-                "output": thaw_json(result.output),
-                "content": [_estimated_content_value(item) for item in result.content],
-                "error": result.error,
-            }
-            for result in message.results
-        ]
-    return value
-
-
-def _estimated_content_value(value: ToolResultContent) -> dict[str, object]:
-    projected = _tool_result_content_to_value(value)
-    if type(value) is MediaBlock:
-        source = cast(dict[str, object], projected["source"])
-        source["base64_data"] = None
-    return projected
+    return project_message_fields(message, MessageProfile.ESTIMATE)
 
 
 __all__ = [

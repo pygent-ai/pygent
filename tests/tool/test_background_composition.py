@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from pygent import AIMessage, Context, ToolAuthorizationDecision
-from pygent.runtime.codec import _tool_spec_from_dict, _tool_spec_to_dict
+from pygent.core._message_fields import _tool_spec_from_dict, _tool_spec_to_dict
 from pygent.tool import ToolCall, ToolKit, ToolSideEffect, tool
 
 
