@@ -45,8 +45,8 @@ from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
 from ._media_content import media_data_url, validate_media_delivery
 from ._media_tokens import openai_media_input_tokens
 from ._tool_context import encode_tool_context
+from ._tool_schema import flatten_nullable_any_of
 from .configuration import ModelSpec
-from .openai_compatible import _flatten_nullable_any_of
 from .types import (
     ModelErrorKind,
     ModelFailureReason,
@@ -593,7 +593,7 @@ def _tool_value(tool: ToolDefinition) -> dict[str, object]:
         "description": tool.description,
         "parameters": cast(
             dict[str, object],
-            _flatten_nullable_any_of(thaw_json(cast(FrozenJsonObject, tool.parameters))),
+            flatten_nullable_any_of(thaw_json(cast(FrozenJsonObject, tool.parameters))),
         ),
     }
 

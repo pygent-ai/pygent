@@ -60,6 +60,7 @@ from ._media_content import (
 from ._media_tokens import openai_media_input_tokens
 from ._provider_policies import provider_protocol_policy
 from ._tool_context import encode_tool_context
+from ._tool_schema import flatten_nullable_any_of
 from .catalog import ModelCatalog, ModelInfo
 from .configuration import ModelSpec
 from .types import (
@@ -238,7 +239,14 @@ class OpenAICompatibleClient:
         # Values this client sent to the provider; provider error bodies are
         # untrusted and may echo them, so they are redacted before any error
         # text is kept.
-        secrets = [base_url, urlsplit(base_url).hostname or "", api_key or ""]
+        secrets = [
+            base_url,
+            api_root,
+            self._endpoint,
+            self._models_endpoint,
+            urlsplit(base_url).hostname or "",
+            api_key or "",
+        ]
         self._sent_secrets: tuple[str, ...] = tuple(
             secret for secret in secrets if secret
         )
@@ -954,11 +962,17 @@ def _wire_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+_KEY_SHAPED_TOKEN = re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b")
+
+
 def _redact_secrets(message: str, sent_secrets: Sequence[str]) -> str:
     for secret in sent_secrets:
         if secret and secret in message:
             message = message.replace(secret, "[REDACTED]")
-    return message
+    # Exact matches cannot catch credentials we never sent (e.g. a gateway
+    # echoing its own upstream key); cover the common OpenAI-style key shape
+    # conservatively. Transformed or encoded secrets stay undetectable.
+    return _KEY_SHAPED_TOKEN.sub("[REDACTED]", message)
 
 
 def _provider_error_message(
@@ -966,9 +980,14 @@ def _provider_error_message(
 ) -> str | None:
     """Extract the provider's field-level diagnostic, e.g. Gemini's
     ``...functionDeclaration parameters.working_directory schema didn't
-    specify the schema type field``, so it survives into run events. Values
-    the client sent (credentials, endpoint) are redacted before the text is
-    kept; redaction runs before truncation so no secret straddles the cap."""
+    specify the schema type field``, so it survives into run events.
+
+    Exposure policy: the value is bounded to 512 characters and redacted
+    against credentials this client sent plus common key shapes, then kept in
+    run events for postmortem by operator decision. It remains
+    provider-controlled text — this is a bounded-leak tradeoff, not a
+    certification that no provider-side secret can survive redaction.
+    """
 
     if not raw_body:
         return None
@@ -1537,43 +1556,6 @@ def _response_format_projection(
     }
 
 
-def _flatten_nullable_any_of(node: object) -> object:
-    """Flatten the Pydantic ``anyOf: [T, null]`` projection of ``Optional[T]``.
-
-    Gemini-class functionDeclaration validators require every schema node to
-    carry an explicit ``type`` and reject top-level ``anyOf`` nodes, so any
-    tools-carrying request failed against them. The non-null branch is inlined
-    while sibling keys (``default``/``title``/``description``) survive; any
-    other ``anyOf`` shape is left untouched because it cannot be rewritten
-    without guessing at its semantics.
-    """
-
-    if isinstance(node, dict):
-        branches = node.get("anyOf")
-        if (
-            isinstance(branches, list)
-            and len(branches) == 2
-            and all(
-                isinstance(branch, dict) and "type" in branch for branch in branches
-            )
-        ):
-            non_null = [branch for branch in branches if branch["type"] != "null"]
-            if len(non_null) == 1:
-                merged = {
-                    key: _flatten_nullable_any_of(value)
-                    for key, value in node.items()
-                    if key != "anyOf"
-                }
-                merged.update(
-                    cast(dict[str, object], _flatten_nullable_any_of(non_null[0]))
-                )
-                return merged
-        return {key: _flatten_nullable_any_of(value) for key, value in node.items()}
-    if isinstance(node, list):
-        return [_flatten_nullable_any_of(item) for item in node]
-    return node
-
-
 @lru_cache(maxsize=512)
 def _tool_projection(tool: ToolDefinition, wire_name: str) -> dict[str, object]:
     return {
@@ -1583,7 +1565,7 @@ def _tool_projection(tool: ToolDefinition, wire_name: str) -> dict[str, object]:
             "description": tool.description,
             "parameters": cast(
                 dict[str, object],
-                _flatten_nullable_any_of(
+                flatten_nullable_any_of(
                     cast(FrozenJsonObject, tool.parameters).to_dict()
                 ),
             ),

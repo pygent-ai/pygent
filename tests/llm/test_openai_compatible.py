@@ -1568,6 +1568,37 @@ def test_provider_error_message_redacts_sent_secrets():
     assert message == "auth failed for [REDACTED] (host [REDACTED]) with key [REDACTED]; see docs"
 
 
+def test_provider_error_message_redacts_sent_endpoint_with_query():
+    body = json.dumps(
+        {
+            "error": {
+                "message": "forwarding failed for "
+                "https://gateway.invalid/v1/chat/completions?trace=abc"
+            }
+        }
+    )
+
+    message = openai_compatible_module._provider_error_message(
+        body, ("https://gateway.invalid/v1/chat/completions?trace=abc",)
+    )
+
+    assert message == "forwarding failed for [REDACTED]"
+
+
+def test_provider_error_message_redacts_key_shaped_tokens():
+    body = json.dumps(
+        {
+            "error": {
+                "message": "upstream rejected sk-gw-0123456789abcdef1234 for quota"
+            }
+        }
+    )
+
+    message = openai_compatible_module._provider_error_message(body, ())
+
+    assert message == "upstream rejected [REDACTED] for quota"
+
+
 def test_provider_error_message_redacts_before_truncation():
     body = json.dumps(
         {"error": {"message": "prefix " + "y" * 520 + " sk-live-secret-2 tail"}}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from typing import Annotated, Literal, TypedDict
 
@@ -24,6 +25,7 @@ from pygent import (
     ToolSpec,
     tool,
 )
+from pygent.llm._tool_schema import flatten_nullable_any_of
 from pygent.runtime import (
     LocalRuntime,
     compile_execution_plan,
@@ -706,3 +708,31 @@ def test_wait_timeouts_apply_to_adopted_mcp_specs() -> None:
     assert toolkit.specs[0].wait_timeout == 2.5
     with pytest.raises(ValueError, match="unknown tool wait configuration"):
         ToolKit(make_mcp_tool(), wait_timeouts={"missing": 1.0})
+
+
+@pytest.mark.asyncio
+async def test_explicit_null_argument_executes_despite_flattened_wire_schema() -> None:
+    """The wire projection flattens anyOf: [T, null], but argument validation
+    runs against the original Pydantic model — explicit null still executes."""
+
+    @tool(tool_id="probe.nullable", version="1", side_effect=ToolSideEffect.READ)
+    async def probe(x: str | None = None) -> str:
+        """Probe nullable argument handling."""
+
+        return "null" if x is None else f"value:{x}"
+
+    toolkit = ToolKit(probe)
+    wire = flatten_nullable_any_of(toolkit.definitions[0].parameters.to_dict())
+    assert "anyOf" not in json.dumps(wire)
+
+    context = toolkit.make_visible_in(Context())
+    message, _ = await toolkit.local_layer(authorization_adapter=allow).invoke(
+        AIMessage(
+            tool_calls=(
+                ToolCall(call_id="probe-null", name="probe", arguments={"x": None}),
+            )
+        ),
+        context,
+    )
+
+    assert message.results[0].status == "succeeded"
