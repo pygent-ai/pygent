@@ -38,6 +38,7 @@ from .types import (
 )
 
 if TYPE_CHECKING:
+    from .mcp.pool import MCPClientPool
     from .standard import (
         BashTools,
         FileTools,
@@ -68,6 +69,8 @@ _STANDARD_EXPORTS = frozenset(
     }
 )
 
+_MCP_EXPORTS = frozenset({"MCPClientPool"})
+
 
 def __getattr__(name: str) -> object:
     if name in _STANDARD_EXPORTS:
@@ -76,6 +79,11 @@ def __getattr__(name: str) -> object:
         value = getattr(standard, name)
         globals()[name] = value
         return value
+    if name in _MCP_EXPORTS:
+        from .mcp.pool import MCPClientPool
+
+        globals()[name] = MCPClientPool
+        return MCPClientPool
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -87,6 +95,7 @@ __all__ = [
     "IdempotencyPolicy",
     "InMemoryToolTaskManager",
     "LocalToolExecutor",
+    "MCPClientPool",
     "MediaBlock",
     "MediaSource",
     "PowerShellTools",

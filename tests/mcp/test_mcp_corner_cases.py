@@ -185,6 +185,109 @@ async def test_mcp_error_and_transport_failure_are_classified() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_remote_error_includes_server_error_text() -> None:
+    spec = (
+        await discover_mcp_tools(FakeTransport(PaginatedSession()), namespace="test")
+    )[0]
+    call = ToolCall("mcp", "read", {})
+
+    class ErrorSession:
+        async def call_tool(self, _name, *, arguments):
+            return SimpleNamespace(
+                is_error=True,
+                content=(
+                    mcp_types.TextContent(
+                        type="text", text="Error: Browser extension not connected"
+                    ),
+                ),
+            )
+
+    with pytest.raises(ToolExecutionError) as raised:
+        await MCPToolExecutor(FakeTransport(ErrorSession())).execute(
+            spec, call, ToolExecutionContext()
+        )
+    assert raised.value.code == "mcp_tool_error"
+    assert "Browser extension not connected" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_mcp_remote_error_counts_non_text_blocks() -> None:
+    spec = (
+        await discover_mcp_tools(FakeTransport(PaginatedSession()), namespace="test")
+    )[0]
+    call = ToolCall("mcp", "read", {})
+
+    class MixedErrorSession:
+        async def call_tool(self, _name, *, arguments):
+            return SimpleNamespace(
+                is_error=True,
+                content=(
+                    mcp_types.TextContent(type="text", text="partial failure"),
+                    mcp_types.ImageContent(
+                        type="image", data="aGk=", mimeType="image/png"
+                    ),
+                ),
+            )
+
+    with pytest.raises(ToolExecutionError) as raised:
+        await MCPToolExecutor(FakeTransport(MixedErrorSession())).execute(
+            spec, call, ToolExecutionContext()
+        )
+    assert "partial failure" in str(raised.value)
+    assert "[1 non-text content block(s) omitted]" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_mcp_remote_error_with_only_non_text_blocks_still_reports_count() -> None:
+    spec = (
+        await discover_mcp_tools(FakeTransport(PaginatedSession()), namespace="test")
+    )[0]
+    call = ToolCall("mcp", "read", {})
+
+    class ImageOnlyErrorSession:
+        async def call_tool(self, _name, *, arguments):
+            return SimpleNamespace(
+                is_error=True,
+                content=(
+                    mcp_types.ImageContent(
+                        type="image", data="aGk=", mimeType="image/png"
+                    ),
+                ),
+            )
+
+    with pytest.raises(ToolExecutionError) as raised:
+        await MCPToolExecutor(FakeTransport(ImageOnlyErrorSession())).execute(
+            spec, call, ToolExecutionContext()
+        )
+    assert str(raised.value) == (
+        "MCP tool reported an error: [1 non-text content block(s) omitted]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_remote_error_detail_is_bounded_with_marker() -> None:
+    spec = (
+        await discover_mcp_tools(FakeTransport(PaginatedSession()), namespace="test")
+    )[0]
+    call = ToolCall("mcp", "read", {})
+
+    class LongErrorSession:
+        async def call_tool(self, _name, *, arguments):
+            return SimpleNamespace(
+                is_error=True,
+                content=(mcp_types.TextContent(type="text", text="x" * 5000),),
+            )
+
+    with pytest.raises(ToolExecutionError) as raised:
+        await MCPToolExecutor(FakeTransport(LongErrorSession())).execute(
+            spec, call, ToolExecutionContext()
+        )
+    message = str(raised.value)
+    assert message.endswith("...")
+    assert len(message) < 2100
+
+
+@pytest.mark.asyncio
 async def test_registration_is_versioned_and_collision_safe() -> None:
     specs = await discover_mcp_tools(
         FakeTransport(PaginatedSession()), namespace="test"

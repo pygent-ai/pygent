@@ -21,6 +21,7 @@ from pygent import (
     ToolResultJson,
     ToolResultText,
     ToolSideEffect,
+    ToolSpec,
     tool,
 )
 from pygent.runtime import (
@@ -28,6 +29,7 @@ from pygent.runtime import (
     compile_execution_plan,
 )
 from pygent.tool import ExecutorRegistry, LocalToolExecutor, SandboxExecutorSupport
+from pygent.tool.mcp.pool import MCPTool
 
 
 def allow(request, _context):
@@ -576,3 +578,131 @@ async def test_managed_runtime_executes_toolkit_registry() -> None:
     assert message.results[0].status == "succeeded"
     assert message.results[0].output == 6
     await runtime.close()
+
+
+class FakeMCPExecutor:
+    def __init__(self) -> None:
+        self.calls: list[ToolCall] = []
+
+    async def execute(self, spec, call, context):
+        self.calls.append(call)
+        return {"echo": dict(call.arguments)}
+
+
+def make_mcp_tool(*, name="double", tool_id="mcp.a.double", version="1-x") -> MCPTool:
+    return MCPTool(
+        server="a",
+        name=name,
+        spec=ToolSpec(
+            tool_id=tool_id,
+            version=version,
+            definition=ToolDefinition(
+                name=name,
+                description="MCP double tool.",
+                parameters={
+                    "type": "object",
+                    "properties": {"value": {"type": "integer"}},
+                    "required": ["value"],
+                },
+            ),
+            side_effect=ToolSideEffect.READ,
+        ),
+        executor=FakeMCPExecutor(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_hybrid_toolkit_mixes_python_and_mcp_tools() -> None:
+    @tool(tool_id="local.add", version="1", side_effect=ToolSideEffect.PURE)
+    def add(left: int, right: int = 1) -> int:
+        """Add two integers."""
+
+        return left + right
+
+    mcp_value = make_mcp_tool()
+    toolkit = ToolKit(add, mcp_value)
+
+    assert [item.name for item in toolkit.definitions] == ["add", "double"]
+    assert [item.tool_id for item in toolkit.specs] == ["local.add", "mcp.a.double"]
+    assert toolkit.specs[1] is mcp_value.spec
+
+    registry = toolkit.build_registry()
+    assert registry.resolve("mcp.a.double", "1-x") is mcp_value.executor
+    assert isinstance(registry.resolve("local.add", "1"), LocalToolExecutor)
+
+    layer = toolkit.local_layer(authorization_adapter=allow)
+    message, _ = await layer.invoke(
+        AIMessage(
+            tool_calls=(
+                ToolCall("mcp-1", "double", {"value": 4}),
+                ToolCall("local-1", "add", {"left": 2}),
+            )
+        ),
+        toolkit.make_visible_in(Context()),
+    )
+    assert [result.status for result in message.results] == ["succeeded", "succeeded"]
+    assert message.results[0].output.to_dict() == {"echo": {"value": 4}}
+    assert message.results[1].output == 3
+
+
+def test_managed_registration_keeps_mcp_executor_unwrapped() -> None:
+    @tool(tool_id="local.square", version="1", side_effect=ToolSideEffect.PURE)
+    def square(value: int) -> int:
+        """Square one value."""
+
+        return value * value
+
+    mcp_value = make_mcp_tool()
+    factory_calls: list[str] = []
+
+    def factory(spec, handler):
+        factory_calls.append(spec.tool_id)
+        return LocalToolExecutor(handler)
+
+    registry = ExecutorRegistry()
+    runtime = LocalRuntime()
+    runtime.attach_executor_registry(registry)
+    ToolKit(square, mcp_value).register_into_runtime(
+        runtime,
+        executor_factory=factory,
+    )
+
+    assert factory_calls == ["local.square"]
+    assert registry.resolve("mcp.a.double", "1-x") is mcp_value.executor
+
+
+def test_hybrid_toolkit_rejects_duplicate_name_and_identity() -> None:
+    @tool(
+        tool_id="local.clash",
+        version="1",
+        side_effect=ToolSideEffect.PURE,
+        name="double",
+    )
+    def name_clash(value: int) -> int:
+        """Clash on the model-visible name."""
+
+        return value
+
+    with pytest.raises(ValueError, match="duplicate model-visible"):
+        ToolKit(name_clash, make_mcp_tool(name="double"))
+
+    @tool(
+        tool_id="mcp.a.double",
+        version="1-x",
+        side_effect=ToolSideEffect.PURE,
+        name="distinct",
+    )
+    def identity_clash(value: int) -> int:
+        """Clash on the tool identity."""
+
+        return value
+
+    with pytest.raises(ValueError, match=r"duplicate \(tool_id, version\)"):
+        ToolKit(identity_clash, make_mcp_tool(name="double"))
+
+
+def test_wait_timeouts_apply_to_adopted_mcp_specs() -> None:
+    toolkit = ToolKit(make_mcp_tool(), wait_timeouts={"double": 2.5})
+    assert toolkit.specs[0].wait_timeout == 2.5
+    with pytest.raises(ValueError, match="unknown tool wait configuration"):
+        ToolKit(make_mcp_tool(), wait_timeouts={"missing": 1.0})

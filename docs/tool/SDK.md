@@ -450,6 +450,82 @@ message: shell.command@1 requires tool.sandbox.workspace-write
 
 Direct execution 可以继续显式传入同一个外部 executor，但没有 managed capability 派生、跨 Root 容量或 durable recovery。调用方必须确保 adapter 真正实施所声明的隔离，并负责 provider session 的拥有、取消、join 和关闭。框架可以提供基于 command/file 最小接口的标准工具便捷 adapter，但该 helper 必须建立在 `ToolExecutor` 之上，不能成为接入外部沙箱的强制协议。
 
+## MCP 工具与连接池
+
+MCP Server 接入不形成第二套 Tool API：部署侧用 `MCPClientPool` 为每个 Server 维持一条常驻活跃会话（stdio 下为常驻子进程），经 `tools/list` 发现工具并映射为现有 `ToolSpec`，执行实现复用 `ToolExecutor` 协议与 Runtime 注册接口。连接池不绑定 Runtime、不管理 Session 状态；活连接、凭据和池状态只留在部署侧，不进入 `ToolSpec`、Context、Module 或 ExecutionPlan。
+
+### 部署注册
+
+```python
+from pygent import Context, ToolAuthorizationDecision, ToolKit, tool
+from pygent.runtime import LocalRuntime
+from pygent.tool import MCPClientPool, MCPStdioTransport
+
+
+servers = {
+    "github": MCPStdioTransport("github-mcp-server", args=("--token", "...")),
+    "search": MCPStdioTransport("search-mcp-server"),
+}
+pool = MCPClientPool(servers=servers, max_concurrency={"search": 1})
+await pool.connect()
+
+# MCP 工具使用现有 Runtime 注册接口注册执行器，只注册一次。
+runtime.register_tools(pool.executors())
+
+
+@tool(tool_id="local.calculate", version="1", side_effect=ToolSideEffect.PURE)
+def calculate(expression: str) -> str:
+    """计算一个表达式。"""
+
+    return expression
+
+
+python_toolkit = ToolKit(calculate)
+python_toolkit.register_into_runtime(runtime, executor_factory=executor_factory)
+```
+
+`pool.executors()` 返回 `tuple[tuple[ToolSpec, ToolExecutor], ...]`，不引入新的公共注册对象；连接池不提供 `bind(runtime)`。工具身份为 `<namespace>.<server>.<remote tool name>@<version>`：version 在配置基值上附加稳定契约指纹，定义未变时身份保持稳定，定义变化不会静默复用旧版本，需要按新版本重新注册执行器并重新装配。不同 Server 暴露同名工具时，模型可见名称确定性地加 Server 前缀（如 `github.get_file`），唯一名称保持原名。`max_concurrency` 按 Server 用信号量限制并发调用，保护不接受并行请求的 Server；默认经 JSON-RPC 多路复用不限并发。`MCPTool` 是连接池的内部装配对象（`server`、`name`、`spec`、`executor`），不是公共导出，也不进入 Module 状态。
+
+### Session 选择
+
+Session 阶段只选择工具声明，不重复向 Runtime 注册执行器：
+
+```python
+toolkit = ToolKit(
+    calculate,
+    *pool.tools(
+        servers=session.enabled_mcp_servers,
+        filter=session.mcp_tool_filter,
+    ),
+)
+
+model_layer = ModelCallLayer(
+    model_group=model_group,
+    retry_policy=retry_policy,
+    generation=generation,
+    tools=toolkit.definitions,
+)
+
+tool_layer = ToolCallLayer(
+    tools=toolkit.specs,
+    authorization=authorization,
+)
+
+agent = ReActLayer(model=model_layer, tools=tool_layer)
+context = toolkit.make_visible_in(Context())
+```
+
+`pool.tools(servers=None, names=None, filter=None)` 返回当前发现目录的固定快照：三个参数取交集，`None` 表示不限制，空列表表示选择空集；`names` 匹配远程 MCP 工具名（`MCPTool.name`），不是重命名后的模型可见名。`filter` 在装配时运行。一次装配得到的工具集合固定；Session 配置变化后由应用重新构造 `ToolKit` 和 Agent，不修改已运行 Execution 的声明。多个 Session 共享同一连接池与 Runtime，各自 `tools()` 选择得到互不相同的可见集合。
+
+### 会话生命周期
+
+- MCP 执行经池内活会话多路复用，不按调用冷连接拉起子进程；`MCPStdioTransport` 保留为无池单次用法后备（子进程生命周期限于单次操作）。
+- 断线采用懒重连：下一次调用触发重连并重新 `initialize`，重连失败抛出可重试的 transport 错误；重连后刷新工具目录，但不静默更改已注册声明。
+- `pool.refresh()` 重新执行 `tools/list` 并重建快照；已装配的 ToolKit 与运行中的 Execution 不受影响。刷新不写入 Runtime：新增或新版本的工具要先注册其 `(ToolSpec, ToolExecutor)` 才能执行，再为新 Session 重新装配 `ToolKit` 与 `ToolCallLayer`。
+- `await pool.aclose()` 先 join 在途调用再关闭会话，对齐 `DefaultModelInvoker.aclose()` 的严格关闭语义；关闭后的调用按可重试 transport 错误返回。
+
+筛选只影响工具可见性；工具调用仍走现有授权与执行机制，工具可见性不等于执行授权。
+
 ## 自定义授权 Module
 
 授权 Module 接收包含 ToolCall、已解析 ToolSpec 与请求事实的不可变 `ToolAuthorizationRequest`，返回 `ToolAuthorizationDecision`。决定至少包含原 `call_id`、`allowed`、稳定 `reason_code` 与由应用选择的 `lifecycle`（`"sync"` 或 `"detach"`）。模型提供的 ToolCall 参数不得设置或覆盖 lifecycle。

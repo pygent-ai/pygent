@@ -1,9 +1,16 @@
-"""MCP stdio adapter implementing the common ToolExecutor protocol."""
+"""MCP stdio adapter implementing the common ToolExecutor protocol.
+
+``MCPStdioTransport`` is the no-pool, single-use fallback: its subprocess
+lifetime is scoped to one operation. Deployment paths that call tools
+repeatedly should use :class:`~pygent.tool.mcp.pool.MCPClientPool`, whose
+connections implement the same ``MCPTransport`` protocol over one persistent
+session.
+"""
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -24,11 +31,23 @@ from ..types import (
 
 
 class MCPTransport(Protocol):
-    def session(self) -> Any: ...
+    """Source of one MCP ``ClientSession`` per entered context.
+
+    Implementations either cold-connect per entered context (the stdio
+    fallback) or yield an already-live pooled session; executors and
+    discovery only rely on the protocol.
+    """
+
+    def session(self) -> AbstractAsyncContextManager[Any]: ...
 
 
 class MCPStdioTransport:
-    """Cold-connect stdio transport; subprocess lifetime is scoped to one operation."""
+    """Cold-connect stdio transport; subprocess lifetime is scoped to one operation.
+
+    Kept as the no-pool single-use fallback; prefer ``MCPClientPool`` when the
+    same server is called repeatedly, so one persistent session serves every
+    call.
+    """
 
     def __init__(
         self,
@@ -55,6 +74,26 @@ class MCPStdioTransport:
         ):
             await session.initialize()
             yield session
+
+
+_REMOTE_ERROR_DETAIL_LIMIT = 2000
+
+
+def _remote_error_detail(content: Sequence[Any]) -> str:
+    """Server-reported error text is actionable; keep it bounded before projecting.
+
+    Non-text blocks are summarized as a count instead of being dropped silently.
+    """
+
+    text_blocks = [item.text for item in content if getattr(item, "text", None)]
+    detail = "\n".join(text_blocks).strip()
+    if len(detail) > _REMOTE_ERROR_DETAIL_LIMIT:
+        detail = detail[:_REMOTE_ERROR_DETAIL_LIMIT].rstrip() + "..."
+    omitted = len(content) - len(text_blocks)
+    if omitted:
+        note = f"[{omitted} non-text content block(s) omitted]"
+        detail = f"{detail}\n{note}" if detail else note
+    return detail
 
 
 class MCPToolExecutor:
@@ -87,8 +126,12 @@ class MCPToolExecutor:
                 side_effect_committed=None,
             ) from exc
         if result.is_error:
+            detail = _remote_error_detail(result.content)
+            message = "MCP tool reported an error"
+            if detail:
+                message = f"{message}: {detail}"
             raise ToolExecutionError(
-                "MCP tool reported an error",
+                message,
                 kind="remote_error",
                 code="mcp_tool_error",
                 retryable=False,

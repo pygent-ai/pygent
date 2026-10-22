@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from functools import reduce
 from types import MethodType, UnionType
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Any,
     NotRequired,
@@ -53,6 +54,9 @@ from .types import (
 P = ParamSpec("P")
 R = TypeVar("R")
 _DECLARATION_ATTRIBUTE = "__pygent_tool_declaration__"
+
+if TYPE_CHECKING:
+    from .mcp.pool import MCPTool
 
 ToolExecutorFactory = Callable[[ToolSpec, ToolHandler], ToolExecutor]
 
@@ -115,6 +119,19 @@ class _CompiledTool:
         # ToolCallLayer owns the authoritative output-schema validation so that
         # invalid outputs retain its established ToolResult classification.
         return self.return_adapter.dump_python(value, mode="json", warnings="none")
+
+
+@dataclass(frozen=True, slots=True)
+class _ExternalTool:
+    """One externally executed tool adopted with its already-built executor.
+
+    MCP executors arrive fully constructed over a deployment-owned live
+    session; they must never be wrapped into a local executor, so assembly
+    keeps the compiled kinds distinguishable.
+    """
+
+    spec: ToolSpec
+    executor: ToolExecutor
 
 
 def tool(
@@ -194,10 +211,13 @@ def tool(
 
 
 class ToolKit:
-    """Deployment-local collection of decorated Python Tool callables.
+    """Deployment-local collection of decorated Python tools and MCP tools.
 
     A ToolKit is an assembly helper, not a portable Tool value. Only its
     ``definitions`` and ``specs`` projections belong in Context or Module state.
+    Python callables are compiled here; MCPTool values are adopted with the
+    portable spec and deployment executor they already carry, and model-visible
+    names plus ``(tool_id, version)`` identities are validated uniformly.
     """
 
     __slots__ = ("_compiled", "_definitions", "_specs")
@@ -207,10 +227,10 @@ class ToolKit:
 
     def __init__(
         self,
-        *handlers: Callable[..., object],
+        *handlers: Callable[..., object] | MCPTool,
         wait_timeouts: Mapping[str, float] | None = None,
     ) -> None:
-        compiled = tuple(_compile_tool(handler) for handler in handlers)
+        compiled = tuple(_prepare_tool(handler) for handler in handlers)
         if wait_timeouts:
             unknown = set(wait_timeouts) - {
                 item.spec.definition.name for item in compiled
@@ -261,6 +281,14 @@ class ToolKit:
         if not isinstance(registry, ExecutorRegistry):
             raise TypeError("registry must be an ExecutorRegistry")
         for item in self._compiled:
+            if isinstance(item, _ExternalTool):
+                registry.register(
+                    item.spec.tool_id,
+                    item.spec.version,
+                    item.executor,
+                    replace_existing=replace_existing,
+                )
+                continue
             registry.register(
                 item.spec.tool_id,
                 item.spec.version,
@@ -290,7 +318,8 @@ class ToolKit:
         owners = [
             getattr(item.handler, "__self__", None)
             for item in self._compiled
-            if item.spec.wait_timeout is not None or item.task_control
+            if isinstance(item, _CompiledTool)
+            and (item.spec.wait_timeout is not None or item.task_control)
         ]
         managers = [getattr(owner, "task_manager", None) for owner in owners]
         managers = [manager for manager in managers if manager is not None]
@@ -326,12 +355,7 @@ class ToolKit:
         if not callable(executor_factory):
             raise TypeError("executor_factory must be callable")
         registrations = tuple(
-            (
-                item.spec,
-                ToolTaskControlExecutor(executor_factory(item.spec, item.invoke))
-                if item.task_control
-                else executor_factory(item.spec, item.invoke),
-            )
+            (item.spec, _deployment_executor(item, executor_factory))
             for item in self._compiled
         )
         register_tools(
@@ -385,6 +409,32 @@ class ToolKit:
         if not additions:
             return context
         return replace(context, tools=context.tools + tuple(additions))
+
+
+def _prepare_tool(
+    handler: Callable[..., object] | MCPTool,
+) -> _CompiledTool | _ExternalTool:
+    """Compile a Python handler or adopt one externally executed MCP tool."""
+
+    # Imported lazily so importing pygent.tool stays free of the MCP stack.
+    from .mcp.pool import MCPTool
+
+    if isinstance(handler, MCPTool):
+        return _ExternalTool(spec=handler.spec, executor=handler.executor)
+    return _compile_tool(handler)
+
+
+def _deployment_executor(
+    item: _CompiledTool | _ExternalTool,
+    executor_factory: ToolExecutorFactory,
+) -> ToolExecutor:
+    """Build the managed executor for one compiled or external tool."""
+
+    if isinstance(item, _ExternalTool):
+        return item.executor
+    if item.task_control:
+        return ToolTaskControlExecutor(executor_factory(item.spec, item.invoke))
+    return executor_factory(item.spec, item.invoke)
 
 
 def _compile_tool(handler: Callable[..., object]) -> _CompiledTool:
