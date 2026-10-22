@@ -4,9 +4,11 @@ import asyncio
 import hashlib
 import json
 from dataclasses import replace
+from typing import Annotated
 
 import httpx
 import pytest
+from pydantic import ConfigDict, Field, create_model
 
 from pygent import (
     AIMessage,
@@ -26,6 +28,8 @@ from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import (
     GenerationConfig,
     MediaTransportCapabilities,
+    ModelAttempt,
+    ModelCallError,
     ModelEntry,
     ModelErrorKind,
     ModelFailureReason,
@@ -1407,6 +1411,225 @@ def test_deployment_static_projections_are_reused_without_sharing_public_mutatio
     assert second["response_format"]["json_schema"]["name"] == "response"
     assert openai_compatible_module._tool_projection.cache_info().hits == 1
     assert openai_compatible_module._response_format_projection.cache_info().hits == 1
+
+
+def _wire_parameters(tool: ToolDefinition) -> dict[str, object]:
+    openai_compatible_module._tool_projection.cache_clear()
+    payload = OpenAICompatibleAdapter().build_request(_request(tools=(tool,))).to_dict()
+    return payload["tools"][0]["function"]["parameters"]
+
+
+def test_tool_wire_schema_flattens_pydantic_optional_fields():
+    model = create_model(
+        "BashArguments",
+        __config__=ConfigDict(extra="forbid"),
+        command=(str, ...),
+        working_directory=(str | None, None),
+        timeout=(Annotated[float | None, Field(ge=0)], None),
+    )
+    tool = ToolDefinition(
+        name="bash",
+        description="run a command",
+        parameters=model.model_json_schema(mode="validation"),
+    )
+
+    parameters = _wire_parameters(tool)
+
+    # Gemini-class functionDeclaration validators reject anyOf nodes without an
+    # explicit type; Optional[T] must not reach the wire as anyOf: [T, null].
+    assert "anyOf" not in json.dumps(parameters)
+    properties = parameters["properties"]
+    assert properties["working_directory"] == {
+        "default": None,
+        "title": "Working Directory",
+        "type": "string",
+    }
+    assert properties["timeout"] == {
+        "default": None,
+        "minimum": 0,
+        "title": "Timeout",
+        "type": "number",
+    }
+    assert properties["command"]["type"] == "string"
+    assert parameters["required"] == ["command"]
+
+
+def test_tool_projection_flattens_nullable_any_of_inside_nested_nodes():
+    tool = ToolDefinition(
+        name="scan",
+        description="scan",
+        parameters={
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "items": {
+                        "anyOf": [{"type": "string"}, {"type": "null"}],
+                        "default": None,
+                    },
+                },
+            },
+        },
+    )
+
+    parameters = _wire_parameters(tool)
+
+    assert parameters["properties"]["paths"]["items"] == {
+        "type": "string",
+        "default": None,
+    }
+
+
+def test_tool_projection_preserves_any_of_it_cannot_rewrite():
+    tool = ToolDefinition(
+        name="flex",
+        description="flex",
+        parameters={
+            "type": "object",
+            "properties": {
+                "union": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+                "enum_branch": {"anyOf": [{"enum": ["a", "b"]}, {"type": "null"}]},
+                "three_branches": {
+                    "anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}]
+                },
+            },
+        },
+    )
+
+    parameters = _wire_parameters(tool)
+
+    assert parameters["properties"] == {
+        "union": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+        "enum_branch": {"anyOf": [{"enum": ["a", "b"]}, {"type": "null"}]},
+        "three_branches": {
+            "anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}]
+        },
+    }
+
+
+def test_provider_status_error_extracts_provider_message_for_run_events():
+    body = json.dumps(
+        {
+            "error": {
+                "message": "Unable to submit request because `bash` functionDeclaration "
+                "`parameters.working_directory` schema didn't specify the schema type "
+                "field.",
+                "type": "upstream_error",
+                "code": 400,
+            }
+        }
+    )
+
+    error = openai_compatible_module._provider_status_error(400, body)
+
+    assert error.kind is ModelErrorKind.INVALID_REQUEST
+    assert error.reason_code is ModelFailureReason.INVALID_PARAMETER
+    assert error.http_status == 400
+    assert error.provider_message is not None
+    assert "didn't specify the schema type field" in error.provider_message
+
+
+def test_provider_error_message_ignores_non_diagnostic_bodies():
+    assert openai_compatible_module._provider_error_message(None) is None
+    assert openai_compatible_module._provider_error_message(b"not json") is None
+    assert openai_compatible_module._provider_error_message("") is None
+    assert (
+        openai_compatible_module._provider_error_message('{"error": {"message": 42}}')
+        is None
+    )
+    assert openai_compatible_module._provider_error_message('{"error": {}}') is None
+    assert openai_compatible_module._provider_error_message('{"error": {"message": "  "}}') is None
+
+
+def test_provider_error_message_is_truncated():
+    body = json.dumps({"error": {"message": "x" * 600}})
+
+    message = openai_compatible_module._provider_error_message(body)
+
+    assert message is not None
+    assert len(message) == 512
+
+
+def test_provider_error_message_redacts_sent_secrets():
+    body = json.dumps(
+        {
+            "error": {
+                "message": "auth failed for https://gateway.invalid/v1 "
+                "(host gateway.invalid) with key sk-live-secret-1; see docs"
+            }
+        }
+    )
+
+    message = openai_compatible_module._provider_error_message(
+        body,
+        ("https://gateway.invalid/v1", "gateway.invalid", "sk-live-secret-1"),
+    )
+
+    assert message == "auth failed for [REDACTED] (host [REDACTED]) with key [REDACTED]; see docs"
+
+
+def test_provider_error_message_redacts_before_truncation():
+    body = json.dumps(
+        {"error": {"message": "prefix " + "y" * 520 + " sk-live-secret-2 tail"}}
+    )
+
+    message = openai_compatible_module._provider_error_message(
+        body, ("sk-live-secret-2",)
+    )
+
+    assert message is not None
+    assert len(message) == 512
+    assert "sk-live-secret-2" not in message
+
+
+def test_provider_status_error_redacts_provider_message():
+    body = json.dumps(
+        {
+            "error": {
+                "message": "bad key sk-live-secret-3 at https://gw.invalid/v1",
+                "type": "upstream_error",
+            }
+        }
+    )
+
+    error = openai_compatible_module._provider_status_error(
+        400, body, ("sk-live-secret-3", "https://gw.invalid/v1")
+    )
+
+    assert error.provider_message == "bad key [REDACTED] at [REDACTED]"
+    assert "sk-live-secret-3" not in (error.provider_message or "")
+
+
+def test_attempt_rejects_provider_message_on_non_failed_attempt():
+    with pytest.raises(ValueError, match="only failed model attempts"):
+        ModelAttempt(
+            "model-6",
+            "succeeded",
+            provider_message="unexpected",
+        )
+
+
+def test_model_attempt_persists_provider_message_through_model_call_error():
+    attempt = ModelAttempt(
+        "model-6",
+        "failed",
+        ModelErrorKind.INVALID_REQUEST,
+        attempt=1,
+        reason_code=ModelFailureReason.INVALID_PARAMETER,
+        http_status=400,
+        provider_message="schema type field missing",
+    )
+    error = ModelCallError(
+        "terminal",
+        kind=ModelErrorKind.INVALID_REQUEST,
+        attempts=(attempt,),
+    )
+
+    stored = error.failure.details["attempts"][0]
+    assert stored["provider_message"] == "schema type field missing"
+
+    restored = ModelCallError.from_failure(error.failure)
+    assert restored.attempts[0].provider_message == "schema type field missing"
 
 
 def test_portable_tool_name_and_named_choice_round_trip_through_wire_mapping():

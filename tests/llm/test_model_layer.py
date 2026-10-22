@@ -441,8 +441,11 @@ async def test_raw_provider_fields_do_not_leak_to_message_context_or_events() ->
 async def test_provider_errors_are_sanitized_for_invoke_stream_and_run_events() -> None:
     secret = "synthetic-api-key-canary"
     endpoint = "https://synthetic-endpoint.invalid/private"
-    internal = "provider-internal-stack-canary"
-    canaries = (secret, endpoint, internal)
+    provider_detail = "provider-internal-stack-canary"
+    # Recalibrated contract: credentials this client sent must never reach any
+    # persisted surface (they are redacted out of provider messages); bounded
+    # non-credential provider diagnostics survive for postmortem.
+    canaries = (secret, endpoint)
     calls = 0
 
     async def handler(_request: httpx.Request) -> httpx.Response:
@@ -454,11 +457,11 @@ async def test_provider_errors_are_sanitized_for_invoke_stream_and_run_events() 
                 json={
                     "error": {
                         "code": "insufficient_quota",
-                        "message": f"raw body {secret} {endpoint} {internal}",
+                        "message": f"raw body {secret} {endpoint} {provider_detail}",
                     }
                 },
             )
-        raise RuntimeError(f"transport exploded: {secret} {endpoint} {internal}")
+        raise RuntimeError(f"transport exploded: {secret} {endpoint} {provider_detail}")
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     provider_client = OpenAICompatibleClient(
@@ -528,6 +531,14 @@ async def test_provider_errors_are_sanitized_for_invoke_stream_and_run_events() 
         first_attempt = error.attempts[0]
         assert first_attempt.reason_code is ModelFailureReason.QUOTA_EXHAUSTED
         assert first_attempt.http_status == 429
+        # Redacted provider diagnostics are persisted for postmortem.
+        assert first_attempt.provider_message == (
+            f"raw body [REDACTED] [REDACTED] {provider_detail}"
+        )
+        stored = error.failure.details["attempts"][0]
+        assert stored["provider_message"] == (
+            f"raw body [REDACTED] [REDACTED] {provider_detail}"
+        )
     assert [
         event.kind for event in streamed_events if event.kind.startswith("model.")
     ] == [

@@ -9,9 +9,10 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from functools import lru_cache
 from typing import Self, cast
+from urllib.parse import urlsplit
 
 import httpx
 import jsonschema  # type: ignore[import-untyped]
@@ -69,6 +70,7 @@ from .types import (
 
 _OPENAI_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _MAX_PROVIDER_ERROR_BYTES = 64 * 1024
+_MAX_PROVIDER_ERROR_MESSAGE_CHARS = 512
 _PROVIDER_ERROR_REASONS = {
     "authentication_error": ModelFailureReason.AUTHENTICATION_FAILED,
     "invalid_api_key": ModelFailureReason.AUTHENTICATION_FAILED,
@@ -233,6 +235,13 @@ class OpenAICompatibleClient:
             trust_env_url=api_root,
         )
         self._models: ModelCatalog = _OpenAICompatibleModelCatalog(self)
+        # Values this client sent to the provider; provider error bodies are
+        # untrusted and may echo them, so they are redacted before any error
+        # text is kept.
+        secrets = [base_url, urlsplit(base_url).hostname or "", api_key or ""]
+        self._sent_secrets: tuple[str, ...] = tuple(
+            secret for secret in secrets if secret
+        )
 
     @property
     def models(self) -> ModelCatalog:
@@ -248,7 +257,7 @@ class OpenAICompatibleClient:
                 "POST", self._endpoint, payload.to_dict()
             )
         except _HTTPResponseError as exc:
-            raise _provider_status_error(exc.status, exc.body) from None
+            raise _provider_status_error(exc.status, exc.body, self._sent_secrets) from None
         except (TypeError, ValueError) as exc:
             raise ModelProviderError(
                 ModelErrorKind.INVALID_RESPONSE,
@@ -289,7 +298,7 @@ class OpenAICompatibleClient:
                     )
                 yield freeze_json_object(cast(Mapping[str, object], item))
         except _HTTPResponseError as exc:
-            raise _provider_status_error(exc.status, exc.body) from None
+            raise _provider_status_error(exc.status, exc.body, self._sent_secrets) from None
 
     async def aclose(self) -> None:
         await self._transport.aclose()
@@ -310,7 +319,7 @@ class OpenAICompatibleClient:
         except asyncio.CancelledError:
             raise
         except _HTTPResponseError as exc:
-            raise _provider_status_error(exc.status, exc.body) from None
+            raise _provider_status_error(exc.status, exc.body, self._sent_secrets) from None
         except (TypeError, ValueError) as exc:
             raise ModelProviderError(
                 ModelErrorKind.INVALID_RESPONSE,
@@ -945,8 +954,51 @@ def _wire_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def _redact_secrets(message: str, sent_secrets: Sequence[str]) -> str:
+    for secret in sent_secrets:
+        if secret and secret in message:
+            message = message.replace(secret, "[REDACTED]")
+    return message
+
+
+def _provider_error_message(
+    raw_body: str | bytes | None, sent_secrets: Sequence[str] = ()
+) -> str | None:
+    """Extract the provider's field-level diagnostic, e.g. Gemini's
+    ``...functionDeclaration parameters.working_directory schema didn't
+    specify the schema type field``, so it survives into run events. Values
+    the client sent (credentials, endpoint) are redacted before the text is
+    kept; redaction runs before truncation so no secret straddles the cap."""
+
+    if not raw_body:
+        return None
+    body_bytes = (
+        raw_body.encode("utf-8", errors="replace")
+        if isinstance(raw_body, str)
+        else raw_body
+    )[:_MAX_PROVIDER_ERROR_BYTES]
+    try:
+        payload = json.loads(body_bytes)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, Mapping):
+        return None
+    message = error.get("message")
+    if not isinstance(message, str):
+        return None
+    message = _redact_secrets(message.strip(), sent_secrets)
+    if not message:
+        return None
+    return message[:_MAX_PROVIDER_ERROR_MESSAGE_CHARS]
+
+
 def _provider_status_error(
-    status: int, raw_body: str | bytes | None
+    status: int,
+    raw_body: str | bytes | None,
+    sent_secrets: Sequence[str] = (),
 ) -> ModelProviderError:
     kind = _kind_for_http_status(status)
     reason = _reason_for_provider_failure(status, raw_body)
@@ -955,6 +1007,7 @@ def _provider_status_error(
         f"model provider request failed: {reason.value}",
         reason_code=reason,
         http_status=status,
+        provider_message=_provider_error_message(raw_body, sent_secrets),
     )
 
 
@@ -1484,6 +1537,43 @@ def _response_format_projection(
     }
 
 
+def _flatten_nullable_any_of(node: object) -> object:
+    """Flatten the Pydantic ``anyOf: [T, null]`` projection of ``Optional[T]``.
+
+    Gemini-class functionDeclaration validators require every schema node to
+    carry an explicit ``type`` and reject top-level ``anyOf`` nodes, so any
+    tools-carrying request failed against them. The non-null branch is inlined
+    while sibling keys (``default``/``title``/``description``) survive; any
+    other ``anyOf`` shape is left untouched because it cannot be rewritten
+    without guessing at its semantics.
+    """
+
+    if isinstance(node, dict):
+        branches = node.get("anyOf")
+        if (
+            isinstance(branches, list)
+            and len(branches) == 2
+            and all(
+                isinstance(branch, dict) and "type" in branch for branch in branches
+            )
+        ):
+            non_null = [branch for branch in branches if branch["type"] != "null"]
+            if len(non_null) == 1:
+                merged = {
+                    key: _flatten_nullable_any_of(value)
+                    for key, value in node.items()
+                    if key != "anyOf"
+                }
+                merged.update(
+                    cast(dict[str, object], _flatten_nullable_any_of(non_null[0]))
+                )
+                return merged
+        return {key: _flatten_nullable_any_of(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_flatten_nullable_any_of(item) for item in node]
+    return node
+
+
 @lru_cache(maxsize=512)
 def _tool_projection(tool: ToolDefinition, wire_name: str) -> dict[str, object]:
     return {
@@ -1491,7 +1581,12 @@ def _tool_projection(tool: ToolDefinition, wire_name: str) -> dict[str, object]:
         "function": {
             "name": wire_name,
             "description": tool.description,
-            "parameters": cast(FrozenJsonObject, tool.parameters).to_dict(),
+            "parameters": cast(
+                dict[str, object],
+                _flatten_nullable_any_of(
+                    cast(FrozenJsonObject, tool.parameters).to_dict()
+                ),
+            ),
         },
     }
 

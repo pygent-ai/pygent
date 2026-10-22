@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
+from typing import Annotated
 
 import httpx
 import pytest
+from pydantic import ConfigDict, Field, create_model
 
 from pygent import (
     AIMessage,
@@ -59,6 +62,37 @@ def _request(
 
 def test_builtin_protocol_has_precise_responses_identifier() -> None:
     assert BuiltinModelProtocol.OPENAI_RESPONSES == "openai_responses"
+
+
+def test_responses_tool_schema_flattens_pydantic_optional_fields():
+    model = create_model(
+        "BashArguments",
+        __config__=ConfigDict(extra="forbid"),
+        command=(str, ...),
+        working_directory=(str | None, None),
+        timeout=(Annotated[float | None, Field(ge=0)], None),
+    )
+    tool = ToolDefinition(
+        name="bash",
+        description="run",
+        parameters=model.model_json_schema(mode="validation"),
+    )
+
+    payload = OpenAIResponsesAdapter().build_request(_request(tools=(tool,))).to_dict()
+    parameters = payload["tools"][0]["parameters"]
+
+    assert "anyOf" not in json.dumps(parameters)
+    assert parameters["properties"]["working_directory"] == {
+        "default": None,
+        "title": "Working Directory",
+        "type": "string",
+    }
+    assert parameters["properties"]["timeout"] == {
+        "default": None,
+        "minimum": 0,
+        "title": "Timeout",
+        "type": "number",
+    }
 
 
 def test_responses_request_projects_input_tools_schema_and_reasoning() -> None:

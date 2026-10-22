@@ -416,6 +416,7 @@ class ModelAttempt:
     attempt: int = 1
     reason_code: ModelFailureReason | None = None
     http_status: int | None = None
+    provider_message: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.model_key, str) or not self.model_key:
@@ -436,12 +437,20 @@ class ModelAttempt:
             self.reason_code, ModelFailureReason
         ):
             raise TypeError("reason_code must be a ModelFailureReason or None")
+        if self.provider_message is not None and not isinstance(
+            self.provider_message, str
+        ):
+            raise TypeError("provider_message must be a str or None")
         if self.status == "failed" and self.error_kind is not None:
             if self.reason_code is None:
                 object.__setattr__(
                     self, "reason_code", _default_failure_reason(self.error_kind)
                 )
-        elif self.reason_code is not None or self.http_status is not None:
+        elif (
+            self.reason_code is not None
+            or self.http_status is not None
+            or self.provider_message is not None
+        ):
             raise ValueError("only failed model attempts may contain diagnostics")
         if self.http_status is not None and (
             not isinstance(self.http_status, int)
@@ -500,6 +509,7 @@ class ModelCallError(ExecutionFailureError):
                                 else attempt.reason_code.value
                             ),
                             "http_status": attempt.http_status,
+                            "provider_message": attempt.provider_message,
                         }
                         for attempt in self.attempts
                     ]
@@ -535,6 +545,7 @@ class ModelCallError(ExecutionFailureError):
                         else ModelFailureReason(cast(str, item.get("reason_code")))
                     ),
                     http_status=cast(int | None, item.get("http_status")),
+                    provider_message=cast(str | None, item.get("provider_message")),
                 )
             )
         return cls(
@@ -555,6 +566,7 @@ class ModelProviderError(RuntimeError):
         *,
         reason_code: ModelFailureReason | None = None,
         http_status: int | None = None,
+        provider_message: str | None = None,
     ) -> None:
         if not isinstance(kind, ModelErrorKind):
             raise TypeError("kind must be a ModelErrorKind")
@@ -566,10 +578,13 @@ class ModelProviderError(RuntimeError):
             or not 100 <= http_status <= 599
         ):
             raise ValueError("http_status must be an HTTP status integer")
+        if provider_message is not None and not isinstance(provider_message, str):
+            raise TypeError("provider_message must be a str or None")
         super().__init__(message)
         self.kind = kind
         self.reason_code = reason_code or _default_failure_reason(kind)
         self.http_status = http_status
+        self.provider_message = provider_message
 
 
 __all__ = [

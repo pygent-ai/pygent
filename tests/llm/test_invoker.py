@@ -30,6 +30,7 @@ from pygent.llm import (
     ExponentialBackoff,
     GenerationConfig,
     MediaTransportCapabilities,
+    ModelAttempt,
     ModelCallError,
     ModelErrorKind,
     ModelFailureReason,
@@ -2165,3 +2166,43 @@ async def test_invalid_tool_arguments_never_emit_model_completed():
         "model.attempt.failed",
         "model.failed",
     ]
+
+
+def test_terminal_failure_message_includes_provider_diagnostic():
+    attempt = ModelAttempt(
+        "model-6",
+        "failed",
+        ModelErrorKind.INVALID_REQUEST,
+        attempt=1,
+        reason_code=ModelFailureReason.INVALID_PARAMETER,
+        http_status=400,
+        provider_message=(
+            "Unable to submit request because `bash` functionDeclaration "
+            "`parameters.working_directory` schema didn't specify the schema type field."
+        ),
+    )
+
+    message = invoker_module._terminal_failure_message([attempt])
+
+    assert message.startswith(
+        "model stream failed after retry and fallback:"
+        " invalid_parameter (HTTP 400): Unable to submit request"
+    )
+    assert "didn't specify the schema type field" in message
+
+
+def test_safe_failure_diagnostics_carry_provider_message():
+    error = ModelProviderError(
+        ModelErrorKind.INVALID_REQUEST,
+        "model provider request failed: invalid_parameter",
+        reason_code=ModelFailureReason.INVALID_PARAMETER,
+        http_status=400,
+        provider_message="upstream diagnostic",
+    )
+
+    assert invoker_module._safe_failure_diagnostics(
+        error, ModelErrorKind.INVALID_REQUEST
+    ) == (ModelFailureReason.INVALID_PARAMETER, 400, "upstream diagnostic")
+    assert invoker_module._safe_failure_diagnostics(
+        error, ModelErrorKind.INVALID_RESPONSE
+    ) == (None, None, None)

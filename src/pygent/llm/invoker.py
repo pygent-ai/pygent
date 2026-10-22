@@ -649,7 +649,9 @@ class DefaultModelInvoker:
                 except Exception as exc:  # noqa: BLE001 - provider SPI boundary
                     kind = adapter.normalize_error(exc)
                     last_kind = kind
-                    reason_code, http_status = _safe_failure_diagnostics(exc, kind)
+                    reason_code, http_status, provider_message = (
+                        _safe_failure_diagnostics(exc, kind)
+                    )
                     attempts.append(
                         ModelAttempt(
                             model_key,
@@ -658,6 +660,7 @@ class DefaultModelInvoker:
                             attempt=number,
                             reason_code=reason_code,
                             http_status=http_status,
+                            provider_message=provider_message,
                         )
                     )
                     await _emit(
@@ -947,10 +950,10 @@ def _validate_model_for_request(
 
 def _safe_failure_diagnostics(
     error: BaseException, kind: ModelErrorKind
-) -> tuple[ModelFailureReason | None, int | None]:
+) -> tuple[ModelFailureReason | None, int | None, str | None]:
     if isinstance(error, ModelProviderError) and error.kind is kind:
-        return error.reason_code, error.http_status
-    return None, None
+        return error.reason_code, error.http_status, error.provider_message
+    return None, None, None
 
 
 def _terminal_failure_message(attempts: list[ModelAttempt]) -> str:
@@ -963,6 +966,8 @@ def _terminal_failure_message(attempts: list[ModelAttempt]) -> str:
     diagnostic = last.reason_code.value
     if last.http_status is not None:
         diagnostic += f" (HTTP {last.http_status})"
+    if last.provider_message:
+        diagnostic += f": {last.provider_message}"
     return f"{message}: {diagnostic}"
 
 
