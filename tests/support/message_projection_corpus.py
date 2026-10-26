@@ -8,15 +8,15 @@ test pins those outputs byte-for-byte; the refactor must keep them green.
 from __future__ import annotations
 
 import base64
+from typing import cast
 
 from pygent import UserMessage
 from pygent.core import (
     AIMessage,
-    Context,
+    JsonValue,
     Message,
     ModelContinuation,
     ToolMessage,
-    freeze_json_object,
 )
 from pygent.tool import (
     IdempotencyPolicy,
@@ -151,7 +151,7 @@ _MESSAGES: dict[str, Message] = {
                 call_id="call-1",
                 name="lookup",
                 status="succeeded",
-                output={"value": "ok"},
+                output=cast(JsonValue, {"value": "ok"}),
                 content=(_image_inline(),),
                 tool_id="tool-1",
                 tool_version="1.0.0",
@@ -210,12 +210,4 @@ _MESSAGES: dict[str, Message] = {
 
 CORPUS: dict[str, Message] = dict(_MESSAGES)
 
-CONTEXT_SAMPLES: dict[str, Context] = {
-    "sample": Context(
-        system_prompt="system",
-        messages=(CORPUS["user_plain"], CORPUS["ai_tool_calls_full"]),
-        metadata=freeze_json_object({"k": "v"}),
-    ),
-}
-
-__all__ = ["CONTEXT_SAMPLES", "CORPUS", "PNG_BASE64"]
+__all__ = ["CORPUS", "PNG_BASE64"]

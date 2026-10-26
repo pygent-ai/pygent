@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, cast
 
 from pygent.core import (
@@ -23,12 +23,16 @@ from pygent.core import (
     thaw_json,
 )
 from pygent.core._message_fields import (
+    _object_value,
     _tool_definition_from_dict,
     _tool_definition_to_dict,
     _tool_result_from_dict,
     _tool_result_to_dict,
     _tool_task_from_dict,
     _tool_task_to_dict,
+)
+from pygent.core._message_fields import (
+    _only as _only_fields,
 )
 from pygent.tool import (
     ToolAuthorizationDecision,
@@ -89,17 +93,17 @@ def _retain_json(value: object) -> object:
 
 
 def _object(value: object, name: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping) or any(
-        not isinstance(key, str) for key in value
-    ):
-        raise WireCodecError(f"{name} must be a JSON object")
-    return cast(Mapping[str, Any], value)
+    try:
+        return _object_value(value, name)
+    except ValueError as exc:
+        raise WireCodecError(str(exc)) from None
 
 
-def _only(value: Mapping[str, Any], allowed: set[str], name: str) -> None:
-    unknown = set(value) - allowed
-    if unknown:
-        raise WireCodecError(f"{name} contains unknown fields: {sorted(unknown)}")
+def _only(value: Mapping[str, Any], allowed: Iterable[str], name: str) -> None:
+    try:
+        _only_fields(value, allowed, name)
+    except ValueError as exc:
+        raise WireCodecError(str(exc)) from None
 
 
 def tool_definition_to_dict(value: ToolDefinition) -> dict[str, object]:
