@@ -7,9 +7,11 @@ import socket
 import httpx
 import pytest
 
+import pygent.llm._json_sse_transport as transport_module
 from pygent.llm._json_sse_transport import (
     _HTTPResponseError,
     _JsonSSETransport,
+    _native_transport_error_parts,
 )
 from pygent.llm.types import ModelErrorKind, ModelProviderError
 
@@ -22,6 +24,76 @@ def _secrets_transport(client: httpx.AsyncClient) -> _JsonSSETransport:
         trust_env_url="https://models.example",
         secrets=_SENT_SECRETS,
     )
+
+
+class _FakeNativeTransportError(transport_module._native.NativeTransportError):
+    """Scripted stand-in for the native structured transport error.
+
+    Subclasses the real native exception so the type-based catch in the
+    transport is exercised without touching the network.
+    """
+
+    def __init__(self, category: str, detail: str) -> None:
+        super().__init__(detail)
+        self.category = category
+        self.detail = detail
+
+
+class _FakeNativeClient:
+    """Native client stand-in that always fails with one scripted error."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    async def request_json(self, *_args: object, **_kwargs: object) -> tuple[int, str]:
+        raise self._error
+
+    async def close(self) -> None:
+        return None
+
+
+def _patched_native_transport(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> _JsonSSETransport:
+    monkeypatch.setattr(
+        transport_module._native,
+        "NativeHttpClient",
+        lambda *_args, **_kwargs: _FakeNativeClient(error),
+    )
+    return _JsonSSETransport(
+        trust_env_url="https://models.example",
+        secrets=_SENT_SECRETS,
+    )
+
+
+class _FakeNativeStream:
+    def __init__(self, items: list[tuple[str, object]]) -> None:
+        self._items = list(items)
+
+    def __aiter__(self) -> _FakeNativeStream:
+        return self
+
+    async def __anext__(self) -> tuple[str, object]:
+        if not self._items:
+            raise StopAsyncIteration
+        return self._items.pop(0)
+
+    def close(self) -> None:
+        return None
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+class _FakeNativeStreamClient:
+    def __init__(self, items: list[tuple[str, object]]) -> None:
+        self._items = items
+
+    def stream_sse(self, *_args: object) -> _FakeNativeStream:
+        return _FakeNativeStream(self._items)
+
+    async def close(self) -> None:
+        return None
 
 
 @pytest.mark.parametrize(
@@ -197,6 +269,133 @@ async def test_native_client_transport_failure_is_wrapped_with_redacted_url(
     assert raised.value.provider_message
     assert base_url not in raised.value.provider_message
     assert f"{base_url}/chat/completions" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("category", "expected_kind"),
+    [
+        pytest.param("connect", ModelErrorKind.UNAVAILABLE, id="connect"),
+        pytest.param("request", ModelErrorKind.UNAVAILABLE, id="request"),
+        pytest.param("body", ModelErrorKind.UNAVAILABLE, id="body"),
+        pytest.param("decode", ModelErrorKind.UNAVAILABLE, id="decode"),
+        pytest.param("timeout", ModelErrorKind.TIMEOUT, id="timeout"),
+        pytest.param("category-not-in-rust-yet", ModelErrorKind.UNAVAILABLE, id="unknown"),
+    ],
+)
+def test_native_transport_error_parts_map_category_to_kind(
+    category: str, expected_kind: ModelErrorKind
+) -> None:
+    error = _FakeNativeTransportError(category, "chain text: os error 10061")
+
+    kind, detail = _native_transport_error_parts(error)
+
+    assert kind is expected_kind
+    assert detail == "chain text: os error 10061"
+
+
+def test_native_transport_error_parts_fall_back_to_exception_text() -> None:
+    """Errors missing the structured fields stay UNAVAILABLE and keep the
+    plain exception text instead of failing the mapping."""
+
+    class _BareNativeTransportError(RuntimeError):
+        pass
+
+    kind, detail = _native_transport_error_parts(_BareNativeTransportError("plain text"))
+
+    assert kind is ModelErrorKind.UNAVAILABLE
+    assert detail == "plain text"
+
+
+@pytest.mark.asyncio
+async def test_request_json_maps_native_timeout_category_to_timeout_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native timeouts must classify as TIMEOUT; the old plain-text
+    RuntimeError path misfiled them as UNAVAILABLE."""
+
+    transport = _patched_native_transport(
+        monkeypatch,
+        _FakeNativeTransportError("timeout", "request timed out after 2.000s"),
+    )
+    try:
+        with pytest.raises(ModelProviderError) as raised:
+            await transport.request_json("POST", "https://models.example/json", {})
+    finally:
+        await transport.aclose()
+
+    assert raised.value.kind is ModelErrorKind.TIMEOUT
+    assert raised.value.provider_message == "request timed out after 2.000s"
+
+
+@pytest.mark.asyncio
+async def test_request_json_redacts_structured_native_transport_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _patched_native_transport(
+        monkeypatch,
+        _FakeNativeTransportError(
+            "connect",
+            "error sending request for url (https://models.example/v1): os error 10061",
+        ),
+    )
+    try:
+        with pytest.raises(ModelProviderError) as raised:
+            await transport.request_json("POST", "https://models.example/json", {})
+    finally:
+        await transport.aclose()
+
+    assert raised.value.kind is ModelErrorKind.UNAVAILABLE
+    assert raised.value.provider_message == (
+        "error sending request for url ([REDACTED]): os error 10061"
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_json_keeps_plain_runtime_error_fallback_wrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """State failures such as a closed native client are not transport
+    errors; they keep the plain RuntimeError fallback wrap."""
+
+    transport = _patched_native_transport(
+        monkeypatch, RuntimeError("model provider client is closed")
+    )
+    try:
+        with pytest.raises(ModelProviderError) as raised:
+            await transport.request_json("POST", "https://models.example/json", {})
+    finally:
+        await transport.aclose()
+
+    assert raised.value.kind is ModelErrorKind.UNAVAILABLE
+    assert raised.value.provider_message == "model provider client is closed"
+
+
+@pytest.mark.asyncio
+async def test_stream_sse_maps_native_error_items_by_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        transport_module._native,
+        "NativeHttpClient",
+        lambda *_args, **_kwargs: _FakeNativeStreamClient(
+            [("error", ("body", "stream read failed: os error 10054"))]
+        ),
+    )
+    transport = _JsonSSETransport(
+        trust_env_url="https://models.example",
+        secrets=_SENT_SECRETS,
+    )
+    try:
+        with pytest.raises(ModelProviderError) as raised:
+            async for _frame in transport.stream_sse(
+                "https://models.example/stream", {"stream": True}
+            ):
+                pass
+    finally:
+        await transport.aclose()
+
+    assert raised.value.kind is ModelErrorKind.UNAVAILABLE
+    assert raised.value.provider_message == "stream read failed: os error 10054"
 
 
 @pytest.mark.asyncio

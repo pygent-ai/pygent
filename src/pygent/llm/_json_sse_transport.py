@@ -86,8 +86,14 @@ class _JsonSSETransport:
                 )
             except asyncio.CancelledError:
                 raise
+            except _native.NativeTransportError as exc:
+                # Structured native transport failures carry the category and
+                # the full error-chain text; wrapping still redacts it.
+                kind, detail = _native_transport_error_parts(exc)
+                raise _transport_failure(kind, detail, self._sent_secrets) from None
             except RuntimeError as exc:
-                # The native client reports transport failures as RuntimeErrors.
+                # Plain RuntimeErrors are state failures (e.g. a closed
+                # client), not transport errors; they keep the generic wrap.
                 raise _transport_failure(
                     ModelErrorKind.UNAVAILABLE, str(exc), self._sent_secrets
                 ) from None
@@ -151,9 +157,10 @@ class _JsonSSETransport:
                             raise _HTTPResponseError(status, b"")
                         continue
                     if kind == "error":
+                        category, detail = cast("tuple[str, str]", value)
                         raise _transport_failure(
-                            ModelErrorKind.UNAVAILABLE,
-                            cast(str, value),
+                            _native_transport_kind(category),
+                            detail,
                             self._sent_secrets,
                         ) from None
                     if kind != "data":  # pragma: no cover - native invariant
@@ -250,6 +257,34 @@ def _redact_secrets(message: str, sent_secrets: Sequence[str]) -> str:
     # echoing its own upstream key); cover the common OpenAI-style key shape
     # conservatively. Transformed or encoded secrets stay undetectable.
     return _KEY_SHAPED_TOKEN.sub("[REDACTED]", message)
+
+
+def _native_transport_kind(category: object) -> ModelErrorKind:
+    """Map a native transport error category onto the public error kind.
+
+    Only the explicit timeout category widens to TIMEOUT; every other
+    transport-phase category (and anything unknown) is provider
+    unavailability, so new native categories never widen the contract.
+    """
+    return (
+        ModelErrorKind.TIMEOUT
+        if category == "timeout"
+        else ModelErrorKind.UNAVAILABLE
+    )
+
+
+def _native_transport_error_parts(exc: object) -> tuple[ModelErrorKind, str]:
+    """Split a native structured transport error into (kind, raw detail).
+
+    The detail is untrusted provider-adjacent text: it is redacted later by
+    ``_transport_failure``. A missing ``detail`` attribute falls back to the
+    exception text itself.
+    """
+    detail = getattr(exc, "detail", None)
+    return (
+        _native_transport_kind(getattr(exc, "category", None)),
+        str(exc) if detail is None else detail,
+    )
 
 
 def _transport_failure(

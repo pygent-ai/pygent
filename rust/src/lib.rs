@@ -13,7 +13,84 @@ use tokio_util::sync::CancellationToken;
 enum StreamItem {
     Data(String),
     Status(u16),
-    Error(String),
+    Error { category: String, detail: String },
+}
+
+// abi3 builds cannot subclass native exceptions with #[pyclass(extends=...)],
+// so the structured fields are attached to a created exception type instead.
+// `category` drives the Python-side error-kind mapping and `detail` keeps the
+// full error-chain text, so OS error codes survive the Rust boundary. Only
+// error-chain text is ever attached; request headers, bodies, and credentials
+// never enter it.
+pyo3::create_exception!(
+    _native,
+    NativeTransportError,
+    PyRuntimeError,
+    "Structured transport failure from the native HTTP client."
+);
+
+/// Attaches the structured fields onto the materialized exception; the args
+/// stay ``(detail,)`` so plain ``str()`` keeps the readable root-cause text.
+fn native_transport_error(category: &str, detail: String) -> PyErr {
+    Python::with_gil(|py| {
+        let failure = NativeTransportError::new_err(detail.clone());
+        let value = failure.value(py).as_any();
+        match value
+            .setattr("category", category)
+            .and_then(|_| value.setattr("detail", detail))
+        {
+            Ok(()) => failure,
+            Err(attaching) => attaching,
+        }
+    })
+}
+
+fn transport_error(category: &str, error: &(dyn std::error::Error + 'static)) -> PyErr {
+    native_transport_error(category, error_chain_text(error))
+}
+
+// tokio drops the inner operation on elapse, so the waited duration is the
+// faithful detail there is; the full error chain is unknowable by design.
+fn transport_timeout_error(seconds: f64) -> PyErr {
+    native_transport_error("timeout", format!("request timed out after {seconds:.3}s"))
+}
+
+/// Joins the top-level Display with every `source()` level, keeping OS error
+/// codes that the plain Display of reqwest errors drops.
+fn error_chain_text(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(error) = source {
+        text.push_str(": ");
+        text.push_str(&error.to_string());
+        source = error.source();
+    }
+    text
+}
+
+// reqwest predicates overlap (a connect timeout is both connect and timeout),
+// so the mapping priority is connect, timeout, body, decode, request.
+fn category_from_flags(connect: bool, timeout: bool, body: bool, decode: bool) -> &'static str {
+    if connect {
+        "connect"
+    } else if timeout {
+        "timeout"
+    } else if body {
+        "body"
+    } else if decode {
+        "decode"
+    } else {
+        "request"
+    }
+}
+
+fn transport_category(error: &reqwest::Error) -> &'static str {
+    category_from_flags(
+        error.is_connect(),
+        error.is_timeout(),
+        error.is_body(),
+        error.is_decode(),
+    )
 }
 
 struct ClientState {
@@ -125,7 +202,7 @@ impl NativeHttpClient {
             let _connection = connection;
             let _active = ActiveGuard::new(state.clone());
             let method = reqwest::Method::from_bytes(method.as_bytes())
-                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+                .map_err(|error| transport_error("request", &error))?;
             let mut request = state
                 .client
                 .request(method, url)
@@ -137,12 +214,12 @@ impl NativeHttpClient {
                 let response = request
                     .send()
                     .await
-                    .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+                    .map_err(|error| transport_error(transport_category(&error), &error))?;
                 let status = response.status().as_u16();
                 let body = response
                     .text()
                     .await
-                    .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+                    .map_err(|error| transport_error(transport_category(&error), &error))?;
                 Ok((status, body))
             };
             state
@@ -151,7 +228,7 @@ impl NativeHttpClient {
                     if let Some(seconds) = timeout {
                         tokio::time::timeout(Duration::from_secs_f64(seconds), operation)
                             .await
-                            .map_err(|_| PyRuntimeError::new_err("request timed out"))?
+                            .map_err(|_| transport_timeout_error(seconds))?
                     } else {
                         operation.await
                     }
@@ -261,7 +338,10 @@ fn stream_item_to_py(item: StreamItem) -> PyResult<Py<PyAny>> {
     Python::with_gil(|py| match item {
         StreamItem::Data(value) => Ok(("data", value).into_pyobject(py)?.unbind().into_any()),
         StreamItem::Status(value) => Ok(("status", value).into_pyobject(py)?.unbind().into_any()),
-        StreamItem::Error(value) => Ok(("error", value).into_pyobject(py)?.unbind().into_any()),
+        StreamItem::Error { category, detail } => Ok(("error", (category, detail))
+            .into_pyobject(py)?
+            .unbind()
+            .into_any()),
     })
 }
 
@@ -356,6 +436,84 @@ mod sse_tests {
     }
 }
 
+#[cfg(test)]
+mod transport_error_tests {
+    use super::{category_from_flags, error_chain_text, transport_category};
+    use std::error::Error as StdError;
+    use std::io;
+
+    #[derive(Debug)]
+    struct ChainHead(io::Error);
+
+    impl std::fmt::Display for ChainHead {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(formatter, "send failed")
+        }
+    }
+
+    impl StdError for ChainHead {
+        fn source(&self) -> Option<&(dyn StdError + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[test]
+    fn error_chain_joins_top_level_display_with_every_source() {
+        let error = ChainHead(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            "os error 10061",
+        ));
+        assert_eq!(error_chain_text(&error), "send failed: os error 10061");
+    }
+
+    #[test]
+    fn error_chain_without_source_keeps_only_the_top_level_display() {
+        let error = io::Error::new(io::ErrorKind::ConnectionRefused, "os error 10061");
+        assert_eq!(error_chain_text(&error), "os error 10061");
+    }
+
+    #[test]
+    fn category_flags_follow_connect_timeout_body_decode_priority() {
+        assert_eq!(category_from_flags(true, true, true, true), "connect");
+        assert_eq!(category_from_flags(false, true, true, true), "timeout");
+        assert_eq!(category_from_flags(false, false, true, true), "body");
+        assert_eq!(category_from_flags(false, false, false, true), "decode");
+        assert_eq!(category_from_flags(false, false, false, false), "request");
+    }
+
+    #[test]
+    fn unclassified_reqwest_errors_fall_back_to_request_category() {
+        let error = reqwest::Client::new()
+            .get("http://127.0.0.1:99999/")
+            .build()
+            .unwrap_err();
+        assert_eq!(transport_category(&error), "request");
+    }
+
+    #[test]
+    fn refused_loopback_connect_is_classified_as_connect_with_os_error_detail() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        drop(listener);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let error = runtime.block_on(async {
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(&url)
+                .send()
+                .await
+                .unwrap_err()
+        });
+        assert_eq!(transport_category(&error), "connect");
+        assert!(error_chain_text(&error).contains("os error"));
+    }
+}
+
 async fn run_sse(
     state: Arc<ClientState>,
     url: String,
@@ -402,8 +560,15 @@ async fn run_sse(
         Some(result) => match result {
             Ok(value) => value,
             Err(error) => {
-                let _ =
-                    send_stream_item(&sender, &cancel, StreamItem::Error(error.to_string())).await;
+                let _ = send_stream_item(
+                    &sender,
+                    &cancel,
+                    StreamItem::Error {
+                        category: transport_category(&error).to_string(),
+                        detail: error_chain_text(&error),
+                    },
+                )
+                .await;
                 return;
             }
         },
@@ -425,8 +590,15 @@ async fn run_sse(
         let chunk = match chunk {
             Ok(value) => value,
             Err(error) => {
-                let _ =
-                    send_stream_item(&sender, &cancel, StreamItem::Error(error.to_string())).await;
+                let _ = send_stream_item(
+                    &sender,
+                    &cancel,
+                    StreamItem::Error {
+                        category: transport_category(&error).to_string(),
+                        detail: error_chain_text(&error),
+                    },
+                )
+                .await;
                 return;
             }
         };
@@ -435,9 +607,15 @@ async fn run_sse(
             let payload = match payload {
                 Ok(value) => value,
                 Err(error) => {
-                    let _ =
-                        send_stream_item(&sender, &cancel, StreamItem::Error(error.to_string()))
-                            .await;
+                    let _ = send_stream_item(
+                        &sender,
+                        &cancel,
+                        StreamItem::Error {
+                            category: "decode".to_string(),
+                            detail: error_chain_text(&error),
+                        },
+                    )
+                    .await;
                     return;
                 }
             };
@@ -478,7 +656,15 @@ async fn send_stream_item(
 
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    use pyo3::PyTypeInfo;
     module.add_class::<NativeHttpClient>()?;
     module.add_class::<NativeSseStream>()?;
+    let transport_error_type = NativeTransportError::type_object(module.py());
+    // create_exception! stringifies the bare module ident, so align the
+    // reported module with the pyclass modules above.
+    transport_error_type
+        .as_any()
+        .setattr("__module__", "pygent._native")?;
+    module.add("NativeTransportError", transport_error_type)?;
     Ok(())
 }
