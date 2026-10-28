@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Self, cast
+from urllib.parse import urlsplit
 
 import httpx
 import jsonschema  # type: ignore[import-untyped]
@@ -47,6 +48,7 @@ from ._media_tokens import openai_media_input_tokens
 from ._tool_context import encode_tool_context
 from ._tool_schema import flatten_nullable_any_of
 from .configuration import ModelSpec
+from .openai_compatible import _provider_error_message
 from .types import (
     ModelErrorKind,
     ModelFailureReason,
@@ -91,11 +93,23 @@ class OpenAIResponsesClient:
             request_headers.setdefault("Authorization", f"Bearer {api_key}")
         api_root = base_url.rstrip("/")
         self._endpoint = f"{api_root}/responses"
+        # Values this client sent to the provider; provider error bodies and
+        # transport failure text are untrusted and may echo them, so they are
+        # redacted before any error text is kept.
+        secrets = [
+            base_url,
+            api_root,
+            self._endpoint,
+            urlsplit(base_url).hostname or "",
+            api_key or "",
+        ]
+        self._sent_secrets = tuple(secret for secret in secrets if secret)
         self._transport = _JsonSSETransport(
             headers=request_headers,
             client=client,
             verify_ssl=verify_ssl,
             trust_env_url=api_root,
+            secrets=self._sent_secrets,
         )
 
     async def invoke(
@@ -106,7 +120,7 @@ class OpenAIResponsesClient:
                 "POST", self._endpoint, payload.to_dict()
             )
         except _HTTPResponseError as exc:
-            raise _status_error(exc.status) from None
+            raise _status_error(exc.status, exc.body, self._sent_secrets) from None
         except asyncio.CancelledError:
             raise
         except (TypeError, ValueError) as exc:
@@ -139,7 +153,7 @@ class OpenAIResponsesClient:
                     )
                 yield freeze_json_object(cast(Mapping[str, object], value))
         except _HTTPResponseError as exc:
-            raise _status_error(exc.status) from None
+            raise _status_error(exc.status, exc.body, self._sent_secrets) from None
 
     async def aclose(self) -> None:
         await self._transport.aclose()
@@ -713,7 +727,9 @@ def _stream_call(
     )
 
 
-def _status_error(status: int) -> ModelProviderError:
+def _status_error(
+    status: int, body: bytes, sent_secrets: Sequence[str] = ()
+) -> ModelProviderError:
     kind = (
         ModelErrorKind.AUTHENTICATION
         if status in {401, 403}
@@ -727,7 +743,11 @@ def _status_error(status: int) -> ModelProviderError:
         if status >= 500
         else ModelErrorKind.UNKNOWN
     )
-    return ModelProviderError(kind, "Responses provider request failed")
+    return ModelProviderError(
+        kind,
+        "Responses provider request failed",
+        provider_message=_provider_error_message(body, sent_secrets),
+    )
 
 
 def openai_responses_adapters() -> dict[str, OpenAIResponsesAdapter]:

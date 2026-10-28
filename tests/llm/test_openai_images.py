@@ -6,6 +6,7 @@ import base64
 from collections.abc import Mapping
 from typing import cast
 
+import httpx
 import pytest
 
 from pygent.core import Context, UserMessage, freeze_json_object
@@ -20,7 +21,12 @@ from pygent.llm import (
 )
 from pygent.llm._adapter_contracts import ModelProviderRequest
 from pygent.llm.catalogs import ModelCapabilityCatalog
-from pygent.llm.types import GenerationConfig, RetryPolicy
+from pygent.llm.types import (
+    GenerationConfig,
+    ModelErrorKind,
+    ModelProviderError,
+    RetryPolicy,
+)
 from pygent.tool import MediaBlock, MediaSource, ToolDefinition
 
 _PNG_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nfixture").decode("ascii")
@@ -209,6 +215,48 @@ def test_openai_images_streaming_is_rejected() -> None:
 
 def test_openai_images_adapter_registry() -> None:
     assert set(openai_images_adapters()) == {"openai_images"}
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_kind"),
+    [(401, ModelErrorKind.AUTHENTICATION), (429, ModelErrorKind.RATE_LIMIT)],
+)
+@pytest.mark.asyncio
+async def test_images_status_errors_carry_redacted_provider_message(
+    status: int, expected_kind: ModelErrorKind
+) -> None:
+    """The client must hand its secrets to the shared status-error builder,
+    or provider bodies echoing the bearer token would leak into run events."""
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status,
+            json={
+                "error": {
+                    "message": (
+                        "request rejected for bearer images-key-canary-2468 at"
+                        " https://synthetic-endpoint.invalid/private"
+                    )
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OpenAIImagesClient(
+            base_url="https://synthetic-endpoint.invalid/private",
+            api_key="images-key-canary-2468",
+            client=http,
+        )
+        with pytest.raises(ModelProviderError) as raised:
+            await client.invoke(_spec(), freeze_json_object({}))
+
+    assert raised.value.kind is expected_kind
+    message = raised.value.provider_message
+    assert message is not None
+    assert "request rejected for bearer" in message
+    assert "images-key-canary-2468" not in message
+    assert "https://synthetic-endpoint.invalid/private" not in message
+    assert "[REDACTED]" in message
 
 
 async def test_openai_images_delivers_media_through_the_invoker() -> None:

@@ -592,7 +592,12 @@ def _tool_delta_payload(data: FrozenJsonObject, *, index: int) -> dict[str, obje
 
 
 def _attempt_failed_payload(
-    *, model_key: str, attempt: int, kind: ModelErrorKind
+    *,
+    model_key: str,
+    attempt: int,
+    kind: ModelErrorKind,
+    reason_code: ModelFailureReason | None = None,
+    provider_message: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "model_key": model_key,
@@ -601,6 +606,10 @@ def _attempt_failed_payload(
     }
     if kind is ModelErrorKind.OUTCOME_UNKNOWN:
         payload["reason"] = _CANCELLATION_CLEANUP_REASON
+    if reason_code is not None:
+        payload["reason_code"] = reason_code.value
+    if provider_message is not None:
+        payload["provider_message"] = provider_message
     return payload
 
 
@@ -676,6 +685,8 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
         and data.get("error_kind") == ModelErrorKind.OUTCOME_UNKNOWN.value
     ):
         expected = expected | {"reason"}
+    if kind is ModelEventKind.ATTEMPT_FAILED:
+        expected = expected | {"reason_code", "provider_message"} & set(data)
     if set(data) != expected:
         raise ValueError(f"{kind.value} data fields must be exactly {sorted(expected)}")
     if kind is ModelEventKind.STARTED:
@@ -842,6 +853,10 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
                 raise ValueError(f"{key} must be null or a non-negative integer")
     elif kind is ModelEventKind.ATTEMPT_FAILED:
         _require_string(data, "error_kind")
+        if "reason_code" in data:
+            _require_string(data, "reason_code", allow_empty=False)
+        if "provider_message" in data:
+            _require_string(data, "provider_message", allow_empty=False)
         if (
             data["error_kind"] == ModelErrorKind.OUTCOME_UNKNOWN.value
             and data["reason"] != _CANCELLATION_CLEANUP_REASON

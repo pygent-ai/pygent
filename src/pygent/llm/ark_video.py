@@ -39,7 +39,10 @@ from ._adapter_contracts import (
     ModelProviderStreamPart,
     _canonical_usage,
 )
-from ._json_sse_transport import _trust_environment_for_url
+from ._json_sse_transport import (
+    _transport_failure,
+    _trust_environment_for_url,
+)
 from .configuration import ModelSpec
 from .openai_compatible import (
     _normalize_openai_error,
@@ -178,6 +181,17 @@ class ArkVideoClient:
         self._headers = dict(headers or {})
         if api_key is not None:
             self._headers.setdefault("Authorization", f"Bearer {api_key}")
+        # Values this client sent to the provider; provider error bodies and
+        # transport failure text are untrusted and may echo them, so they are
+        # redacted before any error text is kept.
+        secrets = [
+            base_url,
+            self._root,
+            self._tasks_endpoint,
+            urllib.parse.urlsplit(base_url).hostname or "",
+            api_key or "",
+        ]
+        self._sent_secrets = tuple(secret for secret in secrets if secret)
         if client is None:
             self._client = httpx.AsyncClient(
                 headers=self._headers,
@@ -266,19 +280,13 @@ class ArkVideoClient:
                 # Transient poll failure: keep waiting inside the poll window
                 # instead of surfacing a retryable failure to the invoker.
                 if time.monotonic() >= deadline:
+                    detail = exc.provider_message
+                    suffix = f": {detail}" if detail else ""
                     raise ModelProviderError(
                         ModelErrorKind.INVALID_RESPONSE,
-                        "video task polling kept failing inside the poll window",
+                        f"video task polling kept failing inside the poll window{suffix}",
                         reason_code=ModelFailureReason.PROVIDER_TIMEOUT,
                     ) from None
-                continue
-            except httpx.TransportError as exc:
-                if time.monotonic() >= deadline:
-                    raise ModelProviderError(
-                        ModelErrorKind.INVALID_RESPONSE,
-                        "video task polling kept failing inside the poll window",
-                        reason_code=ModelFailureReason.PROVIDER_TIMEOUT,
-                    ) from exc
                 continue
             status = polled.get("status")
             if status == "succeeded":
@@ -304,11 +312,26 @@ class ArkVideoClient:
         *,
         timeout: float = _TASK_REQUEST_TIMEOUT,
     ) -> FrozenJsonObject:
-        response = await self._client.request(
-            method, url, json=payload, headers=self._headers or None, timeout=timeout
-        )
+        try:
+            response = await self._client.request(
+                method,
+                url,
+                json=payload,
+                headers=self._headers or None,
+                timeout=timeout,
+            )
+        except httpx.TimeoutException as exc:
+            raise _transport_failure(
+                ModelErrorKind.TIMEOUT, str(exc), self._sent_secrets
+            ) from None
+        except httpx.TransportError as exc:
+            raise _transport_failure(
+                ModelErrorKind.UNAVAILABLE, str(exc), self._sent_secrets
+            ) from None
         if not response.is_success:
-            raise _provider_status_error(response.status_code, response.text)
+            raise _provider_status_error(
+                response.status_code, response.text, self._sent_secrets
+            )
         try:
             decoded = response.json()
         except ValueError as exc:
@@ -382,7 +405,9 @@ class ArkVideoClient:
                 continue
             if response.is_success:
                 return response.content
-            error = _provider_status_error(response.status_code, response.text)
+            error = _provider_status_error(
+                response.status_code, response.text, self._sent_secrets
+            )
             if (
                 error.kind not in _RETRYABLE_KINDS
                 or attempt == _DOWNLOAD_ATTEMPTS

@@ -51,7 +51,11 @@ from ._adapter_contracts import (
     _normalized_finish_reason,
 )
 from ._continuation import continuation_matches
-from ._json_sse_transport import _HTTPResponseError, _JsonSSETransport
+from ._json_sse_transport import (
+    _HTTPResponseError,
+    _JsonSSETransport,
+    _redact_secrets,
+)
 from ._media_content import (
     media_data_url,
     validate_media_delivery,
@@ -229,13 +233,6 @@ class OpenAICompatibleClient:
         api_root = base_url.rstrip("/")
         self._endpoint = f"{api_root}/chat/completions"
         self._models_endpoint = f"{api_root}/models"
-        self._transport = _JsonSSETransport(
-            headers=request_headers,
-            client=client,
-            verify_ssl=verify_ssl,
-            trust_env_url=api_root,
-        )
-        self._models: ModelCatalog = _OpenAICompatibleModelCatalog(self)
         # Values this client sent to the provider; provider error bodies are
         # untrusted and may echo them, so they are redacted before any error
         # text is kept.
@@ -250,6 +247,14 @@ class OpenAICompatibleClient:
         self._sent_secrets: tuple[str, ...] = tuple(
             secret for secret in secrets if secret
         )
+        self._transport = _JsonSSETransport(
+            headers=request_headers,
+            client=client,
+            verify_ssl=verify_ssl,
+            trust_env_url=api_root,
+            secrets=self._sent_secrets,
+        )
+        self._models: ModelCatalog = _OpenAICompatibleModelCatalog(self)
 
     @property
     def models(self) -> ModelCatalog:
@@ -960,19 +965,6 @@ def _validate_catalog_timeout(timeout: float | None) -> None:
 
 def _wire_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-
-_KEY_SHAPED_TOKEN = re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b")
-
-
-def _redact_secrets(message: str, sent_secrets: Sequence[str]) -> str:
-    for secret in sent_secrets:
-        if secret and secret in message:
-            message = message.replace(secret, "[REDACTED]")
-    # Exact matches cannot catch credentials we never sent (e.g. a gateway
-    # echoing its own upstream key); cover the common OpenAI-style key shape
-    # conservatively. Transformed or encoded secrets stay undetectable.
-    return _KEY_SHAPED_TOKEN.sub("[REDACTED]", message)
 
 
 def _provider_error_message(

@@ -468,6 +468,53 @@ def test_anthropic_http_error_mapping_is_closed() -> None:
     assert error is ModelErrorKind.UNAVAILABLE
 
 
+@pytest.mark.parametrize(
+    ("status", "expected_kind"),
+    [(401, ModelErrorKind.AUTHENTICATION), (429, ModelErrorKind.RATE_LIMIT)],
+)
+@pytest.mark.asyncio
+async def test_anthropic_status_errors_carry_redacted_provider_message(
+    status: int, expected_kind: ModelErrorKind
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status,
+            json={
+                "type": "error",
+                "error": {
+                    "type": "authentication_error"
+                    if status == 401
+                    else "rate_limit_error",
+                    "message": (
+                        "request rejected for x-api-key anthropic-key-canary-9876"
+                        " at https://synthetic-endpoint.invalid/private"
+                    ),
+                },
+            },
+        )
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AnthropicMessagesClient(
+        base_url="https://synthetic-endpoint.invalid/private",
+        api_key="anthropic-key-canary-9876",
+        client=http,
+    )
+    try:
+        with pytest.raises(ModelProviderError) as raised:
+            await client.invoke(anthropic_entry().spec, freeze_json_object({}))
+    finally:
+        await client.aclose()
+        await http.aclose()
+
+    assert raised.value.kind is expected_kind
+    message = raised.value.provider_message
+    assert message is not None
+    assert "request rejected for x-api-key" in message
+    assert "anthropic-key-canary-9876" not in message
+    assert "https://synthetic-endpoint.invalid/private" not in message
+    assert "[REDACTED]" in message
+
+
 def test_anthropic_stream_decoder_reduces_indexed_blocks_and_continuation() -> None:
     decoder = AnthropicMessagesAdapter().create_stream_decoder(request())
     payloads = [

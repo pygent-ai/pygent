@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from itertools import pairwise
 from typing import Self, cast
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -47,6 +48,7 @@ from ._provider_policies import provider_protocol_policy
 from ._tool_context import encode_tool_context
 from .catalog import ModelCatalog, ModelInfo
 from .configuration import ModelSpec
+from .openai_compatible import _provider_error_message
 from .types import (
     ModelErrorKind,
     ModelFailureReason,
@@ -92,12 +94,26 @@ class AnthropicMessagesClient:
         api_root = base_url.rstrip("/")
         self._messages_endpoint = f"{api_root}/v1/messages"
         self._models_endpoint = f"{api_root}/v1/models"
+        # Values this client sent to the provider; provider error bodies and
+        # transport failure text are untrusted and may echo them, so they are
+        # redacted before any error text is kept.
+        secrets = [
+            base_url,
+            api_root,
+            self._messages_endpoint,
+            self._models_endpoint,
+            urlsplit(base_url).hostname or "",
+            api_key or "",
+        ]
+        sent_secrets = tuple(secret for secret in secrets if secret)
         self._transport = _JsonSSETransport(
             headers=request_headers,
             client=client,
             verify_ssl=verify_ssl,
             trust_env_url=api_root,
+            secrets=sent_secrets,
         )
+        self._sent_secrets = sent_secrets
         self._models: ModelCatalog = _AnthropicModelCatalog(self)
 
     @property
@@ -112,7 +128,9 @@ class AnthropicMessagesClient:
                 "POST", self._messages_endpoint, payload.to_dict()
             )
         except _HTTPResponseError as exc:
-            raise _anthropic_status_error(exc.status, exc.body) from None
+            raise _anthropic_status_error(
+                exc.status, exc.body, self._sent_secrets
+            ) from None
         except (TypeError, ValueError) as exc:
             raise ModelProviderError(
                 ModelErrorKind.INVALID_RESPONSE,
@@ -145,7 +163,9 @@ class AnthropicMessagesClient:
                     )
                 yield freeze_json_object(cast(Mapping[str, object], item))
         except _HTTPResponseError as exc:
-            raise _anthropic_status_error(exc.status, exc.body) from None
+            raise _anthropic_status_error(
+                exc.status, exc.body, self._sent_secrets
+            ) from None
 
     async def aclose(self) -> None:
         await self._transport.aclose()
@@ -166,7 +186,9 @@ class AnthropicMessagesClient:
         except asyncio.CancelledError:
             raise
         except _HTTPResponseError as exc:
-            raise _anthropic_status_error(exc.status, exc.body) from None
+            raise _anthropic_status_error(
+                exc.status, exc.body, self._sent_secrets
+            ) from None
         except (TypeError, ValueError) as exc:
             raise ModelProviderError(
                 ModelErrorKind.INVALID_RESPONSE,
@@ -1160,13 +1182,16 @@ def _anthropic_usage(value: object) -> FrozenJsonObject:
     return freeze_json_object(result)
 
 
-def _anthropic_status_error(status: int, body: bytes) -> ModelProviderError:
+def _anthropic_status_error(
+    status: int, body: bytes, sent_secrets: Sequence[str] = ()
+) -> ModelProviderError:
     reason = _anthropic_failure_reason(status, body)
     return ModelProviderError(
         _kind_for_status(status),
         f"model provider request failed: {reason.value}",
         reason_code=reason,
         http_status=status,
+        provider_message=_provider_error_message(body, sent_secrets),
     )
 
 

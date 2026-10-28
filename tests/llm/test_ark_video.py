@@ -449,3 +449,101 @@ async def test_video_model_serves_as_the_react_main_model() -> None:
     assert [block.media_type for block in answer.media] == ["video"]
     await runtime.close()
     await invoker.aclose()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_kind"),
+    [
+        pytest.param(
+            httpx.ProxyError(
+                "Unable to connect to proxy https://ark.example/api/v3"
+                " (key ark-key-canary-1357)"
+            ),
+            ModelErrorKind.UNAVAILABLE,
+            id="proxy-disconnect",
+        ),
+        pytest.param(
+            httpx.ReadTimeout("timed out while creating the task"),
+            ModelErrorKind.TIMEOUT,
+            id="read-timeout",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_create_task_transport_errors_carry_redacted_root_cause(
+    error: Exception, expected_kind: ModelErrorKind
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        raise error
+
+    client = ArkVideoClient(
+        base_url="https://ark.example/api/v3",
+        api_key="ark-key-canary-1357",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    try:
+        with pytest.raises(ModelProviderError) as raised:
+            await client.invoke(_spec(), freeze({"model": "m"}))
+    finally:
+        await client.aclose()
+
+    assert raised.value.kind is expected_kind
+    message = raised.value.provider_message
+    assert message
+    assert "ark-key-canary-1357" not in message
+    assert "https://ark.example/api/v3" not in message
+    assert str(error) in message or "[REDACTED]" in message
+
+
+@pytest.mark.asyncio
+async def test_poll_transport_exhaustion_keeps_kind_and_carries_root_cause() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"id": "cgt-1", "status": "queued"})
+        raise httpx.ConnectError("poll connection lost: ark-key-canary-1357")
+
+    client = ArkVideoClient(
+        base_url="https://ark.example/api/v3",
+        api_key="ark-key-canary-1357",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        poll_interval_seconds=0.01,
+        poll_timeout_seconds=0.05,
+    )
+    try:
+        with pytest.raises(ModelProviderError) as raised:
+            await client.invoke(_spec(), freeze({"model": "m"}))
+    finally:
+        await client.aclose()
+
+    # Still non-retryable for the outer policy (no second billed task), but
+    # the redacted transport root cause now survives into the message.
+    assert raised.value.kind is ModelErrorKind.INVALID_RESPONSE
+    assert raised.value.reason_code is ModelFailureReason.PROVIDER_TIMEOUT
+    assert "video task polling kept failing inside the poll window" in str(raised.value)
+    assert "poll connection lost" in str(raised.value)
+    assert "ark-key-canary-1357" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_poll_status_error_redacts_echoed_secrets() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"id": "cgt-1", "status": "queued"})
+        return httpx.Response(
+            401,
+            json={"error": {"message": "invalid Authorization ark-key-canary-1357"}},
+        )
+
+    client = ArkVideoClient(
+        base_url="https://ark.example/api/v3",
+        api_key="ark-key-canary-1357",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    try:
+        with pytest.raises(ModelProviderError) as raised:
+            await client.invoke(_spec(), freeze({"model": "m"}))
+    finally:
+        await client.aclose()
+
+    assert raised.value.kind is ModelErrorKind.AUTHENTICATION
+    assert raised.value.provider_message == "invalid Authorization [REDACTED]"

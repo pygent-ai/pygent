@@ -40,6 +40,7 @@ from pygent.llm import (
     ModelProviderResponse,
     ModelProviderStreamPart,
     OpenAICompatibleAdapter,
+    OpenAICompatibleClient,
     RetryPolicy,
 )
 from pygent.llm import invoker as invoker_module
@@ -2206,3 +2207,117 @@ def test_safe_failure_diagnostics_carry_provider_message():
     assert invoker_module._safe_failure_diagnostics(
         error, ModelErrorKind.INVALID_RESPONSE
     ) == (None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_diagnostics_reach_terminal_message_and_events():
+    # Proxy disconnects used to surface only as a bare "provider_unavailable"
+    # kind; the redacted root cause must now survive the whole chain.
+    secret = "synthetic-api-key-canary"
+    endpoint = "https://synthetic-endpoint.invalid/private"
+    diagnostic = "Unable to connect to proxy {endpoint} (key {secret})"
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ProxyError(diagnostic.format(endpoint=endpoint, secret=secret))
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider_client = OpenAICompatibleClient(
+        base_url=endpoint,
+        api_key=secret,
+        client=http_client,
+    )
+    invoker = configured_invoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": provider_client, "fallback": provider_client},
+        capabilities={"openai": transport_mode(streaming=False)},
+    )
+    execution = invoker.execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        await execution.result()
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+    await http_client.aclose()
+
+    redacted = "Unable to connect to proxy [REDACTED] (key [REDACTED])"
+    assert raised.value.kind is ModelErrorKind.UNAVAILABLE
+    assert secret not in str(raised.value)
+    assert endpoint not in str(raised.value)
+    assert (
+        "model stream failed after retry and fallback:"
+        " provider_unavailable: " + redacted
+    ) == str(raised.value)
+    failure = next(event for event in events if event.kind == "model.attempt.failed")
+    assert failure.data["error_kind"] == "unavailable"
+    assert failure.data["reason_code"] == "provider_unavailable"
+    assert failure.data["provider_message"] == redacted
+
+
+@pytest.mark.asyncio
+async def test_attempt_failed_event_omits_diagnostics_when_none_are_available():
+    """Raw client exceptions keep the additive contract: the new event fields
+    are absent instead of null when no sanitized diagnostics exist."""
+
+    primary = FakeClient([ValueError("non-transport failure")])
+    fallback = FakeClient([ValueError("non-transport failure")])
+    invoker = configured_invoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": primary, "fallback": fallback},
+        capabilities={"openai": transport_mode(streaming=False)},
+    )
+    execution = invoker.execute(
+        model_group=group(),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+    )
+
+    with pytest.raises(ModelCallError) as raised:
+        await execution.result()
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+
+    assert raised.value.kind is ModelErrorKind.UNKNOWN
+    failure = next(event for event in events if event.kind == "model.attempt.failed")
+    assert set(failure.data) == {"model_key", "attempt", "error_kind"}
+
+
+def test_attempt_failed_payload_validates_optional_diagnostics():
+    from pygent.core import freeze_json_object
+    from pygent.llm._adapter_contracts import (
+        ModelEventKind,
+        _attempt_failed_payload,
+        _validate_public_model_event,
+    )
+
+    payload = _attempt_failed_payload(
+        model_key="primary",
+        attempt=1,
+        kind=ModelErrorKind.UNAVAILABLE,
+        reason_code=ModelFailureReason.PROVIDER_UNAVAILABLE,
+        provider_message="Unable to connect to proxy [REDACTED]",
+    )
+    _validate_public_model_event(
+        ModelEventKind.ATTEMPT_FAILED, freeze_json_object(payload)
+    )
+
+    bad_type = dict(payload)
+    bad_type["provider_message"] = 42
+    with pytest.raises(ValueError, match="provider_message"):
+        _validate_public_model_event(
+            ModelEventKind.ATTEMPT_FAILED, freeze_json_object(bad_type)
+        )
+
+    unknown_field = dict(payload)
+    unknown_field["raw_body"] = "nope"
+    with pytest.raises(ValueError, match="must be exactly"):
+        _validate_public_model_event(
+            ModelEventKind.ATTEMPT_FAILED, freeze_json_object(unknown_field)
+        )

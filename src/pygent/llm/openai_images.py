@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from collections.abc import AsyncIterator, Mapping
 from typing import Self, cast
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -61,11 +62,23 @@ class OpenAIImagesClient:
             request_headers.setdefault("Authorization", f"Bearer {api_key}")
         api_root = base_url.rstrip("/")
         self._endpoint = f"{api_root}/images/generations"
+        # Values this client sent to the provider; provider error bodies and
+        # transport failure text are untrusted and may echo them, so they are
+        # redacted before any error text is kept.
+        secrets = [
+            base_url,
+            api_root,
+            self._endpoint,
+            urlsplit(base_url).hostname or "",
+            api_key or "",
+        ]
+        self._sent_secrets = tuple(secret for secret in secrets if secret)
         self._transport = _JsonSSETransport(
             headers=request_headers,
             client=client,
             verify_ssl=verify_ssl,
             trust_env_url=api_root,
+            secrets=self._sent_secrets,
         )
 
     async def invoke(
@@ -76,7 +89,9 @@ class OpenAIImagesClient:
                 "POST", self._endpoint, payload.to_dict()
             )
         except _HTTPResponseError as exc:
-            raise _provider_status_error(exc.status, exc.body) from None
+            raise _provider_status_error(
+                exc.status, exc.body, self._sent_secrets
+            ) from None
         except (TypeError, ValueError) as exc:
             raise ModelProviderError(
                 ModelErrorKind.INVALID_RESPONSE,

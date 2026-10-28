@@ -647,3 +647,44 @@ async def test_gemini_client_maps_status_and_propagates_cancellation() -> None:
         )
         with pytest.raises(asyncio.CancelledError):
             await client.invoke(_request().model, freeze_json_object({}))
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_kind"),
+    [(401, ModelErrorKind.AUTHENTICATION), (429, ModelErrorKind.RATE_LIMIT)],
+)
+@pytest.mark.asyncio
+async def test_gemini_status_errors_carry_redacted_provider_message(
+    status: int, expected_kind: ModelErrorKind
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status,
+            json={
+                "error": {
+                    "code": status,
+                    "message": (
+                        "request rejected for key gemini-key-canary-2468 at"
+                        " https://synthetic-endpoint.invalid/private"
+                    ),
+                    "status": "RESOURCE_EXHAUSTED" if status == 429 else "FAILED",
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = GeminiGenerateContentClient(
+            base_url="https://synthetic-endpoint.invalid/private",
+            api_key="gemini-key-canary-2468",
+            client=http,
+        )
+        with pytest.raises(ModelProviderError) as raised:
+            await client.invoke(_request().model, freeze_json_object({}))
+
+    assert raised.value.kind is expected_kind
+    message = raised.value.provider_message
+    assert message is not None
+    assert "request rejected for key" in message
+    assert "gemini-key-canary-2468" not in message
+    assert "https://synthetic-endpoint.invalid/private" not in message
+    assert "[REDACTED]" in message

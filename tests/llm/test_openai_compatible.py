@@ -1263,6 +1263,75 @@ async def test_provider_http_errors_expose_only_closed_sanitized_diagnostics() -
         assert all(canary not in repr(error) for canary in canaries)
 
 
+_TRANSPORT_CASES = [
+    pytest.param(
+        httpx.ProxyError(
+            "Unable to connect to proxy https://synthetic-endpoint.invalid/private"
+            " (key canary-key-1234567890)"
+        ),
+        ModelErrorKind.UNAVAILABLE,
+        id="proxy-disconnect",
+    ),
+    pytest.param(
+        httpx.ConnectError("[Errno -2] Name or service not known"),
+        ModelErrorKind.UNAVAILABLE,
+        id="dns-failure",
+    ),
+    pytest.param(
+        httpx.ConnectError("[Errno 111] Connect call failed ('10.0.0.42', 443)"),
+        ModelErrorKind.UNAVAILABLE,
+        id="connection-refused",
+    ),
+    pytest.param(
+        httpx.ReadTimeout("timed out while reading the response body"),
+        ModelErrorKind.TIMEOUT,
+        id="read-timeout",
+    ),
+]
+
+
+@pytest.mark.parametrize(("error", "expected_kind"), _TRANSPORT_CASES)
+@pytest.mark.asyncio
+async def test_transport_errors_carry_redacted_root_cause_through_client(
+    error: httpx.TransportError, expected_kind: ModelErrorKind
+) -> None:
+    # The non-key-shaped canary can only be redacted by the secrets tuple the
+    # client must hand to its transport.
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        raise error
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = OpenAICompatibleClient(
+        base_url="https://synthetic-endpoint.invalid/private",
+        api_key="canary-key-1234567890",
+        client=http_client,
+    )
+    route = model_entry("main", "openai", "gpt-test")
+    payload = OpenAICompatibleAdapter().build_request(_request())
+    try:
+        with pytest.raises(ModelProviderError) as invoked:
+            await client.invoke(route.spec, payload)
+        with pytest.raises(ModelProviderError) as streamed:
+            async for _ in client.stream(route.spec, payload):
+                pass
+    finally:
+        await client.aclose()
+        await http_client.aclose()
+
+    for error_out in (invoked.value, streamed.value):
+        assert error_out.kind is expected_kind
+        assert error_out.provider_message
+        assert "canary-key-1234567890" not in error_out.provider_message
+        assert "https://synthetic-endpoint.invalid/private" not in (
+            error_out.provider_message
+        )
+        # Non-secret root-cause text survives; secret-bearing text is replaced.
+        assert (
+            str(error) in error_out.provider_message
+            or "[REDACTED]" in error_out.provider_message
+        )
+
+
 def test_stream_accepts_openai_usage_only_chunk_with_empty_choices() -> None:
     parts = _stream_feed(
         OpenAICompatibleAdapter(),

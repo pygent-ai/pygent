@@ -434,3 +434,42 @@ async def test_responses_client_maps_status_and_propagates_cancellation() -> Non
         client = OpenAIResponsesClient(base_url="https://api.example/v1", client=http)
         with pytest.raises(asyncio.CancelledError):
             await client.invoke(_request().model, freeze_json_object({}))
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_kind"),
+    [(401, ModelErrorKind.AUTHENTICATION), (429, ModelErrorKind.RATE_LIMIT)],
+)
+@pytest.mark.asyncio
+async def test_responses_status_errors_carry_redacted_provider_message(
+    status: int, expected_kind: ModelErrorKind
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status,
+            json={
+                "error": {
+                    "message": (
+                        "request rejected for bearer responses-key-canary-1357 at"
+                        " https://synthetic-endpoint.invalid/private"
+                    )
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OpenAIResponsesClient(
+            base_url="https://synthetic-endpoint.invalid/private",
+            api_key="responses-key-canary-1357",
+            client=http,
+        )
+        with pytest.raises(ModelProviderError) as raised:
+            await client.invoke(_request().model, freeze_json_object({}))
+
+    assert raised.value.kind is expected_kind
+    message = raised.value.provider_message
+    assert message is not None
+    assert "request rejected for bearer" in message
+    assert "responses-key-canary-1357" not in message
+    assert "https://synthetic-endpoint.invalid/private" not in message
+    assert "[REDACTED]" in message

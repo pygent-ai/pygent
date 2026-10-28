@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Literal, Self, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 import jsonschema  # type: ignore[import-untyped]
@@ -46,6 +46,7 @@ from ._media_content import media_base64, validate_media_delivery
 from ._media_tokens import gemini_media_input_tokens
 from ._tool_context import tool_context_payload
 from .configuration import ModelSpec
+from .openai_compatible import _provider_error_message
 from .types import (
     ModelErrorKind,
     ModelFailureReason,
@@ -77,11 +78,23 @@ class GeminiGenerateContentClient:
         if api_key is not None:
             request_headers.setdefault("x-goog-api-key", api_key)
         self._api_root = base_url.rstrip("/")
+        # Values this client sent to the provider; provider error bodies and
+        # transport failure text are untrusted and may echo them, so they are
+        # redacted before any error text is kept. The generateContent endpoint
+        # embeds only the public model id, so it carries no additional secret.
+        secrets = [
+            base_url,
+            self._api_root,
+            urlsplit(base_url).hostname or "",
+            api_key or "",
+        ]
+        self._sent_secrets = tuple(secret for secret in secrets if secret)
         self._transport = _JsonSSETransport(
             headers=request_headers,
             client=client,
             verify_ssl=verify_ssl,
             trust_env_url=self._api_root,
+            secrets=self._sent_secrets,
         )
 
     def _endpoint(self, model: ModelSpec, *, stream: bool) -> str:
@@ -97,7 +110,7 @@ class GeminiGenerateContentClient:
                 "POST", self._endpoint(model, stream=False), payload.to_dict()
             )
         except _HTTPResponseError as exc:
-            raise _status_error(exc.status) from None
+            raise _status_error(exc.status, exc.body, self._sent_secrets) from None
         except asyncio.CancelledError:
             raise
         except (TypeError, ValueError) as exc:
@@ -130,7 +143,7 @@ class GeminiGenerateContentClient:
                     )
                 yield freeze_json_object(cast(Mapping[str, object], value))
         except _HTTPResponseError as exc:
-            raise _status_error(exc.status) from None
+            raise _status_error(exc.status, exc.body, self._sent_secrets) from None
 
     async def aclose(self) -> None:
         await self._transport.aclose()
@@ -968,7 +981,9 @@ def _finish_reason(value: object) -> str:
     return "other"
 
 
-def _status_error(status: int) -> ModelProviderError:
+def _status_error(
+    status: int, body: bytes, sent_secrets: Sequence[str] = ()
+) -> ModelProviderError:
     kind = (
         ModelErrorKind.AUTHENTICATION
         if status in {401, 403}
@@ -982,7 +997,11 @@ def _status_error(status: int) -> ModelProviderError:
         if status >= 500
         else ModelErrorKind.UNKNOWN
     )
-    return ModelProviderError(kind, "Gemini provider request failed")
+    return ModelProviderError(
+        kind,
+        "Gemini provider request failed",
+        provider_message=_provider_error_message(body, sent_secrets),
+    )
 
 
 def gemini_generate_content_adapters() -> dict[str, GeminiGenerateContentAdapter]:

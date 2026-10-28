@@ -680,6 +680,8 @@ class DefaultModelInvoker:
                             model_key=model_key,
                             attempt=number,
                             kind=kind,
+                            reason_code=reason_code,
+                            provider_message=provider_message,
                         ),
                     )
                     if kind is ModelErrorKind.OUTCOME_UNKNOWN:
