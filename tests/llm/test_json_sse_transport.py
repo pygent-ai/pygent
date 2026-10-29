@@ -335,17 +335,22 @@ def test_redact_secrets_scrubs_url_userinfo() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unroutable_connect_budget_elapsed_maps_to_timeout_on_both_transports(
+async def test_hung_local_service_maps_to_timeout_on_both_transports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """httpx and the native client must agree that a connect-phase budget
-    elapse is TIMEOUT, not provider unavailability. Assumes the RFC 5737
-    address is silently dropped rather than actively refused."""
+    """httpx and the native client must agree that an elapsed request budget
+    is TIMEOUT, not provider unavailability. A local listener that never
+    speaks makes the hang deterministic without leaving the machine, so the
+    parity holds in any CI environment."""
 
     monkeypatch.setattr(
         transport_module, "_trust_environment_for_url", lambda _url: False
     )
-    url = "http://192.0.2.1:9/"
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    url = f"http://127.0.0.1:{port}/"
     native_transport = _JsonSSETransport(trust_env_url=url)
     injected_transport = _JsonSSETransport(
         client=httpx.AsyncClient(trust_env=False, timeout=1.0),
@@ -359,6 +364,29 @@ async def test_unroutable_connect_budget_elapsed_maps_to_timeout_on_both_transpo
     finally:
         await native_transport.aclose()
         await injected_transport.aclose()
+        listener.close()
+
+
+@pytest.mark.asyncio
+async def test_httpx_connect_timeout_maps_to_timeout_kind() -> None:
+    """httpx's connect-phase timeout must stay TIMEOUT through the wrap,
+    pinned deterministically with a mock transport instead of a network
+    topology assumption."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("simulated connect timeout", request=request)
+
+    transport = _JsonSSETransport(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        trust_env_url="https://models.example",
+    )
+    try:
+        with pytest.raises(ModelProviderError) as raised:
+            await transport.request_json("POST", "https://models.example/json", {})
+    finally:
+        await transport.aclose()
+
+    assert raised.value.kind is ModelErrorKind.TIMEOUT
 
 
 @pytest.mark.asyncio
