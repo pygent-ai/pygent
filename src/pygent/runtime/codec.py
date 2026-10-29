@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 from pygent.core import (
@@ -99,7 +99,7 @@ def _object(value: object, name: str) -> Mapping[str, Any]:
         raise WireCodecError(str(exc)) from None
 
 
-def _only(value: Mapping[str, Any], allowed: Iterable[str], name: str) -> None:
+def _only(value: Mapping[str, Any], allowed: frozenset[str], name: str) -> None:
     try:
         _only_fields(value, allowed, name)
     except ValueError as exc:
@@ -230,7 +230,7 @@ def message_from_dict(value: object) -> Message:
     message_type = data.get("message_type")
     _only(
         data,
-        set(message_fields_expected_keys(role, MessageProfile.WIRE, message_type)),
+        message_fields_expected_keys(role, MessageProfile.WIRE, message_type),
         "Message",
     )
     try:
@@ -271,7 +271,7 @@ def context_from_dict(
     value: object, *, registry: ContextCodecRegistry = DEFAULT_CONTEXT_CODECS
 ) -> Context:
     data = _object(value, "Context")
-    _only(data, {"schema", "version", "codec", "codec_digest", "data"}, "Context")
+    _only(data, frozenset({"schema", "version", "codec", "codec_digest", "data"}), "Context")
     try:
         identity = (
             cast(str, data["schema"]),
@@ -310,7 +310,7 @@ def invocation_from_dict(
     value: object, *, registry: ContextCodecRegistry = DEFAULT_CONTEXT_CODECS
 ) -> tuple[Message, Context]:
     data = _object(value, "invocation")
-    _only(data, {"message", "context"}, "invocation")
+    _only(data, frozenset({"message", "context"}), "invocation")
     try:
         return message_from_dict(data["message"]), context_from_dict(
             data["context"], registry=registry
