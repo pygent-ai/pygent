@@ -293,17 +293,72 @@ def test_native_transport_error_parts_map_category_to_kind(
     assert detail == "chain text: os error 10061"
 
 
-def test_native_transport_error_parts_fall_back_to_exception_text() -> None:
-    """Errors missing the structured fields stay UNAVAILABLE and keep the
-    plain exception text instead of failing the mapping."""
+def test_native_transport_error_parts_require_structured_fields() -> None:
+    """The native constructor guarantees the structured fields; a plain
+    RuntimeError violates the contract and fails loudly instead of
+    degrading into an unclassified wrap."""
 
     class _BareNativeTransportError(RuntimeError):
         pass
 
-    kind, detail = _native_transport_error_parts(_BareNativeTransportError("plain text"))
+    with pytest.raises(AttributeError):
+        _native_transport_error_parts(_BareNativeTransportError("plain text"))
 
-    assert kind is ModelErrorKind.UNAVAILABLE
-    assert detail == "plain text"
+
+def test_transport_failure_caps_the_redacted_detail() -> None:
+    limit = transport_module._MAX_TRANSPORT_ERROR_MESSAGE_CHARS
+    long_detail = "connect error: " + "x" * (limit * 2)
+
+    failure = transport_module._transport_failure(
+        ModelErrorKind.UNAVAILABLE, long_detail, ()
+    )
+
+    assert failure.provider_message is not None
+    assert len(failure.provider_message) <= limit
+    assert failure.provider_message.startswith("connect error: ")
+
+
+def test_redact_secrets_scrubs_url_userinfo() -> None:
+    """A system proxy echoing its own credentials inside a URL must lose
+    them while the host stays readable for diagnosis."""
+
+    message = (
+        "error sending request for url"
+        " (http://proxyuser:proxypass@proxy.corp:8080/chat/completions)"
+    )
+
+    redacted = transport_module._redact_secrets(message, ())
+
+    assert "proxyuser" not in redacted
+    assert "proxypass" not in redacted
+    assert "[REDACTED]@proxy.corp:8080" in redacted
+
+
+@pytest.mark.asyncio
+async def test_unroutable_connect_budget_elapsed_maps_to_timeout_on_both_transports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """httpx and the native client must agree that a connect-phase budget
+    elapse is TIMEOUT, not provider unavailability. Assumes the RFC 5737
+    address is silently dropped rather than actively refused."""
+
+    monkeypatch.setattr(
+        transport_module, "_trust_environment_for_url", lambda _url: False
+    )
+    url = "http://192.0.2.1:9/"
+    native_transport = _JsonSSETransport(trust_env_url=url)
+    injected_transport = _JsonSSETransport(
+        client=httpx.AsyncClient(trust_env=False, timeout=1.0),
+        trust_env_url=url,
+    )
+    try:
+        for transport in (native_transport, injected_transport):
+            with pytest.raises(ModelProviderError) as raised:
+                await transport.request_json("GET", url, None, timeout=1.0)
+            assert raised.value.kind is ModelErrorKind.TIMEOUT
+    finally:
+        await native_transport.aclose()
+        await injected_transport.aclose()
 
 
 @pytest.mark.asyncio

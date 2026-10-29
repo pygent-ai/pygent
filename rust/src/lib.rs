@@ -68,13 +68,15 @@ fn error_chain_text(error: &(dyn std::error::Error + 'static)) -> String {
     text
 }
 
-// reqwest predicates overlap (a connect timeout is both connect and timeout),
-// so the mapping priority is connect, timeout, body, decode, request.
+// reqwest predicates overlap (a connect-phase timer elapse reports both
+// connect and timeout), so the mapping priority is timeout, connect, body,
+// decode, request: an elapsed timer is a timeout regardless of the phase it
+// fired in, matching httpx's ConnectTimeout classification.
 fn category_from_flags(connect: bool, timeout: bool, body: bool, decode: bool) -> &'static str {
-    if connect {
-        "connect"
-    } else if timeout {
+    if timeout {
         "timeout"
+    } else if connect {
+        "connect"
     } else if body {
         "body"
     } else if decode {
@@ -473,8 +475,10 @@ mod transport_error_tests {
     }
 
     #[test]
-    fn category_flags_follow_connect_timeout_body_decode_priority() {
-        assert_eq!(category_from_flags(true, true, true, true), "connect");
+    fn category_flags_follow_timeout_connect_body_decode_priority() {
+        // An elapsed timer outranks the phase: connect timeouts are timeouts.
+        assert_eq!(category_from_flags(true, true, true, true), "timeout");
+        assert_eq!(category_from_flags(true, false, true, true), "connect");
         assert_eq!(category_from_flags(false, true, true, true), "timeout");
         assert_eq!(category_from_flags(false, false, true, true), "body");
         assert_eq!(category_from_flags(false, false, false, true), "decode");

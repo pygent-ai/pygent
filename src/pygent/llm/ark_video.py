@@ -263,6 +263,10 @@ class ArkVideoClient:
     ) -> FrozenJsonObject:
         deadline = time.monotonic() + behavior.timeout_seconds
         while True:
+            # Window exhaustion is INVALID_RESPONSE on purpose: the kind is
+            # not in the invoker's retry set, so an outer retry can never
+            # re-create a paid video task; PROVIDER_TIMEOUT only records the
+            # underlying cause for diagnostics.
             if time.monotonic() >= deadline:
                 raise ModelProviderError(
                     ModelErrorKind.INVALID_RESPONSE,

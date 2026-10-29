@@ -20,6 +20,7 @@ from .types import ModelErrorKind, ModelFailureReason, ModelProviderError
 
 _DEFAULT_MAX_CONNECTIONS = 56
 _MAX_HTTP_ERROR_BYTES = 64 * 1024
+_MAX_TRANSPORT_ERROR_MESSAGE_CHARS = 2048
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +248,7 @@ async def _read_bounded_body(response: httpx.Response) -> bytes:
 
 
 _KEY_SHAPED_TOKEN = re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b")
+_URL_USERINFO_TOKEN = re.compile(r"(?<=://)[^/@\s]+@")
 
 
 def _redact_secrets(message: str, sent_secrets: Sequence[str]) -> str:
@@ -254,9 +256,13 @@ def _redact_secrets(message: str, sent_secrets: Sequence[str]) -> str:
         if secret and secret in message:
             message = message.replace(secret, "[REDACTED]")
     # Exact matches cannot catch credentials we never sent (e.g. a gateway
-    # echoing its own upstream key); cover the common OpenAI-style key shape
-    # conservatively. Transformed or encoded secrets stay undetectable.
-    return _KEY_SHAPED_TOKEN.sub("[REDACTED]", message)
+    # echoing its own upstream key or a system proxy echoing its own
+    # credentials in a URL). Cover the common OpenAI-style key shape and URL
+    # userinfo conservatively. Transformed or encoded secrets stay
+    # undetectable.
+    return _URL_USERINFO_TOKEN.sub(
+        "[REDACTED]@", _KEY_SHAPED_TOKEN.sub("[REDACTED]", message)
+    )
 
 
 def _native_transport_kind(category: object) -> ModelErrorKind:
@@ -273,18 +279,17 @@ def _native_transport_kind(category: object) -> ModelErrorKind:
     )
 
 
-def _native_transport_error_parts(exc: object) -> tuple[ModelErrorKind, str]:
+def _native_transport_error_parts(
+    exc: _native.NativeTransportError,
+) -> tuple[ModelErrorKind, str]:
     """Split a native structured transport error into (kind, raw detail).
 
     The detail is untrusted provider-adjacent text: it is redacted later by
-    ``_transport_failure``. A missing ``detail`` attribute falls back to the
-    exception text itself.
+    ``_transport_failure``. The native constructor guarantees both structured
+    fields, so a missing attribute fails loudly instead of degrading into an
+    unclassified wrap.
     """
-    detail = getattr(exc, "detail", None)
-    return (
-        _native_transport_kind(getattr(exc, "category", None)),
-        str(exc) if detail is None else detail,
-    )
+    return (_native_transport_kind(exc.category), exc.detail)
 
 
 def _transport_failure(
@@ -293,8 +298,9 @@ def _transport_failure(
     """Wrap a transport-phase failure in the closed provider-error shape.
 
     The provider-controlled ``detail`` text is untrusted: it is redacted
-    against the credentials this client sent before being kept as the
-    diagnostic ``provider_message``.
+    against the credentials this client sent and length-capped before being
+    kept as the diagnostic ``provider_message``, so a pathological provider
+    error chain cannot blow up the public failure payload.
     """
 
     reason = (
@@ -306,7 +312,9 @@ def _transport_failure(
         kind,
         f"model provider request failed: {reason.value}",
         reason_code=reason,
-        provider_message=_redact_secrets(detail, sent_secrets),
+        provider_message=_redact_secrets(detail, sent_secrets)[
+            :_MAX_TRANSPORT_ERROR_MESSAGE_CHARS
+        ],
     )
 
 
