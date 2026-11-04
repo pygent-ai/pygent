@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, replace
 from io import BytesIO
@@ -20,6 +21,7 @@ from pygent import (
     UserMessage,
 )
 from pygent.agent import (
+    ContextCompressionLayer,
     ContextCompressionLimitExceeded,
     ContextCompressionUnavailable,
 )
@@ -60,6 +62,52 @@ class ContextChangingCompressor(RecordingModel):
     async def forward(self, message: Message, context: Context):
         self.calls.append((message, context))
         return self.answer, replace(context, metadata={"changed": True})
+
+
+class CompressorDown(RuntimeError):
+    pass
+
+
+class FailureState:
+    def __init__(self, failures: int) -> None:
+        self.remaining = failures
+
+
+class FlakyCompressor(RecordingModel):
+    trusted_live_resource_attributes = ("recorder", "state")
+
+    def __init__(self, answer: AIMessage, failures: int = 1) -> None:
+        super().__init__(answer)
+        self.state = FailureState(failures)
+
+    async def forward(self, message: Message, context: Context):
+        self.calls.append((message, context))
+        if self.state.remaining > 0:
+            self.state.remaining -= 1
+            raise CompressorDown("compressor down")
+        return self.answer, context
+
+
+class GatedCompressor(RecordingModel):
+    trusted_live_resource_attributes = ("recorder", "entered", "gate")
+
+    def __init__(self, answer: AIMessage) -> None:
+        super().__init__(answer)
+        self.entered = asyncio.Event()
+        self.gate = asyncio.Event()
+
+    async def forward(self, message: Message, context: Context):
+        self.entered.set()
+        await self.gate.wait()
+        return await super().forward(message, context)
+
+
+class EchoCompressor(Module[Message, AIMessage]):
+    trusted_live_resource_attributes = ()
+
+    async def forward(self, message: Message, context: Context):
+        marker = context.messages[0].content.split(" ")[0]
+        return AIMessage(content=f"snapshot:{marker}"), context
 
 
 class EmptyTools(Module[AIMessage, ToolMessage]):
@@ -486,6 +534,150 @@ async def test_agent_forks_projection_and_preserves_current_commits() -> None:
 
 
 @pytest.mark.asyncio
+async def test_compressor_failure_keeps_context_and_recovers() -> None:
+    model = RecordingModel(AIMessage(content="done"))
+    compressor = FlakyCompressor(AIMessage(content="compact snapshot"))
+    agent = build_agent(
+        model=model,
+        compressor=compressor,
+        context_window_tokens=300,
+        compression_context_window_tokens=4096,
+    )
+    original = replace(
+        agent.new_context(),
+        messages=(UserMessage(content="old " + "x" * 2000),),
+    )
+
+    with pytest.raises(CompressorDown):
+        await agent.invoke(UserMessage(content="current"), original)
+
+    assert original.compression_count == 0
+    assert [message.content for message in original.messages] == [
+        "old " + "x" * 2000
+    ]
+    assert not model.calls
+    assert len(compressor.calls) == 1
+
+    answer, final_context = await agent.invoke(
+        UserMessage(content="current"), original
+    )
+
+    assert answer.content == "done"
+    assert [message.content for message in final_context.messages] == [
+        "compact snapshot",
+        "current",
+        "done",
+    ]
+    assert final_context.compression_count == 1
+    assert len(model.calls) == 1
+    assert len(compressor.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_manual_compress_propagates_failure_without_pollution() -> None:
+    compressor = FlakyCompressor(AIMessage(content="compact snapshot"), failures=10)
+    agent = build_agent(
+        model=RecordingModel(AIMessage(content="done")),
+        compressor=compressor,
+    )
+    original = replace(
+        agent.new_context(),
+        messages=(UserMessage(content="old " + "x" * 200),),
+        compression_count=1,
+        projection_revision=3,
+    )
+
+    with pytest.raises(CompressorDown):
+        await agent.compress(original)
+
+    assert original.compression_count == 1
+    assert original.projection_revision == 3
+    assert [message.content for message in original.messages] == [
+        "old " + "x" * 200
+    ]
+    assert len(compressor.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_manual_compress_leaves_no_state() -> None:
+    compressor = GatedCompressor(AIMessage(content="compact snapshot"))
+    agent = build_agent(
+        model=RecordingModel(AIMessage(content="done")),
+        compressor=compressor,
+    )
+    original = replace(
+        agent.new_context(),
+        messages=(UserMessage(content="old " + "x" * 200),),
+        compression_count=2,
+        projection_revision=4,
+    )
+
+    task = asyncio.create_task(agent.compress(original))
+    await compressor.entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert original.compression_count == 2
+    assert original.projection_revision == 4
+    assert [message.content for message in original.messages] == [
+        "old " + "x" * 200
+    ]
+
+    compressor.gate.set()
+    compressed = await agent.compress(original)
+
+    assert [message.content for message in compressed.messages] == [
+        "compact snapshot"
+    ]
+    assert compressed.compression_count == 3
+    assert compressed.projection_revision == 5
+    await asyncio.sleep(0.1)  # drain the orphaned Root call behind the gate
+
+
+@pytest.mark.asyncio
+async def test_concurrent_manual_compresses_stay_isolated() -> None:
+    agent = build_agent(
+        model=RecordingModel(AIMessage(content="done")),
+        compressor=EchoCompressor(),
+    )
+    alpha = replace(
+        agent.new_context(),
+        messages=(UserMessage(content="alpha " + "x" * 200),),
+        compression_count=1,
+        projection_revision=1,
+    )
+    beta = replace(
+        agent.new_context(),
+        messages=(UserMessage(content="beta " + "y" * 200),),
+        compression_count=7,
+        projection_revision=9,
+    )
+
+    alpha_out, beta_out = await asyncio.gather(
+        agent.compress(alpha),
+        agent.compress(beta),
+    )
+
+    assert [message.content for message in alpha_out.messages] == [
+        "snapshot:alpha"
+    ]
+    assert alpha_out.compression_count == 2
+    assert alpha_out.projection_revision == 2
+    assert [message.content for message in beta_out.messages] == [
+        "snapshot:beta"
+    ]
+    assert beta_out.compression_count == 8
+    assert beta_out.projection_revision == 10
+    assert [message.content for message in alpha.messages] == [
+        "alpha " + "x" * 200
+    ]
+    assert [message.content for message in beta.messages] == [
+        "beta " + "y" * 200
+    ]
+
+
+@pytest.mark.asyncio
 async def test_compression_prompt_can_trigger_early_compression() -> None:
     model = RecordingModel(AIMessage(content="done"))
     compressor = RecordingModel(AIMessage(content="summary"))
@@ -674,6 +866,164 @@ async def test_compression_budget_is_explicit_within_an_invocation() -> None:
 
     with pytest.raises(ContextCompressionLimitExceeded):
         await agent.react.model.invoke(UserMessage(content="current"), context)
+
+
+@pytest.mark.asyncio
+async def test_manual_compress_replaces_projection_with_snapshot() -> None:
+    model = RecordingModel(AIMessage(content="done"))
+    compressor = RecordingModel(AIMessage(content="compact snapshot"))
+    agent = build_agent(model=model, compressor=compressor)
+    original = (
+        UserMessage(content="u1 " + "x" * 500),
+        AIMessage(content="a1 " + "y" * 500),
+    )
+    context = replace(
+        agent.new_context(),
+        messages=original,
+        committed_messages=(UserMessage(content="previous invocation"),),
+        compression_count=2,
+        projection_revision=5,
+    )
+
+    compressed = await agent.compress(context)
+
+    compression_request, compression_context = compressor.calls[0]
+    assert compression_request.content == agent.compression_prompt
+    assert compression_request.kind == "pygent.context.compression_request"
+    assert compression_context.messages == original
+    assert compression_context.tools == ()
+    assert not model.calls
+    assert len(compressed.messages) == 1
+    snapshot = compressed.messages[0]
+    assert snapshot.content == "compact snapshot"
+    assert snapshot.kind == "pygent.context.snapshot"
+    assert snapshot.slot == "pygent.context.snapshot"
+    assert dict(snapshot.metadata) == {
+        "compression_number": 3,
+        "source_projection_revision": 5,
+    }
+    assert compressed.compression_count == 3
+    assert compressed.projection_revision == 6
+    assert compressed.committed_messages == (
+        UserMessage(content="previous invocation"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_manual_compress_can_run_repeatedly_without_budget() -> None:
+    compressor = RecordingModel(AIMessage(content="compact snapshot"))
+    agent = build_agent(
+        model=RecordingModel(AIMessage(content="done")),
+        compressor=compressor,
+        max_compressions=1,
+    )
+    context = replace(
+        agent.new_context(),
+        messages=(UserMessage(content="old " + "x" * 200),),
+        compression_count=1,
+        projection_revision=3,
+    )
+
+    first = await agent.compress(context)
+    second = await agent.compress(first)
+
+    assert len(compressor.calls) == 2
+    assert second.compression_count == 3
+    assert second.projection_revision == 5
+    assert dict(second.messages[0].metadata) == {
+        "compression_number": 3,
+        "source_projection_revision": 4,
+    }
+
+
+@pytest.mark.asyncio
+async def test_manual_compress_without_history_raises() -> None:
+    compressor = RecordingModel(AIMessage(content="summary"))
+    agent = build_agent(
+        model=RecordingModel(AIMessage(content="done")),
+        compressor=compressor,
+    )
+
+    with pytest.raises(ContextCompressionUnavailable, match="no projected history"):
+        await agent.compress(agent.new_context())
+
+    assert not compressor.calls
+
+
+@pytest.mark.asyncio
+async def test_manual_compress_request_must_fit_its_window() -> None:
+    compressor = RecordingModel(AIMessage(content="summary"))
+    agent = build_agent(
+        model=RecordingModel(AIMessage(content="done")),
+        compressor=compressor,
+        compression_context_window_tokens=300,
+        compression_prompt="p" * 2000,
+    )
+    context = replace(agent.new_context(), messages=(UserMessage(content="old"),))
+
+    with pytest.raises(
+        ContextCompressionUnavailable, match="compression context window"
+    ):
+        await agent.compress(context)
+
+
+@pytest.mark.asyncio
+async def test_compression_layer_compresses_standalone() -> None:
+    compressor = RecordingModel(AIMessage(content="compact snapshot"))
+    layer = ContextCompressionLayer(
+        model=RecordingModel(AIMessage(content="done")),
+        compressor=compressor,
+        compression_prompt="Summarize goals, constraints, and unfinished work.",
+        context_window_tokens=4096,
+        compression_trigger_ratio=0.9,
+        compression_context_window_tokens=4096,
+        max_compressions=1,
+    )
+    context = PygentAgentContext(
+        system_prompt="You are a careful coding agent.",
+        messages=(UserMessage(content="old " + "x" * 200),),
+        compression_count=1,
+        projection_revision=3,
+    )
+
+    compressed = await layer.compress(context)
+
+    assert [message.content for message in compressed.messages] == [
+        "compact snapshot"
+    ]
+    assert compressed.compression_count == 2
+    assert compressed.projection_revision == 4
+
+
+@pytest.mark.asyncio
+async def test_manual_compressed_context_feeds_the_next_invocation() -> None:
+    answer = AIMessage(content="done")
+    model = RecordingModel(answer)
+    compressor = RecordingModel(AIMessage(content="compact snapshot"))
+    agent = build_agent(model=model, compressor=compressor)
+    original = (
+        UserMessage(content="u1 " + "x" * 500),
+        AIMessage(content="a1 " + "y" * 500),
+    )
+    context = replace(agent.new_context(), messages=original)
+
+    compressed = await agent.compress(context)
+    returned, final_context = await agent.invoke(
+        UserMessage(content="continue"), compressed
+    )
+
+    assert returned == answer
+    assert len(compressor.calls) == 1
+    foreground_current, foreground_context = model.calls[0]
+    assert foreground_current.content == "continue"
+    assert [message.content for message in foreground_context.messages] == [
+        "compact snapshot",
+    ]
+    assert [message.content for message in final_context.messages] == [
+        "compact snapshot",
+        "continue",
+        "done",
+    ]
 
 
 @pytest.mark.asyncio

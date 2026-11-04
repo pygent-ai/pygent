@@ -7,7 +7,7 @@ import pytest
 from pygent.core import Agent, Module, RecurrentModule, RemoteModule
 from pygent.core._module_contracts import _execution_scope
 from pygent.core.values import AIMessage, Context, UserMessage
-from pygent.runtime import LocalRuntime
+from pygent.runtime import ExecutionOptions, LocalRuntime
 
 
 class Child(Module[UserMessage, AIMessage]):
@@ -42,6 +42,55 @@ async def test_direct_invoke_executes_children_and_restores_scope() -> None:
     assert output == AIMessage(content="child:hello")
     assert context.messages == (UserMessage(content="hello"), output)
     assert _execution_scope.get() is None
+
+
+@pytest.mark.asyncio
+async def test_module_call_runs_as_child_inside_an_execution() -> None:
+    class ViaCall(Module[UserMessage, AIMessage]):
+        def __init__(self, child: Child) -> None:
+            super().__init__()
+            self.child = child
+
+        async def forward(
+            self, message: UserMessage, context: Context
+        ) -> tuple[AIMessage, Context]:
+            return await self.child.call(message, context)
+
+    output, context = await ViaCall(Child()).invoke(
+        UserMessage(content="hello"), Context()
+    )
+
+    assert output == AIMessage(content="child:hello")
+    assert context.messages == (UserMessage(content="hello"), output)
+    assert _execution_scope.get() is None
+
+
+@pytest.mark.asyncio
+async def test_module_call_runs_as_root_outside_any_execution() -> None:
+    output, context = await Child().call(
+        UserMessage(content="hello"), Context(), execution=ExecutionOptions()
+    )
+
+    assert output == AIMessage(content="child:hello")
+    assert context.messages == (UserMessage(content="hello"), output)
+    assert _execution_scope.get() is None
+
+
+@pytest.mark.asyncio
+async def test_module_call_rejects_execution_options_for_child_calls() -> None:
+    class ViaCall(Module[UserMessage, AIMessage]):
+        def __init__(self, child: Child) -> None:
+            super().__init__()
+            self.child = child
+
+        async def forward(
+            self, message: UserMessage, context: Context
+        ) -> tuple[AIMessage, Context]:
+            await self.child.call(message, context, execution=ExecutionOptions())
+            raise AssertionError("unreachable")
+
+    with pytest.raises(RuntimeError, match="execution options"):
+        await ViaCall(Child()).invoke(UserMessage(content="hello"), Context())
 
 
 @pytest.mark.asyncio

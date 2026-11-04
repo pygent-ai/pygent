@@ -266,6 +266,31 @@ class Module(Generic[InputMessageT, OutputMessageT]):
         handle = await self.start(*args, execution=execution, **kwargs)
         return await handle._owned_result()
 
+    async def call(
+        self,
+        message: InputMessageT,
+        context: Context,
+        *,
+        execution: ExecutionOptions | None = None,
+    ) -> tuple[OutputMessageT, Context]:
+        """Call this Module as a Child inside the active execution.
+
+        Outside any execution scope the Module runs as its own Root call
+        with the given execution options. Child calls inherit the active
+        execution, so passing ``execution`` there is rejected instead of
+        silently ignored.
+        """
+
+        if _execution_scope.get() is None:
+            result = await self.invoke(message, context, execution=execution)
+            return cast(tuple[OutputMessageT, Context], result)
+        if execution is not None:
+            raise RuntimeError(
+                "call() execution options only apply to a Root call; "
+                "Child calls inherit the active execution"
+            )
+        return await self(message, context)
+
     def _start_direct(
         self,
         args: tuple[Any, ...],

@@ -32,6 +32,7 @@ workspace reminder、ToolResult reminder、压缩提示词正文和长期历史�
 ```python
 from pygent import PygentAgent, PygentAgentContext
 from pygent.agent import (
+    ContextCompressionLayer,
     ContextCompressionLimitExceeded,
     ContextCompressionUnavailable,
 )
@@ -283,6 +284,26 @@ capacity 和 managed-effect 规则。
 - Compressor 修改 fork Context、返回空结果或带 ToolCall：
   `ContextCompressionUnavailable`。
 
+### 手动触发压缩
+
+`PygentAgent.compress()` 与 `ContextCompressionLayer.compress()` 在任意时刻无条件执行
+一轮压缩，宿主可以在两次调用之间主动收缩投影：
+
+```python
+compressed = await agent.compress(context)
+answer, context = await agent.invoke(UserMessage(content="next"), compressed)
+```
+
+- 不检查 token 阈值，连续调用不受 invocation 的 `max_compressions` 预算约束；
+- 压缩语义与自动路径一致：fork（tools 为空）、`pygent.context.snapshot` 替换投影、
+  `compression_count` 与 `projection_revision` 各增加一次；
+- 没有 pending current，自动路径的"压缩后前台复检"不适用；手动压缩后的投影仍可能超限，
+  由下一次 `forward()` 的自动压缩接手（其预算在调用边界重置）；
+- 空投影历史或压缩请求超窗仍抛 `ContextCompressionUnavailable`。
+
+`ContextCompressionLayer` 可以脱离 `PygentAgent` 单独组装，构造参数与自动路径一致；
+在活跃 Execution 内调用时 compressor 作为 Child 运行，否则走独立 Root 调用。
+
 ### 自定义 Compressor
 
 `compressor` 是普通 Module，不要求专用基类。开发者可以组合多个模型、检索或文件读取，
@@ -385,7 +406,7 @@ attempt 或 request snapshot。全部候选都不兼容而使用请求级不可�
 3. Initial 与 Mid-run 输入都是开发者构造的真实 UserMessage。
 4. Runtime 只管理 Execution Input，不解释 Projection Operation。
 5. ReAct 在每次模型调用前和最终返回前消费输入。
-6. 自动压缩和手动 `ReplaceMessageProjection` 只替换模型投影，不删除本次已经记录的提交增量。
+6. 自动压缩、手动压缩和手动 `ReplaceMessageProjection` 只替换模型投影，不删除本次已经记录的提交增量。
 7. 每次有效投影变化只增加一次 `projection_revision`。
 8. 压缩后的 replacement 会阻止过期 append-only rebase。
 9. 每个真实 Provider attempt 都有一份完整、有界的请求快照。

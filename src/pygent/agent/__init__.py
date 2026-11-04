@@ -1,4 +1,5 @@
 from .pygent_agent import (
+    ContextCompressionLayer,
     ContextCompressionLimitExceeded,
     ContextCompressionUnavailable,
     PygentAgent,
@@ -21,6 +22,7 @@ __all__ = [
     "REACT_PROJECTION_OPERATION_KIND",
     "TOOL_BATCH_INTERRUPT_NOTICE",
     "AppendToolResultContent",
+    "ContextCompressionLayer",
     "ContextCompressionLimitExceeded",
     "ContextCompressionUnavailable",
     "InjectionKind",

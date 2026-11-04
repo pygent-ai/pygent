@@ -104,7 +104,9 @@ class PygentAgentContext(Context):
         )
 
 
-class _ContextCompressionLayer(Module[Message, AIMessage]):
+class ContextCompressionLayer(Module[Message, AIMessage]):
+    """Token-window compression coordinator for a foreground model Module."""
+
     execution_requirements = _COORDINATOR_EXECUTION_REQUIREMENTS
 
     def __init__(
@@ -126,6 +128,81 @@ class _ContextCompressionLayer(Module[Message, AIMessage]):
         self.compression_trigger_ratio = compression_trigger_ratio
         self.compression_context_window_tokens = compression_context_window_tokens
         self.max_compressions = max_compressions
+
+    async def compress(self, context: PygentAgentContext) -> PygentAgentContext:
+        """Run one compression round immediately and return the updated context.
+
+        Replaces the projected history with the compressor's snapshot without
+        checking token thresholds or the invocation compression budget. There
+        is no pending current message here, so the foreground re-check that
+        guards automatic compression does not apply.
+        """
+        if not isinstance(context, PygentAgentContext):
+            raise TypeError("ContextCompressionLayer requires PygentAgentContext")
+        compression_request = self._compression_request()
+        compression = await _request_token_estimate(
+            compression_request,
+            context,
+            (),
+            _INITIAL_TOKEN_SCALE_PPM,
+            self.compressor,
+        )
+        return await self._compress_once(
+            context,
+            compression_request,
+            compression,
+        )
+
+    def _compression_request(self) -> UserMessage:
+        return UserMessage(
+            content=self.compression_prompt,
+            kind="pygent.context.compression_request",
+        )
+
+    async def _compress_once(
+        self,
+        context: PygentAgentContext,
+        compression_request: UserMessage,
+        compression: _RequestTokenEstimate,
+    ) -> PygentAgentContext:
+        """Run the shared compression pipeline; callers own the pre-checks."""
+        if not context.messages:
+            raise ContextCompressionUnavailable(
+                "context has no projected history to compress"
+            )
+        if compression.total_tokens >= self.compression_context_window_tokens:
+            raise ContextCompressionUnavailable(
+                "compression request exceeds the compression context window"
+            )
+        compression_context = replace(context, tools=())
+        summary, returned_context = await self.compressor.call(
+            compression_request,
+            compression_context,
+        )
+        if returned_context != compression_context:
+            raise ContextCompressionUnavailable(
+                "compressor must preserve its fork context"
+            )
+        if not summary.content.strip() or summary.tool_calls:
+            raise ContextCompressionUnavailable(
+                "compressor must return non-empty text without tool calls"
+            )
+
+        snapshot = UserMessage(
+            content=summary.content,
+            kind=_CONTEXT_SNAPSHOT_KIND,
+            slot=_CONTEXT_SNAPSHOT_SLOT,
+            metadata={
+                "compression_number": context.compression_count + 1,
+                "source_projection_revision": context.projection_revision,
+            },
+        )
+        return replace(
+            context,
+            messages=(snapshot,),
+            compression_count=context.compression_count + 1,
+            projection_revision=context.projection_revision + 1,
+        )
 
     async def forward(
         self, message: Message, context: Context
@@ -171,10 +248,7 @@ class _ContextCompressionLayer(Module[Message, AIMessage]):
         foreground_trigger = int(
             self.context_window_tokens * self.compression_trigger_ratio
         )
-        compression_request = UserMessage(
-            content=self.compression_prompt,
-            kind="pygent.context.compression_request",
-        )
+        compression_request = self._compression_request()
         compression = await _request_token_estimate(
             compression_request,
             context,
@@ -195,43 +269,10 @@ class _ContextCompressionLayer(Module[Message, AIMessage]):
             raise ContextCompressionLimitExceeded(
                 "foreground context compression budget exhausted"
             )
-        if not context.messages:
-            raise ContextCompressionUnavailable(
-                "oversized request has no projected history to compress"
-            )
-        if compression.total_tokens >= self.compression_context_window_tokens:
-            raise ContextCompressionUnavailable(
-                "compression request exceeds the compression context window"
-            )
-
-        compression_context = replace(context, tools=())
-        summary, returned_context = await self.compressor(
-            compression_request,
-            compression_context,
-        )
-        if returned_context != compression_context:
-            raise ContextCompressionUnavailable(
-                "compressor must preserve its fork context"
-            )
-        if not summary.content.strip() or summary.tool_calls:
-            raise ContextCompressionUnavailable(
-                "compressor must return non-empty text without tool calls"
-            )
-
-        snapshot = UserMessage(
-            content=summary.content,
-            kind=_CONTEXT_SNAPSHOT_KIND,
-            slot=_CONTEXT_SNAPSHOT_SLOT,
-            metadata={
-                "compression_number": context.compression_count + 1,
-                "source_projection_revision": context.projection_revision,
-            },
-        )
-        prepared = replace(
+        prepared = await self._compress_once(
             context,
-            messages=(snapshot,),
-            compression_count=context.compression_count + 1,
-            projection_revision=context.projection_revision + 1,
+            compression_request,
+            compression,
         )
         compressed = await _request_token_estimate(
             current,
@@ -300,7 +341,7 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
             raise ValueError("compression_trigger_ratio must be between zero and one")
         self.system_prompt = system_prompt
         self.compression_prompt = compression_prompt
-        compressed_model = _ContextCompressionLayer(
+        self.compression = ContextCompressionLayer(
             model=model,
             compressor=compressor,
             compression_prompt=compression_prompt,
@@ -310,7 +351,7 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
             max_compressions=max_compressions,
         )
         self.react = ReActLayer(
-            model=compressed_model,
+            model=self.compression,
             tools=tools,
             max_steps=max_steps,
             max_model_calls=max_model_calls,
@@ -339,6 +380,18 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
         )
         answer, next_context = await self.react(message, invocation_context)
         return answer, cast(_PygentAgentContextT, next_context)
+
+    async def compress(
+        self, context: _PygentAgentContextT
+    ) -> _PygentAgentContextT:
+        """Run one compression round immediately and return the updated context.
+
+        Delegates to the agent's :class:`ContextCompressionLayer` without
+        checking token thresholds or the invocation compression budget;
+        ``forward`` still enforces both on its automatic path.
+        """
+        compressed = await self.compression.compress(context)
+        return cast(_PygentAgentContextT, compressed)
 
 
 def _request_token_units(
@@ -437,6 +490,7 @@ def _message_projection(message: Message) -> dict[str, object]:
 
 
 __all__ = [
+    "ContextCompressionLayer",
     "ContextCompressionLimitExceeded",
     "ContextCompressionUnavailable",
     "PygentAgent",

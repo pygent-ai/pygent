@@ -117,6 +117,8 @@ message, context = await agent.invoke(
 
 `await module(*args, **kwargs)` 只表示活动 execution scope 内的 Child 调用；Root 必须使用 `module.invoke()` 或 `module.stream()`。这样同一调用语法不会在 scope 内外分别表示 Child 和 Root。
 
+`Module.call(message, context, execution=...)` 是显式的边界自适应入口：活动 execution scope 内等价于 Child 调用，scope 外自动作为独立 Root direct execution 运行。它不改变 `await module(...)` 只表示 Child 的语法契约，供组合层在两种上下文中复用同一调用代码。`execution=...` 只作用于 Root 路径；活动 scope 内传入会被拒绝，而不是静默忽略。
+
 直接执行只承诺本地、瞬时语义，不承诺 Binding 容量、远程 placement、durable retry、跨进程恢复或可重连事件。需要这些能力时使用托管执行。
 
 ## 托管非流式执行
