@@ -614,6 +614,62 @@ async def test_started_effect_without_decision_recovers_by_original_rules(
         await runtime.close()
 
 
+@pytest.mark.asyncio
+async def test_duplicate_step_decision_never_rewrites_effects(tmp_path) -> None:
+    # The first determination owns the step identity forever: a duplicate
+    # submission returns the journaled decision unchanged and performs no
+    # writes, so it cannot finalize effects outside the original decision.
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        bound = runtime.bind(_GatherProbe())
+        await history.create_execution(
+            execution_id="dup-run",
+            request_id="dup-request",
+            plan_id=bound.plan.plan_id,
+            input=invocation_to_dict(UserMessage(content="go"), Context()),
+            status="running",
+        )
+        spec = {
+            "side_effect": "read",
+            "idempotency": "inherent",
+            "retry_policy": "replay_safe",
+            "idempotency_key": None,
+        }
+        for call_index in (0, 1):
+            await history.begin_effect(
+                execution_id="dup-run",
+                module_path=bound.plan.root,
+                call_index=call_index,
+                effect_type="probe.effect",
+                request={"tag": f"c{call_index}"},
+                spec=spec,
+            )
+
+        first = await history.mark_step_interrupted(
+            execution_id="dup-run",
+            module_path=bound.plan.root,
+            step_index=0,
+            cancelled=(0, 1),
+            interrupt_effects=((bound.plan.root, 0),),
+        )
+        second = await history.mark_step_interrupted(
+            execution_id="dup-run",
+            module_path=bound.plan.root,
+            step_index=0,
+            cancelled=(0,),  # different content on purpose
+            interrupt_effects=((bound.plan.root, 1),),  # outside the first decision
+        )
+
+        assert second == first
+        rows = await history._db().execute_fetchall(
+            "SELECT call_index,status FROM effects "
+            "WHERE module_path=? ORDER BY call_index",
+            (bound.plan.root,),
+        )
+        assert rows == [(0, "interrupted"), (1, "started")]
+        await runtime.close()
+
+
 class _GatherProbe(Module[UserMessage, AIMessage]):
     """Two parallel managed effects; reports how many children kept results."""
 

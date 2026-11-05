@@ -96,27 +96,24 @@ class ExecutionStepHistoryMixin:
         cancelled children reported, and the pending-input snapshot. The
         trigger identity is stored only when that input is still unconsumed at
         the decision boundary, so a stale report can never claim an input that
-        a drain already consumed. An already-journaled decision is returned
-        unchanged: the first determination wins and replay never rewrites
-        history.
+        a drain already consumed.
+
+        Idempotency is decided before any write: when a decision already
+        exists for this step identity it is returned untouched, so a duplicate
+        call can never finalize effects outside the original determination.
+        Only the first creation finalizes the reported effects.
         """
 
         async def operation(db: aiosqlite.Connection) -> StoredStepInterrupt:
-            if interrupt_effects:
-                await db.executemany(
-                    "UPDATE effects SET status='interrupted',result_json=? "
-                    "WHERE execution_id=? AND module_path=? AND call_index=? "
-                    "AND status='started'",
-                    [
-                        (
-                            _json({"interrupted": True}),
-                            execution_id,
-                            effect_module_path,
-                            call_index,
-                        )
-                        for effect_module_path, call_index in interrupt_effects
-                    ],
+            existing = await (
+                await db.execute(
+                    "SELECT detail_json FROM execution_step_interrupts "
+                    "WHERE execution_id=? AND module_path=? AND step_index=?",
+                    (execution_id, module_path, step_index),
                 )
+            ).fetchone()
+            if existing is not None:
+                return _decode_step_interrupt(module_path, step_index, existing[0])
             trigger = trigger_input_sequence
             if trigger is not None:
                 committed = await db.execute_fetchall(
@@ -146,29 +143,35 @@ class ExecutionStepHistoryMixin:
             }
             cursor = await db.execute(
                 "INSERT INTO execution_step_interrupts"
-                "(execution_id,module_path,step_index,detail_json) VALUES(?,?,?,?) "
-                "ON CONFLICT(execution_id,module_path,step_index) DO NOTHING",
+                "(execution_id,module_path,step_index,detail_json) VALUES(?,?,?,?)",
                 (execution_id, module_path, step_index, _json(detail)),
             )
-            if cursor.rowcount == 1:
-                return StoredStepInterrupt(
-                    module_path=module_path,
-                    step_index=step_index,
-                    cancelled=tuple(cancelled),
-                    trigger_input_sequence=trigger,
-                    pending_input_sequences=tuple(
-                        int(row[0]) for row in pending
-                    ),
+            if cursor.rowcount != 1:  # pragma: no cover - writers are serialized
+                raise HistoryStoreError("step decision insert lost its write slot")
+            if interrupt_effects:
+                await db.executemany(
+                    "UPDATE effects SET status='interrupted',result_json=? "
+                    "WHERE execution_id=? AND module_path=? AND call_index=? "
+                    "AND status='started'",
+                    [
+                        (
+                            _json({"interrupted": True}),
+                            execution_id,
+                            effect_module_path,
+                            call_index,
+                        )
+                        for effect_module_path, call_index in interrupt_effects
+                    ],
                 )
-            row = await (
-                await db.execute(
-                    "SELECT detail_json FROM execution_step_interrupts "
-                    "WHERE execution_id=? AND module_path=? AND step_index=?",
-                    (execution_id, module_path, step_index),
-                )
-            ).fetchone()
-            assert row is not None
-            return _decode_step_interrupt(module_path, step_index, row[0])
+            return StoredStepInterrupt(
+                module_path=module_path,
+                step_index=step_index,
+                cancelled=tuple(cancelled),
+                trigger_input_sequence=trigger,
+                pending_input_sequences=tuple(
+                    int(row[0]) for row in pending
+                ),
+            )
 
         return cast(
             StoredStepInterrupt,
