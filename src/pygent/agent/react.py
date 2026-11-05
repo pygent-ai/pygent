@@ -180,8 +180,8 @@ class ReActLayer(Module[UserMessage, AIMessage]):
         infrastructure = active_infrastructure()
         state = _SteeringState(self._steering_event(infrastructure))
         if state.event is None or infrastructure is None:
-            # No interrupt channel (direct execution, durable replay, remote
-            # worker): steering applies at the wait-mode drain points only.
+            # No interrupt channel (direct execution): steering applies at the
+            # wait-mode drain points only.
             return await self._run_react(message, context, state, infrastructure)
         assert infrastructure is not None
 
@@ -207,6 +207,14 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                 return results[0]
             finally:
                 await remove_listener(REACT_PROJECTION_OPERATION_KIND, signal_immediate)
+
+        if self._input_arrival_event(infrastructure) is None:
+            # Durable executions (and any runtime without an in-memory arrival
+            # signal) must never poll a receive from a watcher: every receive
+            # writes a deterministic receipt, so a scheduling-dependent poll
+            # would change replay. Committed-input notifications drive listener
+            # mode, and boundary drains remain the lossless fallback.
+            return await self._run_react(message, context, state, infrastructure)
 
         async def run() -> tuple[AIMessage, Context]:
             try:
@@ -478,7 +486,7 @@ class ReActLayer(Module[UserMessage, AIMessage]):
             tool_context = _commit_message(history, current)
             tool_message, tool_context = await self.tools(answer, tool_context)
             tool_calls += calls_this_turn
-            if state.event is not None and state.event.is_set():
+            if _tool_batch_interrupted(tool_message):
                 state.tool_batch_interrupted = True
                 await self.emit(
                     kind="react.interrupted",
@@ -487,7 +495,11 @@ class ReActLayer(Module[UserMessage, AIMessage]):
                         "call_ids": tuple(call.call_id for call in answer.tool_calls),
                     },
                 )
-                if not state.listener_mode and not state.has_pending_immediate():
+                if (
+                    state.event is not None
+                    and not state.listener_mode
+                    and not state.has_pending_immediate()
+                ):
                     # Immediates absorbed while the batch ran stay pending for
                     # the next drain; their interrupt signal survives until
                     # they are consumed.
@@ -729,6 +741,20 @@ class ReActLayer(Module[UserMessage, AIMessage]):
 def _admit(budget: str, *, used: int, requested: int, limit: int) -> None:
     if used + requested > limit:
         raise ReActBudgetExceeded(budget, limit=limit, requested=requested)
+
+
+def _tool_batch_interrupted(message: ToolMessage) -> bool:
+    """Derive the batch interruption from committed results, not live signals.
+
+    Cancelled and detached results with this marker are produced only by the
+    steering-interrupt path, so replay reconstructs the same injected notice
+    without the interrupt event ever being set. A batch that finished before
+    the interrupt was applied keeps every result and gets no notice.
+    """
+
+    return any(
+        result.error_code == "interrupted_by_steering" for result in message.results
+    )
 
 
 def _append_message(context: Context, message: Message) -> Context:

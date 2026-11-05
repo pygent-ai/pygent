@@ -111,6 +111,18 @@ Runtime 默认只能提供 at-least-once 执行语义。只有底层 Provider、
 
 附着与恢复严格分离。`get_execution_handle(execution_id)` 只读取 snapshot、outcome 和 journal，或向当前 owner 写入取消请求；它不得取得 claim 或启动 `forward()`。只有显式 `recover()` 能在验证 ExecutionPlan、恢复资格和原 admission manifest 后取得新 claim。
 
+## 立即打断（Immediate Steering）与持久化
+
+`send_input(kind, value)` 且输入被模块识别为 immediate steering 时，Durable 与非 Durable Execution 具有一致语义：尽快协作取消当前可取消的模型/工具 Child，在确定性 drain 点消费该输入，并在同一 Execution 内继续。开启 Durability 不再退化为仅在 Step 边界生效。该语义由以下契约支撑：
+
+- **事实与通知分离**。SQLite 已提交的 Execution Input 是唯一事实；提交成功后 Runtime 向进程内 Owner 发送一次性的非消费型通知（`peek_execution_inputs` 只读已提交且未消费的输入，不推进消费者游标、不写收据）。通知丢失、重复或派发失败只影响打断时延，输入仍会在下一个确定性 drain 点被消费。
+- **中断是 Step 结果**。被打断的 Step 由 Owner 按 `(module_path, step_index)` 稳定身份写入 `execution_step_interrupts` 决策记录，同一事务内快照当时已提交未消费的输入序列（即触发输入关联）；被取消 Child 中仍在 `started` 状态的 effect 转为 `interrupted` 终态。已完成的 effect 保留其结果；已完成的 Step 不因迟到通知被追溯打断。
+- **重放确定性**。恢复 attempt 不依赖实时信号：读到中断决策的 Step 直接按决策重放；已提交 effect 走 digest 校验重放，`interrupted` effect 抛出 `StepInterrupted` 并由协作取消原语转换为 `cancelled` 结果，决策中标记为取消的 Child 位置即使其 effect 已提交也按取消处理。输入消费顺序仍由既有 `receive` 收据复现，触发输入不会被重复应用。
+- **Durable 专属纪律**。Durable Execution 没有 in-memory arrival 信号，ReAct 的 steering watcher（会执行 `receive`）不会在其中运行—— watcher 的空观察会写入受调度时机影响的持久收据，破坏重放。
+- **跨 Runtime Owner**。`_DurableExecutionHandle.send_input()` 只提交事实；跨进程 Owner 通知不在本契约内，Owner 通过确定性 drain 兜底发现输入，不承诺零轮询时延。
+
+剩余边界：Owner 在"取消 Child、写入 effect interrupted 终态"之后、"写入 Step 决策记录"之前崩溃（或决策记录写入失败）时，中断前尚未提交任何 effect 的 Child 在恢复时无法从 effect journal 区分"已取消"与"全新执行"；该窗口为一个存储事务宽度，恢复结果可能与原 attempt 不同。提交了 effect 的 Child 始终按 `interrupted` 决策重放。该窗口不产生重复外部副作用，但不是完全的崩溃原子性；依赖严格崩溃一致性的部署应在 effect 前保持可重试边界。
+
 ## Model、Tool 与事件重放
 
 - Model 调用可能在响应丢失后重复产生费用和非确定性输出；Runtime 应记录 model key、attempt、请求关联身份和已提交结果。

@@ -79,7 +79,11 @@ class _ExecutionRecord:
     module_calls: dict[str, int] = field(default_factory=dict)
     effect_calls: dict[str, int] = field(default_factory=dict)
     input_receive_calls: dict[str, int] = field(default_factory=dict)
+    abortable_calls: dict[str, int] = field(default_factory=dict)
+    has_step_interrupts: bool = False
     input_inbox: MemoryExecutionInbox = field(default_factory=MemoryExecutionInbox)
+    input_notification_task: asyncio.Task[None] | None = None
+    dispatched_input_watermark: int = -1
     runnable_held: bool = False
     deadline_fired: bool = False
     release_error: BaseException | None = None
@@ -103,6 +107,65 @@ class _ExecutionRecord:
             ExecutionStatus.CANCELLED,
             ExecutionStatus.DEADLINE_EXCEEDED,
         }
+
+    def notify_committed_input(self) -> None:
+        """Wake the Owner after a durable input commit (notification only).
+
+        The committed SQLite input is the fact; this dispatch is a lossy wake-up
+        that observes committed-but-unconsumed inputs and offers them to the
+        registered listeners. A lost, duplicated, or crashed notification never
+        loses the input: the next deterministic drain discovers it from storage.
+        """
+
+        task = self.input_notification_task
+        if task is not None and not task.done():
+            # A dispatch is already observing; its re-peek covers late commits.
+            return
+        self.input_notification_task = asyncio.create_task(
+            self._dispatch_committed_inputs(),
+            name=f"pygent-input-notify-{self.execution_id}",
+        )
+
+    async def _dispatch_committed_inputs(self) -> None:
+        history = self.history
+        if history is None or not self.history_started:
+            return
+        try:
+            while True:
+                kinds = tuple(self.input_inbox.input_listeners)
+                if not kinds:
+                    return
+                inputs = await history.peek_execution_inputs(
+                    execution_id=self.execution_id, kinds=kinds
+                )
+                # The cursor excludes consumed inputs; the watermark excludes
+                # inputs this Owner already signaled but a drain has not
+                # consumed yet, so one commit produces exactly one signal.
+                fresh = [
+                    item
+                    for item in inputs
+                    if item.sequence > self.dispatched_input_watermark
+                ]
+                if not fresh:
+                    return
+                self.dispatched_input_watermark = max(
+                    item.sequence for item in fresh
+                )
+                for item in fresh:
+                    for listener in tuple(
+                        self.input_inbox.input_listeners.get(item.kind, ())
+                    ):
+                        try:
+                            listener(item.value)
+                        except Exception:  # noqa: BLE001, S110 - notification-only
+                            # The input is already committed; a broken listener
+                            # must not suppress the remaining listeners, and the
+                            # deterministic drain still consumes the input.
+                            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a lost wake-up degrades to boundary drains
+            return
 
     async def emit(
         self,
@@ -389,4 +452,18 @@ _execution_frame: ContextVar[_ExecutionFrame | None] = ContextVar(
     "pygent_managed_execution_frame", default=None
 )
 
-__all__ = ["_ExecutionFrame", "_ExecutionRecord", "_execution_frame", "_module_stack"]
+# Set by the Owner's abortable-step primitives while replaying a step whose
+# interrupt is already journaled: ``(parallel child position, cancelled
+# positions)``. Effect replay uses it to stop cancelled children at their
+# journaled boundary instead of re-executing them.
+_replayed_step_interrupt: ContextVar[tuple[int, frozenset[int]] | None] = ContextVar(
+    "pygent_replayed_step_interrupt", default=None
+)
+
+__all__ = [
+    "_ExecutionFrame",
+    "_ExecutionRecord",
+    "_execution_frame",
+    "_module_stack",
+    "_replayed_step_interrupt",
+]

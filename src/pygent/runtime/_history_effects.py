@@ -322,6 +322,28 @@ class EffectHistoryMixin:
         if cursor.rowcount not in (0, 1):  # pragma: no cover - SQLite invariant
             raise HistoryStoreError("invalid effect update cardinality")
 
+    @_execution_write
+    async def interrupt_effect(
+        self, *, execution_id: str, module_path: str, call_index: int
+    ) -> bool:
+        """Record that a step interrupt cancelled this in-flight effect.
+
+        The transition loses to a concurrent completion by construction: a
+        child that finished before cancellation was applied keeps its
+        ``completed`` result, and only a still-``started`` row becomes
+        ``interrupted``. Returns whether this call performed the transition.
+        """
+
+        cursor = await self._db().execute(
+            "UPDATE effects SET status='interrupted',result_json=? "
+            "WHERE execution_id=? AND module_path=? AND call_index=? "
+            "AND status='started'",
+            (_json({"interrupted": True}), execution_id, module_path, call_index),
+        )
+        if cursor.rowcount not in (0, 1):  # pragma: no cover - SQLite invariant
+            raise HistoryStoreError("invalid effect update cardinality")
+        return cursor.rowcount == 1
+
     async def replay_effect(
         self,
         *,
@@ -360,7 +382,9 @@ class EffectHistoryMixin:
             raise NonDeterministicReplayError(
                 "effect recovery policy differs from committed history"
             )
-        status = cast(Literal["started", "completed", "unknown"], row[3])
+        status = cast(
+            Literal["started", "completed", "interrupted", "unknown"], row[3]
+        )
         result = _load(row[4])
         return StoredEffect(
             execution_id=execution_id,

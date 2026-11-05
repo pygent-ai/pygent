@@ -28,13 +28,17 @@ def prepare_execution_input(input_id: str, kind: str, value: JsonValue) -> JsonV
     return freeze_json(value)
 
 
-def validate_receive(kinds: tuple[str, ...], limit: int, seal_if_empty: bool) -> None:
+def validate_input_kinds(kinds: tuple[str, ...]) -> None:
     if not isinstance(kinds, tuple) or not kinds or any(
         not isinstance(kind, str) or not kind for kind in kinds
     ):
         raise ValueError("kinds must be a non-empty tuple of non-empty strings")
     if len(kinds) != len(set(kinds)):
         raise ValueError("kinds must be unique")
+
+
+def validate_receive(kinds: tuple[str, ...], limit: int, seal_if_empty: bool) -> None:
+    validate_input_kinds(kinds)
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 256:
         raise ValueError("limit must be between 1 and 256")
     if not isinstance(seal_if_empty, bool):

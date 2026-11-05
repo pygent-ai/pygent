@@ -26,6 +26,7 @@ from pygent.core import (
     Module,
     ModuleDependency,
     RemoteModule,
+    StepInterrupted,
     freeze_json,
     freeze_json_object,
 )
@@ -46,6 +47,10 @@ from pygent.tool import (
 from pygent.tool.executors import validate_executor_sandbox
 
 from .._deadline import _ExecutionDeadlineExpired
+from .._history_types import (
+    NonDeterministicReplayError,
+    StoredStepInterrupt,
+)
 from ..api import (
     ExecutionAdmissionError,
     ExecutionOptions,
@@ -56,7 +61,13 @@ from ..api import (
 from .capacity import _BindingState
 from .handles import _LocalBoundModule
 from .policies import _collect_dependency_paths
-from .state import _execution_frame, _ExecutionFrame, _ExecutionRecord, _module_stack
+from .state import (
+    _execution_frame,
+    _ExecutionFrame,
+    _ExecutionRecord,
+    _module_stack,
+    _replayed_step_interrupt,
+)
 
 
 class _ManagedScope(ExecutionScope):
@@ -161,13 +172,15 @@ class _ManagedScope(ExecutionScope):
         """Return this execution's cooperative step-interrupt signal.
 
         Modules decide what a step is and when to request the interrupt;
-        structured child waits observe the signal. History-backed (durable)
-        executions return ``None``: their replay requires deterministic
-        receive ordering, so no watcher may poll while a step is in flight.
+        structured child waits observe the signal. The signal is an Owner-held
+        wake-up only: for durable executions it is set by committed-input
+        notifications, and the resulting interrupt is journaled as a step
+        decision so replay reproduces it without the live signal. What stays
+        durable-specific is consumption discipline -- no watcher may poll a
+        receive while a step is in flight, because receipts must stay
+        deterministic.
         """
 
-        if self.record.history is not None:
-            return None
         event = self.record.step_interrupt_event
         if event is None:
             event = asyncio.Event()
@@ -178,8 +191,9 @@ class _ManagedScope(ExecutionScope):
         """Return this execution's in-memory input-arrival signal.
 
         History-backed (durable) executions return ``None``: their inputs are
-        durable and their drains already record deterministic observations, so
-        the watcher keeps its bounded polling cadence there.
+        durable and every receive writes a deterministic receipt, so a polling
+        watcher must never run there. Committed-input notifications dispatch
+        to input listeners instead, and boundary drains remain the fallback.
         """
 
         if self.record.history is not None:
@@ -198,7 +212,9 @@ class _ManagedScope(ExecutionScope):
 
         Returns ``(result, interrupted)``. The Child runs as a registered
         parallel task so it keeps full access to structured services; abort
-        cancels it and waits for its bounded cleanup to unwind.
+        cancels it and waits for its bounded cleanup to unwind. When the
+        interrupt is journaled for this step, replay derives the same
+        ``interrupted`` outcome from durable history instead of the signal.
         """
 
         self._require_owner_task()
@@ -209,14 +225,30 @@ class _ManagedScope(ExecutionScope):
         if parent_had_lease:
             self._release_runnable(frame)
         self.record.phase = ExecutionPhase.WAITING_CHILD
+        step_index = self._next_abortable_step(frame.module_path)
+        replayed = await self._replayed_step(frame.module_path, step_index)
+        replay_token = None
+        if replayed is not None:
+            # The single Child of this step is parallel position 0.
+            replay_token = _replayed_step_interrupt.set(
+                (0, frozenset(replayed.cancelled))
+            )
         child = asyncio.create_task(self.invoke_module(module, message, context))
         self._parallel_tasks.add(child)
         try:
-            results, completed, _ = await self._abortable_wait((child,), abort=abort)
+            results, completed, _ = await self._abortable_wait(
+                (child,),
+                abort=abort,
+                module_path=frame.module_path,
+                step_index=step_index,
+                replayed=replayed,
+            )
             if completed[0]:
                 return results[0], False
             return None, True
         finally:
+            if replay_token is not None:
+                _replayed_step_interrupt.reset(replay_token)
             self._parallel_tasks.discard(child)
             current = asyncio.current_task()
             if parent_had_lease and (current is None or current.cancelling() == 0):
@@ -253,17 +285,37 @@ class _ManagedScope(ExecutionScope):
         if parent_had_lease:
             self._release_runnable(frame)
         self.record.phase = ExecutionPhase.WAITING_CHILD
+        step_index = self._next_abortable_step(frame.module_path)
+        replayed = await self._replayed_step(frame.module_path, step_index)
+        cancelled = frozenset(replayed.cancelled) if replayed is not None else None
 
-        async def run(operation: Callable[[], Awaitable[Any]]) -> Any:
-            return await operation()
+        async def run(
+            position: int, operation: Callable[[], Awaitable[Any]]
+        ) -> Any:
+            replay_token = None
+            if cancelled is not None:
+                replay_token = _replayed_step_interrupt.set((position, cancelled))
+            try:
+                return await operation()
+            finally:
+                if replay_token is not None:
+                    _replayed_step_interrupt.reset(replay_token)
 
         tasks = tuple(
-            asyncio.create_task(run(operation), name="pygent-parallel-child")
-            for operation in operations
+            asyncio.create_task(
+                run(position, operation), name="pygent-parallel-child"
+            )
+            for position, operation in enumerate(operations)
         )
         self._parallel_tasks.update(tasks)
         try:
-            return await self._abortable_wait(tasks, abort=abort)
+            return await self._abortable_wait(
+                tasks,
+                abort=abort,
+                module_path=frame.module_path,
+                step_index=step_index,
+                replayed=replayed,
+            )
         finally:
             self._parallel_tasks.difference_update(tasks)
             current = asyncio.current_task()
@@ -272,16 +324,118 @@ class _ManagedScope(ExecutionScope):
                 await self._resume_runnable(frame)
                 self.record.phase = ExecutionPhase.RUNNING
 
+    def _next_abortable_step(self, module_path: str) -> int:
+        """Assign the stable per-module identity of one abortable step."""
+
+        step_index = self.record.abortable_calls.get(module_path, 0)
+        self.record.abortable_calls[module_path] = step_index + 1
+        return step_index
+
+    async def _replayed_step(
+        self, module_path: str, step_index: int
+    ) -> StoredStepInterrupt | None:
+        """Return the journaled interrupt decision for this step, if any."""
+
+        history = self.record.history
+        if history is None or not self.record.has_step_interrupts:
+            return None
+        return await history.get_step_interrupt(
+            execution_id=self.record.execution_id,
+            module_path=module_path,
+            step_index=step_index,
+        )
+
+    @staticmethod
+    def _settled_child_outcomes(
+        tasks: tuple[asyncio.Task[Any], ...],
+        interrupted: bool,
+    ) -> tuple[tuple[object, ...], tuple[bool, ...], bool]:
+        """Collect joined child outcomes for one abortable wait.
+
+        A child that failed with ``StepInterrupted`` was cancelled in the
+        original attempt, so replay reproduces the cancelled outcome instead
+        of failing the step. Any other child failure still propagates.
+        """
+
+        for task in tasks:
+            exc = (
+                task.exception()
+                if task.done() and not task.cancelled()
+                else None
+            )
+            if isinstance(exc, StepInterrupted):
+                interrupted = True
+                continue
+            if exc is not None:
+                raise exc
+        results: list[object] = []
+        completed_flags: list[bool] = []
+        for task in tasks:
+            ok = (
+                task.done()
+                and not task.cancelled()
+                and task.exception() is None
+            )
+            completed_flags.append(ok)
+            results.append(task.result() if ok else None)
+        return tuple(results), tuple(completed_flags), interrupted
+
+    async def _adjudicate_step_interrupt(
+        self,
+        results: tuple[object, ...],
+        completed_flags: tuple[bool, ...],
+        interrupted: bool,
+        *,
+        module_path: str,
+        step_index: int,
+        replayed: StoredStepInterrupt | None,
+    ) -> tuple[tuple[object, ...], tuple[bool, ...], bool]:
+        """Make the journaled step decision authoritative over observations.
+
+        The first interrupted determination of this step is journaled with its
+        pending-input association. A stored decision -- pre-read on replay or
+        just journaled -- then overrides the observed per-child outcomes, so
+        replay matches the original attempt regardless of signal timing:
+        children the original attempt cancelled keep no result here even when
+        their last effect committed before cancellation was applied.
+        """
+
+        history = self.record.history
+        decision = replayed
+        if history is not None and interrupted and decision is None:
+            decision = await history.mark_step_interrupted(
+                execution_id=self.record.execution_id,
+                module_path=module_path,
+                step_index=step_index,
+                cancelled=tuple(
+                    index for index, ok in enumerate(completed_flags) if not ok
+                ),
+            )
+            self.record.has_step_interrupts = True
+        if decision is None:
+            return results, completed_flags, interrupted
+        discarded = list(results)
+        flags = list(completed_flags)
+        for position in decision.cancelled:
+            if 0 <= position < len(flags):
+                flags[position] = False
+                discarded[position] = None
+        return tuple(discarded), tuple(flags), True
+
     async def _abortable_wait(
         self,
         tasks: tuple[asyncio.Task[Any], ...],
         *,
         abort: asyncio.Event,
+        module_path: str,
+        step_index: int,
+        replayed: StoredStepInterrupt | None,
     ) -> tuple[tuple[object, ...], tuple[bool, ...], bool]:
         """Wait for registered tasks until they finish or ``abort`` fires.
 
         Shared cancellation primitive behind ``invoke_module_until`` and
-        ``gather_until``.
+        ``gather_until``. On durable executions the step outcome is also a
+        journal fact; see ``_adjudicate_step_interrupt``.
         """
 
         reusable = (
@@ -311,25 +465,17 @@ class _ManagedScope(ExecutionScope):
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
-            for task in tasks:
-                exc = (
-                    task.exception()
-                    if task.done() and not task.cancelled()
-                    else None
-                )
-                if exc is not None:
-                    raise exc
-            results: list[object] = []
-            completed_flags: list[bool] = []
-            for task in tasks:
-                ok = (
-                    task.done()
-                    and not task.cancelled()
-                    and task.exception() is None
-                )
-                completed_flags.append(ok)
-                results.append(task.result() if ok else None)
-            return tuple(results), tuple(completed_flags), interrupted
+            results, completed_flags, interrupted = self._settled_child_outcomes(
+                tasks, interrupted
+            )
+            return await self._adjudicate_step_interrupt(
+                results,
+                completed_flags,
+                interrupted,
+                module_path=module_path,
+                step_index=step_index,
+                replayed=replayed,
+            )
         except BaseException:
             for task in tasks:
                 if not task.done():
@@ -1068,8 +1214,8 @@ class _ManagedScope(ExecutionScope):
                 "retry_policy": spec.retry_policy.value,
                 "idempotency_key": spec.idempotency_key,
             }
-            stored, created = await history.begin_effect(
-                execution_id=self.record.execution_id,
+            stored, created = await self._open_effect(
+                history,
                 module_path=module_path,
                 call_index=call_index,
                 effect_type=spec.effect_type,
@@ -1081,6 +1227,11 @@ class _ManagedScope(ExecutionScope):
                     raise RuntimeError("completed effect has no result")
                 result = stored.result
                 disposition = EffectDisposition.REPLAYED
+            elif stored.status == "interrupted":
+                raise StepInterrupted(
+                    f"effect {spec.effect_type!r} was cancelled by a journaled "
+                    "step interrupt"
+                )
             elif stored.status == "unknown":
                 raise EffectRecoveryUnknown(
                     f"effect {spec.effect_type!r} has an unknown committed state"
@@ -1088,7 +1239,20 @@ class _ManagedScope(ExecutionScope):
             elif created or spec.retry_policy is EffectRetryPolicy.REPLAY_SAFE:
                 if not created:
                     disposition = EffectDisposition.RETRIED
-                result = freeze_json(await operation())
+                try:
+                    result = freeze_json(await operation())
+                except asyncio.CancelledError:
+                    # The child was cancelled while this effect was in flight.
+                    # Journal the interrupted outcome so replay stops at this
+                    # call instead of re-executing a possibly-committed side
+                    # effect; a concurrent completion keeps winning.
+                    with suppress(Exception):
+                        await history.interrupt_effect(
+                            execution_id=self.record.execution_id,
+                            module_path=module_path,
+                            call_index=call_index,
+                        )
+                    raise
                 await history.complete_effect(
                     execution_id=self.record.execution_id,
                     module_path=module_path,
@@ -1121,6 +1285,55 @@ class _ManagedScope(ExecutionScope):
             effect_id=f"{self.record.execution_id}:{module_path}:{call_index}",
             attempt=self.record.attempt,
         )
+
+    async def _open_effect(
+        self,
+        history: Any,
+        *,
+        module_path: str,
+        call_index: int,
+        effect_type: str,
+        request: Mapping[str, JsonValue],
+        spec: Mapping[str, JsonValue],
+    ) -> tuple[Any, bool]:
+        """Begin one effect call, or replay it under a journaled step interrupt.
+
+        Children the original attempt cancelled must not execute again: a
+        committed row replays through the digest-checked path, a missing row
+        means the step ended before this effect began, and a fresh row under a
+        still-running child is a replay determinism violation.
+        """
+
+        replayed = _replayed_step_interrupt.get()
+        if replayed is None:
+            return await history.begin_effect(
+                execution_id=self.record.execution_id,
+                module_path=module_path,
+                call_index=call_index,
+                effect_type=effect_type,
+                request=request,
+                spec=spec,
+            )
+        position, cancelled = replayed
+        try:
+            stored = await history.replay_effect(
+                execution_id=self.record.execution_id,
+                module_path=module_path,
+                call_index=call_index,
+                effect_type=effect_type,
+                request=request,
+                spec=spec,
+            )
+        except KeyError:
+            if position not in cancelled:
+                raise NonDeterministicReplayError(
+                    "replayed interrupted step expects committed history for "
+                    f"effect {effect_type!r}"
+                ) from None
+            raise StepInterrupted(
+                f"effect {effect_type!r} step was interrupted before commit"
+            ) from None
+        return stored, False
 
 
 __all__ = ["_ManagedScope"]

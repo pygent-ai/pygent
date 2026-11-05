@@ -114,9 +114,25 @@ class StoredEffect:
     call_index: int
     effect_type: str
     request_digest: str
-    status: Literal["started", "completed", "unknown"]
+    status: Literal["started", "completed", "interrupted", "unknown"]
     spec: JsonValue | None
     result: JsonValue | None
+
+
+@dataclass(frozen=True, slots=True)
+class StoredStepInterrupt:
+    """A journaled decision that one abortable step ended interrupted.
+
+    ``cancelled`` lists the parallel-child positions whose outcomes the
+    original attempt discarded; ``pending_input_sequences`` snapshots the
+    committed-but-unconsumed execution inputs observed when the interrupt
+    was journaled, so replay can tie the decision to its triggering input.
+    """
+
+    module_path: str
+    step_index: int
+    cancelled: tuple[int, ...]
+    pending_input_sequences: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)

@@ -124,6 +124,7 @@ class _RecoveryMixin:
         last_event_index = await history.last_event_index(
             execution_id=stored.execution_id
         )
+        has_step_interrupts = await history.has_step_interrupts(stored.execution_id)
         record = _ExecutionRecord(
             execution_id=stored.execution_id,
             trace_id=stored.trace_id,
@@ -142,6 +143,7 @@ class _RecoveryMixin:
             event_base_sequence=last_event_index + 1,
             next_sequence=last_event_index + 1,
             committed_sequence=last_event_index,
+            has_step_interrupts=has_step_interrupts,
         )
         record.owner_id = f"{self._recovery_owner_id}:{record.attempt_id}"
         fencing_token = await history.claim_execution(

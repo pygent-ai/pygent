@@ -19,6 +19,7 @@ from ._history_executions import ExecutionHistoryMixin
 from ._history_inputs import ExecutionInputHistoryMixin
 from ._history_jobs import JobHistoryMixin
 from ._history_ownership import WriteAuthority, validate_writers, write_authority
+from ._history_steps import ExecutionStepHistoryMixin
 from ._history_types import HistoryStoreError, _lock_retry
 
 _T = TypeVar("_T")
@@ -57,6 +58,7 @@ class SQLiteHistoryStore(
     JobHistoryMixin,
     EffectHistoryMixin,
     ExecutionInputHistoryMixin,
+    ExecutionStepHistoryMixin,
 ):
     """One serialized SQLite durability boundary for executions and effects."""
 
@@ -252,6 +254,13 @@ class SQLiteHistoryStore(
                 request_json TEXT NOT NULL,
                 batch_json TEXT NOT NULL,
                 PRIMARY KEY(execution_id,module_path,receive_index)
+            );
+            CREATE TABLE IF NOT EXISTS execution_step_interrupts (
+                execution_id TEXT NOT NULL,
+                module_path TEXT NOT NULL,
+                step_index INTEGER NOT NULL,
+                detail_json TEXT NOT NULL,
+                PRIMARY KEY(execution_id,module_path,step_index)
             );
             """
         )

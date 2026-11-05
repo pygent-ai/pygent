@@ -766,7 +766,11 @@ class DurableGatedModel(Module[Message, AIMessage]):
         if index == 0:
             self.state.entered.set()
             if self.gated:
-                await self.state.release.wait()
+                try:
+                    await self.state.release.wait()
+                except asyncio.CancelledError:
+                    self.state.aborted = True
+                    raise
         answer = self.state.answers[min(index, len(self.state.answers) - 1)]
         if index == 0 and self.replace_context:
             context = dataclass_replace(
@@ -816,11 +820,12 @@ class DurableGatedTools(Module[AIMessage, ToolMessage]):
 
 
 @pytest.mark.asyncio
-async def test_durable_immediate_voids_answer_at_model_boundary(tmp_path) -> None:
-    # Tier 1: on durable executions the immediate applies at the in-flight
-    # effect's completion boundary -- the model call finishes and commits,
-    # then the returned answer is voided before any tool runs, and the
-    # projection replacement is kept.
+async def test_durable_immediate_aborts_in_flight_model_call(tmp_path) -> None:
+    # Durable immediate no longer degrades to the next boundary: the
+    # in-flight model call is cancelled mid-flight, the immediate is consumed
+    # at the deterministic drain, and the same execution continues. The
+    # aborted call leaves no partial state -- its would-be projection
+    # replacement is discarded with the rest of its result.
     async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
         runtime = LocalRuntime(history=history)
         model = DurableGatedModel(
@@ -845,17 +850,30 @@ async def test_durable_immediate_voids_answer_at_model_boundary(tmp_path) -> Non
             value=steer(SteeringMode.IMMEDIATE),
         )
         assert delivery.status == "accepted"
-        await asyncio.sleep(0.2)  # the input lands in the durable inbox
+        # The step-interrupt decision is journaled only after the in-flight
+        # model call was cancelled and joined, so this barrier makes the
+        # release below unable to race the abort.
+        for _ in range(500):
+            rows = await history._db().execute_fetchall(
+                "SELECT 1 FROM execution_step_interrupts LIMIT 1"
+            )
+            if rows:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("durable step interrupt was not journaled")
         model.state.release.set()
         answer, context = await asyncio.wait_for(handle.result(), timeout=15)
         assert answer.content == "final"
+        assert model.state.aborted is True
         assert [message.content for message in model.state.messages] == [
             "initial",
             "new direction",
         ]
         committed = [message.content for message in context.messages]
-        assert "compressed" in committed
+        assert "compressed" not in committed
         assert "new direction" in committed
+        assert "final" in committed
         await runtime.close()
 
 

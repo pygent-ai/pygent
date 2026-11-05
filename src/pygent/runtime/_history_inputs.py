@@ -15,6 +15,7 @@ from ._execution_inputs import (
     MAX_PENDING_EXECUTION_INPUTS,
     ExecutionInputConsumerError,
     prepare_execution_input,
+    validate_input_kinds,
     validate_receive,
 )
 from ._history_types import HistoryStoreError, _json, _load
@@ -238,6 +239,37 @@ class ExecutionInputHistoryMixin:
                 batch_payload=request,
                 batch_operation=self._batch_receive_inputs,
             ),
+        )
+
+    async def peek_execution_inputs(
+        self,
+        *,
+        execution_id: str,
+        kinds: tuple[str, ...],
+    ) -> tuple[ExecutionInput, ...]:
+        """Return committed-but-unconsumed inputs without consuming them.
+
+        The query mirrors the pending predicate of ``send_execution_input`` so
+        the Owner observes exactly the facts a receive would claim, but no
+        cursor advances, no receipt is recorded, and a crashed peek leaves no
+        trace. The result is advisory wake-up data; the durable inbox remains
+        the single consumption authority.
+        """
+
+        validate_input_kinds(kinds)
+        rows = await self._db().execute_fetchall(
+            "SELECT i.input_id,i.sequence,i.kind,i.value_json "
+            "FROM execution_inputs i LEFT JOIN execution_input_consumers c "
+            "ON c.execution_id=i.execution_id AND c.kind=i.kind "
+            "WHERE i.execution_id=? AND i.kind IN (SELECT value FROM json_each(?)) "
+            "AND i.sequence>COALESCE(c.last_sequence,-1) ORDER BY i.sequence",
+            (execution_id, json.dumps(list(kinds))),
+        )
+        return tuple(
+            ExecutionInput(
+                input_id, int(sequence), kind, cast(JsonValue, _load(value_json))
+            )
+            for input_id, sequence, kind, value_json in rows
         )
 
     async def _empty_receipt_ranges(

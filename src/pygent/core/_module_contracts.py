@@ -102,6 +102,16 @@ class EffectRecoveryUnknown(RuntimeError):
     """An incomplete non-replayable effect may already have committed."""
 
 
+class StepInterrupted(RuntimeError):
+    """A journaled step interrupt replays at this boundary.
+
+    The original attempt cancelled this Module Child while a committed
+    immediate steering input waited at the next drain point. Replay derives
+    the interruption from durable history instead of live signals, so the
+    same step deterministically reports ``interrupted`` on every attempt.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class CapacityPermit:
     """Public resource-capacity ownership proof.

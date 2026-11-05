@@ -228,9 +228,15 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
                     return ExecutionInputDelivery(
                         "execution_finished", self.execution_id, input_id
                     )
-            return await history.send_execution_input(
+            delivery = await history.send_execution_input(
                 self.execution_id, input_id=input_id, kind=kind, value=value
             )
+            if delivery.status == "accepted":
+                # The committed input is the fact; this wake-up only lets the
+                # in-process Owner observe it early. A lost notification still
+                # reaches the next deterministic drain from storage.
+                self._record.notify_committed_input()
+            return delivery
         return await self._record.input_inbox.send(
             self.execution_id, input_id=input_id, kind=kind, value=value
         )
@@ -389,6 +395,11 @@ class _DurableExecutionHandle(Generic[OutputMessageT]):
     async def send_input(
         self, *, input_id: str, kind: str, value: JsonValue
     ) -> ExecutionInputDelivery:
+        # Cross-runtime handle: the Owner lives in another process, so there is
+        # no in-process wake-up to signal. The committed input is still
+        # discovered by the Owner's next deterministic drain; a routable
+        # cross-runtime notification remains a deployment concern, not a
+        # correctness one.
         return await self._history.send_execution_input(
             self.execution_id, input_id=input_id, kind=kind, value=value
         )

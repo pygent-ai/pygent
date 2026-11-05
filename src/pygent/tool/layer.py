@@ -366,6 +366,8 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             status="detached",
             task=snapshot,
             output=output,
+            error_kind="cancelled",
+            error_code="interrupted_by_steering",
             side_effect_committed=None,
             tool_id=snapshot.tool_id,
             tool_version=snapshot.version,
