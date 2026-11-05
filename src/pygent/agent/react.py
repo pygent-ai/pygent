@@ -192,9 +192,16 @@ class ReActLayer(Module[UserMessage, AIMessage]):
         if callable(add_listener) and callable(remove_listener):
             state.listener_mode = True
 
-            def signal_immediate(value: JsonValue) -> None:
-                if _is_immediate_value(value):
+            def signal_immediate(item: ExecutionInput) -> None:
+                if _is_immediate_value(item.value):
                     state.signal_immediate_input()
+                    # The module owns steering-mode semantics; the Owner only
+                    # carries the trigger identity into a journaled decision.
+                    note_trigger = getattr(
+                        infrastructure, "note_step_interrupt_trigger", None
+                    )
+                    if callable(note_trigger):
+                        note_trigger(item.sequence)
 
             await add_listener(REACT_PROJECTION_OPERATION_KIND, signal_immediate)
             try:

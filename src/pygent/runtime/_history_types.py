@@ -124,14 +124,17 @@ class StoredStepInterrupt:
     """A journaled decision that one abortable step ended interrupted.
 
     ``cancelled`` lists the parallel-child positions whose outcomes the
-    original attempt discarded; ``pending_input_sequences`` snapshots the
-    committed-but-unconsumed execution inputs observed when the interrupt
-    was journaled, so replay can tie the decision to its triggering input.
+    original attempt discarded. ``trigger_input_sequence`` names the committed
+    input the Module identified as the interrupt trigger -- present only when
+    that input was still unconsumed when the decision was journaled.
+    ``pending_input_sequences`` snapshots every committed-but-unconsumed input
+    observed at the decision boundary as context around the trigger.
     """
 
     module_path: str
     step_index: int
     cancelled: tuple[int, ...]
+    trigger_input_sequence: int | None
     pending_input_sequences: tuple[int, ...]
 
 

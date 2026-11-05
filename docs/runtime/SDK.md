@@ -665,7 +665,7 @@ durable Handle，历史读取必须显式调用 `get_execution_handle()`。恢�
 
 所有 managed Handle 都提供 `send_input(input_id=..., kind=..., value=...)`。返回的 `ExecutionInputDelivery.status` 为 `accepted`、`duplicate` 或 `execution_finished`；重复 `input_id` 保留原 sequence。Module 通过 `receive_execution_inputs(kinds=..., limit=16, seal_if_empty=False)` 按 Execution input sequence 获取 opaque 输入。单条输入不设固定字节大小上限；单 Execution 最多 256 条未终结输入、单次 receive 最大 256；每个 kind 只能由一个 Module path 消费。最终消费者使用 `seal_if_empty=True` 原子关闭空 Inbox（这次封箱读取按普通回执持久化），避免最后读取和 Execution finalization 之间丢消息。direct Handle 的 send 明确抛出 `DirectExecutionError`，direct Module receive 固定返回空 tuple。
 
-被 Module 识别为 immediate steering 的输入会协作打断进行中的模型/工具 Step，并在确定性 drain 点消费；该语义在 durable 与非 durable Execution 上一致，durable 侧的打断决策、effect `interrupted` 终态与重放约束见 [持久化与恢复边界](DURABILITY.md#立即打断immediate-steering与持久化)。
+被 Module 识别为 immediate steering 的输入会协作打断进行中的模型/工具 Step，并在确定性 drain 点消费；该语义在 durable 与非 durable Execution 上一致，durable 侧的打断决策、effect `interrupted` 终态与重放约束见 [持久化与恢复边界](DURABILITY.md#立即打断immediate-steering与持久化)。契约边界：通过本地 Handle 发送的 immediate 承诺尽快打断；通过附着的 `_DurableExecutionHandle` 或跨进程发送的 immediate 只承诺不丢失——Owner 进程通过确定性 drain 兜底消费，立即性依赖部署层提供的 Owner 通知，不在本契约内。
 
 `DurabilityPolicy` 支持 `DISABLED`、`PREFERRED` 和 `REQUIRED`。`LocalRuntime(history=...)` 声明 `durability.sqlite`，但存储能力不等于 Module 恢复资格。`RecoverySafety` 与 `EffectSafety` 都是严格、不可变、可哈希的声明；普通 Module 默认两者均为 `UNDECLARED`。required 会逐个验证 ExecutionPlan 节点，缺 capability、未声明 boundary retry、存在未验证 effect 时都在 bind 阶段拒绝。preferred 可以降级，但必须由 `bound.durability` 报告 effective/missing capability、`recovery_undeclared_modules`、`effect_unverified_modules`、recovery/checkpoint/replay、事件重连、容量 scope 与降级原因。只有 SQLite 可用且整张图合格时才报告 `module_boundary_retry`；否则即使事件历史可重连，也只报告 `run_history_only`，且 `recover()` 拒绝。
 

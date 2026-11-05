@@ -326,12 +326,15 @@ class EffectHistoryMixin:
     async def interrupt_effect(
         self, *, execution_id: str, module_path: str, call_index: int
     ) -> bool:
-        """Record that a step interrupt cancelled this in-flight effect.
+        """Transition one in-flight effect to the interrupted terminal state.
 
-        The transition loses to a concurrent completion by construction: a
-        child that finished before cancellation was applied keeps its
-        ``completed`` result, and only a still-``started`` row becomes
-        ``interrupted``. Returns whether this call performed the transition.
+        Production step interrupts mark reported effect calls in the same
+        transaction as their ``mark_step_interrupted`` decision; this
+        single-row primitive remains the explicit store-level form. The
+        transition loses to a concurrent completion by construction: a child
+        that finished before cancellation was applied keeps its ``completed``
+        result, and only a still-``started`` row becomes ``interrupted``.
+        Returns whether this call performed the transition.
         """
 
         cursor = await self._db().execute(

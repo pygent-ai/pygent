@@ -53,7 +53,7 @@ class MemoryExecutionInbox:
     consumers: dict[str, str] = field(default_factory=dict)
     cursors: dict[str, int] = field(default_factory=dict)
     receives: dict[tuple[str, int], tuple[ExecutionInput, ...]] = field(default_factory=dict)
-    input_listeners: dict[str, list[Callable[[JsonValue], None]]] = field(
+    input_listeners: dict[str, list[Callable[[ExecutionInput], None]]] = field(
         default_factory=dict
     )
     sealed: bool = False
@@ -91,9 +91,11 @@ class MemoryExecutionInbox:
             delivery = ExecutionInputDelivery(
                 "accepted", execution_id, input_id, item.sequence
             )
+        # Listeners observe the accepted ExecutionInput (identity and sequence
+        # included); they never consume it.
         for listener in listeners:
             try:
-                listener(frozen)
+                listener(item)
             except Exception:  # noqa: BLE001, S110 - listeners are notification-only
                 # The input is already accepted and committed; a broken listener
                 # must not turn the accepted delivery into an exception (callers
@@ -103,13 +105,13 @@ class MemoryExecutionInbox:
         return delivery
 
     async def add_input_listener(
-        self, kind: str, listener: Callable[[JsonValue], None]
+        self, kind: str, listener: Callable[[ExecutionInput], None]
     ) -> None:
         async with self.lock:
             self.input_listeners.setdefault(kind, []).append(listener)
 
     async def remove_input_listener(
-        self, kind: str, listener: Callable[[JsonValue], None]
+        self, kind: str, listener: Callable[[ExecutionInput], None]
     ) -> None:
         async with self.lock:
             listeners = self.input_listeners.get(kind)

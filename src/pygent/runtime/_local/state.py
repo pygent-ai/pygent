@@ -82,8 +82,11 @@ class _ExecutionRecord:
     abortable_calls: dict[str, int] = field(default_factory=dict)
     has_step_interrupts: bool = False
     input_inbox: MemoryExecutionInbox = field(default_factory=MemoryExecutionInbox)
+    commit_notify: asyncio.Event = field(default_factory=asyncio.Event)
     input_notification_task: asyncio.Task[None] | None = None
     dispatched_input_watermark: int = -1
+    step_interrupt_trigger: int | None = None
+    pending_interrupt_effects: list[tuple[str, int]] = field(default_factory=list)
     runnable_held: bool = False
     deadline_fired: bool = False
     release_error: BaseException | None = None
@@ -111,20 +114,22 @@ class _ExecutionRecord:
     def notify_committed_input(self) -> None:
         """Wake the Owner after a durable input commit (notification only).
 
-        The committed SQLite input is the fact; this dispatch is a lossy wake-up
-        that observes committed-but-unconsumed inputs and offers them to the
-        registered listeners. A lost, duplicated, or crashed notification never
-        loses the input: the next deterministic drain discovers it from storage.
+        The committed SQLite input is the fact; this wake-up observes
+        committed-but-unconsumed inputs and offers them to the registered
+        listeners. Every commit sets the event unconditionally -- also when a
+        dispatch task is already running -- so the clear-peek-wait loop below
+        cannot lose a wakeup, however narrow the commit window is. A crashed
+        notification never loses the input: the next deterministic drain
+        discovers it from storage.
         """
 
+        self.commit_notify.set()
         task = self.input_notification_task
-        if task is not None and not task.done():
-            # A dispatch is already observing; its re-peek covers late commits.
-            return
-        self.input_notification_task = asyncio.create_task(
-            self._dispatch_committed_inputs(),
-            name=f"pygent-input-notify-{self.execution_id}",
-        )
+        if task is None or task.done():
+            self.input_notification_task = asyncio.create_task(
+                self._dispatch_committed_inputs(),
+                name=f"pygent-input-notify-{self.execution_id}",
+            )
 
     async def _dispatch_committed_inputs(self) -> None:
         history = self.history
@@ -132,9 +137,16 @@ class _ExecutionRecord:
             return
         try:
             while True:
+                if self.terminal:
+                    return
                 kinds = tuple(self.input_inbox.input_listeners)
                 if not kinds:
                     return
+                # Clear before the peek: a commit landing after the clear sets
+                # the event again and the wait below returns immediately, while
+                # a commit landing before the peek is visible to the peek
+                # itself. One commit therefore produces exactly one wakeup.
+                self.commit_notify.clear()
                 inputs = await history.peek_execution_inputs(
                     execution_id=self.execution_id, kinds=kinds
                 )
@@ -146,22 +158,26 @@ class _ExecutionRecord:
                     for item in inputs
                     if item.sequence > self.dispatched_input_watermark
                 ]
-                if not fresh:
+                if fresh:
+                    self.dispatched_input_watermark = max(
+                        item.sequence for item in fresh
+                    )
+                    for item in fresh:
+                        for listener in tuple(
+                            self.input_inbox.input_listeners.get(item.kind, ())
+                        ):
+                            try:
+                                listener(item)
+                            except Exception:  # noqa: BLE001, S110 - notification-only
+                                # The input is already committed; a broken
+                                # listener must not suppress the remaining
+                                # listeners, and the deterministic drain still
+                                # consumes the input.
+                                pass
+                    continue
+                if self.terminal:
                     return
-                self.dispatched_input_watermark = max(
-                    item.sequence for item in fresh
-                )
-                for item in fresh:
-                    for listener in tuple(
-                        self.input_inbox.input_listeners.get(item.kind, ())
-                    ):
-                        try:
-                            listener(item.value)
-                        except Exception:  # noqa: BLE001, S110 - notification-only
-                            # The input is already committed; a broken listener
-                            # must not suppress the remaining listeners, and the
-                            # deterministic drain still consumes the input.
-                            pass
+                await self.commit_notify.wait()
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - a lost wake-up degrades to boundary drains
@@ -408,6 +424,9 @@ class _ExecutionRecord:
             self.updated_at_unix_ns = time.time_ns()
             self.event_stream_closed = True
             self.journal_error = None
+        # A parked input-notification dispatch must observe the terminal
+        # boundary and exit instead of waiting for commits that cannot come.
+        self.commit_notify.set()
         if self.active_subscribers:
             async with self.event_condition:
                 self.event_condition.notify_all()

@@ -148,14 +148,14 @@ class _ManagedScope(ExecutionScope):
         )
 
     async def add_execution_input_listener(
-        self, kind: str, listener: Callable[[JsonValue], None]
+        self, kind: str, listener: Callable[[ExecutionInput], None]
     ) -> None:
         self._require_owner_task()
         await self.record.input_inbox.add_input_listener(kind, listener)
         self._interrupt_listener_count += 1
 
     async def remove_execution_input_listener(
-        self, kind: str, listener: Callable[[JsonValue], None]
+        self, kind: str, listener: Callable[[ExecutionInput], None]
     ) -> None:
         self._require_owner_task()
         await self.record.input_inbox.remove_input_listener(kind, listener)
@@ -199,6 +199,17 @@ class _ManagedScope(ExecutionScope):
         if self.record.history is not None:
             return None
         return self.record.input_inbox.arrival_signal()
+
+    def note_step_interrupt_trigger(self, input_sequence: int) -> None:
+        """Record the committed input a Module identified as its interrupt trigger.
+
+        Called from Module-land input listeners, which own the steering-mode
+        semantics; the Owner only carries the identity into the journaled
+        decision. The latest report wins -- it is the most recent committed
+        input whose signal participated in the in-flight interrupt.
+        """
+
+        self.record.step_interrupt_trigger = input_sequence
 
     async def invoke_module_until(
         self,
@@ -393,13 +404,19 @@ class _ManagedScope(ExecutionScope):
         """Make the journaled step decision authoritative over observations.
 
         The first interrupted determination of this step is journaled with its
-        pending-input association. A stored decision -- pre-read on replay or
+        triggering input and the effect calls its cancelled children reported,
+        so one transaction carries the decision, the effect terminal states,
+        and the input association. A stored decision -- pre-read on replay or
         just journaled -- then overrides the observed per-child outcomes, so
         replay matches the original attempt regardless of signal timing:
         children the original attempt cancelled keep no result here even when
         their last effect committed before cancellation was applied.
         """
 
+        trigger = self.record.step_interrupt_trigger
+        self.record.step_interrupt_trigger = None
+        reported = tuple(self.record.pending_interrupt_effects)
+        self.record.pending_interrupt_effects.clear()
         history = self.record.history
         decision = replayed
         if history is not None and interrupted and decision is None:
@@ -410,6 +427,8 @@ class _ManagedScope(ExecutionScope):
                 cancelled=tuple(
                     index for index, ok in enumerate(completed_flags) if not ok
                 ),
+                interrupt_effects=reported,
+                trigger_input_sequence=trigger,
             )
             self.record.has_step_interrupts = True
         if decision is None:
@@ -477,6 +496,11 @@ class _ManagedScope(ExecutionScope):
                 replayed=replayed,
             )
         except BaseException:
+            # The step failed before adjudication: a reported trigger or effect
+            # identity belongs to no journaled decision and must not leak into
+            # the next step.
+            self.record.step_interrupt_trigger = None
+            self.record.pending_interrupt_effects.clear()
             for task in tasks:
                 if not task.done():
                     task.cancel()
@@ -1243,15 +1267,14 @@ class _ManagedScope(ExecutionScope):
                     result = freeze_json(await operation())
                 except asyncio.CancelledError:
                     # The child was cancelled while this effect was in flight.
-                    # Journal the interrupted outcome so replay stops at this
-                    # call instead of re-executing a possibly-committed side
-                    # effect; a concurrent completion keeps winning.
-                    with suppress(Exception):
-                        await history.interrupt_effect(
-                            execution_id=self.record.execution_id,
-                            module_path=module_path,
-                            call_index=call_index,
-                        )
+                    # Report the call identity to the Owner: a journaled step
+                    # interrupt finalizes reported started effects atomically
+                    # with its decision, while any other cancellation (root
+                    # cancel, deadline, owner loss) leaves the row to the
+                    # original effect recovery rules.
+                    self.record.pending_interrupt_effects.append(
+                        (module_path, call_index)
+                    )
                     raise
                 await history.complete_effect(
                     execution_id=self.record.execution_id,

@@ -28,6 +28,12 @@ def _is_int_sequence(value: object) -> bool:
     )
 
 
+def _is_int_or_none(value: object) -> bool:
+    return value is None or (
+        isinstance(value, int) and not isinstance(value, bool)
+    )
+
+
 def _decode_step_interrupt(
     module_path: str,
     step_index: int,
@@ -35,11 +41,18 @@ def _decode_step_interrupt(
 ) -> StoredStepInterrupt:
     detail = _load(detail_json)
     cancelled_value = detail.get("cancelled") if isinstance(detail, Mapping) else None
+    trigger_value = (
+        detail.get("trigger_input_sequence") if isinstance(detail, Mapping) else None
+    )
     pending_value = (
         detail.get("pending_input_sequences") if isinstance(detail, Mapping) else None
     )
     if not _is_int_sequence(cancelled_value):
         raise HistoryStoreError("journaled step interrupt cancelled set is not readable")
+    if not _is_int_or_none(trigger_value):
+        raise HistoryStoreError(
+            "journaled step interrupt trigger identity is not readable"
+        )
     if not _is_int_sequence(pending_value):
         raise HistoryStoreError(
             "journaled step interrupt input snapshot is not readable"
@@ -48,6 +61,7 @@ def _decode_step_interrupt(
         module_path=module_path,
         step_index=step_index,
         cancelled=tuple(item for item in cast("tuple[int, ...]", cancelled_value)),
+        trigger_input_sequence=cast("int | None", trigger_value),
         pending_input_sequences=tuple(
             item for item in cast("tuple[int, ...]", pending_value)
         ),
@@ -72,16 +86,51 @@ class ExecutionStepHistoryMixin:
         module_path: str,
         step_index: int,
         cancelled: tuple[int, ...],
+        interrupt_effects: tuple[tuple[str, int], ...] = (),
+        trigger_input_sequence: int | None = None,
     ) -> StoredStepInterrupt:
         """Journal one step-interrupt decision idempotently.
 
-        The pending-input snapshot is captured inside the same transaction as
-        the insert, so the decision and its triggering input association commit
-        atomically. An already-journaled decision is returned unchanged: the
-        first determination wins and replay never rewrites history.
+        One transaction carries the whole interrupt fact: the decision record,
+        the ``started`` -> ``interrupted`` transition of the effect calls its
+        cancelled children reported, and the pending-input snapshot. The
+        trigger identity is stored only when that input is still unconsumed at
+        the decision boundary, so a stale report can never claim an input that
+        a drain already consumed. An already-journaled decision is returned
+        unchanged: the first determination wins and replay never rewrites
+        history.
         """
 
         async def operation(db: aiosqlite.Connection) -> StoredStepInterrupt:
+            if interrupt_effects:
+                await db.executemany(
+                    "UPDATE effects SET status='interrupted',result_json=? "
+                    "WHERE execution_id=? AND module_path=? AND call_index=? "
+                    "AND status='started'",
+                    [
+                        (
+                            _json({"interrupted": True}),
+                            execution_id,
+                            effect_module_path,
+                            call_index,
+                        )
+                        for effect_module_path, call_index in interrupt_effects
+                    ],
+                )
+            trigger = trigger_input_sequence
+            if trigger is not None:
+                committed = await db.execute_fetchall(
+                    "SELECT 1 FROM execution_inputs i "
+                    "LEFT JOIN execution_input_consumers c "
+                    "ON c.execution_id=i.execution_id AND c.kind=i.kind "
+                    "WHERE i.execution_id=? AND i.sequence=? "
+                    "AND i.sequence>COALESCE(c.last_sequence,-1)",
+                    (execution_id, trigger),
+                )
+                if not committed:
+                    # The reported trigger was already consumed by a drain; it
+                    # cannot be this step's interrupt cause.
+                    trigger = None
             pending = await db.execute_fetchall(
                 "SELECT i.sequence FROM execution_inputs i "
                 "LEFT JOIN execution_input_consumers c "
@@ -92,6 +141,7 @@ class ExecutionStepHistoryMixin:
             )
             detail = {
                 "cancelled": list(cancelled),
+                "trigger_input_sequence": trigger,
                 "pending_input_sequences": [int(row[0]) for row in pending],
             }
             cursor = await db.execute(
@@ -105,6 +155,7 @@ class ExecutionStepHistoryMixin:
                     module_path=module_path,
                     step_index=step_index,
                     cancelled=tuple(cancelled),
+                    trigger_input_sequence=trigger,
                     pending_input_sequences=tuple(
                         int(row[0]) for row in pending
                     ),

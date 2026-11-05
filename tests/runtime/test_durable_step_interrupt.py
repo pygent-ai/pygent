@@ -28,11 +28,13 @@ from pygent.core import (
     AIMessage,
     Context,
     EffectIdempotency,
+    EffectRecoveryUnknown,
     EffectRetryPolicy,
     EffectSafety,
     EffectSideEffect,
     EffectSpec,
     ExecutionRequirements,
+    ExecutionStatus,
     JsonValue,
     Message,
     Module,
@@ -109,7 +111,7 @@ def _durable_bind(runtime: LocalRuntime, react: ReActLayer):
 
 
 async def _wait_for_step_interrupt(
-    db: Path, *, timeout: float = 30.0
+    db: Path, *, timeout: float = 30.0, minimum: int = 1
 ) -> None:
     """Barrier: the journaled interrupt exists only after the child joined."""
 
@@ -123,7 +125,7 @@ async def _wait_for_step_interrupt(
                         "SELECT COUNT(*) FROM execution_step_interrupts"
                     )
                 ).fetchone()
-            if row is not None and int(row[0]) >= 1:
+            if row is not None and int(row[0]) >= minimum:
                 return
         except sqlite3.OperationalError:
             pass
@@ -288,7 +290,8 @@ async def test_durable_duplicate_input_is_rejected_without_new_interrupt(
     async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
         runtime = LocalRuntime(history=history)
         model = _GatedModel()
-        handle = await _durable_bind(runtime, ReActLayer(model=model, tools=None)).start(
+        bound = _durable_bind(runtime, ReActLayer(model=model, tools=None))
+        handle = await bound.start(
             UserMessage(content="initial"), Context(), execution=_options()
         )
         await model.state.entered.wait()
@@ -315,6 +318,85 @@ async def test_durable_duplicate_input_is_rejected_without_new_interrupt(
         model.state.release.set()
         answer, _ = await asyncio.wait_for(handle.result(), timeout=15)
         assert answer.content == "answer-2"
+        # The decision carries the verified trigger identity of the input the
+        # module steered with.
+        stored = await history.get_step_interrupt(
+            execution_id=handle.execution_id,
+            module_path=bound.plan.root,
+            step_index=0,
+        )
+        assert stored is not None
+        assert stored.trigger_input_sequence == 0
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_notification_covers_commit_during_dispatch_peek(
+    tmp_path, monkeypatch
+) -> None:
+    # A commit that lands while the dispatch task already holds its peek read
+    # must still be dispatched: its own notify finds the task running, so the
+    # clear-peek-wait loop -- not the task-done check -- carries the wakeup.
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        model = _GatedModel()
+        handle = await _durable_bind(runtime, ReActLayer(model=model, tools=None)).start(
+            UserMessage(content="initial"), Context(), execution=_options()
+        )
+        await model.state.entered.wait()
+
+        original_peek = history.peek_execution_inputs
+        peeks = 0
+        second_peek_read = asyncio.Event()
+        release_second_peek = asyncio.Event()
+
+        async def gated_peek(*, execution_id, kinds):
+            nonlocal peeks
+            peeks += 1
+            result = await original_peek(execution_id=execution_id, kinds=kinds)
+            if peeks == 2:
+                # Park after the read so the next commit lands in the window
+                # between the observed-empty peek and the dispatch exiting.
+                second_peek_read.set()
+                await release_second_peek.wait()
+            return result
+
+        monkeypatch.setattr(history, "peek_execution_inputs", gated_peek)
+
+        first = await handle.send_input(
+            input_id="steer-1",
+            kind=REACT_PROJECTION_OPERATION_KIND,
+            value=_immediate("first"),
+        )
+        assert first.status == "accepted"
+        await _wait_for_step_interrupt(tmp_path / "history.sqlite3")
+        while model.state.calls < 2:
+            await asyncio.sleep(0.01)
+        await second_peek_read.wait()
+
+        second = await handle.send_input(
+            input_id="steer-2",
+            kind=REACT_PROJECTION_OPERATION_KIND,
+            value=_immediate("second"),
+        )
+        assert second.status == "accepted"
+        release_second_peek.set()
+
+        await _wait_for_step_interrupt(
+            tmp_path / "history.sqlite3", minimum=2
+        )
+        model.state.release.set()
+        answer, context = await asyncio.wait_for(handle.result(), timeout=15)
+
+        assert model.state.aborts == 2
+        assert answer.content == "answer-3"
+        assert [message.content for message in model.state.messages] == [
+            "initial",
+            "first",
+            "second",
+        ]
+        committed = [message.content for message in context.messages]
+        assert committed.index("first") < committed.index("second")
         await runtime.close()
 
 
@@ -356,6 +438,180 @@ async def test_durable_multiple_immediates_apply_in_sequence_order(tmp_path) -> 
 # ---------------------------------------------------------------------------
 # Replay adjudication of a journaled step interrupt
 # ---------------------------------------------------------------------------
+
+
+class _GatedEffectProbe(Module[UserMessage, AIMessage]):
+    """One managed effect whose operation parks until the test releases it."""
+
+    execution_requirements = ExecutionRequirements(
+        recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
+        effect_safety=EffectSafety.MANAGED_EFFECTS,
+    )
+
+    def __init__(self, workspace: Path) -> None:
+        super().__init__()
+        self._workspace = str(workspace)
+
+    async def forward(self, message: UserMessage, context: Context):
+        infrastructure = current_infrastructure()
+        workspace = Path(self._workspace)
+
+        async def operation():
+            while not (workspace / "effect.release").exists():
+                await asyncio.sleep(0.02)
+            return {"released": True}
+
+        await infrastructure.execute_effect(
+            spec=EffectSpec(
+                effect_type="probe.effect",
+                side_effect=EffectSideEffect.READ,
+                idempotency=EffectIdempotency.INHERENT,
+                retry_policy=EffectRetryPolicy.REPLAY_SAFE,
+            ),
+            request={"tag": "gated"},
+            operation=operation,
+        )
+        return AIMessage(content="done"), context
+
+
+class _FailClosedProbe(Module[UserMessage, AIMessage]):
+    execution_requirements = ExecutionRequirements(
+        recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
+        effect_safety=EffectSafety.MANAGED_EFFECTS,
+    )
+
+    async def forward(self, message: UserMessage, context: Context):
+        infrastructure = current_infrastructure()
+
+        async def operation():
+            return {"content": message.content}
+
+        await infrastructure.execute_effect(
+            spec=EffectSpec(
+                effect_type="probe.write",
+                side_effect=EffectSideEffect.EXTERNAL,
+                idempotency=EffectIdempotency.NOT_IDEMPOTENT,
+                retry_policy=EffectRetryPolicy.FAIL_CLOSED,
+            ),
+            request={"content": message.content},
+            operation=operation,
+        )
+        return AIMessage(content="written"), context
+
+
+async def _wait_for_effect_status(
+    db: Path, status: str, *, timeout: float = 30.0
+) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        try:
+            async with aiosqlite.connect(db) as conn:
+                row = await (
+                    await conn.execute(
+                        "SELECT COUNT(*) FROM effects WHERE status=?", (status,)
+                    )
+                ).fetchone()
+            if row is not None and int(row[0]) >= 1:
+                return
+        except sqlite3.OperationalError:
+            pass
+        await asyncio.sleep(0.01)
+    pytest.fail(f"no effect reached status {status!r}")
+
+
+@pytest.mark.asyncio
+async def test_deadline_during_effect_leaves_started_state_not_interrupted(
+    tmp_path,
+) -> None:
+    # Lifecycle cancellations are not steering interrupts: the effect keeps
+    # its started row and no step decision is journaled.
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        bound = runtime.bind(_GatedEffectProbe(tmp_path))
+        handle = await bound.start(
+            UserMessage(content="go"),
+            Context(),
+            execution=ExecutionOptions(
+                deadline=asyncio.get_running_loop().time() + 0.5
+            ),
+        )
+        await _wait_for_effect_status(tmp_path / "history.sqlite3", "started")
+        outcome = await asyncio.wait_for(handle.outcome(), timeout=15)
+
+        assert outcome.status is ExecutionStatus.DEADLINE_EXCEEDED
+        rows = await history._db().execute_fetchall("SELECT status FROM effects")
+        assert [row[0] for row in rows] == ["started"]
+        interrupts = await history._db().execute_fetchall(
+            "SELECT COUNT(*) FROM execution_step_interrupts"
+        )
+        assert int(interrupts[0][0]) == 0
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_execution_cancel_during_effect_leaves_started_state(
+    tmp_path,
+) -> None:
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        bound = runtime.bind(_GatedEffectProbe(tmp_path))
+        handle = await bound.start(
+            UserMessage(content="go"), Context(), execution=_options()
+        )
+        await _wait_for_effect_status(tmp_path / "history.sqlite3", "started")
+        assert await handle.cancel() is True
+        outcome = await handle.outcome()
+
+        assert outcome.status is ExecutionStatus.CANCELLED
+        rows = await history._db().execute_fetchall("SELECT status FROM effects")
+        assert [row[0] for row in rows] == ["started"]
+        interrupts = await history._db().execute_fetchall(
+            "SELECT COUNT(*) FROM execution_step_interrupts"
+        )
+        assert int(interrupts[0][0]) == 0
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_started_effect_without_decision_recovers_by_original_rules(
+    tmp_path,
+) -> None:
+    # Crash before a step decision was journaled: the interrupt never became
+    # durable, so a started FAIL_CLOSED effect follows the original recovery
+    # rules instead of claiming a steering interrupt.
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
+        runtime = LocalRuntime(history=history)
+        bound = runtime.bind(_FailClosedProbe())
+        await history.create_execution(
+            execution_id="gap-run",
+            request_id="gap-request",
+            plan_id=bound.plan.plan_id,
+            input=invocation_to_dict(UserMessage(content="go"), Context()),
+            status="running",
+        )
+        await history.begin_effect(
+            execution_id="gap-run",
+            module_path=bound.plan.root,
+            call_index=0,
+            effect_type="probe.write",
+            request={"content": "go"},
+            spec={
+                "side_effect": "external",
+                "idempotency": "not_idempotent",
+                "retry_policy": "fail_closed",
+                "idempotency_key": None,
+            },
+        )
+
+        recovered = await runtime.recover(
+            bound,
+            "gap-run",
+            deadline=asyncio.get_running_loop().time() + 30,
+        )
+        with pytest.raises(EffectRecoveryUnknown):
+            await asyncio.wait_for(recovered.result(), timeout=30)
+        await runtime.close()
 
 
 class _GatherProbe(Module[UserMessage, AIMessage]):
