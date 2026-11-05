@@ -781,6 +781,7 @@ class InMemoryToolTaskManager:
         self._max_retained_tasks = max_retained_tasks
         self._emit = _guarded_event_sink(emit) if emit is not None else None
         self._snapshots: dict[str, ToolTask] = {}
+        self._calls: dict[str, str] = {}
         self._results: dict[str, ToolResult] = {}
         self._outputs: dict[str, JsonValue] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -818,6 +819,7 @@ class InMemoryToolTaskManager:
         async with self._lock:
             self._purge_terminal_tasks()
             self._snapshots[snapshot.task_id] = snapshot
+            self._calls[snapshot.call_id] = snapshot.task_id
             self._invocations[snapshot.task_id] = (spec, call, execution)
         return snapshot
 
@@ -936,11 +938,14 @@ class InMemoryToolTaskManager:
         ]
         excess = len(terminal_ids) - self._max_retained_tasks + reserve
         for task_id in terminal_ids[: max(0, excess)]:
+            removed_call = self._snapshots[task_id].call_id
             self._snapshots.pop(task_id, None)
             self._results.pop(task_id, None)
             self._outputs.pop(task_id, None)
             self._tasks.pop(task_id, None)
             self._invocations.pop(task_id, None)
+            if self._calls.get(removed_call) == task_id:
+                del self._calls[removed_call]
 
     async def get_output(self, task_id: str) -> JsonValue:
         async with self._lock:
@@ -963,6 +968,20 @@ class InMemoryToolTaskManager:
                 if snapshot.call_id == call_id:
                     found = snapshot
             return found
+
+    def peek_task_by_call(self, call_id: str) -> ToolTask | None:
+        """Synchronous companion of ``get_task_by_call``.
+
+        Read by the tool layer's cancellation cleanup, which must complete
+        without awaiting. The call index is written inside ``prepare`` at
+        the admission instant -- before any await -- so a cancel landing
+        between admission and ``submit()`` returning still finds the task.
+        Purged snapshots report as missing.
+        """
+        task_id = self._calls.get(call_id)
+        if task_id is None:
+            return None
+        return self._snapshots.get(task_id)
 
     async def cancel(self, task_id: str) -> bool:
         event: tuple[str, dict[str, JsonValue]] | None = None

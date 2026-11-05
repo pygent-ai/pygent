@@ -74,6 +74,8 @@ class DurableToolTaskManager:
         self._emit = _guarded_event_sink(emit) if emit is not None else None
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._executions: dict[str, ToolTaskExecution] = {}
+        self._admitted: dict[str, ToolTask] = {}
+        self._calls: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._prepared_ids: set[str] = set()
         self._owner_id = f"tool-owner-{uuid4()}"
@@ -215,6 +217,11 @@ class DurableToolTaskManager:
     ) -> ToolTask:
         task_id = f"tool-{uuid4()}"
         snapshot = self._snapshot(task_id, spec, call, ToolTaskState.PENDING)
+        # Admission-boundary identity record, written before any await: the
+        # tool layer's synchronous cancellation cleanup reads it when a
+        # cancel lands between this persistence and submit() returning.
+        self._admitted[task_id] = snapshot
+        self._calls[call.call_id] = task_id
         # Persist the owner first so admitted tasks never lack crash detection.
         await self._observe(task_id)
         # Reliable admission point: persistence precedes background execution.
@@ -561,6 +568,21 @@ class DurableToolTaskManager:
             return None
         spec, call = _request_from_dict(item.request)
         return self._snapshot(task_id, spec, call, ToolTaskState(item.status))
+
+    def peek_task_by_call(self, call_id: str) -> ToolTask | None:
+        """Synchronous admission snapshot for one call, if any.
+
+        Read by the tool layer's cancellation cleanup, which must complete
+        without awaiting. Recorded in ``prepare`` at the admission instant --
+        before any await -- so a cancel landing between persistence and
+        ``submit()`` returning still finds the admitted task. Reports the
+        admission-time PENDING snapshot; fresh state is available through
+        the async ``get_task``.
+        """
+        task_id = self._calls.get(call_id)
+        if task_id is None:
+            return None
+        return self._admitted.get(task_id)
 
     async def cancel(self, task_id: str) -> bool:
         async with self._lock:

@@ -204,6 +204,118 @@ async def test_cancel_mid_sync_batch_keeps_completed_and_cancels_inflight() -> N
     await runtime.close()
 
 
+class GateAfterAdmissionManager(InMemoryToolTaskManager):
+    """Parks inside the real admission flow: prepare -> [gate] -> start.
+
+    The managed detach path calls ``manager.prepare`` then ``manager.start``
+    separately (scope.submit_tool_task), so gating these two primitives
+    reproduces the critical window exactly: the task is recorded at the
+    admission boundary while ``start`` has not completed, and a cancel
+    fired while parked never lets the layer observe the return value.
+    """
+
+    def __init__(self, registry: ExecutorRegistry, *, park_after_launch: bool) -> None:
+        super().__init__(registry)
+        self.admission_done = asyncio.Event()
+        self.launched = asyncio.Event()
+        self.release = asyncio.Event()
+        self._park_after_launch = park_after_launch
+
+    async def prepare(self, spec, call, *, execution=None):
+        task = await super().prepare(spec, call, execution=execution)
+        self.admission_done.set()
+        return task
+
+    async def start(self, task_id):
+        if not self._park_after_launch:
+            await self.release.wait()
+        await super().start(task_id)
+        if self._park_after_launch:
+            self.launched.set()
+            await self.release.wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("park_after_launch,expected_state", [
+    (False, ToolTaskState.PENDING),
+    (True, ToolTaskState.RUNNING),
+])
+async def test_cancel_inside_submit_window_uses_admission_identity(
+    park_after_launch: bool, expected_state: ToolTaskState
+) -> None:
+    """Cancel between admission and submit() returning keeps the task identity.
+
+    The manager has persisted the task but the layer never observed the
+    return value, so the cleanup consults the manager's synchronous
+    admission index. A task that actually started (RUNNING) yields the
+    detached reference; a merely admitted task (PENDING) follows the
+    steering adjudication and reports cancelled with unknown side-effect
+    state instead of a detached claim on work that never started.
+    """
+
+    tool = double_spec(wait_timeout=600.0)
+    registry = ExecutorRegistry()
+
+    async def double(arguments):
+        await asyncio.sleep(30)
+        return 4
+
+    registry.register(tool.tool_id, tool.version, LocalToolExecutor(double))
+    manager = GateAfterAdmissionManager(registry, park_after_launch=park_after_launch)
+    tools = ToolCallLayer(
+        tools=(tool,),
+        executor_registry=registry,
+        task_manager=manager,
+        authorization_adapter=_detach_allow,
+    )
+    model = ScriptedModel(
+        (
+            AIMessage(
+                content="",
+                tool_calls=(
+                    ToolCall(call_id="slow", name="double", arguments={"value": 2}),
+                ),
+            ),
+            AIMessage(content="final"),
+        ),
+    )
+    runtime = LocalRuntime()
+    runtime.attach_executor_registry(registry)
+    runtime.attach_tool_task_manager(manager)
+    handle = await bind(runtime, ReActLayer(model=model, tools=tools)).start(
+        UserMessage(content="initial"),
+        Context(tools=(tool.definition,), metadata={"permissions": ["tool:use"]}),
+        execution=options(),
+    )
+    await manager.admission_done.wait()
+    if park_after_launch:
+        await manager.launched.wait()
+    assert await handle.cancel() is True
+    outcome = await handle.outcome()
+    assert outcome.status is ExecutionStatus.CANCELLED
+
+    events = await collect_events(handle)
+    artifacts = artifact_events(events)
+    assert len(artifacts) == 1
+    result = list(artifacts[0].data["results"])[0]
+    assert result["error_code"] == "interrupted_by_execution_cancel"
+    if expected_state is ToolTaskState.RUNNING:
+        assert result["status"] == "detached"
+        assert result["side_effect_committed"] is None
+        task_id = result["task"]["task_id"]
+    else:
+        assert result["status"] == "cancelled"
+        assert result["side_effect_committed"] is None
+        assert result["task"] is None
+        by_call = await manager.get_task_by_call("slow")
+        assert by_call is not None and by_call.state is ToolTaskState.PENDING
+        task_id = by_call.task_id
+    admitted = await manager.get_task(task_id)
+    assert admitted is not None and admitted.state is expected_state
+    await manager.cancel(task_id)
+    await runtime.close()
+
+
 @pytest.mark.asyncio
 async def test_cancel_mid_detached_wait_yields_task_reference() -> None:
     tool = double_spec(wait_timeout=600.0)

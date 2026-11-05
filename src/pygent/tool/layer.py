@@ -77,10 +77,17 @@ class _BatchCallState:
     execution and only read back when the batch is interrupted.
     """
 
-    __slots__ = ("admitted", "entered_execution", "outcome", "started")
+    __slots__ = (
+        "admitted",
+        "entered_detach",
+        "entered_execution",
+        "outcome",
+        "started",
+    )
 
     def __init__(self) -> None:
         self.admitted: ToolTask | None = None
+        self.entered_detach = False
         self.entered_execution = False
         self.outcome: ToolResult | None = None
         self.started = False
@@ -257,15 +264,39 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             # Execution-level cancel. Rebuild the paired results from the
             # snapshot recorded above -- purely synchronous, so a
             # re-delivered cancellation cannot interrupt the registration.
-            results = tuple(
-                state.outcome
-                if state.outcome is not None
-                else self._cancel_path_result(
-                    call, specs_by_name.get(call.name), state
-                )
-                for call, state in zip(message.tool_calls, call_states)
+            manager = None
+            resolver = getattr(infrastructure, "resolve_tool_task_manager", None)
+            if callable(resolver):
+                manager = resolver() or self.task_manager
+            peek = cast(
+                Callable[[str], ToolTask | None] | None,
+                getattr(manager, "peek_task_by_call", None),
             )
-            self._record_cancel_artifact(message.tool_calls, results)
+            rebuilt: list[ToolResult] = []
+            for call, state in zip(message.tool_calls, call_states):
+                if state.outcome is not None:
+                    rebuilt.append(state.outcome)
+                    continue
+                admitted = state.admitted
+                if admitted is None and state.entered_detach and peek is not None:
+                    try:
+                        peeked = peek(call.call_id)
+                    except Exception:
+                        peeked = None
+                    if (
+                        peeked is not None
+                        and peeked.call_id == call.call_id
+                        and peeked.state is not ToolTaskState.PENDING
+                    ):
+                        # Same adjudication as the steering rebuild: only a
+                        # task that actually started yields a detached claim.
+                        admitted = peeked
+                rebuilt.append(
+                    self._cancel_path_result(
+                        call, specs_by_name.get(call.name), state, admitted
+                    )
+                )
+            self._record_cancel_artifact(message.tool_calls, tuple(rebuilt))
             raise
         return ToolMessage(results=cast(tuple[ToolResult, ...], results)), context
 
@@ -341,8 +372,11 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                 # Marked before admission on purpose: a cancel landing during
                 # the submit await may leave a task admitted on the manager
                 # that this coroutine never observed. Conservative unknown
-                # side-effect state beats a false "never started".
+                # side-effect state beats a false "never started", and the
+                # detach flag lets the cleanup consult the manager's
+                # synchronous admission index for the identity.
                 state.entered_execution = True
+                state.entered_detach = True
             result = await self._detach(admitted_call, spec, state=state)
             event_kind = (
                 "tool.detached" if result.status == "detached" else
@@ -378,17 +412,21 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
 
     @staticmethod
     def _cancel_path_result(
-        call: ToolCall, spec: ToolSpec | None, state: _BatchCallState
+        call: ToolCall,
+        spec: ToolSpec | None,
+        state: _BatchCallState,
+        admitted: ToolTask | None,
     ) -> ToolResult:
         """Build the paired result for a call killed by execution-level cancel.
 
         Purely synchronous: reads only the snapshot recorded while the batch
-        ran. An admitted task yields a detached reference the model can query
-        next turn; anything else yields a cancelled result whose
-        ``side_effect_committed`` reflects the recorded execution phase
-        (``False`` before the executor was entered, unknown once entered).
+        ran plus the manager's synchronous admission index. An admitted task
+        yields a detached reference the model can query next turn; anything
+        else yields a cancelled result whose ``side_effect_committed``
+        reflects the recorded execution phase (``False`` before the executor
+        was entered, unknown once entered).
         """
-        task = state.admitted
+        task = admitted
         if task is not None:
             return ToolResult(
                 call_id=call.call_id,
