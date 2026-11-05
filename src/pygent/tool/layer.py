@@ -264,33 +264,34 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             # Execution-level cancel. Rebuild the paired results from the
             # snapshot recorded above -- purely synchronous, so a
             # re-delivered cancellation cannot interrupt the registration.
-            manager = None
-            resolver = getattr(infrastructure, "resolve_tool_task_manager", None)
-            if callable(resolver):
-                manager = resolver() or self.task_manager
             peek = cast(
                 Callable[[str], ToolTask | None] | None,
-                getattr(manager, "peek_task_by_call", None),
+                getattr(infrastructure, "peek_admitted_task_by_call", None),
             )
             rebuilt: list[ToolResult] = []
             for call, state in zip(message.tool_calls, call_states):
                 if state.outcome is not None:
                     rebuilt.append(state.outcome)
                     continue
-                admitted = state.admitted
-                if admitted is None and state.entered_detach and peek is not None:
-                    try:
-                        peeked = peek(call.call_id)
-                    except Exception:
-                        peeked = None
-                    if (
-                        peeked is not None
-                        and peeked.call_id == call.call_id
-                        and peeked.state is not ToolTaskState.PENDING
-                    ):
+                admitted = None
+                if state.entered_detach:
+                    # Prefer the runtime's scoped admission record: it merges
+                    # the identity with the manager's launch boundary, so a
+                    # started task is reported RUNNING even when the recorded
+                    # admission snapshot predates the launch.
+                    if peek is not None:
+                        try:
+                            peeked = peek(call.call_id)
+                        except Exception:
+                            peeked = None
+                        if peeked is not None and peeked.call_id == call.call_id:
+                            admitted = peeked
+                    if admitted is None:
+                        admitted = state.admitted
+                    if admitted is not None and admitted.state is ToolTaskState.PENDING:
                         # Same adjudication as the steering rebuild: only a
                         # task that actually started yields a detached claim.
-                        admitted = peeked
+                        admitted = None
                 rebuilt.append(
                     self._cancel_path_result(
                         call, specs_by_name.get(call.name), state, admitted

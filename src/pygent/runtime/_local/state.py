@@ -24,7 +24,7 @@ from pygent.core.execution import _trusted_execution_event
 from pygent.core.json_values import (
     _patch_frozen_json_object,
 )
-from pygent.tool import ToolTaskManager
+from pygent.tool import ToolTask, ToolTaskManager
 
 from .._execution_inputs import MemoryExecutionInbox
 from .._history_store import SQLiteHistoryStore
@@ -100,6 +100,14 @@ class _ExecutionRecord:
     model_calls: Any = None
     model_admission: Any = None
     deferred_tool_tasks: list[tuple[ToolTaskManager, str]] = field(default_factory=list)
+    # Detach admissions of THIS execution, keyed by call_id: (manager, snapshot)
+    # recorded synchronously at the admission boundary. Scoped to the record, so
+    # a call_id reused across executions cannot cross-match and the entries die
+    # with the execution; read by the tool layer's cancellation cleanup, which
+    # must never await.
+    tool_task_admissions: dict[str, tuple[ToolTaskManager, ToolTask]] = field(
+        default_factory=dict
+    )
     step_interrupt_event: asyncio.Event | None = None
     # Module-recorded cancellation artifacts (e.g. batch tool results rebuilt
     # on execution cancel), frozen payloads appended to the journal ahead of

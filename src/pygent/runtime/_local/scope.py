@@ -37,12 +37,16 @@ from pygent.core.json_values import (
     _patch_frozen_json_object,
 )
 from pygent.core.values import validate_context
+from dataclasses import replace
+
 from pygent.tool import (
     SandboxExecutorSupport,
     ToolCall,
     ToolExecutionError,
     ToolSpec,
+    ToolTask,
     ToolTaskAdmission,
+    ToolTaskState,
 )
 from pygent.tool.executors import validate_executor_sandbox
 
@@ -210,6 +214,36 @@ class _ManagedScope(ExecutionScope):
         """
 
         self.record.step_interrupt_trigger = input_sequence
+
+    def peek_admitted_task_by_call(self, call_id: str) -> ToolTask | None:
+        """Admission snapshot for one call of THIS execution, if it started.
+
+        Read by the tool layer's cancellation cleanup, which must complete
+        without awaiting. The lookup is scoped to this execution's own
+        admissions, so a call_id reused across executions cannot cross-match.
+        Started-ness is judged by the task manager at its launch boundary; a
+        task that never started reports as missing, and the caller falls back
+        to a cancelled result with unknown side-effect state (durable
+        recovery rediscovers such jobs through the existing Job rules).
+        """
+        entry = self.record.tool_task_admissions.get(call_id)
+        if entry is None:
+            return None
+        manager, task = entry
+        started = getattr(manager, "task_started", None)
+        if not callable(started):
+            return None
+        try:
+            if not started(task.task_id):
+                return None
+        except Exception:
+            return None
+        if task.state is ToolTaskState.PENDING:
+            # The manager confirms the launch happened; reflect it so the
+            # caller's adjudication does not discard a running task whose
+            # recorded admission snapshot predates the launch.
+            return replace(task, state=ToolTaskState.RUNNING)
+        return task
 
     def record_cancellation_artifact(self, payload: Mapping[str, JsonValue]) -> None:
         """Record one module cancellation artifact for the terminal journal.
@@ -1146,6 +1180,11 @@ class _ManagedScope(ExecutionScope):
             )
         else:
             task = await manager.prepare(spec, call, execution=execute)
+        # Admission-boundary identity record, scoped to this execution and
+        # dropped with it: the tool layer's synchronous cancellation cleanup
+        # reads it when a cancel lands before this coroutine returns. Both
+        # the durable Job and the plain ToolTask admission paths record here.
+        self.record.tool_task_admissions[call.call_id] = (manager, task)
         if spec.wait_timeout is not None:
             # Independent work must start before the Parent observes it. Its
             # execution context is cleared by ToolCallLayer's admission scope.

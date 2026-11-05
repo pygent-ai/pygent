@@ -36,6 +36,7 @@ from pygent.runtime import (
     LocalRuntime,
     SQLiteHistoryStore,
 )
+from pygent.runtime.tasks import DurableToolTaskManager
 from pygent.tool import (
     ExecutorRegistry,
     InMemoryToolTaskManager,
@@ -209,17 +210,21 @@ class GateAfterAdmissionManager(InMemoryToolTaskManager):
 
     The managed detach path calls ``manager.prepare`` then ``manager.start``
     separately (scope.submit_tool_task), so gating these two primitives
-    reproduces the critical window exactly: the task is recorded at the
-    admission boundary while ``start`` has not completed, and a cancel
-    fired while parked never lets the layer observe the return value.
+    reproduces the critical window exactly: the runtime records the task
+    identity at the admission boundary while ``start`` has not completed,
+    and a cancel fired while parked never lets the layer observe the return
+    value. Modes are queued per ``start`` call: ``before_launch`` parks with
+    the task persisted but not launched, ``after_launch`` parks with the
+    task already running.
     """
 
-    def __init__(self, registry: ExecutorRegistry, *, park_after_launch: bool) -> None:
+    def __init__(self, registry: ExecutorRegistry) -> None:
         super().__init__(registry)
         self.admission_done = asyncio.Event()
         self.launched = asyncio.Event()
+        self.parked = asyncio.Event()
         self.release = asyncio.Event()
-        self._park_after_launch = park_after_launch
+        self.modes: list[str] = []
 
     async def prepare(self, spec, call, *, execution=None):
         task = await super().prepare(spec, call, execution=execution)
@@ -227,30 +232,37 @@ class GateAfterAdmissionManager(InMemoryToolTaskManager):
         return task
 
     async def start(self, task_id):
-        if not self._park_after_launch:
+        mode = self.modes.pop(0) if self.modes else None
+        if mode in ("before_launch", "after_launch"):
+            # A fresh gate per gated start, so one release cannot let a
+            # later start through.
+            self.release = asyncio.Event()
+        if mode == "before_launch":
+            self.parked.set()
             await self.release.wait()
         await super().start(task_id)
-        if self._park_after_launch:
+        if mode == "after_launch":
             self.launched.set()
             await self.release.wait()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("park_after_launch,expected_state", [
-    (False, ToolTaskState.PENDING),
-    (True, ToolTaskState.RUNNING),
+@pytest.mark.parametrize("mode,expected_state", [
+    ("before_launch", ToolTaskState.PENDING),
+    ("after_launch", ToolTaskState.RUNNING),
 ])
 async def test_cancel_inside_submit_window_uses_admission_identity(
-    park_after_launch: bool, expected_state: ToolTaskState
+    mode: str, expected_state: ToolTaskState
 ) -> None:
-    """Cancel between admission and submit() returning keeps the task identity.
+    """Cancel between admission and start completing keeps the task identity.
 
     The manager has persisted the task but the layer never observed the
-    return value, so the cleanup consults the manager's synchronous
-    admission index. A task that actually started (RUNNING) yields the
-    detached reference; a merely admitted task (PENDING) follows the
-    steering adjudication and reports cancelled with unknown side-effect
-    state instead of a detached claim on work that never started.
+    return value, so the cleanup consults the execution's admission record
+    plus the manager's launch boundary. A task that actually started
+    (RUNNING) yields the detached reference; a merely admitted task
+    (PENDING) follows the steering adjudication and reports cancelled with
+    unknown side-effect state instead of a detached claim on work that
+    never started.
     """
 
     tool = double_spec(wait_timeout=600.0)
@@ -261,7 +273,8 @@ async def test_cancel_inside_submit_window_uses_admission_identity(
         return 4
 
     registry.register(tool.tool_id, tool.version, LocalToolExecutor(double))
-    manager = GateAfterAdmissionManager(registry, park_after_launch=park_after_launch)
+    manager = GateAfterAdmissionManager(registry)
+    manager.modes.append(mode)
     tools = ToolCallLayer(
         tools=(tool,),
         executor_registry=registry,
@@ -288,8 +301,7 @@ async def test_cancel_inside_submit_window_uses_admission_identity(
         execution=options(),
     )
     await manager.admission_done.wait()
-    if park_after_launch:
-        await manager.launched.wait()
+    await (manager.launched.wait() if mode == "after_launch" else manager.parked.wait())
     assert await handle.cancel() is True
     outcome = await handle.outcome()
     assert outcome.status is ExecutionStatus.CANCELLED
@@ -313,6 +325,82 @@ async def test_cancel_inside_submit_window_uses_admission_identity(
     admitted = await manager.get_task(task_id)
     assert admitted is not None and admitted.state is expected_state
     await manager.cancel(task_id)
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_call_id_reuse_across_executions_does_not_cross_match() -> None:
+    """The admission lookup is scoped to the execution, not the shared manager.
+
+    Execution 1 admits a running detached task under call_id ``slow``; the
+    task survives the cancel. Execution 2 reuses the same call_id and is
+    cancelled inside its own admission window: its artifact must not pick
+    up execution 1's still-running task.
+    """
+
+    tool = double_spec(wait_timeout=600.0)
+    registry = ExecutorRegistry()
+
+    async def double(arguments):
+        await asyncio.sleep(30)
+        return 4
+
+    registry.register(tool.tool_id, tool.version, LocalToolExecutor(double))
+    manager = GateAfterAdmissionManager(registry)
+    manager.modes.extend(["after_launch", "before_launch"])
+    tools = ToolCallLayer(
+        tools=(tool,),
+        executor_registry=registry,
+        task_manager=manager,
+        authorization_adapter=_detach_allow,
+    )
+    first_answer = AIMessage(
+        content="",
+        tool_calls=(ToolCall(call_id="slow", name="double", arguments={"value": 2}),),
+    )
+    # Both runs must dispatch the same tool call: the shared scripted model
+    # hands out answers by call index, so repeat the tool-call answer.
+    model = ScriptedModel((first_answer, first_answer, AIMessage(content="final")))
+    runtime = LocalRuntime()
+    runtime.attach_executor_registry(registry)
+    runtime.attach_tool_task_manager(manager)
+    bound = bind(runtime, ReActLayer(model=model, tools=tools))
+    context = Context(
+        tools=(tool.definition,), metadata={"permissions": ["tool:use"]}
+    )
+
+    first = await bound.start(
+        UserMessage(content="initial"), context, execution=options(),
+    )
+    await manager.admission_done.wait()
+    await manager.launched.wait()
+    manager.release.set()  # run 1's start completes; the layer waits on the task
+    assert await first.cancel() is True
+    outcome = await first.outcome()
+    assert outcome.status is ExecutionStatus.CANCELLED
+    events = await collect_events(first)
+    first_result = list(artifact_events(events)[0].data["results"])[0]
+    assert first_result["status"] == "detached"
+    first_task_id = first_result["task"]["task_id"]
+    running = await manager.get_task(first_task_id)
+    assert running is not None and running.state is ToolTaskState.RUNNING
+
+    second = await bound.start(
+        UserMessage(content="second"), context, execution=options(),
+    )
+    await manager.parked.wait()  # run 2 parked before its own launch
+    assert await second.cancel() is True
+    outcome = await second.outcome()
+    assert outcome.status is ExecutionStatus.CANCELLED
+    events = await collect_events(second)
+    second_result = list(artifact_events(events)[0].data["results"])[0]
+    assert second_result["status"] == "cancelled"
+    assert second_result["task"] is None
+    assert second_result["side_effect_committed"] is None
+    still_running = await manager.get_task(first_task_id)
+    assert still_running is not None and still_running.state is ToolTaskState.RUNNING
+
+    await manager.cancel(first_task_id)
     await runtime.close()
 
 
@@ -655,6 +743,87 @@ async def test_durable_cancel_journals_artifact_before_terminal(tmp_path) -> Non
         results = results_by_call(artifacts[0])
         assert results["fast"]["status"] == "succeeded"
         assert results["slow"]["status"] == "cancelled"
+        await runtime.close()
+
+
+class GatedDurableManager(DurableToolTaskManager):
+    """Parks inside ``start`` after ``prepare_job`` persisted the Job.
+
+    Reproduces the durable admission window through the real
+    ``scope.submit_tool_task`` Job path: the Job and ToolTask are persisted
+    (and recorded on the execution), while the launch has not happened.
+    """
+
+    def __init__(self, history, registry: ExecutorRegistry) -> None:
+        super().__init__(history, registry)
+        self.parked = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def start(self, task_id):
+        self.parked.set()
+        await self.release.wait()
+        await super().start(task_id)
+
+
+@pytest.mark.asyncio
+async def test_durable_cancel_during_start_reports_cancelled_pending_job(
+    tmp_path,
+) -> None:
+    """A durable Job persisted but never launched reports cancelled, not detached.
+
+    The launch boundary has not passed, so the artifact carries no detached
+    claim and unknown side-effect state; the persisted PENDING Job is
+    rediscovered by the durable Job recovery rules instead.
+    """
+
+    tool = double_spec(wait_timeout=600.0)
+    registry = ExecutorRegistry()
+
+    async def double(arguments):
+        await asyncio.sleep(30)
+        return 4
+
+    registry.register(tool.tool_id, tool.version, LocalToolExecutor(double))
+    model = ScriptedModel(
+        (
+            AIMessage(
+                content="",
+                tool_calls=(
+                    ToolCall(call_id="slow", name="double", arguments={"value": 2}),
+                ),
+            ),
+            AIMessage(content="final"),
+        ),
+    )
+    async with SQLiteHistoryStore(tmp_path / "history.sqlite3") as history:
+        manager = GatedDurableManager(history, registry)
+        runtime = LocalRuntime(history=history)
+        runtime.attach_executor_registry(registry)
+        runtime.attach_tool_task_manager(manager)
+        tools = ToolCallLayer(
+            tools=(tool,),
+            executor_registry=registry,
+            task_manager=manager,
+            authorization_adapter=_detach_allow,
+        )
+        handle = await bind(runtime, ReActLayer(model=model, tools=tools)).start(
+            UserMessage(content="initial"),
+            Context(tools=(tool.definition,), metadata={"permissions": ["tool:use"]}),
+            execution=options(),
+        )
+        await manager.parked.wait()
+        assert await handle.cancel() is True
+        outcome = await handle.outcome()
+        assert outcome.status is ExecutionStatus.CANCELLED
+
+        events = await collect_events(handle)
+        artifacts = artifact_events(events)
+        assert len(artifacts) == 1
+        result = list(artifacts[0].data["results"])[0]
+        assert result["status"] == "cancelled"
+        assert result["task"] is None
+        assert result["side_effect_committed"] is None
+        assert result["error_code"] == "interrupted_by_execution_cancel"
         await runtime.close()
 
 
