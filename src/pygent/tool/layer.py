@@ -67,6 +67,25 @@ class TrustedAuthorizationAdapter(Protocol):
     ) -> ToolAuthorizationDecision | Awaitable[ToolAuthorizationDecision]: ...
 
 
+class _BatchCallState:
+    """Per-call snapshot recorded while one tool batch runs.
+
+    The execution-cancel cleanup in ``forward`` must be purely synchronous --
+    a cancellation can be re-delivered any number of times, so the cleanup
+    cannot await anything. Every fact it needs (real outcome, execution
+    phase, admitted task) is therefore captured here during normal batch
+    execution and only read back when the batch is interrupted.
+    """
+
+    __slots__ = ("admitted", "entered_execution", "outcome", "started")
+
+    def __init__(self) -> None:
+        self.admitted: ToolTask | None = None
+        self.entered_execution = False
+        self.outcome: ToolResult | None = None
+        self.started = False
+
+
 class ToolCallLayer(Module[AIMessage, ToolMessage]):
     """Validate, authorize, admit, and execute one ordered batch of tool calls."""
 
@@ -165,7 +184,11 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
         interrupt_event = (
             interrupt_getter() if callable(interrupt_getter) else None
         )
-        async def run(call: ToolCall) -> ToolResult:
+        call_states = [_BatchCallState() for _ in message.tool_calls]
+
+        async def run(index: int, call: ToolCall) -> ToolResult:
+            state = call_states[index]
+            state.started = True
             await self.emit(
                 kind="tool.requested",
                 data={"call_id": call.call_id, "name": call.name, "call_span_id": str(uuid4())},
@@ -178,55 +201,72 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                     kind="tool.rejected",
                     data={"call_id": call.call_id, "reason_code": "duplicate_call_id"},
                 )
+                state.outcome = result
                 return result
             if semaphore is None:
-                return await self._handle_call(call, context, specs_by_name)
-            async with semaphore:
-                return await self._handle_call(call, context, specs_by_name)
+                result = await self._handle_call(
+                    call, context, specs_by_name, state=state
+                )
+            else:
+                async with semaphore:
+                    result = await self._handle_call(
+                        call, context, specs_by_name, state=state
+                    )
+            state.outcome = result
+            return result
 
         # The scope registers a structured parallel group and preserves input order.
         infrastructure = current_infrastructure()
         operations = tuple(
-            (lambda call=call: run(call)) for call in message.tool_calls
+            (lambda index=index, call=call: run(index, call))
+            for index, call in enumerate(message.tool_calls)
         )
         gather = getattr(infrastructure, "gather", None)
         interrupt_getter = getattr(infrastructure, "gather_until", None)
-        if interrupt_event is not None and callable(interrupt_getter):
-            started = [False] * len(operations)
-
-            def wrapped(index: int, operation):
-                async def op():
-                    started[index] = True
-                    return await operation()
-
-                return op
-
-            tracked = tuple(
-                wrapped(index, operation)
-                for index, operation in enumerate(operations)
-            )
-            raw, completed, interrupted = await interrupt_getter(
-                tracked, abort=interrupt_event
-            )
-            if not interrupted:
-                results = raw
+        try:
+            if interrupt_event is not None and callable(interrupt_getter):
+                raw, completed, interrupted = await interrupt_getter(
+                    operations, abort=interrupt_event
+                )
+                if not interrupted:
+                    results = raw
+                else:
+                    results = tuple([
+                        raw[index]
+                        if completed[index]
+                        else await self._interrupted_call_result(
+                            call,
+                            specs_by_name.get(call.name),
+                            call_states[index].started,
+                        )
+                        for index, call in enumerate(message.tool_calls)
+                    ])
             else:
-                results = tuple([
-                    raw[index]
-                    if completed[index]
-                    else await self._interrupted_call_result(
-                        call,
-                        specs_by_name.get(call.name),
-                        started[index],
-                    )
-                    for index, call in enumerate(message.tool_calls)
-                ])
-        else:
-            results = (
-                await gather(operations)
-                if callable(gather)
-                else tuple(await asyncio.gather(*(operation() for operation in operations)))
+                results = (
+                    await gather(operations)
+                    if callable(gather)
+                    else tuple(await asyncio.gather(*(operation() for operation in operations)))
+                )
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is None or current.cancelling() == 0:
+                # Not this execution's cancellation: a child raised it on its
+                # own (ToolRunner converts its own, so this should not happen
+                # in practice). Propagate without touching the batch.
+                raise
+            # Execution-level cancel. Rebuild the paired results from the
+            # snapshot recorded above -- purely synchronous, so a
+            # re-delivered cancellation cannot interrupt the registration.
+            results = tuple(
+                state.outcome
+                if state.outcome is not None
+                else self._cancel_path_result(
+                    call, specs_by_name.get(call.name), state
+                )
+                for call, state in zip(message.tool_calls, call_states)
             )
+            self._record_cancel_artifact(message.tool_calls, results)
+            raise
         return ToolMessage(results=cast(tuple[ToolResult, ...], results)), context
 
     async def _handle_call(
@@ -234,6 +274,8 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
         call: ToolCall,
         context: Context,
         specs_by_name: Mapping[str, ToolSpec],
+        *,
+        state: _BatchCallState | None = None,
     ) -> ToolResult:
         spec = specs_by_name.get(call.name)
         if spec is None:
@@ -295,7 +337,13 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             admitted_call = replace(call, idempotency_key=key)
 
         if decision.lifecycle == "detach":
-            result = await self._detach(admitted_call, spec)
+            if state is not None:
+                # Marked before admission on purpose: a cancel landing during
+                # the submit await may leave a task admitted on the manager
+                # that this coroutine never observed. Conservative unknown
+                # side-effect state beats a false "never started".
+                state.entered_execution = True
+            result = await self._detach(admitted_call, spec, state=state)
             event_kind = (
                 "tool.detached" if result.status == "detached" else
                 "tool.completed" if result.status == "succeeded" else
@@ -308,6 +356,8 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             return result
         if spec.wait_timeout is not None and cast(FrozenJsonObject, call.arguments).get("is_background") is True:
             return await self._reject_event(call, "background_requires_detach", spec)
+        if state is not None:
+            state.entered_execution = True
         return await self._execute_sync(admitted_call, spec)
 
     @staticmethod
@@ -324,6 +374,67 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             side_effect_committed=None if started else False,
             tool_id=None if spec is None else spec.tool_id,
             tool_version=None if spec is None else spec.version,
+        )
+
+    @staticmethod
+    def _cancel_path_result(
+        call: ToolCall, spec: ToolSpec | None, state: _BatchCallState
+    ) -> ToolResult:
+        """Build the paired result for a call killed by execution-level cancel.
+
+        Purely synchronous: reads only the snapshot recorded while the batch
+        ran. An admitted task yields a detached reference the model can query
+        next turn; anything else yields a cancelled result whose
+        ``side_effect_committed`` reflects the recorded execution phase
+        (``False`` before the executor was entered, unknown once entered).
+        """
+        task = state.admitted
+        if task is not None:
+            return ToolResult(
+                call_id=call.call_id,
+                name=call.name,
+                status="detached",
+                task=task,
+                output=None,
+                error_kind="cancelled",
+                error_code="interrupted_by_execution_cancel",
+                side_effect_committed=None,
+                tool_id=task.tool_id,
+                tool_version=task.version,
+            )
+        return ToolResult(
+            call_id=call.call_id,
+            name=call.name,
+            status="cancelled",
+            error_kind="cancelled",
+            error_code="interrupted_by_execution_cancel",
+            retryable=False,
+            side_effect_committed=None if state.entered_execution else False,
+            tool_id=None if spec is None else spec.tool_id,
+            tool_version=None if spec is None else spec.version,
+        )
+
+    @staticmethod
+    def _record_cancel_artifact(
+        calls: tuple[ToolCall, ...], results: tuple[ToolResult, ...]
+    ) -> None:
+        """Hand the rebuilt batch to the journal as a cancellation artifact.
+
+        Synchronous by contract: this runs inside an ``except
+        CancelledError`` cleanup that must complete without awaiting, so the
+        registration cannot be interrupted by a re-delivered cancellation.
+        The scope persists the payload as a ``tool.batch.cancelled`` journal
+        event ordered ahead of the terminal event.
+        """
+        infrastructure = current_infrastructure()
+        record = getattr(infrastructure, "record_cancellation_artifact", None)
+        if not callable(record):
+            return
+        record(
+            {
+                "call_ids": [call.call_id for call in calls],
+                "results": [_artifact_result_value(result) for result in results],
+            }
         )
 
     async def _interrupted_call_result(
@@ -576,7 +687,13 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             )
             return replace(result, task=replace(task, state=state))
 
-    async def _detach(self, call: ToolCall, spec: ToolSpec) -> ToolResult:
+    async def _detach(
+        self,
+        call: ToolCall,
+        spec: ToolSpec,
+        *,
+        state: _BatchCallState | None = None,
+    ) -> ToolResult:
         from .task_handle import ToolTaskHandle
 
         infrastructure = current_infrastructure()
@@ -597,6 +714,11 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                     task = cast(ToolTask | None, submitted)
             if task is None and admission is None and self.task_manager is not None:
                 task = await self.task_manager.submit(spec, call)
+        if state is not None and task is not None:
+            # Recorded immediately, before any await this coroutine may still
+            # lose to cancellation: the execution-cancel cleanup rebuilds the
+            # detached reference from this snapshot without manager queries.
+            state.admitted = task
         if task is None:
             return ToolResult(
                 call_id=call.call_id,
@@ -685,8 +807,20 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
         )
 
 
-def _result_effect_value(result: ToolResult) -> dict[str, object]:
-    return {
+def _artifact_result_value(result: ToolResult) -> dict[str, object]:
+    """Serialize one rebuilt result for the cancellation artifact payload.
+
+    Extends the replay-effect envelope with the wire identity keys a host
+    needs to patch its transcript by ``call_id``.
+    """
+
+    value = _result_effect_value(result)
+    value["call_id"] = result.call_id
+    value["name"] = result.name
+    return value
+
+
+def _result_effect_value(result: ToolResult) -> dict[str, object]:    return {
         "status": result.status,
         "error": result.error,
         "error_kind": result.error_kind,

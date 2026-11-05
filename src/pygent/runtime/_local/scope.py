@@ -211,6 +211,21 @@ class _ManagedScope(ExecutionScope):
 
         self.record.step_interrupt_trigger = input_sequence
 
+    def record_cancellation_artifact(self, payload: Mapping[str, JsonValue]) -> None:
+        """Record one module cancellation artifact for the terminal journal.
+
+        Called from a Module's execution-cancel cleanup (currently the tool
+        layer rebuilding interrupted batch results). Synchronous by contract:
+        the caller runs inside an ``except CancelledError`` unwinding that
+        must never await, so this only freezes and stashes the payload.
+        ``_ExecutionRecord.finalize`` persists it as a ``tool.batch.cancelled``
+        journal event ordered ahead of the terminal event.
+        """
+
+        if self.record.phase is ExecutionPhase.FINALIZING or self.record.terminal:
+            return
+        self.record.cancellation_artifacts.append(freeze_json_object(dict(payload)))
+
     async def invoke_module_until(
         self,
         module: ModuleDependency[Any, Any],

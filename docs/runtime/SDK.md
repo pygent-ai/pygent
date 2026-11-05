@@ -608,6 +608,8 @@ effective_child_deadline = min_non_none(
 
 Child 不能放宽 Parent deadline。Parent deadline 到达时，正在排队、运行或等待调度恢复的结构化 Child 都必须进入取消和清理流程。
 
+执行级取消（`handle.cancel()`、Runtime shutdown 或 deadline 到期）落在工具批次中时，`ToolCallLayer` 以纯同步快照为每个原始 `call_id` 产出配对 ToolResult：已完成的调用保留真实结果；已 admit 的独立任务返回 `status="detached"` 的任务引用（admission 时快照，任务不因取消停止，凭 `task_id` 查询最新状态）；已进入执行但无任务引用的调用返回 `status="cancelled"` 且 `side_effect_committed=None`；未进入执行的调用返回 `side_effect_committed=False`。该批次以 `tool.batch.cancelled` journal 事件持久化（载荷含顶层 `call_ids` 与逐调用结果，`error_code="interrupted_by_execution_cancel"`），事件与终态事件同事务提交且顺序在前；终态提交失败按现有 journal 错误通道暴露，不得静默悬空。事件持久化不等于宿主 transcript 已修复：宿主必须在下一次模型请求前完成事件重放、按 `call_id` 幂等补齐与 checkpoint 更新。宿主恢复判定顺序：execution 非终结（崩溃于终态提交前）走既有 recover 重放规则；终结为 cancelled 才按本事件或宿主兜底规则补齐 transcript。steering 打断（`interrupted_by_steering`）语义不变。
+
 ## RESUME、RETRY 与 CHECKPOINT RESTORE
 
 三者不得混用：

@@ -101,6 +101,11 @@ class _ExecutionRecord:
     model_admission: Any = None
     deferred_tool_tasks: list[tuple[ToolTaskManager, str]] = field(default_factory=list)
     step_interrupt_event: asyncio.Event | None = None
+    # Module-recorded cancellation artifacts (e.g. batch tool results rebuilt
+    # on execution cancel), frozen payloads appended to the journal ahead of
+    # the terminal event by ``finalize``. Written synchronously from a
+    # cancellation cleanup that must never await.
+    cancellation_artifacts: list[FrozenJsonObject] = field(default_factory=list)
 
     @property
     def terminal(self) -> bool:
@@ -372,6 +377,23 @@ class _ExecutionRecord:
             raise self.journal_error
         async with self.event_lock:
             prepared: list[ExecutionEvent] = []
+            for artifact in self.cancellation_artifacts:
+                prepared.append(
+                    _trusted_execution_event(
+                        schema_version=EXECUTION_EVENT_SCHEMA_VERSION,
+                        event_id=str(uuid.uuid4()),
+                        execution_id=self.execution_id,
+                        attempt_id=self.attempt_id,
+                        trace_id=self.trace_id,
+                        span_id=self.root_span_id,
+                        parent_span_id=self.parent_span_id,
+                        module_path=self.plan.root,
+                        sequence=self.next_sequence + len(prepared),
+                        timestamp_unix_ns=time.time_ns(),
+                        kind="tool.batch.cancelled",
+                        data=artifact,
+                    )
+                )
             for kind, data in terminal_events:
                 prepared.append(
                     _trusted_execution_event(
