@@ -405,6 +405,73 @@ async def test_call_id_reuse_across_executions_does_not_cross_match() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancel_after_fast_completion_keeps_task_reference_and_result() -> None:
+    """A task that starts AND completes inside the admission window survives.
+
+    ``task_started`` reads the manager's live task table, which retains
+    finished entries until retention pressure, so a task that runs to
+    completion while ``submit_tool_task`` is still unwinding is not mistaken
+    for unstarted work: the artifact keeps the detached reference and the
+    final result stays queryable through it.
+    """
+
+    tool = double_spec(wait_timeout=600.0)
+    registry = ExecutorRegistry()
+
+    async def double(arguments):
+        await asyncio.sleep(0.3)
+        return 4
+
+    registry.register(tool.tool_id, tool.version, LocalToolExecutor(double))
+    manager = GateAfterAdmissionManager(registry)
+    manager.modes.append("after_launch")
+    tools = ToolCallLayer(
+        tools=(tool,),
+        executor_registry=registry,
+        task_manager=manager,
+        authorization_adapter=_detach_allow,
+    )
+    model = ScriptedModel(
+        (
+            AIMessage(
+                content="",
+                tool_calls=(
+                    ToolCall(call_id="slow", name="double", arguments={"value": 2}),
+                ),
+            ),
+            AIMessage(content="final"),
+        ),
+    )
+    runtime = LocalRuntime()
+    runtime.attach_executor_registry(registry)
+    runtime.attach_tool_task_manager(manager)
+    handle = await bind(runtime, ReActLayer(model=model, tools=tools)).start(
+        UserMessage(content="initial"),
+        Context(tools=(tool.definition,), metadata={"permissions": ["tool:use"]}),
+        execution=options(),
+    )
+    await manager.launched.wait()
+    await asyncio.sleep(0.6)  # the tool completes while submit is parked
+    assert await handle.cancel() is True
+    outcome = await handle.outcome()
+    assert outcome.status is ExecutionStatus.CANCELLED
+
+    events = await collect_events(handle)
+    artifacts = artifact_events(events)
+    assert len(artifacts) == 1
+    result = list(artifacts[0].data["results"])[0]
+    assert result["status"] == "detached"
+    assert result["side_effect_committed"] is None
+    task_id = result["task"]["task_id"]
+    finished = await manager.get_task(task_id)
+    assert finished is not None and finished.state is ToolTaskState.SUCCEEDED
+    final = await runtime.get_tool_result(task_id)
+    assert final is not None and final.status == "succeeded"
+    assert final.output == 4
+    await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_cancel_mid_detached_wait_yields_task_reference() -> None:
     tool = double_spec(wait_timeout=600.0)
     registry = ExecutorRegistry()
