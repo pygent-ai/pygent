@@ -8,6 +8,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
+from dataclasses import replace
 from typing import Any, cast
 
 from pygent.core import (
@@ -37,8 +38,6 @@ from pygent.core.json_values import (
     _patch_frozen_json_object,
 )
 from pygent.core.values import validate_context
-from dataclasses import replace
-
 from pygent.tool import (
     SandboxExecutorSupport,
     ToolCall,
@@ -236,7 +235,9 @@ class _ManagedScope(ExecutionScope):
         try:
             if not started(task.task_id):
                 return None
-        except Exception:
+        except Exception:  # noqa: BLE001 - the capability probe runs arbitrary
+            # manager code; any failure means "cannot confirm the launch" and
+            # the caller's adjudication treats this task as never started.
             return None
         if task.state is ToolTaskState.PENDING:
             # The manager confirms the launch happened; reflect it so the

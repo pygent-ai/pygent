@@ -282,7 +282,9 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                     if peek is not None:
                         try:
                             peeked = peek(call.call_id)
-                        except Exception:
+                        except Exception:  # noqa: BLE001 - the peek probes an
+                            # optional manager capability that may run arbitrary
+                            # code; any failure degrades to the admitted snapshot.
                             peeked = None
                         if peeked is not None and peeked.call_id == call.call_id:
                             admitted = peeked

@@ -22,10 +22,8 @@ from pygent.core import (
     AIMessage,
     Context,
     ExecutionStatus,
-    JsonValue,
     Message,
     Module,
-    ToolMessage,
     UserMessage,
 )
 from pygent.runtime import (
@@ -309,7 +307,7 @@ async def test_cancel_inside_submit_window_uses_admission_identity(
     events = await collect_events(handle)
     artifacts = artifact_events(events)
     assert len(artifacts) == 1
-    result = list(artifacts[0].data["results"])[0]
+    result = next(iter(artifacts[0].data["results"]))
     assert result["error_code"] == "interrupted_by_execution_cancel"
     if expected_state is ToolTaskState.RUNNING:
         assert result["status"] == "detached"
@@ -379,7 +377,7 @@ async def test_call_id_reuse_across_executions_does_not_cross_match() -> None:
     outcome = await first.outcome()
     assert outcome.status is ExecutionStatus.CANCELLED
     events = await collect_events(first)
-    first_result = list(artifact_events(events)[0].data["results"])[0]
+    first_result = next(iter(artifact_events(events)[0].data["results"]))
     assert first_result["status"] == "detached"
     first_task_id = first_result["task"]["task_id"]
     running = await manager.get_task(first_task_id)
@@ -393,7 +391,7 @@ async def test_call_id_reuse_across_executions_does_not_cross_match() -> None:
     outcome = await second.outcome()
     assert outcome.status is ExecutionStatus.CANCELLED
     events = await collect_events(second)
-    second_result = list(artifact_events(events)[0].data["results"])[0]
+    second_result = next(iter(artifact_events(events)[0].data["results"]))
     assert second_result["status"] == "cancelled"
     assert second_result["task"] is None
     assert second_result["side_effect_committed"] is None
@@ -459,7 +457,7 @@ async def test_cancel_after_fast_completion_keeps_task_reference_and_result() ->
     events = await collect_events(handle)
     artifacts = artifact_events(events)
     assert len(artifacts) == 1
-    result = list(artifacts[0].data["results"])[0]
+    result = next(iter(artifacts[0].data["results"]))
     assert result["status"] == "detached"
     assert result["side_effect_committed"] is None
     task_id = result["task"]["task_id"]
@@ -518,7 +516,7 @@ async def test_cancel_mid_detached_wait_yields_task_reference() -> None:
     events = await collect_events(handle)
     artifacts = artifact_events(events)
     assert len(artifacts) == 1
-    result = list(artifacts[0].data["results"])[0]
+    result = next(iter(artifacts[0].data["results"]))
     assert result["status"] == "detached"
     assert result["error_code"] == "interrupted_by_execution_cancel"
     assert result["side_effect_committed"] is None
@@ -527,7 +525,7 @@ async def test_cancel_mid_detached_wait_yields_task_reference() -> None:
     assert admitted is not None and admitted.state is ToolTaskState.RUNNING
     by_call = await manager.get_task_by_call("slow")
     assert by_call is not None and by_call.task_id == task_id
-    await manager.cancel(task_id) is True
+    assert await manager.cancel(task_id) is True
     await runtime.close()
 
 
@@ -577,7 +575,7 @@ async def test_cancel_during_authorization_reports_not_started() -> None:
     events = await collect_events(handle)
     artifacts = artifact_events(events)
     assert len(artifacts) == 1
-    result = list(artifacts[0].data["results"])[0]
+    result = next(iter(artifacts[0].data["results"]))
     assert result["status"] == "cancelled"
     assert result["error_code"] == "interrupted_by_execution_cancel"
     assert result["side_effect_committed"] is False
@@ -886,7 +884,7 @@ async def test_durable_cancel_during_start_reports_cancelled_pending_job(
         events = await collect_events(handle)
         artifacts = artifact_events(events)
         assert len(artifacts) == 1
-        result = list(artifacts[0].data["results"])[0]
+        result = next(iter(artifacts[0].data["results"]))
         assert result["status"] == "cancelled"
         assert result["task"] is None
         assert result["side_effect_committed"] is None
