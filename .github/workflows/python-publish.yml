@@ -119,7 +119,7 @@ jobs:
           - {os: ubuntu-latest, artifact: pygent-wheel-ubuntu-latest-x86_64}
           - {os: ubuntu-24.04-arm, artifact: pygent-wheel-ubuntu-24.04-arm-aarch64}
           - {os: macos-15-intel, artifact: pygent-wheel-macos-15-intel-x86_64}
-          - {os: macos-14, artifact: pygent-wheel-macos-14-aarch64}
+          - {os: macos-15, artifact: pygent-wheel-macos-15-aarch64}
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.platform.os }}
     steps:
