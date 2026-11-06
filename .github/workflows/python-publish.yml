@@ -42,7 +42,10 @@ jobs:
           - {os: ubuntu-latest, target: x86_64}
           - {os: ubuntu-24.04-arm, target: aarch64}
           - {os: macos-15-intel, target: x86_64}
-          - {os: macos-14, target: aarch64}
+          # macos-14-arm64 was retired by GitHub: queued jobs for it are
+          # cancelled with "The configuration 'macos-14-arm64-us-default' is
+          # not supported". macos-15 is the supported arm64 image.
+          - {os: macos-15, target: aarch64}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
