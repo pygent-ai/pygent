@@ -197,6 +197,12 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
         task = self._record.task
         if task is None or task.done():
             return False
+        if self._record.cancel_requested:
+            # A concurrent cancel already initiated the unwinding; report False
+            # instead of racing the task's done() check, which would make the
+            # second caller's True/False outcome scheduling-dependent.
+            return False
+        self._record.cancel_requested = True
         if self._record.phase is ExecutionPhase.SUBMITTING:
             await asyncio.sleep(0)
         if task.done():

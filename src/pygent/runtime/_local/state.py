@@ -109,6 +109,7 @@ class _ExecutionRecord:
         default_factory=dict
     )
     step_interrupt_event: asyncio.Event | None = None
+    cancel_requested: bool = False
     # Module-recorded cancellation artifacts (e.g. batch tool results rebuilt
     # on execution cancel), frozen payloads appended to the journal ahead of
     # the terminal event by ``finalize``. Written synchronously from a
