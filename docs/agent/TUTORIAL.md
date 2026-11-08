@@ -257,6 +257,8 @@ execution = ExecutionOptions(
 )
 ```
 
+若 Agent 的 `ModelCallPolicy` 放行了相应键，`ModelCallOptions(provider_options={"reasoning": {"effort": "high"}})` 还可以按请求覆盖 provider 参数（如思考强度）；覆盖值与模型配置按键一层深合并。可移植写法是 `ModelCallOptions(reasoning_effort="high")`（需 `overridable_generation` 放行）：适配器自动映射到各协议原生参数，无原生映射的协议会警告后忽略。
+
 运行不依赖外部模型的动态配置示例：
 
 ```bash

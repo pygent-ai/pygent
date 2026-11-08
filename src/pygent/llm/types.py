@@ -11,8 +11,10 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkabl
 from pygent.core import (
     ExecutionFailure,
     ExecutionFailureError,
+    FrozenJsonObject,
     JsonObjectInput,
     freeze_json_object,
+    thaw_json,
 )
 
 if TYPE_CHECKING:
@@ -91,7 +93,9 @@ class ModelResourceOwnership(str, Enum):
     OWNED = "owned"
 
 
-_OVERRIDABLE_GENERATION_FIELDS = frozenset({"temperature", "max_output_tokens"})
+_OVERRIDABLE_GENERATION_FIELDS = frozenset(
+    {"temperature", "max_output_tokens", "reasoning_effort"}
+)
 _OUTPUT_MODALITIES = frozenset({"image", "audio", "video"})
 
 
@@ -99,6 +103,7 @@ _OUTPUT_MODALITIES = frozenset({"image", "audio", "video"})
 class ModelCallPolicy:
     allow_profile_override: bool = False
     overridable_generation: frozenset[str] = frozenset()
+    overridable_provider_options: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not isinstance(self.allow_profile_override, bool):
@@ -112,6 +117,12 @@ class ModelCallPolicy:
                 "unsupported generation override fields: " + ", ".join(sorted(unknown))
             )
         object.__setattr__(self, "overridable_generation", values)
+        option_keys = frozenset(self.overridable_provider_options)
+        if any(not isinstance(value, str) or not value for value in option_keys):
+            raise ValueError(
+                "overridable_provider_options must contain non-empty strings"
+            )
+        object.__setattr__(self, "overridable_provider_options", option_keys)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,35 +130,74 @@ class ModelCallOptions:
     profile: str | None = None
     temperature: float | None = None
     max_output_tokens: int | None = None
+    reasoning_effort: str | None = None
+    provider_options: JsonObjectInput | None = None
 
     def __post_init__(self) -> None:
         if self.profile is not None and (
             not isinstance(self.profile, str) or not self.profile
         ):
             raise ValueError("profile must be non-empty when provided")
+        if self.reasoning_effort is not None and (
+            not isinstance(self.reasoning_effort, str) or not self.reasoning_effort
+        ):
+            raise ValueError("reasoning_effort must be a non-empty string when provided")
+        if self.provider_options is not None and not isinstance(
+            self.provider_options, Mapping
+        ):
+            raise TypeError("provider_options must be an object when provided")
         GenerationConfig(
             temperature=self.temperature,
             max_output_tokens=self.max_output_tokens,
+            reasoning_effort=self.reasoning_effort,
         )
+        if self.provider_options is not None and not isinstance(
+            self.provider_options, FrozenJsonObject
+        ):
+            object.__setattr__(
+                self,
+                "provider_options",
+                freeze_json_object(self.provider_options),
+            )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        value: dict[str, object] = {
             "profile": self.profile,
             "temperature": self.temperature,
             "max_output_tokens": self.max_output_tokens,
+            "reasoning_effort": self.reasoning_effort,
         }
+        if self.provider_options is not None:
+            value["provider_options"] = thaw_json(
+                cast(FrozenJsonObject, self.provider_options)
+            )
+        return value
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> ModelCallOptions:
-        unknown = set(value) - {"profile", "temperature", "max_output_tokens"}
+        unknown = set(value) - {
+            "profile",
+            "temperature",
+            "max_output_tokens",
+            "reasoning_effort",
+            "provider_options",
+        }
         if unknown:
             raise ValueError(
                 "unknown model call option fields: " + ", ".join(sorted(unknown))
             )
+        provider_options = value.get("provider_options")
+        if provider_options is not None and not isinstance(provider_options, Mapping):
+            raise ValueError("provider_options must be an object")
         return cls(
             profile=cast(str | None, value.get("profile")),
             temperature=cast(float | None, value.get("temperature")),
             max_output_tokens=cast(int | None, value.get("max_output_tokens")),
+            reasoning_effort=cast(str | None, value.get("reasoning_effort")),
+            provider_options=cast(
+                JsonObjectInput | None,
+                provider_options,
+            ),
         )
 
 
@@ -367,6 +417,7 @@ class GenerationConfig:
     response_schema_name: str = "response"
     tool_choice: str | None = None
     output_modalities: tuple[str, ...] = ()
+    reasoning_effort: str | None = None
 
     def __post_init__(self) -> None:
         if self.temperature is not None and (
@@ -382,6 +433,10 @@ class GenerationConfig:
             or self.max_output_tokens <= 0
         ):
             raise ValueError("max_output_tokens must be greater than zero")
+        if self.reasoning_effort is not None and (
+            not isinstance(self.reasoning_effort, str) or not self.reasoning_effort
+        ):
+            raise ValueError("reasoning_effort must be a non-empty string when provided")
         if (
             not isinstance(self.response_schema_name, str)
             or not self.response_schema_name

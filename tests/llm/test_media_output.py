@@ -849,9 +849,11 @@ def test_missing_capabilities_honors_requested_output_modalities() -> None:
     from pygent.llm.invoker import _missing_capabilities
 
     model = _gemini_image_spec()
+    adapter = GeminiGenerateContentAdapter()
     assert (
         _missing_capabilities(
             model,
+            adapter=adapter,
             generation=GenerationConfig(output_modalities=("image",)),
             tools=(),
         )
@@ -859,11 +861,13 @@ def test_missing_capabilities_honors_requested_output_modalities() -> None:
     )
     assert "modalities.output.text" in _missing_capabilities(
         model,
+        adapter=adapter,
         generation=GenerationConfig(),
         tools=(),
     )
     assert "modalities.output.video" in _missing_capabilities(
         model,
+        adapter=adapter,
         generation=GenerationConfig(output_modalities=("video",)),
         tools=(),
     )

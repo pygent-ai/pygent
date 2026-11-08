@@ -237,13 +237,27 @@ class _LifecycleMixin:
                     raise ModelProfileSelectionError(
                         f"model group {group_name!r} does not allow profile override"
                     )
-            for field_name in ("temperature", "max_output_tokens"):
+            for field_name in (
+                "temperature",
+                "max_output_tokens",
+                "reasoning_effort",
+            ):
                 if (
                     getattr(call_options, field_name) is not None
                     and field_name not in layer.policy.overridable_generation
                 ):
                     raise ExecutionAdmissionError(
                         f"model group {group_name!r} does not allow {field_name} override"
+                    )
+            if call_options.provider_options is not None:
+                denied = sorted(
+                    dict(call_options.provider_options).keys()
+                    - layer.policy.overridable_provider_options
+                )
+                if denied:
+                    raise ExecutionAdmissionError(
+                        f"model group {group_name!r} does not allow "
+                        f"provider options override: {', '.join(denied)}"
                     )
             if layer.model_group.is_deferred:
                 selections[group_name] = call_options.profile

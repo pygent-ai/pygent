@@ -6,11 +6,13 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from dataclasses import replace
 from typing import Any, cast
 
 from pygent.core import (
     Context,
     FrozenJsonObject,
+    JsonObjectInput,
     Message,
     freeze_json_object,
 )
@@ -25,6 +27,7 @@ from ._adapter_contracts import (
     ModelProviderAdapter,
     ModelProviderClient,
     ModelProviderMediaTokenEstimator,
+    ModelProviderReasoningEffortMapper,
     ModelProviderRequest,
     ModelProviderResponse,
     ModelProviderSpecValidator,
@@ -246,6 +249,7 @@ class DefaultModelInvoker:
         tools: tuple[ToolDefinition, ...] = (),
         deadline: float | None = None,
         cancel_event: asyncio.Event | None = None,
+        provider_options: JsonObjectInput | None = None,
     ) -> ModelExecution:
         return ModelExecution._from_trusted_operation(
             lambda event_sink: self._execute_registered(
@@ -257,6 +261,7 @@ class DefaultModelInvoker:
                 tools=tools,
                 deadline=deadline,
                 cancel_event=cancel_event,
+                provider_options=provider_options,
                 event_sink=event_sink,
             )
         )
@@ -286,6 +291,7 @@ class DefaultModelInvoker:
         tools: tuple[ToolDefinition, ...],
         deadline: float | None,
         cancel_event: asyncio.Event | None,
+        provider_options: JsonObjectInput | None = None,
         event_sink: EventSink,
     ) -> ModelProviderResponse:
         await _emit(
@@ -303,6 +309,7 @@ class DefaultModelInvoker:
                 tools=tools,
                 deadline=deadline,
                 cancel_event=cancel_event,
+                provider_options=provider_options,
                 event_sink=event_sink,
             )
         except asyncio.CancelledError:
@@ -422,6 +429,7 @@ class DefaultModelInvoker:
         tools: tuple[ToolDefinition, ...] = (),
         deadline: float | None = None,
         cancel_event: asyncio.Event | None = None,
+        provider_options: JsonObjectInput | None = None,
         event_sink: EventSink | None = None,
     ) -> AsyncIterator[ModelProviderStreamPart]:
         _validate_deadline(deadline)
@@ -534,10 +542,19 @@ class DefaultModelInvoker:
         ):
             model_key = entry.key
             model = entry.spec
+            if provider_options:
+                model = replace(
+                    model,
+                    provider_options=_merge_provider_options(
+                        cast(Mapping[str, object], model.provider_options),
+                        provider_options,
+                    ),
+                )
             adapter, client = self._resolve(entry)
             _validate_model_for_request(adapter, model)
             missing_capabilities = _missing_capabilities(
                 model,
+                adapter=adapter,
                 generation=generation,
                 tools=tools,
             )
@@ -861,6 +878,7 @@ class DefaultModelInvoker:
         tools: tuple[ToolDefinition, ...],
         deadline: float | None,
         cancel_event: asyncio.Event | None,
+        provider_options: JsonObjectInput | None = None,
         event_sink: EventSink | None,
     ) -> ModelProviderResponse:
         accumulator = ModelStreamAccumulator(generation=generation, tools=tools)
@@ -873,6 +891,7 @@ class DefaultModelInvoker:
             tools=tools,
             deadline=deadline,
             cancel_event=cancel_event,
+            provider_options=provider_options,
             event_sink=event_sink,
         ):
             await accumulator.consume(part, event_sink)
@@ -894,6 +913,7 @@ class DefaultModelInvoker:
 def _missing_capabilities(
     model: ModelSpec,
     *,
+    adapter: ModelProviderAdapter,
     generation: GenerationConfig,
     tools: tuple[ToolDefinition, ...],
 ) -> tuple[str, ...]:
@@ -929,7 +949,31 @@ def _missing_capabilities(
         and generation.max_output_tokens > capabilities.limits.max_output_tokens
     ):
         missing.append("limits.max_output_tokens")
+    if generation.reasoning_effort is not None:
+        if not isinstance(adapter, ModelProviderReasoningEffortMapper):
+            missing.append("reasoning_effort.unsupported")
+        elif not capabilities.reasoning.controllable:
+            missing.append("reasoning.controllable")
     return tuple(missing)
+
+
+def _merge_provider_options(
+    base: Mapping[str, object], override: JsonObjectInput
+) -> dict[str, object]:
+    """Merge request-scoped provider options over model-level options.
+
+    Object values merge by key one level deep; every other value type is
+    replaced wholesale by the override. The result is frozen again by
+    ``ModelSpec.__post_init__`` when the request-scoped spec is derived.
+    """
+    merged: dict[str, object] = dict(base)
+    for key, value in dict(override).items():
+        current = merged.get(key)
+        if isinstance(current, Mapping) and isinstance(value, Mapping):
+            merged[key] = {**current, **dict(value)}
+        else:
+            merged[key] = value
+    return merged
 
 
 def _validate_model_for_request(

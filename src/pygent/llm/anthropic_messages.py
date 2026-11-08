@@ -277,6 +277,9 @@ class AnthropicMessagesAdapter:
     def validate_model(self, model: ModelSpec) -> None:
         _validate_provider_options(model.provider_options)
 
+    def reasoning_effort_values(self) -> frozenset[str]:
+        return frozenset(_EFFORT_VALUES)
+
     def build_request(self, request: ModelProviderRequest) -> FrozenJsonObject:
         try:
             self.validate_model(request.model)
@@ -314,9 +317,19 @@ class AnthropicMessagesAdapter:
             elif generation.tool_choice not in (None, "none"):
                 raise ValueError("tool_choice requires at least one visible tool")
             output_config: dict[str, object] = {}
+            typed_effort = generation.reasoning_effort
             raw_output = options.get("output_config")
             if isinstance(raw_output, FrozenJsonObject):
+                if typed_effort is not None:
+                    raise ValueError(
+                        "reasoning_effort conflicts with the output_config "
+                        "provider option"
+                    )
                 output_config.update(raw_output.to_dict())
+            if typed_effort is not None:
+                if typed_effort not in _EFFORT_VALUES:
+                    raise ValueError("Anthropic reasoning effort is invalid")
+                output_config["effort"] = typed_effort
             if generation.response_schema is not None:
                 output_config["format"] = {
                     "type": "json_schema",

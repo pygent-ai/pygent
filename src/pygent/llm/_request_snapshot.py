@@ -75,6 +75,7 @@ def _request_projection(request: ModelProviderRequest) -> dict[str, object]:
             "response_schema_name": generation.response_schema_name,
             "tool_choice": generation.tool_choice,
             "output_modalities": list(generation.output_modalities),
+            "reasoning_effort": generation.reasoning_effort,
         },
         "projection_revision": request.context.projection_revision,
         "media_projections": [

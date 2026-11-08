@@ -543,3 +543,28 @@ def test_remote_declaration_identity_and_capabilities_are_hashed():
     assert remote.definition_id == f"remote:reviewer@{graph_hash}"
     assert dict(remote.metadata)["remote_plan_id"] == f"sha256:{graph_hash}"
     assert remote.placement_constraints == ("mode=adaptive",)
+
+
+def test_model_requirement_provider_options_whitelist_round_trips() -> None:
+    from pygent.runtime.plan import ModelRequirement
+
+    requirement = ModelRequirement(
+        group_name="assistant",
+        overridable_provider_options=("reasoning", "thinking"),
+    )
+    payload = requirement.to_dict()
+    assert payload["overridable_provider_options"] == ["reasoning", "thinking"]
+    assert ModelRequirement.from_dict(payload) == requirement
+
+
+def test_model_requirement_from_legacy_dict_without_provider_options() -> None:
+    from pygent.runtime.plan import ModelRequirement
+
+    legacy = {
+        "group_name": "assistant",
+        "allow_profile_override": True,
+        "overridable_generation": ["temperature"],
+    }
+    requirement = ModelRequirement.from_dict(legacy)
+    assert requirement.overridable_generation == ("temperature",)
+    assert requirement.overridable_provider_options == ()

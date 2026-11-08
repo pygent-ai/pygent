@@ -187,6 +187,9 @@ def _local_module_spec(
                 overridable_generation=tuple(
                     sorted(getattr(policy, "overridable_generation", ()))
                 ),
+                overridable_provider_options=tuple(
+                    sorted(getattr(policy, "overridable_provider_options", ()))
+                ),
             ),
         )
         if isinstance(model_group, ModelGroup) and model_group.is_deferred

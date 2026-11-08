@@ -21,7 +21,7 @@ from pygent import (
     RetryPolicy,
     UserMessage,
 )
-from pygent.core import FrozenJsonObject, Module, RemoteModule
+from pygent.core import FrozenJsonObject, Module, RemoteModule, freeze_json_object
 from pygent.llm import (
     DefaultModelInvoker,
     ModelDeploymentConflictError,
@@ -67,9 +67,11 @@ class _Invoker:
         self.entered = entered
         self.release = release
         self.generations: list[GenerationConfig] = []
+        self.provider_options: list[object] = []
 
     def execute(self, **kwargs: object) -> ModelExecution:
         self.generations.append(kwargs["generation"])  # type: ignore[arg-type]
+        self.provider_options.append(kwargs.get("provider_options"))
 
         async def operation(emit: object) -> ModelProviderResponse:
             del emit
@@ -117,6 +119,8 @@ def _layer(
     requirement: ModelGroup,
     *,
     allow_profile: bool = True,
+    overridable_generation: frozenset[str] = frozenset({"temperature"}),
+    overridable_provider_options: frozenset[str] = frozenset(),
 ) -> ModelCallLayer:
     return ModelCallLayer(
         model_group=requirement,
@@ -124,7 +128,8 @@ def _layer(
         generation=GenerationConfig(temperature=0.7),
         policy=ModelCallPolicy(
             allow_profile_override=allow_profile,
-            overridable_generation=frozenset({"temperature"}),
+            overridable_generation=overridable_generation,
+            overridable_provider_options=overridable_provider_options,
         ),
     )
 
@@ -838,4 +843,119 @@ async def test_pre_admission_deadline_returns_handle_and_rolls_back_orphan_pin()
     assert snapshot.status.value == "deadline_exceeded"
     assert snapshot.phase is ExecutionPhase.TERMINAL
     assert await store.get_admission(handle.execution_id) is None
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_options_override_reaches_invoker_after_admission() -> None:
+    requirement = _requirement()
+    runtime = LocalRuntime()
+    bound = runtime.bind(
+        _layer(
+            requirement,
+            overridable_provider_options=frozenset({"reasoning"}),
+        )
+    )
+    group = bound.model_groups.get(requirement)
+    invoker = _Invoker("default")
+    await _configure(group, "default", invoker)
+    await group.set_default("default", deadline=time.monotonic() + 2)
+
+    _message, _context = await bound.invoke(
+        UserMessage(content="hello"),
+        Context(),
+        execution=ExecutionOptions(
+            deadline=time.monotonic() + 2,
+            model_calls={
+                "assistant": ModelCallOptions(
+                    provider_options={"reasoning": {"effort": "high"}}
+                )
+            },
+        ),
+    )
+
+    assert invoker.provider_options[-1] == freeze_json_object(
+        {"reasoning": {"effort": "high"}}
+    )
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_options_override_fails_closed_without_whitelist() -> None:
+    requirement = _requirement()
+    runtime = LocalRuntime()
+    bound = runtime.bind(_layer(requirement))
+    group = bound.model_groups.get(requirement)
+    invoker = _Invoker("default")
+    await _configure(group, "default", invoker)
+    await group.set_default("default", deadline=time.monotonic() + 2)
+
+    with pytest.raises(ExecutionAdmissionError, match="provider options override"):
+        handle = await bound.start(
+            UserMessage(content="x"),
+            Context(),
+            execution=ExecutionOptions(
+                deadline=time.monotonic() + 2,
+                model_calls={
+                    "assistant": ModelCallOptions(
+                        provider_options={"reasoning": {"effort": "high"}}
+                    )
+                },
+            ),
+        )
+        await handle.result()
+    assert invoker.provider_options == []
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_override_reaches_invoker_generation() -> None:
+    requirement = _requirement()
+    runtime = LocalRuntime()
+    bound = runtime.bind(
+        _layer(requirement, overridable_generation=frozenset({"reasoning_effort"}))
+    )
+    group = bound.model_groups.get(requirement)
+    invoker = _Invoker("default")
+    await _configure(group, "default", invoker)
+    await group.set_default("default", deadline=time.monotonic() + 2)
+
+    _message, _context = await bound.invoke(
+        UserMessage(content="hello"),
+        Context(),
+        execution=ExecutionOptions(
+            deadline=time.monotonic() + 2,
+            model_calls={
+                "assistant": ModelCallOptions(reasoning_effort="high")
+            },
+        ),
+    )
+
+    assert invoker.generations[-1].reasoning_effort == "high"
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_override_fails_closed_without_whitelist() -> None:
+    requirement = _requirement()
+    runtime = LocalRuntime()
+    bound = runtime.bind(_layer(requirement))
+    group = bound.model_groups.get(requirement)
+    invoker = _Invoker("default")
+    await _configure(group, "default", invoker)
+    await group.set_default("default", deadline=time.monotonic() + 2)
+
+    with pytest.raises(ExecutionAdmissionError, match="reasoning_effort"):
+        handle = await bound.start(
+            UserMessage(content="x"),
+            Context(),
+            execution=ExecutionOptions(
+                deadline=time.monotonic() + 2,
+                model_calls={
+                    "assistant": ModelCallOptions(reasoning_effort="high")
+                },
+            ),
+        )
+        await handle.result()
+    assert invoker.generations == []
     await runtime.close()

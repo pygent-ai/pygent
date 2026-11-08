@@ -231,9 +231,23 @@ class OpenAIResponsesAdapter:
         ):
             raise ValueError("Responses include option must contain strings")
 
+    def reasoning_effort_values(self) -> frozenset[str]:
+        return _REASONING_EFFORTS
+
     def build_request(self, request: ModelProviderRequest) -> FrozenJsonObject:
         try:
             self.validate_model(request.model)
+            typed_effort = request.generation.reasoning_effort
+            options = cast(FrozenJsonObject, request.model.provider_options)
+            if typed_effort is not None:
+                if typed_effort not in _REASONING_EFFORTS:
+                    raise ValueError("Responses reasoning effort is invalid")
+                reasoning = options.get("reasoning")
+                if isinstance(reasoning, FrozenJsonObject) and "effort" in reasoning:
+                    raise ValueError(
+                        "reasoning_effort conflicts with the reasoning.effort "
+                        "provider option"
+                    )
             body: dict[str, object] = {
                 "model": request.model.model_id,
                 "input": [
@@ -276,6 +290,10 @@ class OpenAIResponsesAdapter:
             body.update(
                 cast(FrozenJsonObject, request.model.provider_options).to_dict()
             )
+            if typed_effort is not None:
+                # options.reasoning always pins effort (validate_model), so a
+                # typed knob here always replaced it via the conflict check.
+                body["reasoning"] = {"effort": typed_effort}
             return freeze_json_object(body)
         except ModelProviderError:
             raise

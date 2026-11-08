@@ -436,6 +436,17 @@ class ModelProviderSpecValidator(Protocol):
 
 
 @runtime_checkable
+class ModelProviderReasoningEffortMapper(Protocol):
+    """Optional protocol marking adapters that map generation.reasoning_effort.
+
+    Adapters without this protocol ignore the typed knob; the invoker emits
+    a capability warning instead of failing the request.
+    """
+
+    def reasoning_effort_values(self) -> frozenset[str]: ...
+
+
+@runtime_checkable
 class ModelProviderMediaTokenEstimator(Protocol):
     """Optional provider-owned deterministic media token accounting."""
 
@@ -494,6 +505,7 @@ class ModelInvoker(Protocol):
         tools: tuple[ToolDefinition, ...] = (),
         deadline: float | None = None,
         cancel_event: asyncio.Event | None = None,
+        provider_options: JsonObjectInput | None = None,
     ) -> ModelExecution: ...
 
 
@@ -818,6 +830,7 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
             "response_schema_name",
             "tool_choice",
             "output_modalities",
+            "reasoning_effort",
         }:
             raise ValueError("prepared generation fields do not match the contract")
         revision = request["projection_revision"]

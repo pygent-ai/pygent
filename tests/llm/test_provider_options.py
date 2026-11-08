@@ -367,3 +367,137 @@ async def test_fallback_models_receive_only_their_own_provider_options() -> None
     assert "fallback_feature" not in primary.payloads[0]
     assert fallback.payloads[0]["fallback_feature"] is True
     assert "primary_feature" not in fallback.payloads[0]
+
+
+def _ok_response() -> FrozenJsonObject:
+    return freeze_json_object({"choices": [{"message": {"content": "ok"}}]})
+
+
+@pytest.mark.asyncio
+async def test_request_level_provider_options_override_model_level_options() -> None:
+    client = _OutcomeClient(_ok_response())
+    entry = model_entry(
+        "main", "openai", "model", provider_options={"reasoning_effort": "low"}
+    )
+    invoker = configured_invoker(
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
+        clients={"main": client},
+        capabilities={"openai": transport_mode(streaming=False)},
+    )
+    group = model_group("g", (entry,), ("main",))
+    call = lambda **extra: invoker.execute(  # noqa: E731
+        model_group=group,
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+        **extra,
+    ).result()
+
+    await call()
+    assert client.payloads[0]["reasoning_effort"] == "low"
+
+    await call(provider_options={"reasoning_effort": "high"})
+    assert client.payloads[1]["reasoning_effort"] == "high"
+    assert entry.spec.provider_options["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_request_level_provider_options_merge_one_level_deep() -> None:
+    client = _OutcomeClient(_ok_response())
+    entry = model_entry(
+        "main",
+        "openai",
+        "model",
+        provider_options={
+            "reasoning": {"effort": "low", "summary": "auto"},
+            "items": [1, 2],
+        },
+    )
+    invoker = configured_invoker(
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
+        clients={"main": client},
+        capabilities={"openai": transport_mode(streaming=False)},
+    )
+    await invoker.execute(
+        model_group=model_group("g", (entry,), ("main",)),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+        provider_options={"reasoning": {"effort": "high"}, "items": [9]},
+    ).result()
+
+    assert dict(client.payloads[0]["reasoning"]) == {
+        "effort": "high",
+        "summary": "auto",
+    }
+    assert list(client.payloads[0]["items"]) == [9]
+
+
+@pytest.mark.asyncio
+async def test_request_level_provider_options_are_validated_per_request() -> None:
+    client = _CountingClient()
+    entry = model_entry(
+        "main",
+        "deepseek",
+        "deepseek-chat",
+        provider_options={"thinking": {"type": "disabled"}},
+    )
+    invoker = configured_invoker(
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
+        clients={"main": client},
+        capabilities={"openai": transport_mode(streaming=False)},
+    )
+    with pytest.raises(ModelCallError) as raised:
+        await invoker.execute(
+            model_group=model_group("g", (entry,), ("main",)),
+            retry_policy=RetryPolicy(max_attempts_per_model=1),
+            generation=GenerationConfig(),
+            message=UserMessage(content="hello"),
+            context=Context(),
+            provider_options={"thinking": {"type": "bogus"}},
+        ).result()
+    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
+    assert client.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_request_level_provider_options_merge_with_each_fallback_model() -> None:
+    primary = _OutcomeClient(httpx.ConnectError("offline"))
+    fallback = _OutcomeClient(
+        freeze_json_object({"choices": [{"message": {"content": "fallback"}}]})
+    )
+    models = (
+        model_entry(
+            "primary",
+            "openai",
+            "primary-model",
+            provider_options={"primary_feature": True},
+        ),
+        model_entry(
+            "fallback",
+            "openai",
+            "fallback-model",
+            provider_options={"fallback_feature": True},
+        ),
+    )
+    invoker = configured_invoker(
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
+        clients={"primary": primary, "fallback": fallback},
+        capabilities={"openai": transport_mode(streaming=False)},
+    )
+    response = await invoker.execute(
+        model_group=model_group("fallback", models, ("primary", "fallback")),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hello"),
+        context=Context(),
+        provider_options={"shared": "override"},
+    ).result()
+
+    assert response.message.content == "fallback"
+    assert primary.payloads[0]["primary_feature"] is True
+    assert primary.payloads[0]["shared"] == "override"
+    assert fallback.payloads[0]["fallback_feature"] is True
+    assert fallback.payloads[0]["shared"] == "override"

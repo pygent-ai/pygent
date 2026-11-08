@@ -164,7 +164,7 @@ class ModelCallLayer(Module[Message, AIMessage]):
                 raise ValueError(
                     f"model group {self.model_group.name!r} does not allow profile override"
                 )
-        for field_name in ("temperature", "max_output_tokens"):
+        for field_name in ("temperature", "max_output_tokens", "reasoning_effort"):
             if (
                 getattr(options, field_name) is not None
                 and field_name not in self.policy.overridable_generation
@@ -172,6 +172,16 @@ class ModelCallLayer(Module[Message, AIMessage]):
                 raise ValueError(
                     f"model group {self.model_group.name!r} does not allow "
                     f"{field_name} override"
+                )
+        if options.provider_options is not None:
+            denied = sorted(
+                dict(options.provider_options).keys()
+                - self.policy.overridable_provider_options
+            )
+            if denied:
+                raise ValueError(
+                    f"model group {self.model_group.name!r} does not allow "
+                    f"provider options override: {', '.join(denied)}"
                 )
         generation = replace(
             self.generation,
@@ -184,6 +194,11 @@ class ModelCallLayer(Module[Message, AIMessage]):
                 self.generation.max_output_tokens
                 if options.max_output_tokens is None
                 else options.max_output_tokens
+            ),
+            reasoning_effort=(
+                self.generation.reasoning_effort
+                if options.reasoning_effort is None
+                else options.reasoning_effort
             ),
         )
         deployment = None
@@ -203,6 +218,7 @@ class ModelCallLayer(Module[Message, AIMessage]):
                     context=context,
                     tools=effective_tools,
                     deadline=infrastructure.deadline,
+                    provider_options=options.provider_options,
                 )
 
                 async def relay_events() -> None:
@@ -333,6 +349,7 @@ def _model_effect_request(
                     ),
                     "response_schema_name": generation.response_schema_name,
                     "tool_choice": generation.tool_choice,
+                    "reasoning_effort": generation.reasoning_effort,
                 },
                 "message": _message_effect_value(message),
                 "context": {

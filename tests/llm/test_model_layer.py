@@ -11,6 +11,7 @@ import pytest
 from pygent import (
     AIMessage,
     Context,
+    ModelCallPolicy,
     ModelContinuation,
     ToolMessage,
     UserMessage,
@@ -18,6 +19,7 @@ from pygent import (
 from pygent.core import (
     EffectDisposition,
     EffectOutcome,
+    FrozenJsonObject,
     freeze_json_object,
 )
 from pygent.core._module_contracts import _execution_scope
@@ -56,10 +58,14 @@ from tests.support.model_specs import (
 class RecordingInvoker:
     def __init__(self):
         self.tools = None
+        self.provider_options = None
+        self.generation = None
 
     def execute(self, **kwargs):
         async def operation(emit):
             self.tools = kwargs["tools"]
+            self.provider_options = kwargs.get("provider_options")
+            self.generation = kwargs["generation"]
             from pygent import AIMessage
 
             return ModelProviderResponse(AIMessage(content="done"), {"total_tokens": 1})
@@ -553,3 +559,214 @@ async def test_provider_errors_are_sanitized_for_invoke_stream_and_run_events() 
         "model.attempt.failed",
         "model.failed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_layer_rejects_provider_options_override_without_policy() -> None:
+    invoker = RecordingInvoker()
+    model = layer(invoker)
+
+    class ManagedScope:
+        deadline = None
+
+        def model_call_options(self, model_group):
+            return {"provider_options": {"reasoning": {"effort": "high"}}}
+
+        def resolve_model_invoker(self, model_group):
+            return invoker
+
+        async def emit_event(self, module, kind, data):
+            return None
+
+        @asynccontextmanager
+        async def model_permit(self):
+            yield
+
+        async def execute_effect(self, *, spec, request, operation):
+            return EffectOutcome(
+                value=await operation(),
+                disposition=EffectDisposition.EXECUTED,
+                effect_id="test-effect",
+            )
+
+    token = _execution_scope.set(ManagedScope())
+    try:
+        with pytest.raises(ValueError, match="provider options override"):
+            await model.forward(UserMessage(content="question"), Context())
+    finally:
+        _execution_scope.reset(token)
+    assert invoker.provider_options is None
+
+
+@pytest.mark.asyncio
+async def test_layer_passes_whitelisted_provider_options_to_invoker() -> None:
+    invoker = RecordingInvoker()
+    model = ModelCallLayer(
+        model_group=model_group(
+            "assistant",
+            (model_entry("main", "openai", "test"),),
+            ("main",),
+        ),
+        retry_policy=RetryPolicy(),
+        generation=GenerationConfig(),
+        policy=ModelCallPolicy(
+            overridable_provider_options=frozenset({"reasoning"})
+        ),
+        invoker=invoker,
+    )
+
+    class ManagedScope:
+        deadline = None
+
+        def model_call_options(self, model_group):
+            return {"provider_options": {"reasoning": {"effort": "high"}}}
+
+        def resolve_model_invoker(self, model_group):
+            return invoker
+
+        async def emit_event(self, module, kind, data):
+            return None
+
+        @asynccontextmanager
+        async def model_permit(self):
+            yield
+
+        async def execute_effect(self, *, spec, request, operation):
+            return EffectOutcome(
+                value=await operation(),
+                disposition=EffectDisposition.EXECUTED,
+                effect_id="test-effect",
+            )
+
+    token = _execution_scope.set(ManagedScope())
+    try:
+        answer, _returned = await model.forward(
+            UserMessage(content="question"), Context()
+        )
+    finally:
+        _execution_scope.reset(token)
+
+    assert answer.content == "done"
+    assert invoker.provider_options == freeze_json_object(
+        {"reasoning": {"effort": "high"}}
+    )
+
+
+def test_model_call_options_provider_options_round_trip_and_validation() -> None:
+    from pygent import ModelCallOptions
+    from pygent.core import JsonValueError
+
+    options = ModelCallOptions.from_dict(
+        {"provider_options": {"reasoning": {"effort": "high"}}}
+    )
+    assert isinstance(options.provider_options, FrozenJsonObject)
+    assert options.to_dict()["provider_options"] == {
+        "reasoning": {"effort": "high"}
+    }
+
+    with pytest.raises(ValueError, match="unknown model call option fields"):
+        ModelCallOptions.from_dict({"vendor": True})
+    with pytest.raises(ValueError, match="provider_options must be an object"):
+        ModelCallOptions.from_dict({"provider_options": ["not", "an", "object"]})
+    with pytest.raises(JsonValueError):
+        ModelCallOptions(provider_options={"bad": object()})
+
+
+def test_model_call_policy_rejects_invalid_provider_option_keys() -> None:
+    from pygent import ModelCallPolicy
+
+    policy = ModelCallPolicy(overridable_provider_options=["reasoning"])
+    assert policy.overridable_provider_options == frozenset({"reasoning"})
+    with pytest.raises(
+        ValueError, match="overridable_provider_options must contain non-empty"
+    ):
+        ModelCallPolicy(overridable_provider_options=[""])
+
+
+@pytest.mark.asyncio
+async def test_layer_rejects_reasoning_effort_override_without_policy() -> None:
+    invoker = RecordingInvoker()
+    model = layer(invoker)
+
+    class ManagedScope:
+        deadline = None
+
+        def model_call_options(self, model_group):
+            return {"reasoning_effort": "high"}
+
+        def resolve_model_invoker(self, model_group):
+            return invoker
+
+        async def emit_event(self, module, kind, data):
+            return None
+
+        @asynccontextmanager
+        async def model_permit(self):
+            yield
+
+        async def execute_effect(self, *, spec, request, operation):
+            return EffectOutcome(
+                value=await operation(),
+                disposition=EffectDisposition.EXECUTED,
+                effect_id="test-effect",
+            )
+
+    token = _execution_scope.set(ManagedScope())
+    try:
+        with pytest.raises(ValueError, match="does not allow reasoning_effort"):
+            await model.forward(UserMessage(content="question"), Context())
+    finally:
+        _execution_scope.reset(token)
+    assert invoker.generation is None
+
+
+@pytest.mark.asyncio
+async def test_layer_merges_whitelisted_reasoning_effort_into_generation() -> None:
+    invoker = RecordingInvoker()
+    model = ModelCallLayer(
+        model_group=model_group(
+            "assistant",
+            (model_entry("main", "openai", "test"),),
+            ("main",),
+        ),
+        retry_policy=RetryPolicy(),
+        generation=GenerationConfig(temperature=0.7),
+        policy=ModelCallPolicy(overridable_generation=frozenset({"reasoning_effort"})),
+        invoker=invoker,
+    )
+
+    class ManagedScope:
+        deadline = None
+
+        def model_call_options(self, model_group):
+            return {"reasoning_effort": "high"}
+
+        def resolve_model_invoker(self, model_group):
+            return invoker
+
+        async def emit_event(self, module, kind, data):
+            return None
+
+        @asynccontextmanager
+        async def model_permit(self):
+            yield
+
+        async def execute_effect(self, *, spec, request, operation):
+            return EffectOutcome(
+                value=await operation(),
+                disposition=EffectDisposition.EXECUTED,
+                effect_id="test-effect",
+            )
+
+    token = _execution_scope.set(ManagedScope())
+    try:
+        answer, _returned = await model.forward(
+            UserMessage(content="question"), Context()
+        )
+    finally:
+        _execution_scope.reset(token)
+
+    assert answer.content == "done"
+    assert invoker.generation.reasoning_effort == "high"
+    assert invoker.generation.temperature == 0.7
+    assert model.generation.reasoning_effort is None

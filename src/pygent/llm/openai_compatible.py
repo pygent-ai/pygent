@@ -62,7 +62,10 @@ from ._media_content import (
     video_frame_data_urls,
 )
 from ._media_tokens import openai_media_input_tokens
-from ._provider_policies import provider_protocol_policy
+from ._provider_policies import (
+    _ALIYUN_REASONING_EFFORTS,
+    provider_protocol_policy,
+)
 from ._tool_context import encode_tool_context
 from ._tool_schema import flatten_nullable_any_of
 from .catalog import ModelCatalog, ModelInfo
@@ -439,6 +442,11 @@ class OpenAICompatibleAdapter:
 
         _validate_openai_provider_options(model)
 
+    def reasoning_effort_values(self) -> frozenset[str]:
+        """Advisory union of known vendor effort sets; vendors may allow more."""
+
+        return _ALIYUN_REASONING_EFFORTS
+
     def estimate_media_input_tokens(
         self, block: MediaBlock, model: ModelSpec
     ) -> int | None:
@@ -486,6 +494,12 @@ class OpenAICompatibleAdapter:
         }
         generation = request.generation
         options = cast(FrozenJsonObject, request.model.provider_options)
+        typed_effort = generation.reasoning_effort
+        if typed_effort is not None and "reasoning_effort" in options:
+            raise ModelProviderError(
+                ModelErrorKind.INVALID_REQUEST,
+                "reasoning_effort conflicts with the reasoning_effort provider option",
+            )
         token_fields = set(options) & _TOKEN_LIMIT_PROVIDER_FIELDS
         if generation.max_output_tokens is not None and token_fields:
             raise ModelProviderError(
@@ -525,6 +539,8 @@ class OpenAICompatibleAdapter:
                 "tool_choice requires at least one visible tool",
             )
         body.update(options.to_dict())
+        if typed_effort is not None:
+            body["reasoning_effort"] = typed_effort
         audio_params = _audio_request_params(request)
         if audio_params is not None:
             body.update(audio_params)

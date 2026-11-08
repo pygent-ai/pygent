@@ -82,6 +82,7 @@ class ModelRequirement:
     group_name: str
     allow_profile_override: bool = False
     overridable_generation: tuple[str, ...] = ()
+    overridable_provider_options: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_text(self.group_name, "model_requirement.group_name")
@@ -92,12 +93,22 @@ class ModelRequirement:
             "model_requirement.overridable_generation",
         )
         object.__setattr__(self, "overridable_generation", tuple(sorted(values)))
+        option_keys = _text_tuple(
+            self.overridable_provider_options,
+            "model_requirement.overridable_provider_options",
+        )
+        object.__setattr__(
+            self, "overridable_provider_options", tuple(sorted(option_keys))
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
             "group_name": self.group_name,
             "allow_profile_override": self.allow_profile_override,
             "overridable_generation": list(self.overridable_generation),
+            "overridable_provider_options": list(
+                self.overridable_provider_options
+            ),
         }
 
     @classmethod
@@ -106,6 +117,7 @@ class ModelRequirement:
             "group_name",
             "allow_profile_override",
             "overridable_generation",
+            "overridable_provider_options",
         }
         _reject_unknown_fields(value, allowed, "model requirement")
         return cls(
@@ -114,6 +126,10 @@ class ModelRequirement:
             overridable_generation=_text_tuple(
                 value.get("overridable_generation", ()),
                 "model_requirement.overridable_generation",
+            ),
+            overridable_provider_options=_text_tuple(
+                value.get("overridable_provider_options", ()),
+                "model_requirement.overridable_provider_options",
             ),
         )
 
