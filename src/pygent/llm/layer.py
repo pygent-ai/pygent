@@ -19,12 +19,14 @@ from pygent.core import (
     ExecutionRequirements,
     FrozenJsonObject,
     JsonValue,
+    JsonObjectInput,
     Message,
     MessageProfile,
     Module,
     RecoverySafety,
     current_infrastructure,
     freeze_json,
+    freeze_json_object,
     message_fields_expected_keys,
     message_from_fields,
     project_message_fields,
@@ -288,6 +290,7 @@ class ModelCallLayer(Module[Message, AIMessage]):
                 model_group=model_group,
                 generation=generation,
                 deployment=deployment,
+                provider_options=options.provider_options,
             ),
             operation=invoke,
         )
@@ -307,6 +310,7 @@ def _model_effect_request(
     model_group: ModelGroup | None = None,
     generation: GenerationConfig | None = None,
     deployment: object | None = None,
+    provider_options: JsonObjectInput | None = None,
 ) -> FrozenJsonObject:
     generation = generation or layer.generation
     model_group = model_group or layer.model_group
@@ -351,6 +355,15 @@ def _model_effect_request(
                     "tool_choice": generation.tool_choice,
                     "reasoning_effort": generation.reasoning_effort,
                 },
+                **(
+                    {}
+                    if provider_options is None
+                    else {
+                        "provider_options": thaw_json(
+                            cast(JsonValue, freeze_json_object(provider_options))
+                        )
+                    }
+                ),
                 "message": _message_effect_value(message),
                 "context": {
                     "system_prompt": context.system_prompt,

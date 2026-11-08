@@ -277,9 +277,6 @@ class AnthropicMessagesAdapter:
     def validate_model(self, model: ModelSpec) -> None:
         _validate_provider_options(model.provider_options)
 
-    def reasoning_effort_values(self) -> frozenset[str]:
-        return frozenset(_EFFORT_VALUES)
-
     def build_request(self, request: ModelProviderRequest) -> FrozenJsonObject:
         try:
             self.validate_model(request.model)
@@ -320,7 +317,7 @@ class AnthropicMessagesAdapter:
             typed_effort = generation.reasoning_effort
             raw_output = options.get("output_config")
             if isinstance(raw_output, FrozenJsonObject):
-                if typed_effort is not None:
+                if typed_effort is not None and "effort" in raw_output:
                     raise ValueError(
                         "reasoning_effort conflicts with the output_config "
                         "provider option"

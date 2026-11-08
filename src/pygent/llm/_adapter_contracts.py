@@ -436,17 +436,6 @@ class ModelProviderSpecValidator(Protocol):
 
 
 @runtime_checkable
-class ModelProviderReasoningEffortMapper(Protocol):
-    """Optional protocol marking adapters that map generation.reasoning_effort.
-
-    Adapters without this protocol ignore the typed knob; the invoker emits
-    a capability warning instead of failing the request.
-    """
-
-    def reasoning_effort_values(self) -> frozenset[str]: ...
-
-
-@runtime_checkable
 class ModelProviderMediaTokenEstimator(Protocol):
     """Optional provider-owned deterministic media token accounting."""
 

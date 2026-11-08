@@ -27,7 +27,6 @@ from ._adapter_contracts import (
     ModelProviderAdapter,
     ModelProviderClient,
     ModelProviderMediaTokenEstimator,
-    ModelProviderReasoningEffortMapper,
     ModelProviderRequest,
     ModelProviderResponse,
     ModelProviderSpecValidator,
@@ -554,7 +553,6 @@ class DefaultModelInvoker:
             _validate_model_for_request(adapter, model)
             missing_capabilities = _missing_capabilities(
                 model,
-                adapter=adapter,
                 generation=generation,
                 tools=tools,
             )
@@ -913,7 +911,6 @@ class DefaultModelInvoker:
 def _missing_capabilities(
     model: ModelSpec,
     *,
-    adapter: ModelProviderAdapter,
     generation: GenerationConfig,
     tools: tuple[ToolDefinition, ...],
 ) -> tuple[str, ...]:
@@ -949,11 +946,10 @@ def _missing_capabilities(
         and generation.max_output_tokens > capabilities.limits.max_output_tokens
     ):
         missing.append("limits.max_output_tokens")
-    if generation.reasoning_effort is not None:
-        if not isinstance(adapter, ModelProviderReasoningEffortMapper):
-            missing.append("reasoning_effort.unsupported")
-        elif not capabilities.reasoning.controllable:
-            missing.append("reasoning.controllable")
+    if generation.reasoning_effort is not None and (
+        not capabilities.reasoning.controllable
+    ):
+        missing.append("reasoning.controllable")
     return tuple(missing)
 
 

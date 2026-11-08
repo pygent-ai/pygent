@@ -231,9 +231,6 @@ class OpenAIResponsesAdapter:
         ):
             raise ValueError("Responses include option must contain strings")
 
-    def reasoning_effort_values(self) -> frozenset[str]:
-        return _REASONING_EFFORTS
-
     def build_request(self, request: ModelProviderRequest) -> FrozenJsonObject:
         try:
             self.validate_model(request.model)

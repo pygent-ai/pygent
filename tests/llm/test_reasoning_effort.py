@@ -19,7 +19,6 @@ from pygent.llm import (
     OpenAICompatibleAdapter,
     OpenAIResponsesAdapter,
 )
-from pygent.llm._adapter_contracts import ModelProviderReasoningEffortMapper
 from pygent.llm.invoker import _missing_capabilities
 from tests.support.model_specs import (
     configured_invoker,
@@ -78,7 +77,9 @@ class _CountingClient:
         return None
 
 
-class _NoMapperAdapter:
+class _PassthroughAdapter:
+    """Minimal adapter: maps nothing, answers successfully."""
+
     protocol = "openai_chat_completions"
 
     def build_request(self, request: object) -> FrozenJsonObject:
@@ -98,19 +99,6 @@ class _NoMapperAdapter:
     def normalize_error(self, error: BaseException) -> ModelErrorKind:
         del error
         return ModelErrorKind.UNKNOWN
-
-
-def test_mappers_declare_their_native_effort_sets() -> None:
-    assert isinstance(_responses_adapter(), ModelProviderReasoningEffortMapper)
-    assert isinstance(_anthropic_adapter(), ModelProviderReasoningEffortMapper)
-    assert isinstance(OpenAICompatibleAdapter(), ModelProviderReasoningEffortMapper)
-    assert "high" in _responses_adapter().reasoning_effort_values()
-    assert "none" in _responses_adapter().reasoning_effort_values()
-    assert "max" in _anthropic_adapter().reasoning_effort_values()
-    assert "minimal" not in _anthropic_adapter().reasoning_effort_values()
-    assert not isinstance(
-        GeminiGenerateContentAdapter(), ModelProviderReasoningEffortMapper
-    )
 
 
 def test_responses_typed_effort_maps_to_reasoning_object() -> None:
@@ -232,28 +220,23 @@ def _entry_with_reasoning_capabilities(
 
 
 @pytest.mark.parametrize(
-    ("supported", "controllable", "mapper", "expected"),
+    ("supported", "controllable", "expected"),
     [
-        (True, True, True, ()),
-        (True, False, True, ("reasoning.controllable",)),
-        (False, False, True, ("reasoning.controllable",)),
-        (True, True, False, ("reasoning_effort.unsupported",)),
-        (True, False, False, ("reasoning_effort.unsupported",)),
+        (True, True, ()),
+        (True, False, ("reasoning.controllable",)),
+        (False, False, ("reasoning.controllable",)),
     ],
 )
 def test_missing_capabilities_report_reasoning_effort_gaps(
     supported: bool,
     controllable: bool,
-    mapper: bool,
     expected: tuple[str, ...],
 ) -> None:
     entry = _entry_with_reasoning_capabilities(
         supported=supported, controllable=controllable
     )
-    adapter = _responses_adapter() if mapper else _NoMapperAdapter()
     gaps = _missing_capabilities(
         entry.spec,
-        adapter=adapter,
         generation=GenerationConfig(reasoning_effort="high"),
         tools=(),
     )
@@ -264,26 +247,23 @@ def test_missing_capabilities_stay_quiet_without_effort() -> None:
     entry = _entry_with_reasoning_capabilities(supported=False, controllable=False)
     gaps = _missing_capabilities(
         entry.spec,
-        adapter=_NoMapperAdapter(),
         generation=GenerationConfig(),
         tools=(),
     )
     assert "reasoning.controllable" not in gaps
-    assert "reasoning_effort.unsupported" not in gaps
 
 
 @pytest.mark.asyncio
-async def test_unsupported_adapter_degrades_with_warning_and_proceeds() -> None:
+async def test_capabilityless_model_degrades_with_warning_and_proceeds() -> None:
     client = _CountingClient()
     invoker = configured_invoker(
-        adapters={"openai_chat_completions": _NoMapperAdapter()},
+        adapters={"openai_chat_completions": _PassthroughAdapter()},
         clients={"main": client},
         capabilities={"openai": transport_mode(streaming=False)},
     )
+    entry = _entry_with_reasoning_capabilities(supported=False, controllable=False)
     execution = invoker.execute(
-        model_group=model_group(
-            "g", (model_entry("main", "openai", "model"),), ("main",)
-        ),
+        model_group=model_group("g", (entry,), ("main",)),
         retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(reasoning_effort="high"),
         message=UserMessage(content="hello"),

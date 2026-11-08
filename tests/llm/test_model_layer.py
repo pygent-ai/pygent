@@ -770,3 +770,37 @@ async def test_layer_merges_whitelisted_reasoning_effort_into_generation() -> No
     assert invoker.generation.reasoning_effort == "high"
     assert invoker.generation.temperature == 0.7
     assert model.generation.reasoning_effort is None
+
+
+def test_effect_identity_includes_request_provider_options() -> None:
+    model = layer()
+    fragment = {"reasoning": {"effort": "high"}}
+
+    baseline = _model_effect_request(model, UserMessage(content="q"), Context(), ())
+    with_fragment = _model_effect_request(
+        model,
+        UserMessage(content="q"),
+        Context(),
+        (),
+        provider_options=freeze_json_object(fragment),
+    )
+    same_fragment = _model_effect_request(
+        model,
+        UserMessage(content="q"),
+        Context(),
+        (),
+        provider_options=freeze_json_object(fragment),
+    )
+    other_fragment = _model_effect_request(
+        model,
+        UserMessage(content="q"),
+        Context(),
+        (),
+        provider_options=freeze_json_object({"reasoning": {"effort": "low"}}),
+    )
+
+    assert "provider_options" not in baseline
+    assert with_fragment["provider_options"] == freeze_json_object(fragment)
+    assert with_fragment == same_fragment
+    assert with_fragment != other_fragment
+    assert with_fragment != baseline

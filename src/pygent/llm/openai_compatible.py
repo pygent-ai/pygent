@@ -62,10 +62,7 @@ from ._media_content import (
     video_frame_data_urls,
 )
 from ._media_tokens import openai_media_input_tokens
-from ._provider_policies import (
-    _ALIYUN_REASONING_EFFORTS,
-    provider_protocol_policy,
-)
+from ._provider_policies import provider_protocol_policy
 from ._tool_context import encode_tool_context
 from ._tool_schema import flatten_nullable_any_of
 from .catalog import ModelCatalog, ModelInfo
@@ -441,11 +438,6 @@ class OpenAICompatibleAdapter:
         """Validate portable provider options without performing provider I/O."""
 
         _validate_openai_provider_options(model)
-
-    def reasoning_effort_values(self) -> frozenset[str]:
-        """Advisory union of known vendor effort sets; vendors may allow more."""
-
-        return _ALIYUN_REASONING_EFFORTS
 
     def estimate_media_input_tokens(
         self, block: MediaBlock, model: ModelSpec

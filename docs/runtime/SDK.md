@@ -321,7 +321,7 @@ message, context = await bound.invoke(
 
 `ModelCallOptions.provider_options` 按请求覆盖 provider 参数（如思考强度）：仅 `ModelCallPolicy.overridable_provider_options` 白名单中的键被放行，admission 与调用两层都会拒绝未授权键。覆盖值与每个模型的 `provider_options` 按键一层深合并（object 按键合并，标量与数组整体替换），再经过该协议适配器的常规校验。常见键名：OpenAI Responses 为 `reasoning`（如 `{"effort": "high"}`），Anthropic Messages 为 `thinking`，Gemini 为 `thinking_config`，OpenAI 兼容 Chat 为 `reasoning_effort`。
 
-类型化糖 `ModelCallOptions.reasoning_effort` 是可移植的思考强度表达：加入 `ModelCallPolicy.overridable_generation` 白名单后即可按请求覆盖。适配器把它映射到原生 wire 参数（OpenAI Responses → `reasoning.effort`，Anthropic Messages → `output_config.effort`，OpenAI 兼容 Chat → `reasoning_effort`，各协议的合法值集不同）；无原生映射的协议（如 Gemini）发出 `CAPABILITY_WARNING` 后忽略该字段继续执行。与 provider_options 中的原生 effort 字段（`reasoning.effort` / `output_config.effort` / `reasoning_effort`）互斥——两者同时设置会以 `INVALID_REQUEST` 失败，二选一。
+类型化糖 `ModelCallOptions.reasoning_effort` 是可移植的思考强度表达：加入 `ModelCallPolicy.overridable_generation` 白名单后即可按请求覆盖。适配器把它映射到原生 wire 参数（OpenAI Responses → `reasoning.effort`，Anthropic Messages → `output_config.effort`，OpenAI 兼容 Chat → `reasoning_effort`，各协议的合法值集不同；OpenAI 兼容协议按供应商透传，由各供应商策略约束取值）。模型能力声明 `reasoning.controllable=false` 时发出 `CAPABILITY_WARNING` 后继续执行，无原生映射的适配器（如 Gemini）忽略该字段。与 provider_options 中的原生 effort 字段（`reasoning.effort` / `output_config.effort` / `reasoning_effort`）互斥——两者同时设置会以 `INVALID_REQUEST` 失败，二选一。
 
 流式观察不创建另一套调度语义：
 
