@@ -23,7 +23,7 @@ target/
 src/pygent/_native.pyd
 src/pygent/_native.pdb
 
-sessions/
+/sessions/
 .doc_project_maintainer/
 
 # JiuwenSwarm runtime file operation logs
