@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pygent.lara.scheduler.message import SCHEDULER_GUIDANCE, build_task_message
 
@@ -15,7 +15,7 @@ def test_task_message_golden_and_escaping() -> None:
         instructions="Check <repo> & report",
         user_message="Run <all> & summarize",
         user_identity="alice & bob",
-        now=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        now=datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
     )
     assert message == (
         "<task-context>\n"

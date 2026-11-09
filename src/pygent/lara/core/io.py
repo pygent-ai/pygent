@@ -7,7 +7,7 @@ import threading
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +30,7 @@ def jsonl_path_lock(path: str | Path):
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def read_json(path: str | Path, default: dict[str, Any] | None = None) -> dict[str, Any]:

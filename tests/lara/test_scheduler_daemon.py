@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pygent.lara.scheduler.daemon import SchedulerDaemon, TaskResult
@@ -91,7 +91,7 @@ def _submit(
 
 def test_user_task_promotes_to_approved(tmp_path: Path) -> None:
     daemon, store, user_root = _daemon(tmp_path)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     submission_id = _submit(
         store,
         user_root,
@@ -113,7 +113,7 @@ def test_user_task_promotes_to_approved(tmp_path: Path) -> None:
 
 def test_agent_task_defaults_to_needs_review(tmp_path: Path) -> None:
     daemon, store, user_root = _daemon(tmp_path)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     _submit(
         store,
         user_root,
@@ -127,7 +127,7 @@ def test_agent_task_defaults_to_needs_review(tmp_path: Path) -> None:
 
 def test_agent_task_auto_approves_when_enabled(tmp_path: Path) -> None:
     daemon, store, user_root = _daemon(tmp_path, agent_create_enabled=True)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     _submit(
         store,
         user_root,
@@ -163,7 +163,7 @@ def test_unsigned_tampered_and_forged_submissions_are_quarantined(
         payload=payload,
         signature=_sign(user_root, kind="task", source="agent", payload=payload),
     )
-    daemon.run_once(now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    daemon.run_once(now=datetime(2026, 1, 1, tzinfo=UTC))
     assert store.submission(unsigned).status == "quarantined"  # type: ignore[union-attr]
     assert store.submission(tampered).status == "quarantined"  # type: ignore[union-attr]
     assert store.submission(forged).status == "quarantined"  # type: ignore[union-attr]
@@ -172,7 +172,7 @@ def test_unsigned_tampered_and_forged_submissions_are_quarantined(
 
 def test_missed_due_task_runs_once_and_advances(tmp_path: Path) -> None:
     daemon, store, _user_root = _daemon(tmp_path)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     task = store.create_task(
         name="missed",
         schedule="every 1h",
@@ -191,7 +191,7 @@ def test_missed_due_task_runs_once_and_advances(tmp_path: Path) -> None:
 
 def test_single_at_task_terminates_after_run(tmp_path: Path) -> None:
     daemon, store, _user_root = _daemon(tmp_path)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     task = store.create_task(
         name="once",
         schedule="at 2026-01-01T11:00:00+00:00",
@@ -208,7 +208,7 @@ def test_single_at_task_terminates_after_run(tmp_path: Path) -> None:
 
 def test_changed_prompt_hash_rejects_and_alerts(tmp_path: Path) -> None:
     daemon, store, _user_root = _daemon(tmp_path)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     task = store.create_task(
         name="tampered",
         schedule="every 1h",
@@ -233,7 +233,7 @@ def test_changed_prompt_hash_rejects_and_alerts(tmp_path: Path) -> None:
 
 def test_control_submission_updates_task_status(tmp_path: Path) -> None:
     daemon, store, user_root = _daemon(tmp_path)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     task = store.create_task(
         name="review",
         schedule="daily 09:00",
@@ -257,7 +257,7 @@ def test_control_submission_updates_task_status(tmp_path: Path) -> None:
 def test_event_submission_triggers_on_task(tmp_path: Path) -> None:
     runner = _Runner()
     daemon, store, user_root = _daemon(tmp_path, runner=runner)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     task = store.create_task(
         name="event",
         schedule="on build",
@@ -283,7 +283,7 @@ def test_event_submission_triggers_on_task(tmp_path: Path) -> None:
 def test_run_forever_processes_one_loop_and_stops(tmp_path: Path) -> None:
     runner = _Runner()
     daemon, store, _user_root = _daemon(tmp_path, runner=runner)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     task = store.create_task(
         name="loop",
         schedule="every 1h",
@@ -304,7 +304,7 @@ def test_default_session_is_scheduler_name(tmp_path: Path) -> None:
     store.migrate()
     init_keys(config.user_lara_root)
     daemon = SchedulerDaemon(config, store=store, runner=_Runner())
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     _submit(
         store,
         Path(config.user_lara_root),
@@ -320,7 +320,7 @@ def test_agent_high_priority_is_normalized_with_audit_note(
     tmp_path: Path,
 ) -> None:
     daemon, store, user_root = _daemon(tmp_path, agent_create_enabled=True)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     submission_id = _submit(
         store,
         user_root,
@@ -348,7 +348,7 @@ def test_agent_high_priority_is_normalized_with_audit_note(
 
 def test_user_priority_and_delivery_are_honored(tmp_path: Path) -> None:
     daemon, store, user_root = _daemon(tmp_path)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     _submit(
         store,
         user_root,
@@ -387,7 +387,7 @@ def test_internal_timer_and_event_submissions_are_unsigned(
     tmp_path: Path,
 ) -> None:
     daemon, store, _user_root = _daemon(tmp_path, agent_create_enabled=True)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     timer = store.submit_internal(
         kind="task",
         origin="timer",

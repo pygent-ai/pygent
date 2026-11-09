@@ -10,7 +10,7 @@ import statistics
 import sys
 import time
 import unicodedata
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal
@@ -34,7 +34,7 @@ class ClosingConnection(sqlite3.Connection):
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def normalize(value: Any) -> str:

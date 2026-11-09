@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -15,7 +15,7 @@ def test_parse_all_schedule_kinds() -> None:
     assert interval.interval_seconds == 1800
     once = parse_schedule("at 2026-05-01T12:30:00+00:00")
     assert once.kind == "once"
-    assert once.at == datetime(2026, 5, 1, 12, 30, tzinfo=timezone.utc)
+    assert once.at == datetime(2026, 5, 1, 12, 30, tzinfo=UTC)
     daily = parse_schedule("daily 09:05")
     assert daily.kind == "daily"
     assert daily.time_of_day is not None
@@ -34,14 +34,14 @@ def test_invalid_schedules(text: str) -> None:
 
 
 def test_next_run_and_advance_are_deterministic() -> None:
-    now = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     every = parse_schedule("every 30m")
     assert next_run(every, after=now, now=now) == datetime(
-        2026, 1, 1, 10, 30, tzinfo=timezone.utc
+        2026, 1, 1, 10, 30, tzinfo=UTC
     )
     daily = parse_schedule("daily 09:00")
     assert next_run(daily, after=now, now=now) == datetime(
-        2026, 1, 2, 9, 0, tzinfo=timezone.utc
+        2026, 1, 2, 9, 0, tzinfo=UTC
     )
     once = parse_schedule("at 2026-01-01T09:00:00+00:00")
     assert next_run(once, after=now, now=now) is None

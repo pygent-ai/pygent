@@ -24,7 +24,7 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -149,7 +149,7 @@ class SchedulerDaemon:
         self.runner = runner or SubprocessTaskRunner(
             user_identity=config.user_identity
         )
-        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.clock = clock or (lambda: datetime.now(UTC))
         self.sleeper = sleeper or time.sleep
         self.alert_callback = alert
         self.owner = f"scheduler-{uuid.uuid4().hex}"

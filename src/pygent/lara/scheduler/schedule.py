@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 from typing import Literal
 
 ScheduleKind = Literal["interval", "once", "daily", "event"]
@@ -30,9 +30,9 @@ class Schedule:
 
 def _utc(value: datetime) -> datetime:
     return (
-        value.replace(tzinfo=timezone.utc)
+        value.replace(tzinfo=UTC)
         if value.tzinfo is None
-        else value.astimezone(timezone.utc)
+        else value.astimezone(UTC)
     )
 
 
@@ -84,7 +84,7 @@ def next_run(
     if schedule.kind == "daily":
         assert schedule.time_of_day is not None
         candidate = datetime.combine(
-            current.date(), schedule.time_of_day, tzinfo=timezone.utc
+            current.date(), schedule.time_of_day, tzinfo=UTC
         )
         if candidate <= current:
             candidate += timedelta(days=1)

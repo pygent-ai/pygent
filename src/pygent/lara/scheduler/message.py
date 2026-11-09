@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pygent.lara.core.prompt import Prompt
 from pygent.lara.core.timefmt import format_current_time_line
@@ -31,7 +31,7 @@ def build_task_message(
 ) -> str:
     """Build the ``<task-context>`` message for one scheduler execution."""
 
-    timestamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    timestamp = (now or datetime.now(UTC)).astimezone(UTC)
     instruction_body = SCHEDULER_GUIDANCE
     if instructions.strip():
         instruction_body = f"{instruction_body}\n\n{instructions}"

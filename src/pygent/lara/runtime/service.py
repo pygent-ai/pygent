@@ -1597,7 +1597,7 @@ class LaraRuntimeService:
         for pool in self._mcp_pools:
             try:
                 await asyncio.wait_for(asyncio.shield(pool.aclose()), 10)
-            except (TimeoutError, asyncio.TimeoutError):
+            except TimeoutError:
                 # A hung in-flight call must not block shutdown; the shielded
                 # close task keeps draining in the background.
                 pass

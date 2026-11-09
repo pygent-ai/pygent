@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -98,8 +98,8 @@ def _manager(tmp_path: Path) -> SimpleNamespace:
         session_id="session-1",
         workspace_root=str(tmp_path),
         session_dir=str(tmp_path / "session"),
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat(),
-        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat(),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
         metadata={"mode": "lara-says"},
     )
     return SimpleNamespace(load=lambda _sid: session)

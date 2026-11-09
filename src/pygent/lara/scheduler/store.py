@@ -24,7 +24,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -47,11 +47,11 @@ DEFAULT_PRIORITY = "normal"
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def iso(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat()
+    return value.astimezone(UTC).isoformat()
 
 
 def parse_iso(value: str | None) -> datetime | None:
@@ -593,7 +593,7 @@ class SchedulerStore:
         if limit < 1:
             return []
         now_text = iso(now)
-        lease_text = iso(datetime.fromtimestamp(now.timestamp() + lease_seconds, timezone.utc))
+        lease_text = iso(datetime.fromtimestamp(now.timestamp() + lease_seconds, UTC))
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute(
@@ -629,7 +629,7 @@ class SchedulerStore:
         lease_seconds: float,
     ) -> Task | None:
         now_text = iso(now)
-        lease_text = iso(datetime.fromtimestamp(now.timestamp() + lease_seconds, timezone.utc))
+        lease_text = iso(datetime.fromtimestamp(now.timestamp() + lease_seconds, UTC))
         with self._connect() as connection:
             updated = connection.execute(
                 "UPDATE tasks SET lease_id=?, lease_expires_at=?, updated_at=? "

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +44,7 @@ def test_submission_queue_and_idempotent_insert(tmp_path: Path) -> None:
 
 def test_task_and_run_audit(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
     task = store.create_task(
         name="daily",
         schedule="daily 09:00",
@@ -74,7 +74,7 @@ def test_task_and_run_audit(tmp_path: Path) -> None:
 
 def test_atomic_task_claim_and_release(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     task = store.create_task(
         name="due",
         schedule="every 1h",
@@ -101,7 +101,7 @@ def test_atomic_task_claim_and_release(tmp_path: Path) -> None:
 
 def test_claim_event_task_and_delete(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
     task = store.create_task(
         name="event",
         schedule="on build",
@@ -130,7 +130,7 @@ def test_reads_before_daemon_migration_are_empty(tmp_path: Path) -> None:
 
 def test_trigger_fields_default_and_round_trip(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
     task = store.create_task(
         name="defaults",
         schedule="every 1h",
@@ -171,7 +171,7 @@ def test_trigger_fields_default_and_round_trip(tmp_path: Path) -> None:
 
 def test_invalid_trigger_fields_are_rejected(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
 
     def create(**extra: Any) -> None:
         store.create_task(
@@ -242,7 +242,7 @@ def test_trigger_columns_migrate_idempotently(tmp_path: Path) -> None:
 
 def test_claim_orders_by_priority_then_next_run(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     due = now - timedelta(seconds=5)
 
     def add(name: str, priority: str, next_run_at: datetime) -> str:
