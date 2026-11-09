@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Mapping
 
 from pygent.lara.scheduler.daemon import SchedulerDaemon, TaskResult
 from pygent.lara.scheduler.keys import init_keys, load_secret, sign

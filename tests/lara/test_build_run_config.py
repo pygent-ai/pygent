@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from pygent.lara.schema import build_run_config
 from pygent.lara.core.paths import project_lara_root
+from pygent.lara.schema import build_run_config
 
 MODEL_CONFIG_MAPPING: dict = {
     "connections": {

@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pygent.lara.clis.provision import ensure_dynamic_memory_cli
 from pygent.lara.core.io import append_jsonl, read_json, utc_now, write_json
 from pygent.lara.core.prompt import Prompt
 from pygent.lara.core.redaction import redact_secrets
 from pygent.lara.schema import AgentSession, EternalConversationConfig, RunConfig
-from pygent.lara.clis.provision import ensure_dynamic_memory_cli
 
 MAX_MEMORY_JOB_ATTEMPTS = 3
 
@@ -516,7 +516,7 @@ class EternalConversationHarness:
             try:
                 await operation(failure)
                 return
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - each failure becomes the next retry's reason
                 last_error = exc
                 failure = f"{type(exc).__name__}: {exc}"
                 append_jsonl(
@@ -689,13 +689,12 @@ def _extractor_directive(
         / "jobs"
         / f"proposal-{context.covered_through + 1}-{context.target_cursor}.json"
     )
-    cli_command = (
-        f'"{sys.executable}" "{context.memory_script}" --root "{context.memory_root}"'
-    )
     lines = [
         "You are now maintaining this conversation's memory (background memory job).",
-        "The model-visible history above is the frozen Working Memory for "
-        f"{context.evidence_ref} ({context.covered_through + 1}..{context.target_cursor}).",
+        (
+            "The model-visible history above is the frozen Working Memory for "
+            f"{context.evidence_ref} ({context.covered_through + 1}..{context.target_cursor})."
+        ),
         "",
         "Old Snapshot (JSON):",
         json.dumps(snapshot, ensure_ascii=False, indent=2),
@@ -711,9 +710,11 @@ def _extractor_directive(
         f'  "{sys.executable}" "{context.memory_script}" --root "{context.memory_root}" get-state',
         f'  "{sys.executable}" "{context.memory_script}" --root "{context.memory_root}" publish-pending --file "{proposal_path}"',
         "",
-        "Steps: run get-state to read base_memory_revision and base_snapshot_revision; "
-        f'write the proposal JSON to "{proposal_path}"; run publish-pending; on validation '
-        "errors, fix the proposal file and run publish-pending again.",
+        (
+            "Steps: run get-state to read base_memory_revision and base_snapshot_revision; "
+            f'write the proposal JSON to "{proposal_path}"; run publish-pending; on validation '
+            "errors, fix the proposal file and run publish-pending again."
+        ),
         "",
         EXTRACTOR_GUIDANCE,
     ]
@@ -727,9 +728,6 @@ def _extractor_directive(
 
 def _builder_directive(*, context: MemoryJobContext, batch: dict[str, Any]) -> str:
     assert context.build_batch_path is not None
-    cli_command = (
-        f'"{sys.executable}" "{context.memory_script}" --root "{context.memory_root}"'
-    )
     lines = [
         "Frozen Pending UT batch (JSON):",
         json.dumps(batch, ensure_ascii=False, indent=2),

@@ -5,9 +5,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-from pygent.llm import ModelConfig
-
 from pygent.lara.core.paths import project_lara_root, user_lara_root
+from pygent.llm import ModelConfig
 
 
 def _abs_path(value: str | Path) -> str:
@@ -219,13 +218,13 @@ class SchedulerConfig:
         if isinstance(self.max_concurrent, bool) or not isinstance(
             self.max_concurrent, int
         ):
-            raise ValueError("scheduler max_concurrent must be an integer")
+            raise ValueError("scheduler max_concurrent must be an integer")  # noqa: TRY004 - validation contract errors are value errors
         if self.max_concurrent < 1:
             raise ValueError("scheduler max_concurrent must be positive")
         if isinstance(self.poll_seconds, bool) or not isinstance(
             self.poll_seconds, (int, float)
         ):
-            raise ValueError("scheduler poll_seconds must be a number")
+            raise ValueError("scheduler poll_seconds must be a number")  # noqa: TRY004 - validation contract errors are value errors
         self.poll_seconds = float(self.poll_seconds)
         if self.poll_seconds <= 0:
             raise ValueError("scheduler poll_seconds must be positive")
@@ -255,7 +254,7 @@ class EternalConversationConfig:
         if isinstance(self.extraction_trigger_ratio, bool) or not isinstance(
             self.extraction_trigger_ratio, (int, float)
         ):
-            raise ValueError("extraction_trigger_ratio must be a number")
+            raise ValueError("extraction_trigger_ratio must be a number")  # noqa: TRY004 - validation contract errors are value errors
         self.extraction_trigger_ratio = float(self.extraction_trigger_ratio)
         if not 0 < self.extraction_trigger_ratio < 1:
             raise ValueError(
@@ -406,7 +405,7 @@ class RunConfig:
             for preset in self.cli_bash_presets
         ]
         if not isinstance(self.bash_full_output_allowlist, list):
-            raise ValueError("bash_full_output_allowlist must be a list")
+            raise ValueError("bash_full_output_allowlist must be a list")  # noqa: TRY004 - validation contract errors are value errors
         self.bash_full_output_allowlist = [
             _require(item, "bash_full_output_allowlist item")
             for item in self.bash_full_output_allowlist
@@ -469,7 +468,7 @@ class RunConfig:
         return data
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RunConfig":
+    def from_dict(cls, data: dict[str, Any]) -> RunConfig:
         clean = dict(data)
         resolved = clean.get("resolved_agent")
         if isinstance(resolved, dict):
@@ -530,7 +529,7 @@ class CaseRunRef:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "CaseRunRef":
+    def from_dict(cls, data: dict[str, Any]) -> CaseRunRef:
         return cls(**data)
 
 
@@ -551,7 +550,7 @@ class CaseRunStatus(StrEnum):
         return self is not CaseRunStatus.RUNNING
 
     @classmethod
-    def from_value(cls, value: Any) -> "CaseRunStatus | None":
+    def from_value(cls, value: Any) -> CaseRunStatus | None:
         try:
             return cls(str(value))
         except ValueError:
@@ -578,13 +577,13 @@ class ContextEvent:
         if self.actor not in {"user", "assistant", "tool", "system"}:
             raise ValueError("actor must be one of user, assistant, tool, system")
         if not isinstance(self.payload, dict):
-            raise ValueError("payload must be a dict")
+            raise ValueError("payload must be a dict")  # noqa: TRY004 - validation contract errors are value errors
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ContextEvent":
+    def from_dict(cls, data: dict[str, Any]) -> ContextEvent:
         return cls(**data)
 
 
@@ -627,7 +626,7 @@ class AgentSession:
         return data
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "AgentSession":
+    def from_dict(cls, data: dict[str, Any]) -> AgentSession:
         version = str(data.get("version") or "1.0")
         if version != "1.0":
             raise ValueError(f"unsupported AgentSession version: {version}")
@@ -687,7 +686,7 @@ def build_run_config(
         ),
         model_config_mapping=dict(model_config_mapping),
     )
-    if default_model_group not in config.model_config.model_groups:
+    if config.model_config is None or default_model_group not in config.model_config.model_groups:
         raise ValueError(
             f"Agent alias {agent_alias!r} references unknown model group "
             f"{default_model_group!r}"

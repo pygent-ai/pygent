@@ -12,11 +12,10 @@ import asyncio
 from typing import Any
 
 from pygent import IdempotencyPolicy, ToolDefinition, ToolSideEffect
-from pygent.tool import SandboxExecutorSupport, ToolSpec
-from pygent.tool.executors import ToolExecutionContext
-
 from pygent.lara.core.io import plain_object
 from pygent.lara.schema import RunConfig
+from pygent.tool import SandboxExecutorSupport, ToolSpec
+from pygent.tool.executors import ToolExecutionContext
 
 from .keys import load_secret, sign
 from .schedule import parse_schedule
@@ -156,20 +155,20 @@ class SchedulerToolExecutor:
             )
             return submission.to_dict()
         if name == "emit_event":
-            payload = {
+            event_payload: dict[str, Any] = {
                 "event": str(arguments.get("event") or ""),
                 "data": arguments.get("data") or {},
             }
-            if not payload["event"].strip():
+            if not event_payload["event"].strip():
                 raise ValueError("emit_event.event must be non-empty")
             signature = sign(
-                submission_payload("event", "agent", payload), secret
+                submission_payload("event", "agent", event_payload), secret
             )
             submission = await asyncio.to_thread(
                 self.store.submit,
                 kind="event",
                 source="agent",
-                payload=payload,
+                payload=event_payload,
                 signature=signature,
                 submission_id=submission_id or None,
             )

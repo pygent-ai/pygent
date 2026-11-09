@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+
 from pygent import MediaSource
 from pygent.core import FrozenJsonObject
 from pygent.llm import (
@@ -13,21 +14,20 @@ from pygent.llm import (
     AnthropicMessagesClient,
     GeminiGenerateContentAdapter,
     GeminiGenerateContentClient,
-    ModelConfig,
     MediaTransportCapabilities,
+    ModelConfig,
     ModelEntry,
     ModelProviderClient,
     ModelSpec,
-    OpenAICompatibleClient,
     OpenAICompatibleAdapter,
+    OpenAICompatibleClient,
     OpenAIResponsesAdapter,
     OpenAIResponsesClient,
     ResolvedModelConnection,
 )
 
-from .attachments import MEDIA_MAX_BYTES
 from .agent.model_invoker import LaraModelInvoker
-
+from .attachments import MEDIA_MAX_BYTES
 
 # The kernel owns the lookup *protocol*; the shell supplies the store-backed
 # implementation at the process composition root.

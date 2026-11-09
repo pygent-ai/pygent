@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pygent.lara.core.timefmt import format_current_time_line
-
 from pygent.lara.core.prompt import Prompt
+from pygent.lara.core.timefmt import format_current_time_line
 
 from .models import ReminderSection
 

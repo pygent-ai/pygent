@@ -10,11 +10,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pygent import ToolResult as PygentToolResult
-from pygent.runtime.codec import tool_task_to_dict
-
 from pygent.lara.core.io import plain_data
 from pygent.lara.core.redaction import redact_secrets
 from pygent.lara.tracing import DiffRecorder, EventStore, read_snapshot_content
+from pygent.runtime.codec import tool_task_to_dict
 
 from .file_effect_models import DeferredFileEffectJob, FileEffect, FileSnapshot
 
@@ -66,7 +65,7 @@ class FileEffectTracker:
                 name for name in directories
                 if not self._is_ignored(Path(root) / name)
                 and not (Path(root) / name).is_symlink()
-                and not (Path(root) / name).is_junction()
+                and not _path_is_junction(Path(root) / name)
             ]
             for name in files:
                 yield Path(root) / name
@@ -667,6 +666,14 @@ def _shell_syntax(command: str) -> str:
     return re.sub(r"'(?:[^']*)'|\"(?:\\.|[^\"\\])*\"|\\.|#[^\n]*", " ", text)
 
 
+def _path_is_junction(path: Path) -> bool:
+    """Junctions only exist on Windows; other runtimes have nothing to skip."""
+    is_junction = getattr(path, "is_junction", None)
+    if is_junction is None:
+        return False
+    return bool(is_junction())
+
+
 def _bash_command_may_write(command: str) -> bool:
     # Quoted shell programs are executable code, unlike quoted echo/print data.
     try:
@@ -674,9 +681,12 @@ def _bash_command_may_write(command: str) -> bool:
     except ValueError:
         words = []
     for index, word in enumerate(words[:-2]):
-        if word.rsplit("/", 1)[-1] in {"sh", "bash", "zsh"} and words[index + 1] == "-c":
-            if _bash_command_may_write(words[index + 2]):
-                return True
+        if (
+            word.rsplit("/", 1)[-1] in {"sh", "bash", "zsh"}
+            and words[index + 1] == "-c"
+            and _bash_command_may_write(words[index + 2])
+        ):
+            return True
     command = _shell_syntax(command)
     lowered = command.lower()
     if re.search(r"(?<!>)>{1,2}(?![>&])", command):

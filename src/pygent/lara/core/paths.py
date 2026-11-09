@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 
 
-
 def user_lara_root() -> Path:
     """Return the user-owned Lara data root shared by all projects."""
     return (Path.home() / ".lara").expanduser().resolve()

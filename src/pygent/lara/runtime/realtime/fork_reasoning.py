@@ -19,9 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from pygent.llm import ModelConfig, ModelEntry
-
 from pygent.lara.runtime.model_configuration import preferred_models
+from pygent.llm import ModelConfig, ModelEntry
 
 # Adapters that forward ``provider_options`` as top-level request fields.
 _REASONING_EFFORT_PROTOCOLS = frozenset({"openai_chat_completions"})

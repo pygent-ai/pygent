@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .runner import AgentRunResult, AgentRunner
+from .runner import AgentRunner, AgentRunResult
 
 
 @dataclass(frozen=True)

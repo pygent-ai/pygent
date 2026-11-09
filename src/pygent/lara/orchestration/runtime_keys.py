@@ -14,7 +14,7 @@ class RuntimeScopeKey:
     lara_root: str
 
     @classmethod
-    def from_config(cls, config: RunConfig) -> "RuntimeScopeKey":
+    def from_config(cls, config: RunConfig) -> RuntimeScopeKey:
         return cls(
             workspace_root=str(Path(config.workspace_root).resolve()),
             lara_root=str(Path(config.lara_root).resolve()),
@@ -27,7 +27,7 @@ class RuntimeGenerationKey:
     config_fingerprint: str
 
     @classmethod
-    def from_config(cls, config: RunConfig) -> "RuntimeGenerationKey":
+    def from_config(cls, config: RunConfig) -> RuntimeGenerationKey:
         payload = config.to_dict()
         encoded = json.dumps(
             payload,

@@ -8,7 +8,7 @@ from typing import Any, Literal
 from .common import _hash_json
 
 
-def _always_enabled(ctx: "PromptRenderContext") -> bool:
+def _always_enabled(ctx: PromptRenderContext) -> bool:
     return True
 
 
@@ -19,10 +19,10 @@ class PromptModule:
     type: Literal["system", "project", "runtime", "tool", "memory", "policy"]
     cache_scope: Literal["session", "request", "turn", "none"]
     order: int
-    render: Callable[["PromptRenderContext"], str | None]
+    render: Callable[[PromptRenderContext], str | None]
     required: bool = False
     depends_on: tuple[str, ...] = ()
-    enabled: Callable[["PromptRenderContext"], bool] = _always_enabled
+    enabled: Callable[[PromptRenderContext], bool] = _always_enabled
 
     @property
     def version_hash(self) -> str:

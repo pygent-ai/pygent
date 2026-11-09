@@ -7,7 +7,6 @@ from typing import Any, Literal
 from pygent.lara.core.prompt import Prompt
 from pygent.lara.tracing import EventStore
 
-
 COMPRESSION_REQUEST_PROMPT = """CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
 
 - Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.

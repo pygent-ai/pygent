@@ -104,7 +104,7 @@ class Prompt(str):
 
     def wrap(
         self, tag: str, *, indent: str | None = None, **attrs: Any
-    ) -> "Prompt":
+    ) -> Prompt:
         """Wrap this body in ``tag`` without escaping the body.
 
         ``indent=None`` keeps the body byte-for-byte intact. A string
@@ -122,33 +122,33 @@ class Prompt(str):
 
     def wrap_escaped(
         self, tag: str, *, indent: str | None = None, **attrs: Any
-    ) -> "Prompt":
+    ) -> Prompt:
         """Escape this body as text, then wrap it in ``tag``."""
 
         return self.escape().wrap(tag, indent=indent, **attrs)
 
-    def escape(self) -> "Prompt":
+    def escape(self) -> Prompt:
         """Return this prompt with text escaping applied."""
 
         return Prompt(_escape_text(str(self)))
 
     @staticmethod
-    def self_closing(tag: str, **attrs: Any) -> "Prompt":
+    def self_closing(tag: str, **attrs: Any) -> Prompt:
         """Render a self-closing tag with the repo's slash spacing."""
 
         _validate_tag(tag)
         rendered_attrs = _render_attrs(attrs)
         return Prompt(f"<{tag}{rendered_attrs} />")
 
-    def __add__(self, other: object) -> "Prompt":
+    def __add__(self, other: object) -> Prompt:
         if isinstance(other, str):
             return Prompt(str(self) + other)
         return NotImplemented
 
-    def __radd__(self, other: object) -> "Prompt":
+    def __radd__(self, other: object) -> Prompt:
         if isinstance(other, str):
             return Prompt(other + str(self))
         return NotImplemented
 
 
-__all__ = ["EnvelopeInfo", "KNOWN_ENVELOPES", "Prompt"]
+__all__ = ["KNOWN_ENVELOPES", "EnvelopeInfo", "Prompt"]

@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, cast
 
 from pygent import ToolResult
 from pygent.core import independent_execution
-from pygent.runtime import LocalRuntime
-
+from pygent.core.json_values import JsonValue
 from pygent.lara.core.io import jsonl_path_lock, read_json, write_json_atomic
 from pygent.lara.schema import CaseRunRef, RunConfig
 from pygent.lara.tracing import EventStore
+from pygent.runtime import LocalRuntime
 
 from .context import LaraContext
 from .file_effect_models import DeferredFileEffectBatch, DeferredFileEffectJob
@@ -139,7 +140,7 @@ class BashTaskObservations:
                     await self._finish_thread(self._finalize, path, record, final)
                     return
                 await asyncio.sleep(0.1)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - the failure is journaled as an event
             EventStore(CaseRunRef.from_dict(record["case_run_ref"])).append_error(
                 exc, event_type="runtime.error", turn_id=record["turn_id"],
                 payload={"task_id": record["task_id"], "phase": "bash-finalization"},
@@ -181,7 +182,8 @@ class BashTaskObservations:
     async def _result(self, task_id: str, *, wait: bool = False) -> ToolResult | None:
         result = await self.runtime.get_tool_result(task_id, wait=wait)
         if result is not None and result.output is None:
-            result = replace(result, output=await self.runtime.get_tool_output(task_id))
+            retrieved = await self.runtime.get_tool_output(task_id)
+            result = replace(result, output=cast("JsonValue", retrieved))
         return result
 
     @staticmethod

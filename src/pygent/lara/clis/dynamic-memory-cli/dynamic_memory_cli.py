@@ -12,19 +12,25 @@ import time
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
+from types import TracebackType
+from typing import Any, Literal
 
 SCHEMA_VERSION = 1
 DB_NAME = "memory.sqlite3"
 
 
 class ClosingConnection(sqlite3.Connection):
-    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> Literal[False]:
         try:
-            return super().__exit__(exc_type, exc, traceback)
+            super().__exit__(exc_type, exc, traceback)
         finally:
             self.close()
+        return False
 
 
 def now() -> str:
@@ -259,7 +265,7 @@ def publish_pending(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
     for field, limit in snapshot_field_limits.items():
         items = snapshot.get(field)
         if not isinstance(items, list):
-            raise ValueError(f"snapshot.{field} must be a list")
+            raise ValueError(f"snapshot.{field} must be a list")  # noqa: TRY004
         if not all(isinstance(item, str) for item in items):
             raise ValueError(f"snapshot.{field} items must be strings")
         if len(items) > limit:
@@ -278,7 +284,7 @@ def publish_pending(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("changed_uts must be a list with at most 8 items")
     for change_index, change in enumerate(changed):
         if not isinstance(change, dict):
-            raise ValueError(f"changed_uts[{change_index}] must be an object")
+            raise ValueError(f"changed_uts[{change_index}] must be an object")  # noqa: TRY004
         action = change.get("action", "upsert")
         if action not in ("upsert", "retire"):
             raise ValueError(
@@ -289,7 +295,7 @@ def publish_pending(root: Path, proposal: dict[str, Any]) -> dict[str, Any]:
             continue
         content = change.get("content")
         if not isinstance(content, str):
-            raise ValueError("UT content must be a string of at most 700 characters")
+            raise ValueError("UT content must be a string of at most 700 characters")  # noqa: TRY004
         if len(content) > 700:
             overage = len(content) - 700
             unit = "character" if overage == 1 else "characters"
@@ -513,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
             else: raise AssertionError(args.command)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 1 if result.get("status") in {"failed", "exists", "not_found"} or result.get("failed", 0) else 0
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - CLI boundary reports any failure as JSON
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False, indent=2))
         return 1
 

@@ -13,8 +13,10 @@ import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import cast
 
 import pytest
+
 from pygent import (
     AIMessage,
     Context,
@@ -32,9 +34,6 @@ from pygent import (
     tool,
 )
 from pygent.core import JsonValue
-from pygent.runtime.codec import message_to_dict
-from typing import cast
-
 from pygent.lara.agents import (
     AgentLimits,
     AgentRunner,
@@ -47,13 +46,14 @@ from pygent.lara.agents import (
     MessageSlice,
     ReminderTransform,
     SystemPromptTransform,
+    ToolkitToolSurface,
     ToolProfile,
     ToolRegistry,
-    ToolkitToolSurface,
     align_slice_bounds,
     messages_from_history,
     system_reminder,
 )
+from pygent.runtime.codec import message_to_dict
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,7 @@ class _WindowSource:
 class _ScriptState:
     """Opaque adapter holding the scripted model's mutable test state."""
 
-    __slots__ = ("answers", "seen", "received_definitions")
+    __slots__ = ("answers", "received_definitions", "seen")
 
     def __init__(self, answers: Sequence[AIMessage]) -> None:
         self.answers = list(answers)
@@ -385,7 +385,7 @@ def test_fork_snapshot_records_freeze_point() -> None:
         ),
     )
 
-    window, snapshot = fork.materialize()
+    _window, snapshot = fork.materialize()
 
     assert snapshot.source == "static-messages:2"
     assert (snapshot.start_index, snapshot.end_index) == (0, 2)

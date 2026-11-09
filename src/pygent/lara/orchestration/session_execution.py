@@ -7,11 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pygent.lara.core.io import plain_object
-from pygent.lara.sessions import realtime_enabled_for
 from pygent.lara.agents.context import system_reminder
+from pygent.lara.core.io import plain_object
 from pygent.lara.runtime.realtime.speak import SPEAK_TOOL_NAME
 from pygent.lara.runtime.realtime.turn_finalizer import decide_turn_finalization
+from pygent.lara.sessions import realtime_enabled_for
 
 from .managed_turn import ManagedSessionTurn
 from .models import TurnCommand, TurnState
@@ -25,7 +25,7 @@ class SessionExecutionKey:
     session_id: str
 
     @classmethod
-    def from_manager(cls, manager: Any, session_id: str) -> "SessionExecutionKey":
+    def from_manager(cls, manager: Any, session_id: str) -> SessionExecutionKey:
         return cls(
             sessions_root=str(Path(manager.sessions_root).resolve()),
             session_id=session_id,
@@ -86,7 +86,7 @@ class SessionExecutionCoordinator:
             turn.state = TurnState.SKIPPED
             turn.ready.set()
             turn.finalized.set()
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - startup errors are captured and surfaced
             turn.startup_error = exc
             turn.state = TurnState.ERROR
             turn.ready.set()
@@ -144,7 +144,7 @@ class SessionExecutionCoordinator:
             status = "skipped"
             if turn.execution_handle is not None:
                 await turn.execution_handle.cancel()
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - startup errors are captured and surfaced
             turn.startup_error = exc
             # The startup error otherwise lives only in memory; persisting it
             # with the terminal is what makes a failed start diagnosable.

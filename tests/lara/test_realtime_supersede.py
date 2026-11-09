@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from pygent import AIMessage
-
 from pygent.lara.runtime.realtime.envelope import (
     format_user_asked,
     render_exchange_envelope,

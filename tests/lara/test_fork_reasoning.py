@@ -6,13 +6,13 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
-from pygent.llm import ModelConfig
 
 from pygent.lara.runtime.realtime.fork_reasoning import (
     fork_model_profiles,
     fork_profile_name,
 )
 from pygent.lara.schema.models import RealtimeInteractionConfig
+from pygent.llm import ModelConfig
 
 
 def _capabilities(

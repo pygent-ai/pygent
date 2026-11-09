@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from pathlib import Path
 
 from pygent.lara.core.io import read_json
@@ -75,9 +76,7 @@ class ReminderService:
             self._prepare(scope), name=f"lara-reminder-prewarm:{session_id}"
         )
         self._preparations[session_id] = task
-        task.add_done_callback(
-            lambda completed, key=session_id: self._discard_preparation(key, completed)
-        )
+        task.add_done_callback(partial(self._discard_preparation, session_id))
         return task
 
     async def claim_initial(self, session_id: str, turn_id: str) -> str | None:
@@ -228,7 +227,9 @@ class ReminderService:
         if self._closed:
             return
         self._closed = True
-        tasks = tuple(task for task in self._preparations.values() if not task.done())
+        tasks: tuple[asyncio.Task[object], ...] = tuple(
+            task for task in self._preparations.values() if not task.done()
+        )
         tasks += tuple(task for task in self._observations.values() if not task.done())
         for task in tasks:
             task.cancel()
@@ -332,7 +333,7 @@ class ReminderService:
         self._observations.pop(session_id, None)
         try:
             result = task.result()
-        except (asyncio.CancelledError, Exception):
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001 - a failed observation degrades to None
             result = None
         if session_id in self._queued_observations and not self._closed:
             self._queued_observations.discard(session_id)

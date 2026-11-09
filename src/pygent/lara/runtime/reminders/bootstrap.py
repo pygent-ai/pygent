@@ -49,7 +49,7 @@ def build_initial_snapshot(
     snapshot_id = (
         "initial-"
         + hashlib.sha256(
-            f"{scope.session_id}:{prepared_at}:{content}".encode("utf-8")
+            f"{scope.session_id}:{prepared_at}:{content}".encode()
         ).hexdigest()[:16]
     )
     observations: dict[str, object] = {

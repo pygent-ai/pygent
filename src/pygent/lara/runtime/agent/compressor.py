@@ -5,7 +5,6 @@ from pathlib import Path
 
 from pygent import AIMessage, Message, Module
 from pygent.core import EffectSafety, ExecutionRequirements, RecoverySafety
-
 from pygent.lara.core.prompt import Prompt
 from pygent.lara.runtime.context import LaraContext
 from pygent.lara.runtime.context_compression import (
@@ -15,6 +14,7 @@ from pygent.lara.runtime.context_compression import (
     render_file_read_block,
 )
 from pygent.lara.schema import RunConfig
+
 from .common import _session_dir_for_run
 
 

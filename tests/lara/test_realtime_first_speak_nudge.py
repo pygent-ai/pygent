@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from pygent import ToolMessage, ToolResult
-
 from pygent.lara.runtime.context import LaraContext
 from pygent.lara.runtime.realtime.envelope import render_exchange_envelope
 from pygent.lara.runtime.realtime.injection import (

@@ -123,11 +123,11 @@ def validate_config_mapping(data: dict[str, Any]) -> None:
         raise ValueError("agents must be a list")
     for index, agent in enumerate(agents or []):
         if not isinstance(agent, dict):
-            raise ValueError(f"agents[{index}] must be a mapping")
+            raise ValueError(f"agents[{index}] must be a mapping")  # noqa: TRY004
         _require_known_keys(agent, {"alias", "model_request"}, f"agents[{index}]")
         request = agent.get("model_request")
         if not isinstance(request, dict):
-            raise ValueError(f"agents[{index}].model_request must be a mapping")
+            raise ValueError(f"agents[{index}].model_request must be a mapping")  # noqa: TRY004
         allowed_request_fields = {"default_model_group", "retry", "context_window"}
         if {"profile", "routes", "fallback"} & set(request):
             allowed_request_fields.update({"profile", "routes", "fallback"})
@@ -154,7 +154,7 @@ def _validate_mapping(value: Any, allowed: set[str], path: str) -> None:
     if value is None:
         return
     if not isinstance(value, dict):
-        raise ValueError(f"{path} must be a mapping")
+        raise ValueError(f"{path} must be a mapping")  # noqa: TRY004
     _require_known_keys(value, allowed, path)
 
 

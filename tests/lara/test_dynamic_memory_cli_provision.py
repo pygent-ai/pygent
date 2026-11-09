@@ -13,22 +13,21 @@ import json
 import subprocess
 import sys
 import warnings
-from collections.abc import Awaitable
 from pathlib import Path
 
 import pytest
 
+from pygent.lara.clis.provision import (
+    MARKER_NAME,
+    bundled_cli_dir,
+    ensure_dynamic_memory_cli,
+)
 from pygent.lara.runtime.agent.skill_catalog import scan_multilevel_skills
 from pygent.lara.runtime.eternal_conversation import (
     EternalConversationHarness,
     MemoryJobRequest,
 )
 from pygent.lara.schema import EternalConversationConfig
-from pygent.lara.clis.provision import (
-    MARKER_NAME,
-    bundled_cli_dir,
-    ensure_dynamic_memory_cli,
-)
 
 
 async def _fail_runner(request: MemoryJobRequest) -> str:
@@ -68,6 +67,7 @@ def test_provision_mounts_bundled_cli_and_script_resolves(tmp_path: Path) -> Non
     completed = subprocess.run(
         [sys.executable, str(mounted), "--help"],
         capture_output=True,
+        check=False,
         timeout=30,
     )
     assert completed.returncode == 0

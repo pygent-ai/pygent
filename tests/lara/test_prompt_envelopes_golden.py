@@ -8,23 +8,25 @@ is migrated.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
-from pygent import AIMessage, UserMessage
-from pygent.runtime.codec import message_to_dict
 
 import pygent.lara.runtime.agent.compressor as compressor_module
 import pygent.lara.runtime.reminders.bootstrap as bootstrap_module
 import pygent.lara.runtime.reminders.skills_context as skills_module
+from pygent import AIMessage, UserMessage
 from pygent.lara.agents.context import system_reminder
 from pygent.lara.core.io import write_json
 from pygent.lara.runtime.agent.compressor import LaraCompressorModule
 from pygent.lara.runtime.attachments import ResolvedAttachment, render_attachments_xml
 from pygent.lara.runtime.context import LaraContext
-from pygent.lara.runtime.context_compression import FileReadRecord, render_file_read_block
+from pygent.lara.runtime.context_compression import (
+    FileReadRecord,
+    render_file_read_block,
+)
 from pygent.lara.runtime.eternal_conversation import render_memory_access_instruction
 from pygent.lara.runtime.realtime.envelope import render_exchange_envelope
 from pygent.lara.runtime.realtime.speak import render_reply_instruction
@@ -40,6 +42,7 @@ from pygent.lara.schema import AgentSession, BashCliPreset, CaseRunRef, RunConfi
 from pygent.lara.sessions import AgentMessage
 from pygent.lara.sessions.collaboration import AgentMessageState
 from pygent.lara.sessions.manager import LARA_SAYS_SESSION_MODE
+from pygent.runtime.codec import message_to_dict
 
 
 def _assert_exact(actual: str, expected: str) -> None:
@@ -267,7 +270,7 @@ def test_rendering_time_golden() -> None:
     _assert_exact(
         render_context_body(
             sections,
-            rendered_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+            rendered_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
         )
         or "",
         """<time>
@@ -558,8 +561,10 @@ async def test_compressor_session_context_golden(
         compressor_module,
         "render_file_read_block",
         lambda *_, **__: (
-            '<file-read>\n<file path="a.py" mode="full" truncated="false" '
-            'char_count="2">ok</file>\n</file-read>',
+            (
+                '<file-read>\n<file path="a.py" mode="full" truncated="false" '
+                'char_count="2">ok</file>\n</file-read>'
+            ),
             [],
         ),
     )

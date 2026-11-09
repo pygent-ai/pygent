@@ -31,7 +31,7 @@ from .context import (
     MessageSlice,
     align_slice_bounds,
 )
-from .runner import AgentLimits, AgentRunResult, AgentRunner
+from .runner import AgentLimits, AgentRunner, AgentRunResult
 
 
 @dataclass(frozen=True)

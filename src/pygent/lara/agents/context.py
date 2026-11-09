@@ -16,9 +16,8 @@ from typing import Protocol, runtime_checkable
 
 from pygent import AIMessage, Message, ToolMessage, UserMessage
 from pygent.core import JsonValue
-from pygent.runtime.codec import message_from_dict
-
 from pygent.lara.core.prompt import Prompt
+from pygent.runtime.codec import message_from_dict
 
 
 def _hash_text(text: str) -> str:

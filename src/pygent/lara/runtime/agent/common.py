@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from pygent import Message as PygentMessage
-from pygent.runtime.codec import context_from_dict, message_from_dict
-
-from pygent.lara.core.io import utc_now as _now
+from pygent.lara.core.io import (
+    utc_now as _now,  # noqa: F401 - re-exported as the reminders clock
+)
 from pygent.lara.runtime.context import LARA_CONTEXT_CODECS, LaraContext
+from pygent.runtime.codec import context_from_dict, message_from_dict
 
 DEFAULT_REACT_MAX_STEPS = 500
 

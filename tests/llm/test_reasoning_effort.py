@@ -11,7 +11,6 @@ from pygent.core import FrozenJsonObject, freeze_json_object
 from pygent.llm import (
     AnthropicMessagesAdapter,
     GeminiGenerateContentAdapter,
-    ModelCallError,
     ModelErrorKind,
     ModelProviderError,
     ModelProviderRequest,

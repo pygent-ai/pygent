@@ -21,11 +21,12 @@ import hashlib
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any
 
 TASK_STATUSES = (
     "needs_review",
@@ -84,7 +85,7 @@ def _json(value: Mapping[str, Any]) -> str:
 def _dict(value: str) -> dict[str, Any]:
     parsed = json.loads(value)
     if not isinstance(parsed, dict):
-        raise ValueError("scheduler payload must be a JSON object")
+        raise ValueError("scheduler payload must be a JSON object")  # noqa: TRY004
     return parsed
 
 

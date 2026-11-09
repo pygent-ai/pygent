@@ -20,8 +20,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pygent import AIMessage, Context, Message, ToolDefinition
-
-from pygent.lara.runtime.realtime.speak import SPEAK_TOOL_NAME, SpeakArgs, parse_speak_args
+from pygent.lara.runtime.realtime.speak import (
+    SPEAK_TOOL_NAME,
+    SpeakArgs,
+    parse_speak_args,
+)
 
 
 @dataclass(frozen=True)
@@ -64,8 +67,8 @@ def extract_speak_args(message: AIMessage) -> SpeakArgs | None:
 
 
 __all__ = [
-    "ForkReplyOutcome",
     "SPEAK_TOOL_NAME",
+    "ForkReplyOutcome",
     "build_fork_context",
     "extract_speak_args",
 ]

@@ -19,7 +19,6 @@ from __future__ import annotations
 from dataclasses import replace
 
 from pygent import Module, ToolMessage
-
 from pygent.lara.runtime.context import LaraContext
 
 from .nudge import DEFAULT_NUDGE_INTERVAL, nudge_reminder
@@ -39,7 +38,7 @@ class _NudgeCounter:
     rejected, mutating its fields is not.
     """
 
-    __slots__ = ("rounds", "turn_id", "first_result_seen", "spoke_yet")
+    __slots__ = ("first_result_seen", "rounds", "spoke_yet", "turn_id")
 
     def __init__(self) -> None:
         self.rounds = 0

@@ -21,11 +21,12 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from pygent.lara.core.io import append_jsonl
 from pygent.lara.schema import RunConfig
@@ -102,6 +103,7 @@ class SubprocessTaskRunner:
             completed = subprocess.run(
                 command,
                 capture_output=True,
+                check=False,
                 text=True,
                 encoding="utf-8",
                 errors="replace",

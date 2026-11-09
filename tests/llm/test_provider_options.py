@@ -385,7 +385,7 @@ async def test_request_level_provider_options_override_model_level_options() -> 
         capabilities={"openai": transport_mode(streaming=False)},
     )
     group = model_group("g", (entry,), ("main",))
-    call = lambda **extra: invoker.execute(  # noqa: E731
+    call = lambda **extra: invoker.execute(
         model_group=group,
         retry_policy=RetryPolicy(max_attempts_per_model=1),
         generation=GenerationConfig(),

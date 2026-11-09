@@ -74,7 +74,7 @@ class AgentMessage:
         return value
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "AgentMessage":
+    def from_dict(cls, value: dict[str, Any]) -> AgentMessage:
         return cls(
             message_id=str(value["message_id"]),
             submission_id=str(value["submission_id"]),
@@ -267,7 +267,7 @@ class SessionCollaborationStore:
                     UPDATE agent_messages
                     SET state = 'claimed', claim_id = ?, claim_until_epoch = ?, updated_at = ?
                     WHERE message_id IN ({placeholders})
-                    """,  # noqa: S608 - placeholders are generated locally.
+                    """,
                     (claim_id, now_epoch + lease_seconds, utc_now(), *message_ids),
                 )
             connection.commit()

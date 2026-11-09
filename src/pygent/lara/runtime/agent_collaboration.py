@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from pygent import IdempotencyPolicy, ToolDefinition, ToolSideEffect
-from pygent.tool import ToolSpec
-
 from pygent.lara.schema import RunConfig
+from pygent.tool import ToolSpec
 
 
 def _spec(

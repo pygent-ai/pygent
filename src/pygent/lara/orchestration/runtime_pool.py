@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from pygent.lara.runtime.agent.prompts import PromptRegistry
 from pygent.lara.runtime.service import LaraRuntimeService
 from pygent.lara.schema import RunConfig
 from pygent.lara.sessions import SessionManager
@@ -33,7 +34,7 @@ class WorkspaceRuntimePool:
         collaboration: Any | None = None,
         credential_environ: Mapping[str, str] | None = None,
         run_config_loader: Callable[..., RunConfig] | None = None,
-        prompt_registry: "PromptRegistry | None" = None,
+        prompt_registry: PromptRegistry | None = None,
     ) -> None:
         self._runtime_factory = runtime_factory
         self._collaboration = collaboration

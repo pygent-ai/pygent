@@ -10,14 +10,22 @@ recovery (idempotent per interrupt via the execution idempotency key).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
-from pygent import AIMessage, GenerationConfig, ModelCallLayer, ModelGroup, Module, RetryPolicy, UserMessage
-from pygent.llm import ModelCallPolicy
+from pygent import (
+    AIMessage,
+    GenerationConfig,
+    ModelCallLayer,
+    ModelGroup,
+    Module,
+    RetryPolicy,
+    UserMessage,
+)
 from pygent.core import EffectSafety, ExecutionRequirements, RecoverySafety
-
 from pygent.lara.runtime.realtime.fork_reply import ForkReplyOutcome, extract_speak_args
 from pygent.lara.runtime.realtime.speak import SPEAK_TOOL_NAME, parse_speak_args
+from pygent.llm import ModelCallPolicy
 
 FORK_RESULT_KIND = "lara.realtime.fork-result"
 
@@ -99,7 +107,11 @@ def outcome_from_result(message: AIMessage) -> ForkReplyOutcome:
             f"execution result is not a fork reply ({message.kind!r})"
         )
     data = message.data
+    if not isinstance(data, Mapping):
+        raise ValueError(f"execution result data must be a mapping (got {type(data).__name__})")  # noqa: TRY004
     raw_speak = data.get("speak_args")
+    if raw_speak is not None and not isinstance(raw_speak, Mapping):
+        raise ValueError("fork reply speak_args must be a mapping")
     speak_args = None if raw_speak is None else parse_speak_args(dict(raw_speak))
     return ForkReplyOutcome(
         via=str(data.get("via") or ("speak" if speak_args else "text")),

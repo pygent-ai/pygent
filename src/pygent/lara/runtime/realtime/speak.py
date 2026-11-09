@@ -15,10 +15,9 @@ from pathlib import Path
 from typing import Protocol
 
 from pygent import IdempotencyPolicy, ToolDefinition, ToolSideEffect
-from pygent.tool import ToolSpec
-
 from pygent.lara.core.prompt import Prompt
 from pygent.lara.runtime.attachments import resolve_attachments
+from pygent.tool import ToolSpec
 
 SPEAK_TOOL_ID = "lara.realtime.speak"
 SPEAK_RESOURCE_KEY = "lara-realtime-speak"

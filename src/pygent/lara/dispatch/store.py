@@ -113,8 +113,11 @@ class DispatchStore:
                 ).fetchone()
         if row is None:
             raise RuntimeError("dispatch item submission was not persisted")
-        if fingerprint is not None and row["fingerprint"] is not None:
-            if str(row["fingerprint"]) != fingerprint:
+        if (
+            fingerprint is not None
+            and row["fingerprint"] is not None
+            and str(row["fingerprint"]) != fingerprint
+        ):
                 raise ValueError("submission_id was already used for a different request")
         return _item(row)
 
@@ -313,4 +316,4 @@ def _required(value: str, name: str) -> str:
     return clean
 
 
-__all__ = ["DispatchStore", "LEGACY_MIGRATION_MARKER"]
+__all__ = ["LEGACY_MIGRATION_MARKER", "DispatchStore"]

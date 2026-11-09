@@ -5,11 +5,11 @@ import hashlib
 import os
 import time
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from html import escape
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, cast
 
 from pygent import (
     AIMessage,
@@ -23,6 +23,41 @@ from pygent.agent import (
     ReplaceMessageProjection,
     encode_react_projection_operation,
 )
+from pygent.lara.agents import (
+    AgentLimits,
+    AgentRunner,
+    ChildAgent,
+    ChildSpec,
+    ForkAgent,
+    ForkSpec,
+    ToolkitToolSurface,
+    ToolProfile,
+    ToolRegistry,
+    build_model_layer_factory,
+)
+from pygent.lara.core.io import aclose_if_supported, plain_object, read_json, write_json
+from pygent.lara.core.prompt import Prompt
+from pygent.lara.dispatch import DispatchOperationView, DispatchService, DispatchStore
+from pygent.lara.runtime.attachments import (
+    ResolvedAttachment,
+    build_media_blocks,
+    render_attachments_xml,
+    resolve_attachments,
+)
+from pygent.lara.runtime.bash_tasks import BashTaskObservations
+from pygent.lara.runtime.mcp import ReadinessRetryingTransport
+from pygent.lara.runtime.reminders import ReminderService
+from pygent.lara.runtime.reminders.agent_messages import render_agent_message
+from pygent.lara.scheduler.tools import SCHEDULER_TOOL_SPECS, SchedulerToolExecutor
+from pygent.lara.schema import AgentSession, CaseRunRef, RunConfig
+from pygent.lara.sessions import (
+    AgentMessage,
+    CollaborationOperation,
+    SessionManager,
+    realtime_enabled_for,
+    user_lara_root_for,
+)
+from pygent.lara.tracing import DIFF_TOOL_SPEC, DiffTool
 from pygent.llm import ModelResourceRef
 from pygent.runtime import (
     CapacityPolicy,
@@ -50,42 +85,6 @@ from pygent.tool import (
 from pygent.tool.executors import ToolExecutionContext
 from pygent.tool.mcp import MCPClientPool
 
-from pygent.lara.agents import (
-    AgentLimits,
-    AgentRunner,
-    ChildAgent,
-    ChildSpec,
-    ForkAgent,
-    ForkSpec,
-    ToolProfile,
-    ToolRegistry,
-    ToolkitToolSurface,
-    build_model_layer_factory,
-)
-from pygent.lara.core.io import aclose_if_supported, plain_object, read_json, write_json
-from pygent.lara.core.prompt import Prompt
-from pygent.lara.runtime.attachments import (
-    ResolvedAttachment,
-    build_media_blocks,
-    render_attachments_xml,
-    resolve_attachments,
-)
-from pygent.lara.runtime.bash_tasks import BashTaskObservations
-from pygent.lara.runtime.mcp import ReadinessRetryingTransport
-from pygent.lara.runtime.reminders import ReminderService
-from pygent.lara.runtime.reminders.agent_messages import render_agent_message
-from pygent.lara.scheduler.tools import SCHEDULER_TOOL_SPECS, SchedulerToolExecutor
-from pygent.lara.dispatch import DispatchOperationView, DispatchService, DispatchStore
-from pygent.lara.schema import AgentSession, CaseRunRef, RunConfig
-from pygent.lara.sessions import (
-    AgentMessage,
-    CollaborationOperation,
-    SessionManager,
-    realtime_enabled_for,
-    user_lara_root_for,
-)
-from pygent.lara.tracing import DIFF_TOOL_SPEC, DiffTool
-
 from .agent.common import (
     DEFAULT_REACT_MAX_STEPS,
     _to_pygent_message,
@@ -96,18 +95,6 @@ from .agent.core import (
     model_retry_policy,
 )
 from .agent.prompts import PromptRegistry
-from .realtime.fork_agent import ForkReplyModule, outcome_from_result
-from .realtime.fork_reasoning import ForkModelProfile, fork_model_profiles
-from .realtime.fork_reply import build_fork_context
-from .realtime.fork_state import SessionForkState
-from .realtime.envelope import format_user_asked
-from .realtime.posting import queue_exchange_envelope
-from .realtime.speak import (
-    SILENT_ACKNOWLEDGEMENT,
-    SPEAK_TOOL_SPEC,
-    parse_speak_args,
-    render_reply_instruction,
-)
 from .agent_collaboration import (
     AGENT_COLLABORATION_TOOL_SPECS,
     visible_agent_collaboration_specs,
@@ -131,9 +118,23 @@ from .fork_context import (
     session_fork_window,
 )
 from .model_configuration import preferred_models, preferred_profile_name
+from .realtime.envelope import format_user_asked
+from .realtime.fork_agent import ForkReplyModule, outcome_from_result
+from .realtime.fork_reasoning import ForkModelProfile, fork_model_profiles
+from .realtime.fork_reply import build_fork_context
+from .realtime.fork_state import SessionForkState
+from .realtime.posting import queue_exchange_envelope
+from .realtime.speak import (
+    SILENT_ACKNOWLEDGEMENT,
+    SPEAK_TOOL_SPEC,
+    parse_speak_args,
+    render_reply_instruction,
+)
 
 if TYPE_CHECKING:
-    from pygent.lara.orchestration.session_collaboration import SessionCollaborationService
+    from pygent.lara.orchestration.session_collaboration import (
+        SessionCollaborationService,
+    )
 
 RECOVERY_CLAIM_WAIT_SECONDS = 31.0
 # Pygent agent graphs declare requires_finite_deadline=True, so an unlimited
@@ -202,7 +203,7 @@ class _SpeakExecutor:
     none by default.
     """
 
-    def __init__(self, service: "LaraRuntimeService", channels: Sequence[Any] = ()) -> None:
+    def __init__(self, service: LaraRuntimeService, channels: Sequence[Any] = ()) -> None:
         self.service = service
         self.channels = tuple(channels)
         self._delivery_tasks: set[asyncio.Task[bool]] = set()
@@ -241,7 +242,7 @@ class _SpeakExecutor:
 
 
 class _DiffExecutor:
-    def __init__(self, service: "LaraRuntimeService") -> None:
+    def __init__(self, service: LaraRuntimeService) -> None:
         self.service = service
 
     async def execute(
@@ -284,7 +285,7 @@ class LaraRuntimeService:
         dispatch: DispatchService | None = None,
         credential_environ: Mapping[str, str] | None = None,
         run_config_loader: Callable[..., RunConfig] | None = None,
-        prompt_registry: "PromptRegistry | None" = None,
+        prompt_registry: PromptRegistry | None = None,
     ) -> None:
         self.config = config
         self.collaboration = collaboration
@@ -362,15 +363,9 @@ class LaraRuntimeService:
         collaboration_executor = AgentToolExecutor(
             invoke=self._execute_agent_collaboration
         )
-        setattr(
-            collaboration_executor,
-            "sandbox_support",
-            SandboxExecutorSupport(
-                profiles=("agent",),
-                durable_reconnect=True,
-                deployment_fingerprint="lara:agent-collaboration:v1",
-            ),
-        )
+        # The framework reads executor sandbox support via getattr(); the attribute is
+        # intentionally attached to the shared pygent executor for this deployment.
+        collaboration_executor.sandbox_support = SandboxExecutorSupport(profiles=("agent",), durable_reconnect=True, deployment_fingerprint="lara:agent-collaboration:v1")  # type: ignore[attr-defined]
         for spec in AGENT_COLLABORATION_TOOL_SPECS:
             self.runtime.register_tool(spec, collaboration_executor)
         scheduler_executor = SchedulerToolExecutor(config)

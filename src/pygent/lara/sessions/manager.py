@@ -480,8 +480,7 @@ class SessionManager:
 
         validate_path_id(case_run_ref.session_id, "session_id")
         database_path = self._checkpoint_database_path(case_run_ref.session_id)
-        with closing(self._checkpoint_connection(database_path)) as connection:
-            with connection:
+        with closing(self._checkpoint_connection(database_path)) as connection, connection:
                 cursor = connection.execute(
                     """
                     INSERT OR IGNORE INTO conversation_checkpoints (
@@ -615,16 +614,16 @@ class SessionManager:
         return session_dir
 
     def _new_session_id(self, case_id: str, mode: str) -> str:
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")  # noqa: DTZ005 - ids use local-time stamps
         digest = hashlib.sha1(
-            f"{case_id}:{mode}:{stamp}:{utc_now()}".encode("utf-8")
+            f"{case_id}:{mode}:{stamp}:{utc_now()}".encode()
         ).hexdigest()[:6]
         return f"{mode}-{_slug(case_id)}-{stamp}-{digest}"
 
     def _new_case_run_id(self, session_id: str, case_id: str) -> str:
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")  # noqa: DTZ005 - ids use local-time stamps
         digest = hashlib.sha1(
-            f"{session_id}:{case_id}:{stamp}".encode("utf-8")
+            f"{session_id}:{case_id}:{stamp}".encode()
         ).hexdigest()[:6]
         return f"run-{stamp}-{digest}"
 

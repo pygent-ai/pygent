@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 _JSONL_LOCKS: dict[str, threading.RLock] = {}
 _JSONL_LOCKS_GUARD = threading.Lock()
 
@@ -84,8 +83,7 @@ def append_jsonl(path: str | Path, data: dict[str, Any], *, durable: bool = Fals
     jsonl_path = Path(path)
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     row = json.dumps(data, ensure_ascii=False, sort_keys=True) + "\n"
-    with jsonl_path_lock(jsonl_path):
-        with jsonl_path.open("a", encoding="utf-8") as handle:
+    with jsonl_path_lock(jsonl_path), jsonl_path.open("a", encoding="utf-8") as handle:
             handle.write(row)
             if durable:
                 handle.flush()

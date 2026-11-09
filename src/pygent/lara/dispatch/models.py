@@ -89,7 +89,7 @@ class DispatchOperationView:
     model_group: str | None = None
 
     @classmethod
-    def from_item(cls, item: DispatchItem) -> "DispatchOperationView":
+    def from_item(cls, item: DispatchItem) -> DispatchOperationView:
         return cls(
             operation_id=item.item_id,
             submission_id=item.submission_id,

@@ -23,31 +23,30 @@ from pygent import (
     UserMessage,
 )
 from pygent.core import EffectSafety, ExecutionRequirements, RecoverySafety
-from pygent.llm import ModelCallError, ModelCallPolicy
-from pygent.runtime.codec import context_to_dict
-from pygent.tool import StandardTools, ToolSpec
-
 from pygent.lara.core.io import aclose_if_supported, plain_data
 from pygent.lara.core.redaction import redact_secrets
-from pygent.lara.runtime.context import LARA_CONTEXT_CODECS, LaraContext
 from pygent.lara.runtime.bash_tasks import BashTaskObservations
+from pygent.lara.runtime.context import LARA_CONTEXT_CODECS, LaraContext
 from pygent.lara.runtime.context_compression import COMPRESSION_REQUEST_PROMPT
 from pygent.lara.runtime.eternal_conversation import (
     EternalConversationHarness,
     eternal_enabled_for,
 )
 from pygent.lara.runtime.file_effects import FILE_EFFECT_TOOL_SPEC
-from pygent.lara.runtime.reminders import ReminderService
-from pygent.lara.runtime.realtime.injection import RealtimeNudgeModule
-from pygent.lara.runtime.realtime.speak import SPEAK_TOOL_SPEC
 from pygent.lara.runtime.model_configuration import (
     CredentialEnvironment,
     build_model_invoker,
     workspace_media_resolver,
 )
+from pygent.lara.runtime.realtime.injection import RealtimeNudgeModule
+from pygent.lara.runtime.realtime.speak import SPEAK_TOOL_SPEC
+from pygent.lara.runtime.reminders import ReminderService
 from pygent.lara.schema import ResolvedAgentConfig, RunConfig
 from pygent.lara.sessions import SessionManager
 from pygent.lara.tracing import DIFF_TOOL_SPEC, EventStore
+from pygent.llm import ModelCallError, ModelCallPolicy
+from pygent.runtime.codec import context_to_dict
+from pygent.tool import StandardTools, ToolSpec
 
 from .common import DEFAULT_REACT_MAX_STEPS
 from .compressor import LaraCompressorModule

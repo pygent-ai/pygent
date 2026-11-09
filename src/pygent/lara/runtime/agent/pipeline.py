@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pygent import (
     AIMessage,
@@ -40,28 +40,34 @@ from pygent.core import (
     active_infrastructure,
     freeze_json,
 )
-from pygent.runtime.codec import message_from_dict, message_to_dict
-from pygent.tool import ToolSideEffect
-
 from pygent.lara.core.io import plain_data, plain_object
-from pygent.lara.runtime.context import LaraContext
 from pygent.lara.runtime.bash_tasks import BashTaskObservations
+from pygent.lara.runtime.context import LaraContext
 from pygent.lara.runtime.eternal_conversation import render_memory_access_instruction
 from pygent.lara.runtime.file_effect_models import DeferredFileEffectJob
-from pygent.lara.runtime.file_effects import FILE_EFFECT_TOOL_SPEC, DeferredFileEffectBatch
-from pygent.lara.runtime.reminders import ReminderService
+from pygent.lara.runtime.file_effects import (
+    FILE_EFFECT_TOOL_SPEC,
+    DeferredFileEffectBatch,
+)
 from pygent.lara.runtime.realtime.injection import RealtimeNudgeModule
+from pygent.lara.runtime.reminders import ReminderService
 from pygent.lara.runtime.reminders.agent_messages import render_agent_message
 from pygent.lara.runtime.tools import ToolObserver
 from pygent.lara.schema import RunConfig
 from pygent.lara.sessions import AgentMessage, AgentMessageState, SessionManager
 from pygent.lara.tracing import EventStore
+from pygent.runtime.codec import message_from_dict, message_to_dict
+from pygent.tool import ToolSideEffect
 
 from .common import (
     _serialize_tool_payload_for_model,
     _session_dir_for_run,
 )
-from .media_offload import default_remote_fetcher, offload_inline_media, offload_remote_media
+from .media_offload import (
+    default_remote_fetcher,
+    offload_inline_media,
+    offload_remote_media,
+)
 from .prompts import AgentContextManager, PromptRegistry
 
 MAX_EMPTY_TOOL_FOLLOWUP_RETRIES = 5
@@ -260,7 +266,7 @@ class LaraToolAuthorization(
         context: PygentContext,
     ) -> tuple[ToolAuthorizationDecision, PygentContext]:
         name = request.spec.definition.name
-        lifecycle = "detach" if name in self.detached_tools else "sync"
+        lifecycle: Literal["sync", "detach"] = "detach" if name in self.detached_tools else "sync"
         high_risk = request.spec.side_effect in {
             ToolSideEffect.WRITE,
             ToolSideEffect.EXTERNAL,

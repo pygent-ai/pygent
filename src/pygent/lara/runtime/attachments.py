@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import mimetypes
+from collections.abc import Sequence
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
-from typing import Sequence
 
 from pygent import MediaBlock, MediaSource
-
 from pygent.lara.core.prompt import Prompt
 
 MAX_ATTACHMENTS = 10

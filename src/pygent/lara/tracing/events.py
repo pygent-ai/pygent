@@ -10,7 +10,6 @@ from pygent.lara.core.io import append_jsonl, utc_now, write_json, write_text
 from pygent.lara.core.redaction import redact_secrets
 from pygent.lara.schema import CaseRunRef, ContextEvent
 
-
 DESIGN_EVENT_TYPES = frozenset(
     {
         "case.started",

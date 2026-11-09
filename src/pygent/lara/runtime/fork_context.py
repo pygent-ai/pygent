@@ -20,7 +20,6 @@ from typing import Any, Literal, cast
 
 from pygent import freeze_json_object
 from pygent.core import JsonValue
-
 from pygent.lara.agents.context import ContextWindow, messages_from_history
 from pygent.lara.schema import AgentSession, CaseRunRef, RunConfig
 
