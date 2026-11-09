@@ -56,12 +56,12 @@ def test_progressive_tutorial_is_linked_from_public_navigation() -> None:
         assert link in document.read_text(encoding="utf-8")
 
 
-def test_source_layout_has_core_runtime_and_three_public_domains():
+def test_source_layout_has_core_runtime_and_public_domains():
     assert {
         path.name
         for path in SOURCE_ROOT.iterdir()
         if path.is_dir() and not path.name.startswith("__")
-    } == {"core", "runtime", "agent", "llm", "tool"}
+    } == {"core", "runtime", "agent", "llm", "tool", "lara"}
 
 
 def test_nonempty_test_directories_are_packages():

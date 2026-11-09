@@ -7,6 +7,7 @@ is migrated.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -296,14 +297,14 @@ def test_bootstrap_runtime_context_golden(monkeypatch: pytest.MonkeyPatch) -> No
     )
     snapshot, _ = build_initial_snapshot(scope)
     _assert_exact(
-        snapshot.content,
+        snapshot.content.replace(os.sep, "/"),
         r"""<time>
   Current system time: 2026-01-02 03:04:05 UTC
 </time>
 
 <runtime-context>
   <session id="session-1" />
-  <workspace-root>C:\workspace</workspace-root>
+  <workspace-root>C:/workspace</workspace-root>
 </runtime-context>""",
     )
 
@@ -355,7 +356,7 @@ def test_memory_access_instruction_golden() -> None:
         render_memory_access_instruction(
             Path("C:/golden/session"),
             {"memory_cli_command": "uv run memory-cli --root C:/mem"},
-        ),
+        ).replace(os.sep, "/"),
         r"""<memory-access-instruction>
 Use the mounted dynamic-memory-cli search interface when the Snapshot is insufficient or the task depends on prior decisions, constraints, commitments, preferences, or detailed history.
 Published memory records prior decisions, not immutable authority.
@@ -367,7 +368,7 @@ Action gate: while a conflict is suspected under the protocol above, the only pe
 Literal-term rule: if a search result or Raw History match contains a user-defined proper noun, codename, alias, or environment name, repeat that exact original term in both your conflict statement and your final clarification question; never replace it with a generic label. If the request removes a promise that carries a literal version/date boundary, repeat that boundary verbatim as well.
 For an unacknowledged conflict, pause before acting. Stop further exploration immediately. Do not accept the new request, reject it, or choose a workaround on the user's behalf. In at most 120 words, state the conflict briefly, then end the response with exactly one direct clarification question that names the prior option and the new option; the final character of your response MUST be `?` or `？`. Wait for the user's answer.
 Search command: uv run memory-cli --root C:/mem search <keyword-or-key-phrase>
-Complete observable Raw History: C:\golden\session\raw-history\events.jsonl
+Complete observable Raw History: C:/golden/session/raw-history/events.jsonl
 Use read/grep tools directly on Raw History for evidence. Before changing existing behavior, search both dynamic memory and Raw History for prior user constraints, commitments, preferences, and environment assumptions. For compatibility removal, alias removal, deprecation, or version migration, explicitly search Raw History for the affected feature name together with support-window, version, release, compatibility, and deprecation terms before editing. Preserve the earliest relevant direct-user matches (for example, use a bounded first-match search); a tail-only view can hide the original constraint and is not sufficient evidence. If memory search returns only implementation facts rather than direct user intent, Raw History is the required fallback, not an optional extra. Never invent missing history.
 </memory-access-instruction>""",
     )
@@ -581,7 +582,7 @@ async def test_compressor_session_context_golden(
     )
     answer, _ = await module.forward(AIMessage(content="request"), context)
     _assert_exact(
-        answer.content,
+        answer.content.replace(os.sep, "/"),
         r"""<session-context>
 Compact summary & details
 
@@ -590,6 +591,6 @@ Compact summary & details
 </file-read>
 
 If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at:
-C:\golden\session\session.json (the authoritative transcript is in its history field)
+C:/golden/session/session.json (the authoritative transcript is in its history field)
 </session-context>""",
     )
