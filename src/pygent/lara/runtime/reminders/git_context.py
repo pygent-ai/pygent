@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from pygent.lara.core.prompt import Prompt
-from pygent.lara.runtime.agent.common import _now
+from pygent.lara.graph.common import _now
 
 from .models import ReminderSection
 

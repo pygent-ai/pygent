@@ -22,7 +22,6 @@ from .context import (
     SystemPromptTransform,
     align_slice_bounds,
     messages_from_history,
-    system_reminder,
 )
 from .fork import ForkAgent, ForkSnapshot, ForkSpec
 from .main import BackgroundJobHandle, BackgroundOutcome, MainAgent
@@ -64,5 +63,4 @@ __all__ = [
     "align_slice_bounds",
     "build_model_layer_factory",
     "messages_from_history",
-    "system_reminder",
 ]

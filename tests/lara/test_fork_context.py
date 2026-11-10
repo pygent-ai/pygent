@@ -14,7 +14,7 @@ from typing import cast
 from pygent import AIMessage, UserMessage
 from pygent.lara.agents import AgentRunner, ForkAgent, ForkSpec
 from pygent.lara.core.io import write_json
-from pygent.lara.runtime.agent.pipeline import render_model_request_text
+from pygent.lara.graph.pipeline import render_model_request_text
 from pygent.lara.runtime.fork_context import (
     SessionForkWindowSource,
     session_fork_window,

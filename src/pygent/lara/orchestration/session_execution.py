@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pygent.lara.agents.context import system_reminder
 from pygent.lara.core.io import plain_object
+from pygent.lara.core.prompt import system_reminder
 from pygent.lara.runtime.realtime.continuation import (
     CONTINUATION_MESSAGE_KIND,
     render_draft_delivery_message,

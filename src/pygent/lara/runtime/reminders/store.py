@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pygent.lara.runtime.agent.common import _write_json_atomic
+from pygent.lara.graph.common import _write_json_atomic
 
 from .models import BootstrapStatus, InitialSnapshot, ReminderScope
 

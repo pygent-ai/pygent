@@ -23,8 +23,8 @@ from pygent.core import JsonValue
 from pygent.lara.agents.context import ContextWindow, messages_from_history
 from pygent.lara.schema import AgentSession, CaseRunRef, RunConfig
 
-from .agent.common import _initial_lara_context
-from .agent.pipeline import render_model_request_text
+from ..graph.common import _initial_lara_context
+from ..graph.pipeline import render_model_request_text
 from .context import LaraContext
 from .eternal_conversation import eternal_enabled_for, load_projection
 
@@ -94,7 +94,7 @@ def session_fork_window(
     model-request system prompt the foreground would use. Its
     ``system_prompt`` and ``messages`` are byte-identical to calling
     :func:`restore_session_context` and
-    :func:`~lara.runtime.agent.pipeline.render_model_request_text` directly;
+    :func:`~lara.graph.pipeline.render_model_request_text` directly;
     this preserves the fork-reply cache prefix.
 
     ``frozen`` pairs the persisted ``session.json`` system prompt supplied by

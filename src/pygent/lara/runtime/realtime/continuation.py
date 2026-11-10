@@ -12,8 +12,7 @@ bottom-line check, so nothing in the chain bypasses the speak contract.
 
 from __future__ import annotations
 
-from pygent.lara.agents.context import system_reminder
-from pygent.lara.core.prompt import Prompt
+from pygent.lara.core.prompt import Prompt, system_reminder
 
 CONTINUATION_MESSAGE_KIND = "lara.realtime.continuation"
 

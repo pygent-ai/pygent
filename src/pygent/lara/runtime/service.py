@@ -80,16 +80,16 @@ from pygent.tool import (
 from pygent.tool.executors import ToolExecutionContext
 from pygent.tool.mcp import MCPClientPool
 
-from .agent.common import (
+from ..graph.common import (
     DEFAULT_REACT_MAX_STEPS,
     _to_pygent_message,
 )
-from .agent.core import (
+from ..graph.core import (
     LARA_PROJECTION_READY_KIND,
     LaraAgent,
     model_retry_policy,
 )
-from .agent.prompts import PromptRegistry
+from ..graph.prompts import PromptRegistry
 from .context import LARA_CONTEXT_CODEC, LaraContext
 from .deployment import (
     LaraModelResourceResolver,

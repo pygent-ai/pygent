@@ -26,7 +26,7 @@ from pygent.llm import (
     ResolvedModelConnection,
 )
 
-from .agent.model_invoker import LaraModelInvoker
+from ..graph.model_invoker import LaraModelInvoker
 from .attachments import MEDIA_MAX_BYTES
 
 # The kernel owns the lookup *protocol*; the shell supplies the store-backed

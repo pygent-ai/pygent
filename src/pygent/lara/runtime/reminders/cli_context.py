@@ -6,8 +6,8 @@ from html import escape
 from typing import Any
 
 from pygent.lara.core.prompt import Prompt
-from pygent.lara.runtime.agent.common import _now
-from pygent.lara.runtime.agent.skill_catalog import infer_installed_cli_names
+from pygent.lara.graph.common import _now
+from pygent.lara.graph.skill_catalog import infer_installed_cli_names
 from pygent.lara.schema import BashCliPreset
 
 from .models import ReminderSection

@@ -151,4 +151,18 @@ class Prompt(str):
         return NotImplemented
 
 
-__all__ = ["KNOWN_ENVELOPES", "EnvelopeInfo", "Prompt"]
+def system_reminder(text: str) -> str:
+    """Wrap directive text in the ``<system-reminder>`` steering envelope."""
+
+    stripped = text.strip()
+    if not stripped:
+        raise ValueError("system reminder text must be non-empty")
+    return Prompt(stripped).wrap("system-reminder")
+
+
+__all__ = [
+    "KNOWN_ENVELOPES",
+    "EnvelopeInfo",
+    "Prompt",
+    "system_reminder",
+]

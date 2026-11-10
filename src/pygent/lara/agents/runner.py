@@ -41,7 +41,7 @@ from pygent.llm import ModelCallPolicy, ModelEntry, ModelInvoker
 
 from .context import ContextWindow
 
-# Aligned with lara.runtime.agent.core.MODEL_RETRYABLE_ERROR_KINDS; redeclared
+# Aligned with lara.graph.core.MODEL_RETRYABLE_ERROR_KINDS; redeclared
 # here so the agent scaffold does not depend on the durable runtime package.
 MODEL_RETRYABLE_ERROR_KINDS = (
     ModelErrorKind.TIMEOUT,

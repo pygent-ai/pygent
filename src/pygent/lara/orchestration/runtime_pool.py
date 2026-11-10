@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from pygent.lara.runtime.agent.prompts import PromptRegistry
+from pygent.lara.graph.prompts import PromptRegistry
 from pygent.lara.runtime.service import LaraRuntimeService
 from pygent.lara.schema import RunConfig
 from pygent.lara.sessions import SessionManager

@@ -51,8 +51,8 @@ from pygent.lara.agents import (
     ToolRegistry,
     align_slice_bounds,
     messages_from_history,
-    system_reminder,
 )
+from pygent.lara.core.prompt import system_reminder
 from pygent.runtime.codec import message_to_dict
 
 

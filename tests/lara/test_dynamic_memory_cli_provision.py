@@ -22,7 +22,7 @@ from pygent.lara.clis.provision import (
     bundled_cli_dir,
     ensure_dynamic_memory_cli,
 )
-from pygent.lara.runtime.agent.skill_catalog import scan_multilevel_skills
+from pygent.lara.graph.skill_catalog import scan_multilevel_skills
 from pygent.lara.runtime.eternal_conversation import (
     EternalConversationHarness,
     MemoryJobRequest,

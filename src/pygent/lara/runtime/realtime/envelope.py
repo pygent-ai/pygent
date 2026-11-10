@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pygent.lara.agents.context import system_reminder
-from pygent.lara.core.prompt import Prompt
+from pygent.lara.core.prompt import Prompt, system_reminder
 
 
 def format_user_asked(user_asked: str | Sequence[str]) -> str:

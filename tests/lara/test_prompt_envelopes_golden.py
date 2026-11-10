@@ -14,13 +14,13 @@ from typing import Any
 
 import pytest
 
-import pygent.lara.runtime.agent.compressor as compressor_module
+import pygent.lara.graph.compressor as compressor_module
 import pygent.lara.runtime.reminders.bootstrap as bootstrap_module
 import pygent.lara.runtime.reminders.skills_context as skills_module
 from pygent import AIMessage, UserMessage
-from pygent.lara.agents.context import system_reminder
 from pygent.lara.core.io import write_json
-from pygent.lara.runtime.agent.compressor import LaraCompressorModule
+from pygent.lara.core.prompt import system_reminder
+from pygent.lara.graph.compressor import LaraCompressorModule
 from pygent.lara.runtime.attachments import ResolvedAttachment, render_attachments_xml
 from pygent.lara.runtime.context import LaraContext
 from pygent.lara.runtime.context_compression import (

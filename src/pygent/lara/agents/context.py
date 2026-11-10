@@ -16,7 +16,7 @@ from typing import Protocol, runtime_checkable
 
 from pygent import AIMessage, Message, ToolMessage, UserMessage
 from pygent.core import JsonValue
-from pygent.lara.core.prompt import Prompt
+from pygent.lara.core.prompt import system_reminder
 from pygent.runtime.codec import message_from_dict
 
 
@@ -29,15 +29,6 @@ def _hash_text(text: str) -> str:
     """
 
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def system_reminder(text: str) -> str:
-    """Wrap directive text in the ``<system-reminder>`` steering envelope."""
-
-    stripped = text.strip()
-    if not stripped:
-        raise ValueError("system reminder text must be non-empty")
-    return Prompt(stripped).wrap("system-reminder")
 
 
 def messages_from_history(

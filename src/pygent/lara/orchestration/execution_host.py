@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from functools import partial
 from typing import Any, Self
 
-from pygent.lara.runtime.agent.prompts import PromptRegistry
+from pygent.lara.graph.prompts import PromptRegistry
 from pygent.lara.runtime.service import LaraRuntimeService
 from pygent.lara.schema import RunConfig
 from pygent.lara.sessions import SessionManager

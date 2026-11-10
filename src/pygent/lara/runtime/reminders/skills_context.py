@@ -4,7 +4,7 @@ from html import escape
 from typing import Any
 
 from pygent.lara.core.prompt import Prompt
-from pygent.lara.runtime.agent.skill_catalog import (
+from pygent.lara.graph.skill_catalog import (
     scan_multilevel_skills,
     skill_selection_changed,
     skills_fingerprint,

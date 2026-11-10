@@ -5,7 +5,7 @@ from datetime import datetime
 from html import escape
 
 from pygent.lara.core.prompt import Prompt
-from pygent.lara.runtime.agent.common import _now
+from pygent.lara.graph.common import _now
 
 from .cli_context import collect_initial_cli
 from .git_context import capture_git_snapshot, render_git_section, snapshot_state
