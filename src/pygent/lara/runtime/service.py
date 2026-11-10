@@ -272,11 +272,16 @@ class LaraRuntimeService:
         credential_environ: Mapping[str, str] | None = None,
         run_config_loader: Callable[..., RunConfig] | None = None,
         prompt_registry: PromptRegistry | None = None,
+        on_exchange_queued: Callable[[str], None] | None = None,
     ) -> None:
         self.config = config
         self._credential_environ = credential_environ
         self._run_config_loader = run_config_loader
         self._prompt_registry = prompt_registry
+        # Fired after an interrupt delivery queues its exchange envelope: when
+        # the session chain is idle no drive tail will ever drain the queue,
+        # so the delivery itself must trigger the continuation turn.
+        self._on_exchange_queued = on_exchange_queued
         self.reminders = reminders or ReminderService(config)
         self._owns_reminders = (
             reminders is None if own_reminders is None else own_reminders
@@ -950,6 +955,8 @@ class LaraRuntimeService:
             state.handle = None
             state.finished = False
             state.pending = []
+        if self._on_exchange_queued is not None:
+            self._on_exchange_queued(session_id)
         return outcome
 
     async def _start_fork_reply(

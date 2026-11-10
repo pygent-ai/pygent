@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -56,6 +57,8 @@ class _Handle:
 
 
 class _FakeService:
+    _on_exchange_queued: Callable[[str], object] | None = None
+
     def __init__(self, *, final_index: int, late_first: bool = False) -> None:
         self.config = RunConfig(
             workspace_root="C:/workspace",

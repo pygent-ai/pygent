@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -272,26 +273,68 @@ class SessionExecutionCoordinator:
         user turn's opening context — or strand forever when none comes.
         """
 
-        session = turn.manager.load(turn.command.session_id)
-        if not realtime_enabled_for(session):
-            return
-        if self._lane_has_waiters(turn.manager, turn.command.session_id):
-            return
-        pending = await turn.runtime_service.pending_agent_messages(
-            turn.command.session_id
-        )
-        if not pending:
-            return
-        await self.submit_turn(
-            lease=turn.lease,
-            command=TurnCommand(
-                session_id=turn.command.session_id,
-                case_id=turn.command.case_id,
-                message=render_pending_input_message(),
-                turn_id=f"{_turn_key(turn)}:cont",
-                interactive_approvals=False,
-                message_kind=CONTINUATION_MESSAGE_KIND,
+        if await self._pending_drain_gate(
+            turn.manager, turn.runtime_service, turn.command.session_id
+        ):
+            await self.submit_turn(
+                lease=turn.lease,
+                command=self._drain_command(
+                    turn.command.session_id,
+                    turn.command.case_id,
+                    f"{_turn_key(turn)}:cont",
+                ),
+            )
+
+    async def submit_pending_drain(
+        self, *, lease: Any, session_id: str
+    ) -> ManagedSessionTurn | None:
+        """Submit a continuation turn for envelopes queued in an idle session.
+
+        Called by the interrupt delivery after an exchange envelope lands: if
+        no turn chain is active, no drive tail will ever drain the queue, so
+        the delivery itself must. Returns the submitted turn, or ``None`` when
+        the session is busy (its own tail will drain) or has nothing pending.
+        """
+
+        runtime = lease.runtime
+        if not await self._pending_drain_gate(
+            runtime.manager, runtime.runtime_service, session_id
+        ):
+            return None
+        return await self.submit_turn(
+            lease=lease,
+            command=self._drain_command(
+                session_id, "chat", f"drain-{uuid.uuid4().hex[:12]}"
             ),
+        )
+
+    async def _pending_drain_gate(
+        self, manager: Any, runtime_service: Any, session_id: str
+    ) -> bool:
+        """Whether an idle realtime session holds undelivered envelopes.
+
+        Both drain entry points share the gate: the chain's own tail (a turn
+        just ended) and the interrupt delivery (an envelope just landed with
+        no turn chain left that would run a tail).
+        """
+
+        session = manager.load(session_id)
+        if not realtime_enabled_for(session):
+            return False
+        if self._lane_has_waiters(manager, session_id):
+            return False
+        return bool(await runtime_service.pending_agent_messages(session_id))
+
+    def _drain_command(
+        self, session_id: str, case_id: str, turn_id: str
+    ) -> TurnCommand:
+        return TurnCommand(
+            session_id=session_id,
+            case_id=case_id,
+            message=render_pending_input_message(),
+            turn_id=turn_id,
+            interactive_approvals=False,
+            message_kind=CONTINUATION_MESSAGE_KIND,
         )
 
     @contextlib.asynccontextmanager
