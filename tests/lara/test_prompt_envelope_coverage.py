@@ -49,6 +49,7 @@ _INNER_TAGS = {
     "memory-snapshot": "snapshot body inside memory-access-instruction",
     "user-asked": "inner exchange frame",
     "your-response-in-another-session": "inner exchange frame",
+    "undelivered-draft": "quoted draft body inside the continuation reminder",
     "session": "runtime-context field",
     "workspace-root": "runtime-context field",
     "notice": "git-context notice",

@@ -9,8 +9,16 @@ from typing import Any
 
 from pygent.lara.agents.context import system_reminder
 from pygent.lara.core.io import plain_object
+from pygent.lara.runtime.realtime.continuation import (
+    CONTINUATION_MESSAGE_KIND,
+    render_draft_delivery_message,
+    render_pending_input_message,
+)
 from pygent.lara.runtime.realtime.speak import SPEAK_TOOL_NAME
-from pygent.lara.runtime.realtime.turn_finalizer import decide_turn_finalization
+from pygent.lara.runtime.realtime.turn_finalizer import (
+    FINALIZER_MESSAGE_KIND,
+    decide_turn_finalization,
+)
 from pygent.lara.sessions import realtime_enabled_for
 
 from .managed_turn import ManagedSessionTurn
@@ -139,7 +147,8 @@ class SessionExecutionCoordinator:
                 # D-RT11: a pure-text ending is invisible in speak mode, so the
                 # lane queues one bottom-line round before releasing the turn.
                 # The follow-up enters the same lane after this drive exits.
-                await self._maybe_start_finalizer(turn)
+                if not await self._maybe_start_finalizer(turn):
+                    await self._maybe_drain_pending(turn)
         except asyncio.CancelledError:
             status = "skipped"
             if turn.execution_handle is not None:
@@ -161,7 +170,7 @@ class SessionExecutionCoordinator:
             turn.ready.set()
             turn.finalized.set()
 
-    async def _maybe_start_finalizer(self, turn: ManagedSessionTurn) -> None:
+    async def _maybe_start_finalizer(self, turn: ManagedSessionTurn) -> bool:
         """Queue the D-RT11 bottom-line round for a pure-text turn ending.
 
         The final assistant message is invisible in speak mode, so the turn
@@ -170,32 +179,54 @@ class SessionExecutionCoordinator:
         — including any ending of a finalizer turn itself — is accepted as a
         deliberate silent finish. The follow-up submits through the same
         session lane, so it serializes behind this drive.
+
+        User input already pending when the turn ends — a lane-queued turn or
+        a queued exchange envelope — defers the decision into a continuation
+        turn instead: the continuation serializes behind the queued input,
+        quotes the undelivered draft explicitly, and, being a normal turn,
+        its own ending receives the standard bottom-line check. A finalizer
+        submitted ahead of queued input would decide against a stale draft
+        pointer, and its ``:finalize`` key would pin the inbox shut
+        afterwards.
+
+        Returns whether a follow-up round was submitted.
         """
 
-        turn_key = (
-            turn.command.turn_id
-            or f"turn-{(turn.run_ref.case_run_id if turn.run_ref else '')[-8:]}"
-        )
+        turn_key = _turn_key(turn)
         if turn_key in self._finalized_turns or turn_key.endswith(":finalize"):
-            return
+            return False
         session = turn.manager.load(turn.command.session_id)
         if not realtime_enabled_for(session):
-            return
+            return False
         last = session.history[-1] if session.history else None
         if (
             not isinstance(last, dict)
             or last.get("role") != "assistant"
             or last.get("tool_calls")
         ):
-            return
+            return False
         decision = decide_turn_finalization(
             final_text=str(last.get("content") or ""),
             nudge_used=False,
             spoke=_preceding_round_spoke(session.history),
         )
         if decision.action != "nudge" or decision.reminder is None:
-            return
+            return False
+        draft = str(last.get("content") or "")
         self._finalized_turns.add(turn_key)
+        if await self._has_pending_input(turn):
+            await self.submit_turn(
+                lease=turn.lease,
+                command=TurnCommand(
+                    session_id=turn.command.session_id,
+                    case_id=turn.command.case_id,
+                    message=render_draft_delivery_message(draft=draft),
+                    turn_id=f"{turn_key}:cont",
+                    interactive_approvals=False,
+                    message_kind=CONTINUATION_MESSAGE_KIND,
+                ),
+            )
+            return True
         await self.submit_turn(
             lease=turn.lease,
             command=TurnCommand(
@@ -204,7 +235,62 @@ class SessionExecutionCoordinator:
                 message=system_reminder(decision.reminder),
                 turn_id=f"{turn_key}:finalize",
                 interactive_approvals=False,
-                message_kind="lara.realtime.finalizer",
+                message_kind=FINALIZER_MESSAGE_KIND,
+            ),
+        )
+        return True
+
+    def _lane_has_waiters(self, manager: Any, session_id: str) -> bool:
+        """Whether turns are queued behind the lane lock.
+
+        The driving turn itself is counted while it holds the lock, so more
+        than one user means waiters.
+        """
+
+        key = SessionExecutionKey.from_manager(manager, session_id)
+        lane = self._session_lanes.get(key)
+        return lane is not None and lane.users > 1
+
+    async def _has_pending_input(self, turn: ManagedSessionTurn) -> bool:
+        """Whether user input is waiting at this turn's ending: lane-queued
+        turns or queued exchange envelopes. Both defer the bottom-line
+        decision into a continuation turn.
+        """
+
+        if self._lane_has_waiters(turn.manager, turn.command.session_id):
+            return True
+        return bool(
+            await turn.runtime_service.pending_agent_messages(
+                turn.command.session_id
+            )
+        )
+
+    async def _maybe_drain_pending(self, turn: ManagedSessionTurn) -> None:
+        """Submit a continuation turn for exchange envelopes queued after the
+        whole turn chain ended (an interrupt that lost the race with turn
+        completion). Without the drain the envelope would wait for the next
+        user turn's opening context — or strand forever when none comes.
+        """
+
+        session = turn.manager.load(turn.command.session_id)
+        if not realtime_enabled_for(session):
+            return
+        if self._lane_has_waiters(turn.manager, turn.command.session_id):
+            return
+        pending = await turn.runtime_service.pending_agent_messages(
+            turn.command.session_id
+        )
+        if not pending:
+            return
+        await self.submit_turn(
+            lease=turn.lease,
+            command=TurnCommand(
+                session_id=turn.command.session_id,
+                case_id=turn.command.case_id,
+                message=render_pending_input_message(),
+                turn_id=f"{_turn_key(turn)}:cont",
+                interactive_approvals=False,
+                message_kind=CONTINUATION_MESSAGE_KIND,
             ),
         )
 
@@ -260,6 +346,13 @@ class SessionExecutionCoordinator:
                 *(turn.lease.release() for turn in turns),
                 return_exceptions=True,
             )
+
+
+def _turn_key(turn: ManagedSessionTurn) -> str:
+    return (
+        turn.command.turn_id
+        or f"turn-{(turn.run_ref.case_run_id if turn.run_ref else '')[-8:]}"
+    )
 
 
 def _preceding_round_spoke(history: list[dict[str, Any]]) -> bool:

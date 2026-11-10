@@ -19,6 +19,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# The internal bottom-line round a pure-text ending spawns (session_execution).
+# Its key ends with ":finalize" and is accepted as a deliberate silent finish,
+# so queued agent messages deliberately wait for the continuation turn.
+FINALIZER_MESSAGE_KIND = "lara.realtime.finalizer"
+
 TURN_FINALIZER_REMINDER = (
     "Your turn is about to end. The final text you just produced is NOT visible "
     "to the user — speak is the only channel they see. Decide now: call "
@@ -56,4 +61,8 @@ def decide_turn_finalization(
     return FinalizationDecision(action="nudge", reminder=TURN_FINALIZER_REMINDER)
 
 
-__all__ = ["FinalizationDecision", "decide_turn_finalization"]
+__all__ = [
+    "FINALIZER_MESSAGE_KIND",
+    "FinalizationDecision",
+    "decide_turn_finalization",
+]

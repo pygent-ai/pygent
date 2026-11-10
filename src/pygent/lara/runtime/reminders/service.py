@@ -5,6 +5,7 @@ from functools import partial
 from pathlib import Path
 
 from pygent.lara.core.io import read_json
+from pygent.lara.runtime.realtime.turn_finalizer import FINALIZER_MESSAGE_KIND
 from pygent.lara.schema import RunConfig
 from pygent.lara.sessions import AgentMessage, SessionCollaborationStore
 
@@ -184,6 +185,47 @@ class ReminderService:
             session_id,
             claim_id=claim_id,
             lease_seconds=lease_seconds,
+        )
+        return tuple(messages)
+
+    def turn_opening_claim_id(self, session_id: str, turn_id: str) -> str:
+        """The idempotent claim id for one turn's opening-context claim."""
+
+        return f"agent-messages:initial:{session_id}:{turn_id}"
+
+    async def claim_turn_opening(
+        self,
+        session_id: str,
+        *,
+        turn_id: str,
+        message_kind: str,
+        realtime_enabled: bool,
+    ) -> tuple[AgentMessage, ...]:
+        """Claim envelopes queued since the previous turn for this turn's
+        opening context.
+
+        Envelopes queued after the previous turn ended (including an interrupt
+        that lost the race with turn completion) must reach this turn's opening
+        context, not wait for a tool boundary that may never come. The
+        finalizer round decides only its own turn's bottom line and leaves
+        pending messages to the continuation turn.
+        """
+
+        if not realtime_enabled or message_kind == FINALIZER_MESSAGE_KIND:
+            return ()
+        return await self.claim_agent_messages(
+            session_id,
+            claim_id=self.turn_opening_claim_id(session_id, turn_id),
+        )
+
+    async def pending_agent_messages(
+        self,
+        session_id: str,
+    ) -> tuple[AgentMessage, ...]:
+        """Queued or lease-expired agent messages, without claiming them."""
+
+        messages = await asyncio.to_thread(
+            self.message_store.pending_messages, session_id
         )
         return tuple(messages)
 

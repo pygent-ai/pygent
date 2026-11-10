@@ -273,6 +273,34 @@ class SessionCollaborationStore:
             connection.commit()
         return [self.get_message(message_id) for message_id in message_ids]
 
+    def pending_messages(
+        self,
+        target_session_id: str,
+        *,
+        limit: int = 16,
+    ) -> list[AgentMessage]:
+        """Queued or lease-expired agent messages, without claiming them.
+
+        A read-only peek for delivery decisions: a message under a live lease
+        belongs to another claim, and delivered ones are done.
+        """
+
+        now_epoch = time.time()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM agent_messages
+                WHERE target_session_id = ? AND (
+                    state = 'queued'
+                    OR (state = 'claimed' AND claim_until_epoch <= ?)
+                )
+                ORDER BY rowid
+                LIMIT ?
+                """,
+                (target_session_id, now_epoch, limit),
+            ).fetchall()
+        return [self._agent_message(row) for row in rows]
+
     def acknowledge_message(
         self,
         message_id: str,

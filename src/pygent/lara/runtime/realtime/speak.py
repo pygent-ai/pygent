@@ -47,10 +47,13 @@ def render_reply_instruction() -> str:
 # The tool result for a deliberate ``say_nothing`` decision. It must steer the
 # model back to a plain-text turn ending: after every tool result pygent runs
 # another round, and a bare acknowledgement left the finalizer round looping
-# on say_nothing calls until the step cap (observed 70 in a row).
+# on say_nothing calls until the step cap (observed 70 in a row). An exchange
+# envelope claimed at this same tool boundary is the exception — without it,
+# a say_nothing ending would swallow the queued user input (D-RT1).
 SILENT_ACKNOWLEDGEMENT = (
-    "acknowledged (silent). Your decision is recorded - do not call speak "
-    "again; end this turn with a normal plain-text reply."
+    "acknowledged (silent). Your decision is recorded - end this turn with a "
+    "normal plain-text reply and do not speak it. Exception: when a new user "
+    "exchange is appended below this result, answer it with speak."
 )
 
 SPEAK_TOOL_SPEC = ToolSpec(

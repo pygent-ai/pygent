@@ -36,6 +36,7 @@ from pygent.lara.agents import (
     build_model_layer_factory,
 )
 from pygent.lara.core.io import aclose_if_supported, plain_object, read_json, write_json
+from pygent.lara.core.paths import user_lara_root_for
 from pygent.lara.core.prompt import Prompt
 from pygent.lara.dispatch import DispatchOperationView, DispatchService, DispatchStore
 from pygent.lara.runtime.attachments import (
@@ -55,7 +56,6 @@ from pygent.lara.sessions import (
     CollaborationOperation,
     SessionManager,
     realtime_enabled_for,
-    user_lara_root_for,
 )
 from pygent.lara.tracing import DIFF_TOOL_SPEC, DiffTool
 from pygent.llm import ModelResourceRef
@@ -118,6 +118,7 @@ from .fork_context import (
     session_fork_window,
 )
 from .model_configuration import preferred_models, preferred_profile_name
+from .realtime.continuation import CONTINUATION_MESSAGE_KIND
 from .realtime.envelope import format_user_asked
 from .realtime.fork_agent import ForkReplyModule, outcome_from_result
 from .realtime.fork_reasoning import ForkModelProfile, fork_model_profiles
@@ -130,6 +131,7 @@ from .realtime.speak import (
     parse_speak_args,
     render_reply_instruction,
 )
+from .realtime.turn_finalizer import FINALIZER_MESSAGE_KIND
 
 if TYPE_CHECKING:
     from pygent.lara.orchestration.session_collaboration import (
@@ -508,9 +510,8 @@ class LaraRuntimeService:
             )
             return DispatchOperationView.from_item(item).to_dict()
         if name == "agent_send":
-            # Addressing policy: every session registered in the user-level
-            # directory is reachable, across projects included; unknown
-            # sessions fail closed inside collaboration.send.
+            # Addressing policy: sessions resolve through their own project
+            # store; unknown sessions fail closed inside collaboration.send.
             target_session_id = str(arguments["session_id"])
             message = await collaboration.send(
                 config=self.config,
@@ -1016,20 +1017,15 @@ class LaraRuntimeService:
             eternal_memory_enabled=eternal_enabled_for(session, self.config),
             realtime_interaction_enabled=realtime_enabled,
         )
-        # Envelopes queued after the previous turn ended (including an
-        # interrupt that lost the race with turn completion) must reach this
-        # turn's opening context, not wait for a tool boundary that may never
-        # come. The internal finalizer round belongs to the same turn and
-        # leaves pending messages for the next user turn.
-        initial_claim_id = (
-            f"agent-messages:initial:{run_ref.session_id}:{turn_id}"
+        initial_claim_id = self.reminders.turn_opening_claim_id(
+            run_ref.session_id, turn_id
         )
-        initial_agent_messages: tuple[AgentMessage, ...] = ()
-        if realtime_enabled and message_kind != "lara.realtime.finalizer":
-            initial_agent_messages = await self.reminders.claim_agent_messages(
-                run_ref.session_id,
-                claim_id=initial_claim_id,
-            )
+        initial_agent_messages = await self.reminders.claim_turn_opening(
+            run_ref.session_id,
+            turn_id=turn_id,
+            message_kind=message_kind,
+            realtime_enabled=realtime_enabled,
+        )
         initial_agent_context = (
             "\n".join(
                 render_agent_message(item) for item in initial_agent_messages
@@ -1087,6 +1083,13 @@ class LaraRuntimeService:
         self._record_execution_id(run_ref, handle.execution_id)
         self._track_turn_context(handle.execution_id, turn_context)
         return handle
+
+    async def pending_agent_messages(
+        self, session_id: str
+    ) -> tuple[AgentMessage, ...]:
+        """Peek the session's queued agent messages without claiming them."""
+
+        return await self.reminders.pending_agent_messages(session_id)
 
     async def send_interrupt(
         self,
@@ -1407,7 +1410,11 @@ class LaraRuntimeService:
             resolved_attachments = resolve_attachments(
                 attachments, config.workspace_root
             )
-        if message_kind in ("lara.automation.trigger", "lara.realtime.finalizer"):
+        if message_kind in (
+            "lara.automation.trigger",
+            FINALIZER_MESSAGE_KIND,
+            CONTINUATION_MESSAGE_KIND,
+        ):
             # Harness-triggered injections carry their own framing; wrapping
             # them in <user-context> would misrepresent their origin.
             wrapped = message
