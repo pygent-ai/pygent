@@ -31,13 +31,11 @@ class WorkspaceRuntimePool:
         self,
         *,
         runtime_factory: Callable[..., Any] = LaraRuntimeService,
-        collaboration: Any | None = None,
         credential_environ: Mapping[str, str] | None = None,
         run_config_loader: Callable[..., RunConfig] | None = None,
         prompt_registry: PromptRegistry | None = None,
     ) -> None:
         self._runtime_factory = runtime_factory
-        self._collaboration = collaboration
         self._credential_environ = credential_environ
         self._run_config_loader = run_config_loader
         self._prompt_registry = prompt_registry
@@ -45,17 +43,6 @@ class WorkspaceRuntimePool:
         self._active: dict[RuntimeScopeKey, str] = {}
         self._lock = asyncio.Lock()
         self._accepting = True
-
-    def attach_collaboration(self, collaboration: Any) -> None:
-        """Attach the host-owned collaboration service before creating runtimes."""
-
-        if self._entries:
-            raise RuntimeError(
-                "cannot attach session collaboration after runtime creation"
-            )
-        if self._collaboration is not None and self._collaboration is not collaboration:
-            raise RuntimeError("session collaboration is already attached")
-        self._collaboration = collaboration
 
     async def acquire(
         self,
@@ -84,7 +71,6 @@ class WorkspaceRuntimePool:
                     config,
                     reminders=reminders,
                     own_reminders=reminders is None,
-                    collaboration=self._collaboration,
                     credential_environ=self._credential_environ,
                     run_config_loader=self._run_config_loader,
                     prompt_registry=self._prompt_registry,

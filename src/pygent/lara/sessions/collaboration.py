@@ -12,26 +12,6 @@ from typing import Any
 from pygent.lara.core.io import utc_now, validate_path_id
 
 
-class CollaborationState(StrEnum):
-    PREPARING = "preparing"
-    QUEUED = "queued"
-    STARTING = "starting"
-    RUNNING = "running"
-    PASSED = "passed"
-    FAILED = "failed"
-    ERROR = "error"
-    SKIPPED = "skipped"
-
-    @property
-    def terminal(self) -> bool:
-        return self in {
-            CollaborationState.PASSED,
-            CollaborationState.FAILED,
-            CollaborationState.ERROR,
-            CollaborationState.SKIPPED,
-        }
-
-
 class AgentMessageState(StrEnum):
     QUEUED = "queued"
     CLAIMED = "claimed"
@@ -55,23 +35,6 @@ class AgentMessage:
     @property
     def done(self) -> bool:
         return self.state is AgentMessageState.DELIVERED
-
-    def to_dict(self, *, include_content: bool = False) -> dict[str, Any]:
-        value: dict[str, Any] = {
-            "message_id": self.message_id,
-            "submission_id": self.submission_id,
-            "source_session_id": self.source_session_id,
-            "source_agent_alias": self.source_agent_alias,
-            "target_session_id": self.target_session_id,
-            "status": self.state.value,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "delivered_at": self.delivered_at,
-            "delivered_execution_id": self.delivered_execution_id,
-        }
-        if include_content:
-            value["content"] = self.content
-        return value
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> AgentMessage:
@@ -106,52 +69,8 @@ class AgentMessage:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class CollaborationOperation:
-    operation_id: str
-    submission_id: str
-    source_session_id: str | None
-    target_session_id: str | None
-    agent_alias: str
-    case_id: str
-    message: str
-    state: CollaborationState
-    created_at: str
-    updated_at: str
-    execution_id: str | None = None
-    case_run_id: str | None = None
-    final_answer: str = ""
-    error: str | None = None
-    model_group: str | None = None
-
-    @property
-    def done(self) -> bool:
-        return self.state.terminal
-
-    def to_dict(self, *, include_message: bool = False) -> dict[str, Any]:
-        value: dict[str, Any] = {
-            "operation_id": self.operation_id,
-            "submission_id": self.submission_id,
-            "source_session_id": self.source_session_id,
-            "target_session_id": self.target_session_id,
-            "agent_alias": self.agent_alias,
-            "case_id": self.case_id,
-            "status": self.state.value,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "execution_id": self.execution_id,
-            "case_run_id": self.case_run_id,
-            "final_answer": self.final_answer,
-            "error": self.error,
-            "model_group": self.model_group,
-        }
-        if include_message:
-            value["message"] = self.message
-        return value
-
-
 class SessionCollaborationStore:
-    """SQLite operation log with idempotency and target-session leases."""
+    """SQLite agent-message inbox with idempotency and target-session claims."""
 
     def __init__(self, lara_root: str | Path) -> None:
         self.path = (
@@ -200,24 +119,6 @@ class SessionCollaborationStore:
         if row is None:
             raise FileNotFoundError(f"Agent message {message_id!r} does not exist")
         return self._agent_message(row)
-
-    def list_operations(
-        self, session_id: str, *, limit: int = 100
-    ) -> list[CollaborationOperation]:
-        validate_path_id(session_id, "session_id")
-        if not 1 <= limit <= 200:
-            raise ValueError("limit must be between 1 and 200")
-        with closing(self._connect()) as connection:
-            rows = connection.execute(
-                """
-                SELECT * FROM collaboration_operations
-                WHERE source_session_id = ? OR target_session_id = ?
-                ORDER BY rowid DESC
-                LIMIT ?
-                """,
-                (session_id, session_id, limit),
-            ).fetchall()
-        return [self._operation(row) for row in rows]
 
     def get_claimed_message(
         self, message_id: str, *, claim_id: str
@@ -338,18 +239,6 @@ class SessionCollaborationStore:
                 (utc_now(), message_id, claim_id),
             )
 
-    def get(self, operation_id: str) -> CollaborationOperation:
-        with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT * FROM collaboration_operations WHERE operation_id = ?",
-                (operation_id,),
-            ).fetchone()
-        if row is None:
-            raise FileNotFoundError(
-                f"Collaboration operation {operation_id!r} does not exist"
-            )
-        return self._operation(row)
-
     @staticmethod
     def _enqueue_message(
         connection: sqlite3.Connection,
@@ -401,43 +290,9 @@ class SessionCollaborationStore:
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA synchronous=FULL")
         connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS collaboration_operations (
-                operation_id TEXT PRIMARY KEY,
-                submission_id TEXT NOT NULL UNIQUE,
-                fingerprint TEXT NOT NULL,
-                source_session_id TEXT,
-                target_session_id TEXT,
-                agent_alias TEXT NOT NULL,
-                case_id TEXT NOT NULL,
-                message TEXT NOT NULL,
-                state TEXT NOT NULL,
-                execution_id TEXT,
-                case_run_id TEXT,
-                final_answer TEXT NOT NULL DEFAULT '',
-                error TEXT,
-                owner_id TEXT,
-                lease_until_epoch REAL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
+            "PRAGMA synchronous=FULL"
         )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS collaboration_target_state_idx ON collaboration_operations(target_session_id, state, lease_until_epoch)"
-        )
-        columns = {
-            str(row[1])
-            for row in connection.execute(
-                "PRAGMA table_info(collaboration_operations)"
-            )
-        }
-        if "model_group" not in columns:
-            connection.execute(
-                "ALTER TABLE collaboration_operations ADD COLUMN model_group TEXT"
-            )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS agent_messages (
@@ -464,32 +319,6 @@ class SessionCollaborationStore:
         return connection
 
     @staticmethod
-    def _operation(row: sqlite3.Row) -> CollaborationOperation:
-        return CollaborationOperation(
-            operation_id=str(row["operation_id"]),
-            submission_id=str(row["submission_id"]),
-            source_session_id=None
-            if row["source_session_id"] is None
-            else str(row["source_session_id"]),
-            target_session_id=None
-            if row["target_session_id"] is None
-            else str(row["target_session_id"]),
-            agent_alias=str(row["agent_alias"]),
-            case_id=str(row["case_id"]),
-            message=str(row["message"]),
-            state=CollaborationState(str(row["state"])),
-            created_at=str(row["created_at"]),
-            updated_at=str(row["updated_at"]),
-            execution_id=None
-            if row["execution_id"] is None
-            else str(row["execution_id"]),
-            case_run_id=None if row["case_run_id"] is None else str(row["case_run_id"]),
-            final_answer=str(row["final_answer"] or ""),
-            error=None if row["error"] is None else str(row["error"]),
-            model_group=None if row["model_group"] is None else str(row["model_group"]),
-        )
-
-    @staticmethod
     def _agent_message(row: sqlite3.Row) -> AgentMessage:
         value = dict(row)
         value["status"] = value.pop("state")
@@ -499,7 +328,5 @@ class SessionCollaborationStore:
 __all__ = [
     "AgentMessage",
     "AgentMessageState",
-    "CollaborationOperation",
-    "CollaborationState",
     "SessionCollaborationStore",
 ]

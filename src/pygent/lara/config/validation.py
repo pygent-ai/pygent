@@ -98,7 +98,7 @@ def validate_config_mapping(data: dict[str, Any]) -> None:
                 )
     _validate_mapping(
         data.get("delegation"),
-        {"allowed_agents", "max_depth", "max_parallel", "background_enabled"},
+        {"max_depth"},
         "delegation",
     )
     _validate_mapping(

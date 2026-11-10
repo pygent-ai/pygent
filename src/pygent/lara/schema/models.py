@@ -161,18 +161,11 @@ class MCPServerConfig:
 
 @dataclass(slots=True)
 class DelegationConfig:
-    allowed_agents: tuple[str, ...] = ()
     max_depth: int = 4
-    max_parallel: int = 4
-    background_enabled: bool = True
 
     def __post_init__(self) -> None:
-        self.allowed_agents = tuple(
-            _require(item, "delegation agent") for item in self.allowed_agents
-        )
         self.max_depth = int(self.max_depth)
-        self.max_parallel = int(self.max_parallel)
-        if self.max_depth < 1 or self.max_parallel < 1:
+        if self.max_depth < 1:
             raise ValueError("delegation limits must be positive")
 
 

@@ -29,8 +29,6 @@ Owns model execution, tool execution, context management, and the high-level run
 - `file_effect_models.py`: dependency-light file-effect contracts.
 - `file_effects.py`: deferred file-effect persistence and execution.
 - `deployment.py`: model-resource and workspace executor adapters.
-- `agent_collaboration.py`: model-visible session collaboration tool definitions
-  and visibility policy.
 - `service.py`: session-oriented runtime facade used by API and CLI adapters.
 
 Runtime callers import concrete owning modules; package-level compatibility

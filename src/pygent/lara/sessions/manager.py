@@ -26,7 +26,6 @@ from pygent.lara.schema import (
     RunConfig,
     SessionRef,
 )
-from pygent.lara.sessions.directory import SessionDirectory, user_lara_root_for
 
 # The dedicated session where realtime silent-work interaction lives: the
 # agent works silently and ``speak`` is the only user-visible channel.
@@ -50,7 +49,6 @@ class SessionManager:
         self.workspace_root = Path(config.workspace_root)
         self.lara_root = Path(config.lara_root)
         self.sessions_root = self.lara_root / "sessions"
-        self._directory = SessionDirectory(user_lara_root_for(self.lara_root))
 
     def create(
         self,
@@ -107,7 +105,6 @@ class SessionManager:
                 "selected_model_key": selected_model,
             },
         )
-        self._register_in_directory(session_id=session_id, case_id=case_id, mode=mode)
         return SessionRef(
             session_id=session_id,
             session_dir=str(session_dir),
@@ -124,24 +121,7 @@ class SessionManager:
         session = AgentSession.from_dict(data)
         self._resolve_missing_selection(session)
         session = self._apply_history_checkpoints(session)
-        self._register_in_directory(
-            session_id=session_id,
-            case_id=str(session.metadata.get("active_case_id") or ""),
-            mode=str(session.metadata.get("mode") or ""),
-        )
         return session
-
-    def _register_in_directory(
-        self, *, session_id: str, case_id: str, mode: str
-    ) -> None:
-        """Keep the user-level directory addressable across projects."""
-        self._directory.register_session(
-            session_id=session_id,
-            lara_root=str(self.lara_root),
-            workspace_root=str(self.workspace_root),
-            case_id=case_id,
-            mode=mode,
-        )
 
     def model_selection(self, session_id: str) -> tuple[str, str]:
         session = self.load(session_id)

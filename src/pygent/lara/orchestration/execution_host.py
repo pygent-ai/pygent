@@ -8,7 +8,6 @@ from pygent.lara.schema import RunConfig
 from pygent.lara.sessions import SessionManager
 
 from .runtime_pool import WorkspaceRuntimePool
-from .session_collaboration import SessionCollaborationService
 from .session_execution import SessionExecutionCoordinator
 from .session_turns import SessionTurnService
 
@@ -35,10 +34,6 @@ class LocalExecutionHost:
             coordinator=self.coordinator,
             acquire_runtime=self.acquire_runtime,
         )
-        self.collaboration = SessionCollaborationService()
-        attach_collaboration = getattr(self.runtime_pool, "attach_collaboration", None)
-        if callable(attach_collaboration):
-            attach_collaboration(self.collaboration)
         self._closed = False
 
     async def acquire_runtime(
@@ -54,7 +49,6 @@ class LocalExecutionHost:
             return
         self._closed = True
         await self.runtime_pool.stop_accepting()
-        await self.collaboration.aclose()
         await self.coordinator.close()
         await self.runtime_pool.close(cancel=True)
 
