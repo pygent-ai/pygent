@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pygent.lara.tracing.events import _turn_file_name
+from pygent.agent.lara.tracing.events import _turn_file_name
 
 
 def test_turn_file_name_preserves_normal_turn_ids() -> None:

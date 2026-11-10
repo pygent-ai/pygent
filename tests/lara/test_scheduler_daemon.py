@@ -7,15 +7,15 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from pygent.lara.scheduler.daemon import SchedulerDaemon, TaskResult
-from pygent.lara.scheduler.keys import init_keys, load_secret, sign
-from pygent.lara.scheduler.store import (
+from pygent.agent.lara.scheduler.daemon import SchedulerDaemon, TaskResult
+from pygent.agent.lara.scheduler.keys import init_keys, load_secret, sign
+from pygent.agent.lara.scheduler.store import (
     SchedulerStore,
     prompt_hash,
     scheduler_db_path,
     submission_payload,
 )
-from pygent.lara.schema import RunConfig
+from pygent.agent.lara.schema import RunConfig
 
 
 class _Runner:

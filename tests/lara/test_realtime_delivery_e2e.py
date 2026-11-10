@@ -20,13 +20,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from pygent.lara.core.io import read_json
-from pygent.lara.orchestration.execution_host import LocalExecutionHost
-from pygent.lara.runtime.realtime.speak import SPEAK_TOOL_NAME
-from pygent.lara.schema import build_run_config
-from pygent.lara.schema.models import RealtimeInteractionConfig
-from pygent.lara.sessions import SessionCollaborationStore
-from pygent.lara.sessions.manager import SessionManager
+from pygent.agent.lara.core.io import read_json
+from pygent.agent.lara.orchestration.execution_host import LocalExecutionHost
+from pygent.agent.lara.runtime.realtime.speak import SPEAK_TOOL_NAME
+from pygent.agent.lara.schema import build_run_config
+from pygent.agent.lara.schema.models import RealtimeInteractionConfig
+from pygent.agent.lara.sessions import SessionCollaborationStore
+from pygent.agent.lara.sessions.manager import SessionManager
 
 _DRAFT = "重构完成,改动 A/B/C"
 _FORK_REPLY = "收到,我看一下"

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pygent.lara.runtime.eternal_conversation import (
+from pygent.agent.lara.runtime.eternal_conversation import (
     MemoryJobContext,
     _builder_directive,
     _extractor_directive,

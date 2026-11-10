@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pygent.lara.scheduler.keys import (
+from pygent.agent.lara.scheduler.keys import (
     SchedulerKeysMissing,
     init_keys,
     load_secret,

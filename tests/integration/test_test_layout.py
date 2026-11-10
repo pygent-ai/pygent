@@ -61,7 +61,7 @@ def test_source_layout_has_core_runtime_and_public_domains():
         path.name
         for path in SOURCE_ROOT.iterdir()
         if path.is_dir() and not path.name.startswith("__")
-    } == {"core", "runtime", "agent", "llm", "tool", "lara"}
+    } == {"core", "runtime", "agent", "llm", "tool"}
 
 
 def test_nonempty_test_directories_are_packages():

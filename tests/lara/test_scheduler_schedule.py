@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from pygent.lara.scheduler.schedule import advance, next_run, parse_schedule
+from pygent.agent.lara.scheduler.schedule import advance, next_run, parse_schedule
 
 
 def test_parse_all_schedule_kinds() -> None:

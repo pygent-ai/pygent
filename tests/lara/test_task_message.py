@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from pygent.lara.scheduler.message import SCHEDULER_GUIDANCE, build_task_message
+from pygent.agent.lara.scheduler.message import SCHEDULER_GUIDANCE, build_task_message
 
 
 def test_task_message_golden_and_escaping() -> None:

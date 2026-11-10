@@ -9,13 +9,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from pygent import AIMessage
-from pygent.lara.runtime.realtime.envelope import (
+from pygent.agent.lara.runtime.realtime.envelope import (
     format_user_asked,
     render_exchange_envelope,
 )
-from pygent.lara.runtime.realtime.fork_agent import FORK_RESULT_KIND
-from pygent.lara.runtime.service import LaraRuntimeService
-from pygent.lara.schema import AgentSession, CaseRunRef, RunConfig
+from pygent.agent.lara.runtime.realtime.fork_agent import FORK_RESULT_KIND
+from pygent.agent.lara.runtime.service import LaraRuntimeService
+from pygent.agent.lara.schema import AgentSession, CaseRunRef, RunConfig
 
 
 class _Store:

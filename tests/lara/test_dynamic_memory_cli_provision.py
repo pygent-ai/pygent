@@ -17,17 +17,17 @@ from pathlib import Path
 
 import pytest
 
-from pygent.lara.clis.provision import (
+from pygent.agent.lara.clis.provision import (
     MARKER_NAME,
     bundled_cli_dir,
     ensure_dynamic_memory_cli,
 )
-from pygent.lara.graph.skill_catalog import scan_multilevel_skills
-from pygent.lara.runtime.eternal_conversation import (
+from pygent.agent.lara.graph.skill_catalog import scan_multilevel_skills
+from pygent.agent.lara.runtime.eternal_conversation import (
     EternalConversationHarness,
     MemoryJobRequest,
 )
-from pygent.lara.schema import EternalConversationConfig
+from pygent.agent.lara.schema import EternalConversationConfig
 
 
 async def _fail_runner(request: MemoryJobRequest) -> str:

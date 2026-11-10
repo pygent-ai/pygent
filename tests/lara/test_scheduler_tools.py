@@ -7,18 +7,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from pygent.lara.scheduler.keys import init_keys, verify
-from pygent.lara.scheduler.store import (
+from pygent.agent.lara.scheduler.keys import init_keys, verify
+from pygent.agent.lara.scheduler.store import (
     SchedulerStore,
     scheduler_db_path,
     submission_payload,
 )
-from pygent.lara.scheduler.tools import (
+from pygent.agent.lara.scheduler.tools import (
     EMIT_EVENT_TOOL_SPEC,
     SCHEDULE_TASK_TOOL_SPEC,
     SchedulerToolExecutor,
 )
-from pygent.lara.schema import RunConfig
+from pygent.agent.lara.schema import RunConfig
 
 
 def _config(tmp_path: Path, *, enabled: bool) -> RunConfig:

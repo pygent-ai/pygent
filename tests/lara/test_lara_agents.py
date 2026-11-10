@@ -33,8 +33,7 @@ from pygent import (
     UserMessage,
     tool,
 )
-from pygent.core import JsonValue
-from pygent.lara.agents import (
+from pygent.agent.lara.agents import (
     AgentLimits,
     AgentRunner,
     ChildAgent,
@@ -52,7 +51,8 @@ from pygent.lara.agents import (
     align_slice_bounds,
     messages_from_history,
 )
-from pygent.lara.core.prompt import system_reminder
+from pygent.agent.lara.core.prompt import system_reminder
+from pygent.core import JsonValue
 from pygent.runtime.codec import message_to_dict
 
 

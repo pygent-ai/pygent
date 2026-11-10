@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from pygent import ToolMessage, ToolResult
-from pygent.lara.runtime.context import LaraContext
-from pygent.lara.runtime.realtime.envelope import render_exchange_envelope
-from pygent.lara.runtime.realtime.injection import RealtimeNudgeModule
-from pygent.lara.runtime.realtime.nudge import nudge_reminder
-from pygent.lara.runtime.realtime.speak import SPEAK_TOOL_SPEC
+from pygent.agent.lara.runtime.context import LaraContext
+from pygent.agent.lara.runtime.realtime.envelope import render_exchange_envelope
+from pygent.agent.lara.runtime.realtime.injection import RealtimeNudgeModule
+from pygent.agent.lara.runtime.realtime.nudge import nudge_reminder
+from pygent.agent.lara.runtime.realtime.speak import SPEAK_TOOL_SPEC
 
 OTHER_INJECTION = render_exchange_envelope(
     user_asked="what changed?", response="the exchange envelope"

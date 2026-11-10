@@ -12,15 +12,15 @@ from pathlib import Path
 from typing import cast
 
 from pygent import AIMessage, UserMessage
-from pygent.lara.agents import AgentRunner, ForkAgent, ForkSpec
-from pygent.lara.core.io import write_json
-from pygent.lara.graph.pipeline import render_model_request_text
-from pygent.lara.runtime.fork_context import (
+from pygent.agent.lara.agents import AgentRunner, ForkAgent, ForkSpec
+from pygent.agent.lara.core.io import write_json
+from pygent.agent.lara.graph.pipeline import render_model_request_text
+from pygent.agent.lara.runtime.fork_context import (
     SessionForkWindowSource,
     session_fork_window,
 )
-from pygent.lara.runtime.service import LaraRuntimeService
-from pygent.lara.schema import AgentSession, CaseRunRef, RunConfig
+from pygent.agent.lara.runtime.service import LaraRuntimeService
+from pygent.agent.lara.schema import AgentSession, CaseRunRef, RunConfig
 from pygent.runtime.codec import message_to_dict
 
 

@@ -14,34 +14,39 @@ from typing import Any
 
 import pytest
 
-import pygent.lara.graph.compressor as compressor_module
-import pygent.lara.runtime.reminders.bootstrap as bootstrap_module
-import pygent.lara.runtime.reminders.skills_context as skills_module
+import pygent.agent.lara.graph.compressor as compressor_module
+import pygent.agent.lara.runtime.reminders.bootstrap as bootstrap_module
+import pygent.agent.lara.runtime.reminders.skills_context as skills_module
 from pygent import AIMessage, UserMessage
-from pygent.lara.core.io import write_json
-from pygent.lara.core.prompt import system_reminder
-from pygent.lara.graph.compressor import LaraCompressorModule
-from pygent.lara.runtime.attachments import ResolvedAttachment, render_attachments_xml
-from pygent.lara.runtime.context import LaraContext
-from pygent.lara.runtime.context_compression import (
+from pygent.agent.lara.core.io import write_json
+from pygent.agent.lara.core.prompt import system_reminder
+from pygent.agent.lara.graph.compressor import LaraCompressorModule
+from pygent.agent.lara.runtime.attachments import (
+    ResolvedAttachment,
+    render_attachments_xml,
+)
+from pygent.agent.lara.runtime.context import LaraContext
+from pygent.agent.lara.runtime.context_compression import (
     FileReadRecord,
     render_file_read_block,
 )
-from pygent.lara.runtime.eternal_conversation import render_memory_access_instruction
-from pygent.lara.runtime.realtime.envelope import render_exchange_envelope
-from pygent.lara.runtime.realtime.speak import render_reply_instruction
-from pygent.lara.runtime.reminders.agent_messages import render_agent_message
-from pygent.lara.runtime.reminders.bootstrap import build_initial_snapshot
-from pygent.lara.runtime.reminders.cli_context import collect_initial_cli
-from pygent.lara.runtime.reminders.git_context import render_git_section
-from pygent.lara.runtime.reminders.models import ReminderScope, ReminderSection
-from pygent.lara.runtime.reminders.rendering import render_context_body
-from pygent.lara.runtime.reminders.skills_context import collect_initial_skills
-from pygent.lara.runtime.service import LaraRuntimeService
-from pygent.lara.schema import AgentSession, BashCliPreset, CaseRunRef, RunConfig
-from pygent.lara.sessions import AgentMessage
-from pygent.lara.sessions.collaboration import AgentMessageState
-from pygent.lara.sessions.manager import LARA_SAYS_SESSION_MODE
+from pygent.agent.lara.runtime.eternal_conversation import (
+    render_memory_access_instruction,
+)
+from pygent.agent.lara.runtime.realtime.envelope import render_exchange_envelope
+from pygent.agent.lara.runtime.realtime.speak import render_reply_instruction
+from pygent.agent.lara.runtime.reminders.agent_messages import render_agent_message
+from pygent.agent.lara.runtime.reminders.bootstrap import build_initial_snapshot
+from pygent.agent.lara.runtime.reminders.cli_context import collect_initial_cli
+from pygent.agent.lara.runtime.reminders.git_context import render_git_section
+from pygent.agent.lara.runtime.reminders.models import ReminderScope, ReminderSection
+from pygent.agent.lara.runtime.reminders.rendering import render_context_body
+from pygent.agent.lara.runtime.reminders.skills_context import collect_initial_skills
+from pygent.agent.lara.runtime.service import LaraRuntimeService
+from pygent.agent.lara.schema import AgentSession, BashCliPreset, CaseRunRef, RunConfig
+from pygent.agent.lara.sessions import AgentMessage
+from pygent.agent.lara.sessions.collaboration import AgentMessageState
+from pygent.agent.lara.sessions.manager import LARA_SAYS_SESSION_MODE
 from pygent.runtime.codec import message_to_dict
 
 

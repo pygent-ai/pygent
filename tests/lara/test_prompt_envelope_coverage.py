@@ -15,10 +15,10 @@ import ast
 import re
 from pathlib import Path
 
-from pygent.lara.core.prompt import KNOWN_ENVELOPES
+from pygent.agent.lara.core.prompt import KNOWN_ENVELOPES
 
 SOURCE_ROOTS = (
-    Path(__file__).resolve().parents[2] / "src" / "pygent" / "lara",
+    Path(__file__).resolve().parents[2] / "src" / "pygent" / "agent" / "lara",
 )
 # The bundled dynamic-memory-cli tool is vendored third-party data; its
 # output tags are its own wire format, not the prompt envelope layer.
@@ -26,6 +26,7 @@ _VENDORED_DATA_ROOTS = (
     Path(__file__).resolve().parents[2]
     / "src"
     / "pygent"
+    / "agent"
     / "lara"
     / "clis"
     / "dynamic-memory-cli",

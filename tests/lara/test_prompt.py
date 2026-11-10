@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pygent.lara.core.prompt import KNOWN_ENVELOPES, Prompt
+from pygent.agent.lara.core.prompt import KNOWN_ENVELOPES, Prompt
 
 
 def test_wrap_preserves_body_and_escapes_attributes() -> None:

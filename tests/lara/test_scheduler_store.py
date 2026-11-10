@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from pygent.lara.scheduler.store import SchedulerStore, prompt_hash
+from pygent.agent.lara.scheduler.store import SchedulerStore, prompt_hash
 
 
 def _store(tmp_path: Path) -> SchedulerStore:

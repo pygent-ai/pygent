@@ -14,29 +14,29 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from pygent.lara.orchestration.models import TurnCommand
-from pygent.lara.orchestration.runtime_keys import RuntimeGenerationKey
-from pygent.lara.orchestration.runtime_lease import RuntimeLease, SessionRuntime
-from pygent.lara.orchestration.session_execution import (
+from pygent.agent.lara.orchestration.models import TurnCommand
+from pygent.agent.lara.orchestration.runtime_keys import RuntimeGenerationKey
+from pygent.agent.lara.orchestration.runtime_lease import RuntimeLease, SessionRuntime
+from pygent.agent.lara.orchestration.session_execution import (
     SessionExecutionCoordinator,
 )
-from pygent.lara.runtime.realtime.continuation import (
+from pygent.agent.lara.runtime.realtime.continuation import (
     CONTINUATION_MESSAGE_KIND,
     render_pending_input_message,
 )
-from pygent.lara.runtime.realtime.turn_finalizer import (
+from pygent.agent.lara.runtime.realtime.turn_finalizer import (
     FINALIZER_MESSAGE_KIND,
 )
-from pygent.lara.runtime.reminders.agent_messages import (
+from pygent.agent.lara.runtime.reminders.agent_messages import (
     render_agent_message,
 )
-from pygent.lara.runtime.reminders.service import ReminderService
-from pygent.lara.schema import AgentSession, CaseRunRef, RunConfig
-from pygent.lara.sessions.collaboration import (
+from pygent.agent.lara.runtime.reminders.service import ReminderService
+from pygent.agent.lara.schema import AgentSession, CaseRunRef, RunConfig
+from pygent.agent.lara.sessions.collaboration import (
     AgentMessageState,
     SessionCollaborationStore,
 )
-from pygent.lara.sessions.manager import realtime_enabled_for
+from pygent.agent.lara.sessions.manager import realtime_enabled_for
 
 
 def _run_config(tmp_path: Path) -> RunConfig:
