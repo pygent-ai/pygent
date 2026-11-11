@@ -11,9 +11,12 @@ scheduler、tracing、core。环境层（配置文件机制、用户凭据、CLI
 
 from pygent.agent.lara.runtime.tools import ToolObserver
 
+from .graph.core import ForegroundAgent, PygentAgent
 from .sessions import SessionManager
 
 __all__ = [
+    "ForegroundAgent",
+    "PygentAgent",
     "SessionManager",
     "ToolObserver",
 ]
