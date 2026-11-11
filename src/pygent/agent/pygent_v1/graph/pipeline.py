@@ -456,8 +456,8 @@ class ConversationCheckpointModelModule(Module[Message, AIMessage]):
         self.inner = inner
 
     async def forward(
-        self, message: Message, context: Context
-    ) -> tuple[AIMessage, Context]:
+        self, message: Message, context: PygentContext
+    ) -> tuple[AIMessage, PygentContext]:
         # Pygent can consume several queued user inputs at one ReAct boundary.
         # Persist each consumed input, including those now in context.messages.
         for candidate in (*context.messages, message):
