@@ -58,7 +58,7 @@ def capture_git_snapshot(
         "--untracked-files=normal",
         "--",
         ".",
-        ":(exclude).lara",
+        ":(exclude).pygent_v1",
     )
     if status is None:
         return None

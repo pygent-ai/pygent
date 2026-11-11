@@ -63,7 +63,7 @@ class ForkReplyModule(Module[UserMessage, AIMessage]):
         self.model_group_name = model_group_name
         self.llm = llm
         self.model = ModelCallLayer(
-            model_group=ModelGroup.deferred(name=f"lara:{model_group_name}"),
+            model_group=ModelGroup.deferred(name=f"pygent.v1:{model_group_name}"),
             policy=ModelCallPolicy(allow_profile_override=True),
             retry_policy=retry_policy,
             generation=GenerationConfig(tool_choice=SPEAK_TOOL_NAME),

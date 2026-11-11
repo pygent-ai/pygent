@@ -24,8 +24,8 @@ from pygent.core import (
 from .common import _session_dir_for_run
 
 
-class LaraCompressorModule(Module[Message, AIMessage]):
-    """Add Lara file evidence to Pygent's native compression result."""
+class PygentCompressorModule(Module[Message, AIMessage]):
+    """Add pygent_v1 file evidence to Pygent's native compression result."""
 
     execution_requirements = ExecutionRequirements(
         recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
@@ -42,7 +42,7 @@ class LaraCompressorModule(Module[Message, AIMessage]):
         for _ in range(10):
             answer, returned = await self.model(request, context)
             if returned != context:
-                raise RuntimeError("Lara compressor model must preserve its fork context")
+                raise RuntimeError("pygent_v1 compressor model must preserve its fork context")
             summary = parse_summary(answer.content, has_tool_call=bool(answer.tool_calls))
             if summary is not None:
                 break

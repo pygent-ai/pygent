@@ -64,7 +64,7 @@ FILE_EFFECT_TOOL_SPEC = ToolSpec(
     tool_id="pygent.v1.internal.persist_file_effects",
     version="1",
     definition=ToolDefinition(
-        name="lara_persist_file_effects",
+        name="pygent_persist_file_effects",
         description="Persist an internal batch of observed workspace file effects.",
         parameters={
             "type": "object",
@@ -84,7 +84,7 @@ class FileEffectToolExecutor:
     sandbox_support = SandboxExecutorSupport(
         profiles=("workspace-write",),
         durable_reconnect=True,
-        deployment_fingerprint="lara:file-effects:v1",
+        deployment_fingerprint="pygent.v1:file-effects:v1",
     )
 
     async def execute(

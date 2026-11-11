@@ -30,7 +30,7 @@ _TOOL_TASK_EVENT_TYPES = {
 
 
 class BashTaskObservations:
-    """Persist Lara audit work; Pygent alone owns command execution and results."""
+    """Persist pygent_v1 audit work; Pygent alone owns command execution and results."""
 
     def __init__(self, config: RunConfig, runtime: LocalRuntime, directory: Path) -> None:
         self.config = config

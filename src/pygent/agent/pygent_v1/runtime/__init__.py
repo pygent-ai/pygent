@@ -1,4 +1,4 @@
-"""Lara runtime implementation package."""
+"""pygent_v1 runtime implementation package."""
 
 from .model_configuration import (
     CredentialEnvironment,

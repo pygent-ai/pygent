@@ -56,7 +56,7 @@ from pygent.runtime.codec import context_to_dict
 from pygent.tool import StandardTools, ToolCallLayer, ToolDefinition, ToolKit, ToolSpec
 
 from .common import DEFAULT_REACT_MAX_STEPS
-from .compressor import LaraCompressorModule
+from .compressor import PygentCompressorModule
 from .pipeline import (
     ConversationCheckpointModelModule,
     ConversationCheckpointToolModule,
@@ -302,10 +302,10 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
         if self.llm is None:
             raise RuntimeError("model invoker is not configured")
         group = (
-            ModelGroup.deferred(name=f"lara:{self.model_group_name}")
+            ModelGroup.deferred(name=f"pygent.v1:{self.model_group_name}")
             if self.managed_model
             else ModelGroup(
-                name=f"lara:{self.model_group_name}",
+                name=f"pygent.v1:{self.model_group_name}",
                 models=self._model_entries(),
             )
         )
@@ -395,10 +395,10 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
                 else DEFAULT_REACT_MAX_STEPS
             )
             self.foreground = ForegroundAgent(
-                system_prompt="Lara supplies the execution system prompt in PygentContext.",
+                system_prompt="pygent_v1 supplies the execution system prompt in PygentContext.",
                 compression_prompt=COMPRESSION_REQUEST_PROMPT,
                 model=prepared_model,
-                compressor=LaraCompressorModule(self.config, compression_model),
+                compressor=PygentCompressorModule(self.config, compression_model),
                 tools=prepared_tools,
                 context_window_tokens=context_window_tokens,
                 compression_trigger_ratio=min(
@@ -493,7 +493,7 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
                 message, visible = await self.prompt(message, visible)
                 answer = AIMessage(
                     content=(
-                        "Lara agent is wired into chat, but API key is not configured "
+                        "pygent_v1 agent is wired into chat, but API key is not configured "
                         f"for agent alias {self.resolved_agent.alias!r}."
                     )
                 )

@@ -295,7 +295,7 @@ def default_cli_bash_presets() -> list[BashCliPreset]:
             name="pygent.v1-automation",
             command="uv run lara automation --help",
             description=(
-                "Manage Lara scheduled Agent tasks with "
+                "Manage pygent_v1 scheduled Agent tasks with "
                 "`create|list|show|update|pause|resume|delete|run|runs`. Use `--session` with "
                 "the current session ID for a heartbeat, or `--standalone` for a new "
                 "session per run. Run `uv run lara automation --help` for complete syntax."

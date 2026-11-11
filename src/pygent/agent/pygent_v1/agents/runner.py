@@ -1,4 +1,4 @@
-"""Single invocation seam for every LARA agent (main, fork, child).
+"""Single invocation seam for every pygent_v1 agent (main, fork, child).
 
 Design invariants (docs/design/lara-architecture/README.md):
 
@@ -49,7 +49,7 @@ from pygent.tool import (
 
 from .context import ContextWindow
 
-# Aligned with lara.graph.core.MODEL_RETRYABLE_ERROR_KINDS; redeclared
+# Aligned with pygent_v1.graph.core.MODEL_RETRYABLE_ERROR_KINDS; redeclared
 # here so the agent scaffold does not depend on the durable runtime package.
 MODEL_RETRYABLE_ERROR_KINDS = (
     ModelErrorKind.TIMEOUT,

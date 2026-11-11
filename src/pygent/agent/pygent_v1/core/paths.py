@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def user_pygent_root() -> Path:
-    """Return the user-owned Lara data root shared by all projects."""
+    """Return the user-owned pygent_v1 data root shared by all projects."""
     return (Path.home() / ".pygent_v1").expanduser().resolve()
 
 

@@ -19,21 +19,21 @@ REPO_SRC = Path(__file__).resolve().parents[2] / "src" / "pygent"
 SDK_IMPORT_SCRIPT = """
 from pygent import Agent, ReActAgent
 from pygent.agent import PygentAgent
-from pygent.agent.pygent_v1 import PygentAgent as LaraPygentAgent
+from pygent.agent.pygent_v1 import PygentAgent as V1PygentAgent
 from pygent.agent.react_agent import ReActAgent as BuiltinReActAgent
 
-assert PygentAgent is LaraPygentAgent
+assert PygentAgent is V1PygentAgent
 assert ReActAgent is BuiltinReActAgent
 print("ok")
 """
 
 PYGENT_V1_FIRST_SCRIPT = """
-from pygent.agent.pygent_v1 import PygentAgent as LaraPygentAgent
+from pygent.agent.pygent_v1 import PygentAgent as V1PygentAgent
 from pygent.agent.react_agent import ReActAgent as BuiltinReActAgent
 from pygent import Agent, ReActAgent, ModelCallLayer
 from pygent.agent import PygentAgent
 
-assert PygentAgent is LaraPygentAgent
+assert PygentAgent is V1PygentAgent
 assert ReActAgent is BuiltinReActAgent
 print("ok")
 """
@@ -134,6 +134,6 @@ def test_lazy_pygent_v1_export_defers_loading() -> None:
     _run_fresh(LAZY_LOADING_SCRIPT)
 
 
-def test_heavy_lara_module_imports_standalone() -> None:
+def test_heavy_pygent_v1_module_imports_standalone() -> None:
     _run_fresh("import pygent.agent.pygent_v1.graph.core\nprint('ok')")
     _run_fresh("import pygent.llm._json_sse_transport\nprint('ok')")

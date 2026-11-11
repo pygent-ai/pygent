@@ -20,7 +20,7 @@ import pygent.agent.pygent_v1.runtime.reminders.skills_context as skills_module
 from pygent import AIMessage, UserMessage
 from pygent.agent.pygent_v1.core.io import write_json
 from pygent.agent.pygent_v1.core.prompt import system_reminder
-from pygent.agent.pygent_v1.graph.compressor import LaraCompressorModule
+from pygent.agent.pygent_v1.graph.compressor import PygentCompressorModule
 from pygent.agent.pygent_v1.runtime.attachments import (
     ResolvedAttachment,
     render_attachments_xml,
@@ -587,7 +587,7 @@ async def test_compressor_session_context_golden(
         workspace_root="C:/golden/workspace",
         user_pygent_root="C:/golden/user",
     )
-    module = LaraCompressorModule(config, _FakeCompressorModel())  # type: ignore[arg-type]
+    module = PygentCompressorModule(config, _FakeCompressorModel())  # type: ignore[arg-type]
 
     async def _emit(**_kwargs: Any) -> None:
         return None

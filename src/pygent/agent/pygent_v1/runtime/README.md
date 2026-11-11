@@ -3,7 +3,7 @@
 Owns model execution, tool execution, context management, and the high-level runtime service.
 
 - `agent/`: agent orchestration split by concern.
-  - `core.py`: `LaraAgent` construction and run lifecycle.
+  - `core.py`: `PygentAgent` construction and run lifecycle.
   - `model_invoker.py`: native model execution with per-call reasoning display
     metadata; output resets discard failed-attempt reasoning before persistence.
   - `pipeline.py`: model/tool middleware and authorization.
@@ -41,7 +41,7 @@ in both the default Agent toolkit and Runtime executor registry. It reads text,
 extracts PDF text (or renders selected `pages`), and returns native structured
 media blocks for images and MP4 video. Separate `read_image` / `read_video`
 tools are not exposed. Text-only `limit` / `offset` cannot be used with media.
-Lara's audit projection leaves Pygent's `ToolResult.output` untouched: ordinary
+pygent_v1's audit projection leaves Pygent's `ToolResult.output` untouched: ordinary
 text reads reach the model as the file text over the provider's plain output
 path, while media reads keep their native structured blocks.
 The OpenAI Chat Completions adapter enables inline image/video tool results with
@@ -55,7 +55,7 @@ native video processing enforces a 120-second, 12,000,000-byte, 1280-px and
 
 ## Runtime-state boundary
 
-`LaraAgent` is a reusable, run-independent Pygent module graph. It must not retain
+`PygentAgent` is a reusable, run-independent Pygent module graph. It must not retain
 the current session, case run, turn, observer, or a mutable side-effect queue.
 Each managed execution receives those portable facts through `PygentContext`.
 
@@ -70,7 +70,7 @@ tool observation appends jobs, and the persisted-diff module drains them into th
 managed Pygent tool task. There is no hidden observer-owned queue.
 
 Checkpoint restoration delegates directly to Pygent's current context codec
-registry without Lara-owned version detection or migration branches.
+registry without pygent_v1-owned version detection or migration branches.
 
 ## Eternal conversation projection
 
@@ -82,7 +82,7 @@ its latest exchange for follow-up references. Stored history is not removed.
 
 ## File-effect scan limits
 
-Lara observes file effects after tool execution. Explicit write/edit jobs snapshot
+pygent_v1 observes file effects after tool execution. Explicit write/edit jobs snapshot
 only their declared targets. Shell write detection ignores quoted text, comments,
 and heredoc bodies; it remains a heuristic, not a complete shell interpreter.
 Full scans prune dependency, build, temporary, and runtime directories before

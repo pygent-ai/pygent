@@ -17,7 +17,7 @@ from .file_effect_models import DeferredFileEffectJob
 
 @dataclass(frozen=True, slots=True)
 class PygentContext(ReActAgentContext):
-    """Portable Lara agent state carried through one Pygent execution."""
+    """Portable pygent_v1 agent state carried through one Pygent execution."""
 
     context_schema: ClassVar[str] = "pygent.v1.agent-context"
     context_schema_version: ClassVar[int] = 6

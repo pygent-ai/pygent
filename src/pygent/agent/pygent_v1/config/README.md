@@ -4,7 +4,7 @@ Kernel-side configuration surface. It owns only pure shape validation of the
 raw configuration mapping (`validate_config_mapping`); the typed settings live
 in `pygent_v1.schema` (`RunConfig` and friends).
 
-The configuration *mechanism* — reading `~/.lara/config.yaml`, merging
+The configuration *mechanism* — reading `~/.pygent_v1/config.yaml`, merging
 defaults, parsing the YAML subset, and editing files — lives in
 `lara_shell.config`. The kernel never imports that module; the shell loader
-calls `lara.config.validate_config_mapping` before constructing `RunConfig`.
+calls `pygent_v1.config.validate_config_mapping` before constructing `RunConfig`.

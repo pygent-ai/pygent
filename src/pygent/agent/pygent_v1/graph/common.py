@@ -53,7 +53,7 @@ def _uncovered_history(
     )
 
 
-def _initial_lara_context(
+def _initial_pygent_context(
     *,
     context: PygentContext,
     history: list[dict[str, Any]],

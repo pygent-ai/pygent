@@ -62,7 +62,7 @@ KNOWN_ENVELOPES: dict[str, EnvelopeInfo] = {
     ),
     "task-context": EnvelopeInfo(False, "Scheduled task execution message."),
     "summary": EnvelopeInfo(
-        True, "model-generated compression summary; no renderer is owned by Lara."
+        True, "model-generated compression summary; no renderer is owned by pygent_v1."
     ),
 }
 

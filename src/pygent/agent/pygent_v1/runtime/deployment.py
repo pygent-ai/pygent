@@ -37,7 +37,7 @@ class PygentModelResourceResolver:
 
 
 class WorkspaceToolExecutor(LocalToolExecutor):
-    """Deployment adapter for Lara's workspace-based standard tools."""
+    """Deployment adapter for pygent_v1's workspace-based standard tools."""
 
     sandbox_support = SandboxExecutorSupport(profiles=("workspace",))
 

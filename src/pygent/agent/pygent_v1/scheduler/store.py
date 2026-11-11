@@ -73,7 +73,7 @@ def scheduler_keys_dir(user_pygent_root: str | Path) -> Path:
 def submission_payload(
     kind: str, source: str, payload: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """The exact object signed by ``lara.scheduler.keys``."""
+    """The exact object signed by ``pygent_v1.scheduler.keys``."""
 
     return {"kind": kind, "source": source, "payload": dict(payload)}
 

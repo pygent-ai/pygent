@@ -483,7 +483,7 @@ class ToolObserver:
         available_tools: tuple[str, ...] = (),
         audit_call_id: str | None = None,
     ) -> tuple[dict[str, Any], DeferredFileEffectJob | None]:
-        """Persist Lara audit facts after Pygent has executed a tool."""
+        """Persist pygent_v1 audit facts after Pygent has executed a tool."""
 
         call_id = audit_call_id or self.store.append(
             "tool.call",

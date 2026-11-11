@@ -50,7 +50,7 @@ def _spec(
 
 SCHEDULE_TASK_TOOL_SPEC = _spec(
     "schedule_task",
-    "Submit a task to the Lara scheduler for approval or execution.",
+    "Submit a task to the pygent_v1 scheduler for approval or execution.",
     {
         "type": "object",
         "properties": {
@@ -114,7 +114,7 @@ class SchedulerToolExecutor:
         self.sandbox_support = SandboxExecutorSupport(
             profiles=("agent",),
             durable_reconnect=True,
-            deployment_fingerprint="lara:scheduler:v1",
+            deployment_fingerprint="pygent.v1:scheduler:v1",
         )
 
     async def execute(

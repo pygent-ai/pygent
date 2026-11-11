@@ -6,12 +6,12 @@ invokes `lara session run <scheduler-session> -m <prompt>` as a child process.
 
 ## Layers
 
-- `store.py`: one SQLite file (`<pygent_root>/scheduler/lara-scheduler.sqlite3`)
+- `store.py`: one SQLite file (`<pygent_root>/scheduler/pygent.v1-scheduler.sqlite3`)
   with append-only signed `submissions` and daemon-owned `tasks` / `runs`.
   WAL, busy timeout, and lease-checked atomic claims are always enabled.
 - `schedule.py`: deterministic `every`, `at`, `daily`, and `on` parsing and
   advancement.
-- `keys.py`: per-source HMAC-SHA256 keys under the user Lara directory. The
+- `keys.py`: per-source HMAC-SHA256 keys under the user pygent_v1 directory. The
   two-key format is intentionally replaceable by Ed25519 later.
 - `daemon.py`: verification, promotion, `needs_review`/approval gates, due and
   missed execution, prompt-hash rechecks, audit runs, and failure alerts.

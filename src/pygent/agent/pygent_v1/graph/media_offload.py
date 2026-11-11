@@ -6,7 +6,7 @@ tool results, and markdown links to remote hosts. Storing them verbatim makes
 every session open transfer and decode the full bytes again, and remote links
 keep the image hostage to the host staying reachable and CORS-open. The
 checkpoint boundary rewrites all three shapes into workspace files under
-``.lara/uploads`` and keeps only resource references, which the uploads
+``.pygent_v1/uploads`` and keeps only resource references, which the uploads
 endpoint and the pygent workspace media resolver both resolve back to bytes.
 """
 
@@ -98,7 +98,7 @@ async def offload_remote_media(
 
     Markdown image links and ``kind: "url"`` media blocks pointing at
     ``http(s)`` hosts are downloaded once and rewritten to the same stored
-    ``.lara/uploads`` references the inline path produces, so copies and
+    ``.pygent_v1/uploads`` references the inline path produces, so copies and
     replays stop depending on the remote host. Fetch failures, sub-thumbnail
     images, and oversized payloads keep their remote link: a dead host
     degrades to the previous behavior instead of failing the turn. Storage

@@ -8,7 +8,7 @@ from pygent.agent.pygent_v1.core.prompt import Prompt
 from pygent.agent.pygent_v1.core.timefmt import format_current_time_line
 
 SCHEDULER_GUIDANCE = (
-    "You are executing a scheduled Lara task in an isolated session. "
+    "You are executing a scheduled pygent_v1 task in an isolated session. "
     "Use the available tools to complete the task, then report the concrete "
     "result. Do not modify scheduler task definitions, signing keys, or the "
     "scheduler database."

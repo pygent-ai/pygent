@@ -154,7 +154,7 @@ PROJECTION_READY_INPUT_ID_METADATA_KEY = "projection_replacement_ready_input_id"
 
 
 def _config_fingerprint(config: RunConfig) -> str:
-    # Imported lazily: lara.orchestration imports runtime.service at package load.
+    # Imported lazily: pygent_v1.orchestration imports runtime.service at package load.
     from pygent.agent.pygent_v1.orchestration.runtime_keys import RuntimeGenerationKey
 
     return RuntimeGenerationKey.from_config(config).config_fingerprint
@@ -185,7 +185,7 @@ def _uncovered_conversation_messages(
 class _SpeakExecutor:
     """Delivers the model's speak calls as user-facing stream events (D-RT10).
 
-    The event (``lara.realtime.speak``) is the bubble the desktop renders;
+    The event (``pygent.v1.realtime.speak``) is the bubble the desktop renders;
     ``say_nothing`` emits nothing and acknowledges silently. Attachments are
     validated against the workspace and reported as workspace-relative paths.
     Configured external channels receive the same text fire-and-forget —
@@ -661,7 +661,7 @@ class PygentRuntimeService:
         if agent.llm is not None and (
             module is agent or getattr(module, "agent", None) is agent
         ):
-            requirement = ModelGroup.deferred(name=f"lara:{agent.model_group_name}")
+            requirement = ModelGroup.deferred(name=f"pygent.v1:{agent.model_group_name}")
             handle = bound.model_groups.get(requirement)
             native = agent.config.model_config
             if native is None:
@@ -697,9 +697,9 @@ class PygentRuntimeService:
                     invoker=agent.llm,
                     resource_ref=ModelResourceRef(
                         resolver_id=self.model_resolver.resolver_id,
-                        resource_id=f"lara:{agent.model_group_name}",
+                        resource_id=f"pygent.v1:{agent.model_group_name}",
                         revision=revision,
-                        capacity_owner_id=f"lara:{Path(self.config.workspace_root).resolve()}",
+                        capacity_owner_id=f"pygent.v1:{Path(self.config.workspace_root).resolve()}",
                         coordinator_domain=str(
                             Path(self.config.workspace_root).resolve()
                         ),
@@ -764,7 +764,7 @@ class PygentRuntimeService:
                 raise ValueError("model_key must be a non-empty string")
             profile_name = preferred_profile_name(selected_model_key)
         return {
-            f"lara:{group_name}": {
+            f"pygent.v1:{group_name}": {
                 "profile": profile_name,
             }
         }
@@ -1339,7 +1339,7 @@ class PygentRuntimeService:
                 model_factory=build_model_layer_factory(
                     agent.llm,
                     model_group_name=(
-                        f"lara:{child_config.resolved_agent.default_model_group}"
+                        f"pygent.v1:{child_config.resolved_agent.default_model_group}"
                     ),
                     models=agent._model_entries(),
                 ),

@@ -1,4 +1,4 @@
-"""Lara's independent, single-agent scheduler subsystem."""
+"""pygent_v1's independent, single-agent scheduler subsystem."""
 
 from .daemon import SchedulerDaemon, SubprocessTaskRunner, TaskResult, TaskRunner
 from .keys import canonical_payload, init_keys, load_secret, sign, verify

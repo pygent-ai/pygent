@@ -276,7 +276,7 @@ class PygentToolAuthorization(
                 ToolAuthorizationDecision(
                     call_id=request.call.call_id,
                     allowed=True,
-                    reason_code="lara_policy_allowed",
+                    reason_code="pygent_policy_allowed",
                     lifecycle=lifecycle,
                 ),
                 context,

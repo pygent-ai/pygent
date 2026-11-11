@@ -41,7 +41,7 @@ DESIGN_EVENT_TYPES = frozenset(
     }
 )
 
-LARA_EVENT_TYPES = DESIGN_EVENT_TYPES | frozenset(
+PYGENT_EVENT_TYPES = DESIGN_EVENT_TYPES | frozenset(
     {
         "chat.started",
         "chat.finished",
@@ -258,7 +258,7 @@ class EventStore:
 
     @staticmethod
     def _validate_event_type(event_type: str) -> None:
-        if event_type not in LARA_EVENT_TYPES:
+        if event_type not in PYGENT_EVENT_TYPES:
             raise ValueError(f"Unsupported event type: {event_type}")
 
 def _event_envelope(event: ContextEvent) -> dict[str, Any]:
