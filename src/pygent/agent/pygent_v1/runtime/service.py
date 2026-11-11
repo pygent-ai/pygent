@@ -869,13 +869,12 @@ class PygentRuntimeService:
 
     async def send_interrupt(
         self,
-        execution_id: str,
         *,
         manager: SessionManager,
-        run_ref: CaseRunRef,
         session_id: str,
         input_id: str,
         message: str,
+        case_id: str = "chat",
     ) -> Any:
         """Fork-reply path for a user message arriving mid-turn (D-RT2/3).
 
@@ -891,6 +890,7 @@ class PygentRuntimeService:
         session = manager.load(session_id)
         if not realtime_enabled_for(session):
             raise RuntimeError("realtime interaction is not enabled for this session")
+        run_ref = manager.start_case_run(session_id, case_id)
         state = self._fork_states.setdefault(session_id, SessionForkState())
         async with state.lock:
             if state.handle is not None and not state.finished:

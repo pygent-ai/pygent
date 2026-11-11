@@ -105,7 +105,10 @@ def _manager(tmp_path: Path) -> SimpleNamespace:
         updated_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
         metadata={"mode": "pygent.v1-says"},
     )
-    return SimpleNamespace(load=lambda _sid: session)
+    return SimpleNamespace(
+        load=lambda _sid: session,
+        start_case_run=lambda _sid, _cid: _run_ref(tmp_path),
+    )
 
 
 def _run_ref(tmp_path: Path) -> CaseRunRef:
@@ -120,9 +123,7 @@ def _run_ref(tmp_path: Path) -> CaseRunRef:
 async def _send(service: _FakeService, tmp_path: Path, message: str, input_id: str):
     return await PygentRuntimeService.send_interrupt(
         service,  # type: ignore[arg-type]
-        "execution-1",
         manager=_manager(tmp_path),  # type: ignore[arg-type]
-        run_ref=_run_ref(tmp_path),
         session_id="session-1",
         input_id=input_id,
         message=message,

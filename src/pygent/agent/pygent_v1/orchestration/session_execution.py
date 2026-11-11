@@ -241,6 +241,18 @@ class SessionExecutionCoordinator:
         )
         return True
 
+    def has_active_execution(self, manager: Any, session_id: str) -> bool:
+        """Whether a turn chain currently holds or queues on the session lane.
+
+        Called from outside the lane (message delivery routing), so any
+        counted user means an active or pending turn — unlike
+        :meth:`_lane_has_waiters`, which runs from inside the driving turn.
+        """
+
+        key = SessionExecutionKey.from_manager(manager, session_id)
+        lane = self._session_lanes.get(key)
+        return lane is not None and lane.users > 0
+
     def _lane_has_waiters(self, manager: Any, session_id: str) -> bool:
         """Whether turns are queued behind the lane lock.
 

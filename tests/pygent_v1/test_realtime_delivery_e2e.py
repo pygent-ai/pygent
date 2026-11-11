@@ -22,6 +22,7 @@ from typing import Any
 
 from pygent.agent.pygent_v1.core.io import read_json
 from pygent.agent.pygent_v1.orchestration.execution_host import LocalExecutionHost
+from pygent.agent.pygent_v1.orchestration.models import TurnCommand
 from pygent.agent.pygent_v1.runtime.realtime.speak import SPEAK_TOOL_NAME
 from pygent.agent.pygent_v1.schema import build_run_config
 from pygent.agent.pygent_v1.schema.models import RealtimeInteractionConfig
@@ -385,15 +386,18 @@ async def test_plain_turn_runs_to_completion(tmp_path: Path) -> None:
         ],
     )
     try:
-        turn = await harness.host.turns.submit(
-            config=harness.config,
-            manager=harness.manager,
-            message="帮我重构这个模块",
-            session_id=harness.session_id,
-            turn_id="turn-1",
-            interactive_approvals=False,
-            model_group_name="default",
-            selected_model_key="scripted",
+        lease = await harness.host.acquire_runtime(
+            config=harness.config, manager=harness.manager
+        )
+        turn = await harness.host.coordinator.submit_turn(
+            lease=lease,
+            command=TurnCommand(
+                session_id=harness.session_id,
+                message="帮我重构这个模块",
+                case_id="chat",
+                turn_id="turn-1",
+                interactive_approvals=False,
+            ),
         )
         output, _ = await asyncio.wait_for(turn.result(), 30)
         assert turn.status == "passed"
@@ -418,12 +422,9 @@ async def test_fork_reply_in_idle_session_drains_immediately(tmp_path: Path) -> 
     )
     try:
         service = await _acquire_service(harness)
-        run_ref = harness.manager.start_case_run(harness.session_id, "chat")
 
         outcome = await service.send_interrupt(
-            "execution-1",
             manager=harness.manager,
-            run_ref=run_ref,
             session_id=harness.session_id,
             input_id="i1",
             message="顺便问下,影响性能吗?",
@@ -470,25 +471,25 @@ async def test_fork_reply_after_finalizer_chain_gets_delivered(
     )
     try:
         service = await _acquire_service(harness)
-        run_ref = harness.manager.start_case_run(harness.session_id, "chat")
 
-        turn1 = await harness.host.turns.submit(
-            config=harness.config,
-            manager=harness.manager,
-            message="帮我重构这个模块",
-            session_id=harness.session_id,
-            turn_id="turn-1",
-            interactive_approvals=False,
-            model_group_name="default",
-            selected_model_key="scripted",
+        lease = await harness.host.acquire_runtime(
+            config=harness.config, manager=harness.manager
+        )
+        turn1 = await harness.host.coordinator.submit_turn(
+            lease=lease,
+            command=TurnCommand(
+                session_id=harness.session_id,
+                message="帮我重构这个模块",
+                case_id="chat",
+                turn_id="turn-1",
+                interactive_approvals=False,
+            ),
         )
         assert await harness.server.wait_received(3) == [0, 1, 2]
 
         interrupt = asyncio.create_task(
             service.send_interrupt(
-                "execution-1",
                 manager=harness.manager,
-                run_ref=run_ref,
                 session_id=harness.session_id,
                 input_id="i1",
                 message="顺便问下,影响性能吗?",
@@ -525,6 +526,116 @@ async def test_fork_reply_after_finalizer_chain_gets_delivered(
         history = harness.manager.load(harness.session_id).history
         assert "顺便问下,影响性能吗?" in str(history)
         assert _DRAFT in str(history)
+        assert harness.store.pending_messages(harness.session_id) == []
+    finally:
+        await harness.host.aclose()
+        await harness.server.aclose()
+
+
+async def test_delivery_entry_starts_idle_realtime_turn(tmp_path: Path) -> None:
+    """The unified entry routes an idle realtime session into a real turn."""
+
+    harness = await _harness(
+        tmp_path,
+        script=[
+            {"response": _speak_call_response("ack", "开始重构")},
+            {"response": _text_response("done")},
+        ],
+    )
+    try:
+        delivery = await harness.host.deliver_user_message(
+            config=harness.config,
+            manager=harness.manager,
+            message="帮我重构这个模块",
+            session_id=harness.session_id,
+            input_id="t1",
+            interactive_approvals=False,
+        )
+        assert delivery.mode == "turn"
+        assert delivery.turn is not None
+        await asyncio.wait_for(delivery.turn.result(), 30)
+        assert delivery.turn.status == "passed"
+        texts = await _speak_texts(
+            await _acquire_service(harness), harness.session_dir
+        )
+        assert texts == ["开始重构"]
+    finally:
+        await harness.host.aclose()
+        await harness.server.aclose()
+
+
+async def test_delivery_entry_interrupts_busy_realtime_session(
+    tmp_path: Path,
+) -> None:
+    """Full user-experience chain through the unified entry: the first
+    message starts a real turn; a second message while the lane is busy is
+    routed to a real fork, whose envelope is claimed by a continuation turn
+    and answered through speak.
+    """
+
+    after_interrupt = asyncio.Event()
+    harness = await _harness(
+        tmp_path,
+        script=[
+            {"response": _speak_call_response("t1-ack", "开始重构")},
+            {"response": _tool_call_response("t1-bash", "bash", '{"command": "echo hi"}')},
+            # Held: turn1 stays mid-flight while the interrupt arrives. The
+            # turn ends pure-text after a non-speak tool round, so its draft
+            # needs the bottom-line decision.
+            {"response": _text_response(_DRAFT), "gate": after_interrupt},
+            {"response": _speak_call_response("fork", _FORK_REPLY)},
+            # The envelope drain continuation serializes behind turn1.
+            {"response": _speak_call_response("cont", _ANSWER)},
+            {"response": _text_response("done")},
+            # The pure-text turn1 ending defers its bottom-line decision
+            # into a draft-delivery continuation (queued input present).
+            {"response": _speak_call_response("draft-cont", _DRAFT)},
+            {"response": _text_response("done")},
+        ],
+    )
+    try:
+        service = await _acquire_service(harness)
+        delivery1 = await harness.host.deliver_user_message(
+            config=harness.config,
+            manager=harness.manager,
+            message="帮我重构这个模块",
+            session_id=harness.session_id,
+            input_id="t1",
+            interactive_approvals=False,
+        )
+        assert delivery1.mode == "turn"
+        assert await harness.server.wait_received(3) == [0, 1, 2]
+
+        delivery2 = await harness.host.deliver_user_message(
+            config=harness.config,
+            manager=harness.manager,
+            message="顺便问下,影响性能吗?",
+            session_id=harness.session_id,
+            input_id="i2",
+        )
+        assert delivery2.mode == "interrupt"
+        assert delivery2.turn is None
+        assert delivery2.outcome is not None
+        assert delivery2.outcome.speak_args is not None
+        assert delivery2.outcome.speak_args.text == _FORK_REPLY
+        assert await harness.server.wait_received(1) == [3]
+
+        # Give the envelope's drain turn time to queue behind turn1, then
+        # let turn1 end pure-text: the finalizer defers into a continuation.
+        await asyncio.sleep(0.2)
+        after_interrupt.set()
+        assert await harness.server.wait_received(4) == [4, 5, 6, 7]
+        await asyncio.wait_for(delivery1.turn.result(), 30)
+        assert delivery1.turn.status == "passed"
+
+        await _eventually(
+            lambda: _envelope_state(harness.store.path, "realtime-exchange:i2")
+            == "delivered"
+        )
+        texts = await _speak_texts(service, harness.session_dir)
+        assert texts == ["开始重构", _ANSWER, _DRAFT]
+        history = harness.manager.load(harness.session_id).history
+        assert "顺便问下,影响性能吗?" in str(history)
         assert harness.store.pending_messages(harness.session_id) == []
     finally:
         await harness.host.aclose()

@@ -1,18 +1,38 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+import uuid
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
-from typing import Any, Self
+from pathlib import Path
+from typing import Any, Literal, Self
 
 from pygent.agent.pygent_v1.graph.prompts import PromptRegistry
+from pygent.agent.pygent_v1.runtime.realtime.fork_reply import ForkReplyOutcome
 from pygent.agent.pygent_v1.runtime.service import PygentRuntimeService
 from pygent.agent.pygent_v1.schema import RunConfig
-from pygent.agent.pygent_v1.sessions import SessionManager
+from pygent.agent.pygent_v1.sessions import SessionManager, realtime_enabled_for
 
+from .managed_turn import ManagedSessionTurn
+from .models import TurnCommand
 from .runtime_pool import WorkspaceRuntimePool
 from .session_execution import SessionExecutionCoordinator
-from .session_turns import SessionTurnService
+
+
+@dataclass(frozen=True)
+class UserDelivery:
+    """Result of routing one user message through the unified entry.
+
+    ``turn`` deliveries admit immediately; await ``turn.result()`` for the
+    final answer or ``turn.subscribe()`` for the event stream. ``interrupt``
+    deliveries resolve after the fork ack has been produced; ``outcome``
+    carries the reply text the transport can show right away.
+    """
+
+    mode: Literal["turn", "interrupt"]
+    turn: ManagedSessionTurn | None = None
+    outcome: ForkReplyOutcome | None = None
 
 
 class LocalExecutionHost:
@@ -33,10 +53,6 @@ class LocalExecutionHost:
             credential_environ=credential_environ,
             run_config_loader=run_config_loader,
             prompt_registry=prompt_registry,
-        )
-        self.turns = SessionTurnService(
-            coordinator=self.coordinator,
-            acquire_runtime=self.acquire_runtime,
         )
         self._drain_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
@@ -71,6 +87,119 @@ class LocalExecutionHost:
             if turn is None:
                 await lease.release()
 
+    async def deliver_user_message(
+        self,
+        *,
+        config: RunConfig,
+        manager: SessionManager,
+        message: str,
+        session_id: str | None = None,
+        input_id: str | None = None,
+        case_id: str = "chat",
+        interactive_approvals: bool = True,
+        attachments: Sequence[str] = (),
+        session_title: str | None = None,
+        model_group_name: str | None = None,
+        selected_model_key: str | None = None,
+    ) -> UserDelivery:
+        """Single user-message entry across both delivery paths.
+
+        A realtime session with a turn chain on its lane delivers through the
+        fork interrupt: the user gets a fast speak ack and an exchange
+        envelope, which the running chain claims at its next tool-result
+        boundary (or a continuation turn drains afterwards). Everything else —
+        plain sessions at any time, idle realtime sessions, and brand-new
+        sessions — starts or queues a real turn. The lane state is the only
+        routing signal: an in-flight fork needs no routing, its own
+        supersede-and-merge state absorbs the message.
+        """
+
+        if session_id is not None:
+            session = manager.load(session_id)
+            if (
+                realtime_enabled_for(session)
+                and self.coordinator.has_active_execution(manager, session_id)
+            ):
+                if attachments:
+                    raise ValueError(
+                        "attachments are only supported on turns; the fork "
+                        "interrupt path is text-only"
+                    )
+                lease = await self.acquire_runtime(config=config, manager=manager)
+                try:
+                    outcome = await lease.runtime.runtime_service.send_interrupt(
+                        manager=manager,
+                        session_id=session_id,
+                        input_id=input_id or uuid.uuid4().hex,
+                        message=message,
+                        case_id=case_id,
+                    )
+                finally:
+                    await lease.release()
+                return UserDelivery(mode="interrupt", outcome=outcome)
+        return UserDelivery(
+            mode="turn",
+            turn=await self._submit_user_turn(
+                config=config,
+                manager=manager,
+                message=message,
+                session_id=session_id,
+                input_id=input_id,
+                case_id=case_id,
+                interactive_approvals=interactive_approvals,
+                attachments=attachments,
+                session_title=session_title,
+                model_group_name=model_group_name,
+                selected_model_key=selected_model_key,
+            ),
+        )
+
+    async def _submit_user_turn(
+        self,
+        *,
+        config: RunConfig,
+        manager: SessionManager,
+        message: str,
+        session_id: str | None,
+        input_id: str | None,
+        case_id: str,
+        interactive_approvals: bool,
+        attachments: Sequence[str],
+        session_title: str | None,
+        model_group_name: str | None,
+        selected_model_key: str | None,
+    ) -> ManagedSessionTurn:
+        Path(config.workspace_root).mkdir(parents=True, exist_ok=True)
+        lease = await self.acquire_runtime(config=config, manager=manager)
+        try:
+            active_session_id = session_id
+            if active_session_id is None:
+                active_session_id = manager.create(
+                    case_id,
+                    mode="chat",
+                    model_group_name=model_group_name,
+                    selected_model_key=selected_model_key,
+                ).session_id
+            lease.runtime.reminders.prewarm_session(active_session_id)
+            if session_title:
+                manager.save_title(active_session_id, session_title)
+            else:
+                manager.save_title_from_user_input(active_session_id, message)
+            return await self.coordinator.submit_turn(
+                lease=lease,
+                command=TurnCommand(
+                    session_id=active_session_id,
+                    message=message,
+                    case_id=case_id,
+                    submission_id=input_id,
+                    interactive_approvals=interactive_approvals,
+                    attachments=tuple(attachments),
+                ),
+            )
+        except BaseException:
+            await lease.release()
+            raise
+
     async def acquire_runtime(
         self,
         *,
@@ -96,4 +225,4 @@ class LocalExecutionHost:
         await self.aclose()
 
 
-__all__ = ["LocalExecutionHost"]
+__all__ = ["LocalExecutionHost", "UserDelivery"]

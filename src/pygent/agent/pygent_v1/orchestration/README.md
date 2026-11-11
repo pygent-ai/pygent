@@ -13,9 +13,11 @@ control plane.
 - `runtime_keys.py`: stable workspace scope and configuration-generation keys.
 - `runtime_lease.py`: the runtime bundle and idempotent ownership lease.
 - `runtime_pool.py`: creates, reuses, retires, and closes runtime generations.
-- `session_turns.py`: submits ordinary turns for transport adapters without
-  duplicating lease, session creation, or title persistence logic.
-- `execution_host.py`: short-lived CLI composition root with ordered shutdown.
+- `execution_host.py`: short-lived CLI composition root with ordered shutdown;
+  `deliver_user_message` is the single user-message entry — it routes realtime
+  sessions with a busy lane through the fork interrupt and everything else
+  through turn submission (lease, session creation, and title persistence
+  included).
 
 Session identity includes the resolved sessions root as well as the session ID.
 This prevents equal IDs in different desktop project scopes from sharing a lane.
