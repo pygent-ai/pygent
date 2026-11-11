@@ -33,7 +33,7 @@ _CONTEXT_SNAPSHOT_KIND = "pygent.context.snapshot"
 _CONTEXT_SNAPSHOT_SLOT = "pygent.context.snapshot"
 _TOKEN_SCALE_BASE = 1_000_000
 _INITIAL_TOKEN_SCALE_PPM = 1_100_000
-_PygentAgentContextT = TypeVar("_PygentAgentContextT", bound="PygentAgentContext")
+_ReActAgentContextT = TypeVar("_ReActAgentContextT", bound="ReActAgentContext")
 _COORDINATOR_EXECUTION_REQUIREMENTS = ExecutionRequirements(
     requires_finite_deadline=True,
     recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
@@ -49,7 +49,7 @@ class _RequestTokenEstimate:
 
 
 class ContextCompressionLimitExceeded(RuntimeError):
-    """Raised when a PygentAgent exhausts its compression budget."""
+    """Raised when a ReActAgent exhausts its compression budget."""
 
 
 class ContextCompressionUnavailable(RuntimeError):
@@ -57,7 +57,7 @@ class ContextCompressionUnavailable(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
-class PygentAgentContext(Context):
+class ReActAgentContext(Context):
     """Portable foreground-Agent state with bounded invocation commits."""
 
     context_schema: ClassVar[str] = "pygent.agent-context"
@@ -69,7 +69,7 @@ class PygentAgentContext(Context):
     last_input_tokens: int | None = None
 
     def __post_init__(self) -> None:
-        super(PygentAgentContext, self).__post_init__()
+        super(ReActAgentContext, self).__post_init__()
         committed_messages = tuple(self.committed_messages)
         if any(not isinstance(message, Message) for message in committed_messages):
             raise TypeError("committed_messages must contain only Message values")
@@ -129,7 +129,7 @@ class ContextCompressionLayer(Module[Message, AIMessage]):
         self.compression_context_window_tokens = compression_context_window_tokens
         self.max_compressions = max_compressions
 
-    async def compress(self, context: PygentAgentContext) -> PygentAgentContext:
+    async def compress(self, context: ReActAgentContext) -> ReActAgentContext:
         """Run one compression round immediately and return the updated context.
 
         Replaces the projected history with the compressor's snapshot without
@@ -137,8 +137,8 @@ class ContextCompressionLayer(Module[Message, AIMessage]):
         is no pending current message here, so the foreground re-check that
         guards automatic compression does not apply.
         """
-        if not isinstance(context, PygentAgentContext):
-            raise TypeError("ContextCompressionLayer requires PygentAgentContext")
+        if not isinstance(context, ReActAgentContext):
+            raise TypeError("ContextCompressionLayer requires ReActAgentContext")
         compression_request = self._compression_request()
         compression = await _request_token_estimate(
             compression_request,
@@ -161,10 +161,10 @@ class ContextCompressionLayer(Module[Message, AIMessage]):
 
     async def _compress_once(
         self,
-        context: PygentAgentContext,
+        context: ReActAgentContext,
         compression_request: UserMessage,
         compression: _RequestTokenEstimate,
-    ) -> PygentAgentContext:
+    ) -> ReActAgentContext:
         """Run the shared compression pipeline; callers own the pre-checks."""
         if not context.messages:
             raise ContextCompressionUnavailable(
@@ -209,8 +209,8 @@ class ContextCompressionLayer(Module[Message, AIMessage]):
     ) -> tuple[AIMessage, Context]:
         current, prepared, estimate = await self._compress_if_needed(message, context)
         answer, returned = await self.model(current, prepared)
-        if not isinstance(returned, PygentAgentContext):
-            raise TypeError("PygentAgent model must preserve PygentAgentContext")
+        if not isinstance(returned, ReActAgentContext):
+            raise TypeError("ReActAgent model must preserve ReActAgentContext")
         actual = answer.usage.get("input_tokens")
         if isinstance(actual, int) and not isinstance(actual, bool):
             updated_scale = returned.input_token_scale_ppm
@@ -229,9 +229,9 @@ class ContextCompressionLayer(Module[Message, AIMessage]):
 
     async def _compress_if_needed(
         self, current: Message, context: Context
-    ) -> tuple[Message, PygentAgentContext, _RequestTokenEstimate]:
-        if not isinstance(context, PygentAgentContext):
-            raise TypeError("PygentAgent requires PygentAgentContext")
+    ) -> tuple[Message, ReActAgentContext, _RequestTokenEstimate]:
+        if not isinstance(context, ReActAgentContext):
+            raise TypeError("ReActAgent requires ReActAgentContext")
         resolve_tools = getattr(self.model, "effective_tools", None)
         effective_tools = (
             tuple(resolve_tools(context))
@@ -288,10 +288,10 @@ class ContextCompressionLayer(Module[Message, AIMessage]):
         return current, prepared, compressed
 
 
-class PygentAgent(Agent[UserMessage, AIMessage]):
+class ReActAgent(Agent[UserMessage, AIMessage]):
     """Standard foreground ReAct Agent with configurable context compression."""
 
-    context_type = PygentAgentContext
+    context_type = ReActAgentContext
     execution_requirements = _COORDINATOR_EXECUTION_REQUIREMENTS
 
     def __init__(
@@ -363,27 +363,27 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
         *,
         tools: tuple[ToolDefinition, ...] = (),
         metadata: Mapping[str, JsonValue] | None = None,
-    ) -> PygentAgentContext:
-        return PygentAgentContext(
+    ) -> ReActAgentContext:
+        return ReActAgentContext(
             system_prompt=self.system_prompt,
             tools=tools,
             metadata={} if metadata is None else metadata,
         )
 
     async def forward(
-        self, message: UserMessage, context: _PygentAgentContextT
-    ) -> tuple[AIMessage, _PygentAgentContextT]:
+        self, message: UserMessage, context: _ReActAgentContextT
+    ) -> tuple[AIMessage, _ReActAgentContextT]:
         invocation_context = replace(
             context,
             committed_messages=(),
             compression_count=0,
         )
         answer, next_context = await self.react(message, invocation_context)
-        return answer, cast(_PygentAgentContextT, next_context)
+        return answer, cast(_ReActAgentContextT, next_context)
 
     async def compress(
-        self, context: _PygentAgentContextT
-    ) -> _PygentAgentContextT:
+        self, context: _ReActAgentContextT
+    ) -> _ReActAgentContextT:
         """Run one compression round immediately and return the updated context.
 
         Delegates to the agent's :class:`ContextCompressionLayer` without
@@ -391,7 +391,7 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
         ``forward`` still enforces both on its automatic path.
         """
         compressed = await self.compression.compress(context)
-        return cast(_PygentAgentContextT, compressed)
+        return cast(_ReActAgentContextT, compressed)
 
 
 def _request_token_units(
@@ -493,6 +493,6 @@ __all__ = [
     "ContextCompressionLayer",
     "ContextCompressionLimitExceeded",
     "ContextCompressionUnavailable",
-    "PygentAgent",
-    "PygentAgentContext",
+    "ReActAgent",
+    "ReActAgentContext",
 ]

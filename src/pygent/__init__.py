@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from .agent import (
     InjectionKind,
-    PygentAgent,
-    PygentAgentContext,
+    ReActAgent,
+    ReActAgentContext,
     ReActBudgetExceeded,
     ReActLayer,
     Reminder,
@@ -78,6 +78,11 @@ from .tool import (
     tool,
 )
 
+
+def __dir__() -> list[str]:
+    return sorted(__all__)
+
+
 __all__ = [
     "AIMessage",
     "Agent",
@@ -115,8 +120,8 @@ __all__ = [
     "ProviderCatalog",
     "ProviderPreset",
     "ProviderProtocolPreset",
-    "PygentAgent",
-    "PygentAgentContext",
+    "ReActAgent",
+    "ReActAgentContext",
     "ReActBudgetExceeded",
     "ReActLayer",
     "RecurrentModule",
@@ -143,7 +148,3 @@ __all__ = [
     "thaw_json",
     "tool",
 ]
-
-
-def __dir__() -> list[str]:
-    return sorted(__all__)

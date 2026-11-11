@@ -14,8 +14,8 @@ from pygent import (
     Context,
     Message,
     Module,
-    PygentAgent,
-    PygentAgentContext,
+    ReActAgent,
+    ReActAgentContext,
     ToolDefinition,
     ToolMessage,
     UserMessage,
@@ -181,8 +181,8 @@ def build_agent(
     compression_context_window_tokens: int | None = None,
     compression_prompt: str = "Summarize goals, constraints, and unfinished work.",
     max_compressions: int = 4,
-) -> PygentAgent:
-    return PygentAgent(
+) -> ReActAgent:
+    return ReActAgent(
         system_prompt="You are a careful coding agent.",
         compression_prompt=compression_prompt,
         model=model,
@@ -195,7 +195,7 @@ def build_agent(
 
 
 def test_pygent_agent_context_has_a_portable_round_trip() -> None:
-    context = PygentAgentContext(
+    context = ReActAgentContext(
         system_prompt="fixed",
         messages=(UserMessage(content="visible"),),
         committed_messages=(UserMessage(content="original"),),
@@ -205,12 +205,12 @@ def test_pygent_agent_context_has_a_portable_round_trip() -> None:
         projection_revision=3,
     )
 
-    codec = ContextCodec.dataclass(PygentAgentContext)
+    codec = ContextCodec.dataclass(ReActAgentContext)
     encoded = codec.encode(context)
     decoded = codec.decode(encoded)
 
     assert decoded == context
-    assert type(decoded) is PygentAgentContext
+    assert type(decoded) is ReActAgentContext
     assert codec.schema == "pygent.agent-context"
     assert codec.version == 3
     assert "committed_messages" in encoded
@@ -219,7 +219,7 @@ def test_pygent_agent_context_has_a_portable_round_trip() -> None:
 
 def test_pygent_agent_context_rejects_the_removed_history_field() -> None:
     with pytest.raises(TypeError, match="full_history"):
-        PygentAgentContext(full_history=())  # type: ignore[call-arg]
+        ReActAgentContext(full_history=())  # type: ignore[call-arg]
 
 
 def test_new_context_uses_the_agent_configuration() -> None:
@@ -258,7 +258,7 @@ def test_agent_rejects_invalid_window_configuration(kwargs, message) -> None:
     }
     base.update(kwargs)
     with pytest.raises(ValueError, match=message):
-        PygentAgent(**base)
+        ReActAgent(**base)
 
 
 @pytest.mark.asyncio
@@ -277,7 +277,7 @@ async def test_managed_agent_auto_registers_context_schema_v3() -> None:
     answer, context = await handle.result()
 
     assert answer.content == "done"
-    assert isinstance(context, PygentAgentContext)
+    assert isinstance(context, ReActAgentContext)
     assert [message.content for message in context.committed_messages] == [
         "hello",
         "done",
@@ -302,7 +302,7 @@ async def test_pygent_agent_context_v3_survives_durable_reattach(tmp_path) -> No
         attached = await runtime.get_execution_handle(handle.execution_id)
 
         assert await attached.result() == expected
-        assert isinstance(expected[1], PygentAgentContext)
+        assert isinstance(expected[1], ReActAgentContext)
         assert [message.content for message in expected[1].committed_messages] == [
             "hello",
             "done",
@@ -313,12 +313,12 @@ async def test_pygent_agent_context_v3_survives_durable_reattach(tmp_path) -> No
 @pytest.mark.asyncio
 async def test_agent_invocation_reset_preserves_a_concrete_context_subtype() -> None:
     @dataclass(frozen=True, slots=True)
-    class DerivedContext(PygentAgentContext):
+    class DerivedContext(ReActAgentContext):
         context_schema: ClassVar[str] = "tests.pygent-derived"
         context_schema_version: ClassVar[int] = 1
         workspace: str = "repo"
 
-    class DerivedAgent(PygentAgent):
+    class DerivedAgent(ReActAgent):
         context_type = DerivedContext
 
     agent = DerivedAgent(
@@ -498,7 +498,7 @@ async def test_agent_forks_projection_and_preserves_current_commits() -> None:
         AIMessage(content="a1 " + "y" * 500),
         UserMessage(content="u2 " + "z" * 500),
     )
-    context = PygentAgentContext(
+    context = ReActAgentContext(
         system_prompt=agent.system_prompt,
         messages=original,
         committed_messages=(UserMessage(content="previous invocation"),),
@@ -979,7 +979,7 @@ async def test_compression_layer_compresses_standalone() -> None:
         compression_context_window_tokens=4096,
         max_compressions=1,
     )
-    context = PygentAgentContext(
+    context = ReActAgentContext(
         system_prompt="You are a careful coding agent.",
         messages=(UserMessage(content="old " + "x" * 200),),
         compression_count=1,
@@ -1030,7 +1030,7 @@ async def test_manual_compressed_context_feeds_the_next_invocation() -> None:
 async def test_long_session_keeps_only_each_invocation_commit_delta() -> None:
     model = LongSessionModel(tool_calls_per_invocation=15)
     compressor = RecordingModel(AIMessage(content="compact snapshot"))
-    agent = PygentAgent(
+    agent = ReActAgent(
         system_prompt="system",
         compression_prompt="Return a compact continuation.",
         model=model,
@@ -1042,7 +1042,7 @@ async def test_long_session_keeps_only_each_invocation_commit_delta() -> None:
         max_model_calls=16,
         max_tool_calls=16,
     )
-    codec = ContextCodec.dataclass(PygentAgentContext)
+    codec = ContextCodec.dataclass(ReActAgentContext)
     registry = ContextCodecRegistry((codec,))
     context = agent.new_context()
     external_history: list[Message] = []
@@ -1080,7 +1080,7 @@ class ReplacingModel(Module[Message, AIMessage]):
 
 @pytest.mark.asyncio
 async def test_react_rejects_an_invalid_model_projection_revision() -> None:
-    agent = PygentAgent(
+    agent = ReActAgent(
         system_prompt="fixed",
         compression_prompt="compress",
         model=ReplacingModel(revision_delta=2),

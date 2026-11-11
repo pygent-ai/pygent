@@ -1,9 +1,11 @@
+from typing import Any
+
 from .pygent_agent import (
     ContextCompressionLayer,
     ContextCompressionLimitExceeded,
     ContextCompressionUnavailable,
-    PygentAgent,
-    PygentAgentContext,
+    ReActAgent,
+    ReActAgentContext,
 )
 from .react import TOOL_BATCH_INTERRUPT_NOTICE, ReActBudgetExceeded, ReActLayer
 from .react_projection_operations import (
@@ -18,6 +20,22 @@ from .react_projection_operations import (
 )
 from .reminder import InjectionKind, Reminder, format_context
 
+_LARA_EXPORTS = ("ForegroundAgent", "PygentAgent")
+
+
+def __getattr__(name: str) -> Any:
+    # The lara individual's classes resolve lazily: an eager import here would
+    # make `import pygent.agent` pull the whole lara stack and cycle against
+    # pygent's own __init__.
+    if name in _LARA_EXPORTS:
+        from .lara.graph.core import ForegroundAgent, PygentAgent
+
+        for value in (ForegroundAgent, PygentAgent):
+            globals()[value.__name__] = value
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "REACT_PROJECTION_OPERATION_KIND",
     "TOOL_BATCH_INTERRUPT_NOTICE",
@@ -25,9 +43,11 @@ __all__ = [
     "ContextCompressionLayer",
     "ContextCompressionLimitExceeded",
     "ContextCompressionUnavailable",
+    "ForegroundAgent",
     "InjectionKind",
     "PygentAgent",
-    "PygentAgentContext",
+    "ReActAgent",
+    "ReActAgentContext",
     "ReActBudgetExceeded",
     "ReActLayer",
     "ReActProjectionOperation",

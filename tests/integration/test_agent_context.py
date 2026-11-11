@@ -11,7 +11,7 @@ from pygent import (
     ContextCodec,
     Message,
     Module,
-    PygentAgentContext,
+    ReActAgentContext,
     UserMessage,
 )
 from pygent.runtime import ExecutionAdmissionError, LocalRuntime, SQLiteHistoryStore
@@ -115,7 +115,7 @@ def test_agent_context_add_and_codec_preserve_concrete_type_and_fields():
 
 def test_context_codec_includes_inherited_extension_fields():
     @dataclass(frozen=True, slots=True)
-    class DerivedAgentContext(PygentAgentContext):
+    class DerivedAgentContext(ReActAgentContext):
         context_schema = "tests.derived-agent-context"
         context_schema_version = 1
 
@@ -140,9 +140,9 @@ def test_context_codec_includes_inherited_extension_fields():
 
 
 def test_pygent_agent_context_v2_identity_is_rejected() -> None:
-    codec = ContextCodec.dataclass(PygentAgentContext)
+    codec = ContextCodec.dataclass(ReActAgentContext)
     registry = ContextCodecRegistry((codec,))
-    encoded = context_to_dict(PygentAgentContext(), registry=registry)
+    encoded = context_to_dict(ReActAgentContext(), registry=registry)
     encoded["version"] = 2
 
     with pytest.raises(WireCodecError, match="invalid Context"):

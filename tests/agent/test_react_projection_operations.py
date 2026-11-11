@@ -8,7 +8,7 @@ import pytest
 from pygent.agent import (
     REACT_PROJECTION_OPERATION_KIND,
     AppendToolResultContent,
-    PygentAgentContext,
+    ReActAgentContext,
     ReActLayer,
     ReplaceMessageProjection,
     StandaloneUserMessage,
@@ -160,11 +160,11 @@ async def test_replace_during_final_model_does_not_duplicate_committed_history()
     second = AIMessage(content="after replacement")
     model = BlockingFirstModel((first, second))
     runtime = LocalRuntime(
-        context_codecs=(ContextCodec.dataclass(PygentAgentContext),)
+        context_codecs=(ContextCodec.dataclass(ReActAgentContext),)
     )
     handle = await bind(runtime, ReActLayer(model=model, tools=EmptyTools())).start(
         UserMessage(content="initial"),
-        PygentAgentContext(),
+        ReActAgentContext(),
         execution=options(),
     )
     await model.state.entered.wait()
@@ -181,7 +181,7 @@ async def test_replace_during_final_model_does_not_duplicate_committed_history()
     model.state.release.set()
 
     _, context = await handle.result()
-    assert isinstance(context, PygentAgentContext)
+    assert isinstance(context, ReActAgentContext)
     assert [message.content for message in context.committed_messages] == [
         "initial",
         "first answer",
@@ -198,11 +198,11 @@ async def test_replace_preserving_pending_current_commits_it_once() -> None:
     model.state.release.set()
     gated = GatedReAct(ReActLayer(model=model, tools=EmptyTools()))
     runtime = LocalRuntime(
-        context_codecs=(ContextCodec.dataclass(PygentAgentContext),)
+        context_codecs=(ContextCodec.dataclass(ReActAgentContext),)
     )
     handle = await bind(runtime, gated).start(
         current,
-        PygentAgentContext(
+        ReActAgentContext(
             messages=(
                 UserMessage(content="earlier request"),
                 AIMessage(content="earlier answer"),
@@ -231,7 +231,7 @@ async def test_replace_preserving_pending_current_commits_it_once() -> None:
     gated.release.set()
 
     _, context = await handle.result()
-    assert isinstance(context, PygentAgentContext)
+    assert isinstance(context, ReActAgentContext)
     assert [message.content for message in context.committed_messages] == [
         "earlier request",
         "earlier answer",

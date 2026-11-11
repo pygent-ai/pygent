@@ -10,7 +10,7 @@ from pygent import (
     Message,
     ModelCallLayer,
     Module,
-    PygentAgent,
+    ReActAgent,
     ReActLayer,
     ToolCallLayer,
     ToolMessage,
@@ -175,7 +175,7 @@ async def test_pygent_agent_native_graph_declares_managed_boundary_retry(
         async def forward(self, message, context):
             return ToolMessage(content=""), context
 
-    agent = PygentAgent(
+    agent = ReActAgent(
         system_prompt="system",
         compression_prompt="compress",
         model=SafeModel(),

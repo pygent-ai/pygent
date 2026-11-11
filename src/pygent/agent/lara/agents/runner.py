@@ -27,7 +27,6 @@ from pygent import (
     ModelErrorKind,
     ModelGroup,
     Module,
-    PygentAgent,
     RetryPolicy,
     ToolAuthorizationDecision,
     ToolAuthorizationRequest,
@@ -35,6 +34,9 @@ from pygent import (
     ToolKit,
     ToolMessage,
     UserMessage,
+)
+from pygent.agent.pygent_agent import (
+    ReActAgent,
 )
 from pygent.core import JsonValue
 from pygent.llm import ModelCallPolicy, ModelEntry, ModelInvoker
@@ -202,7 +204,7 @@ class AgentRunner:
 
     Each run is isolated: the runner resolves the tool profile, builds the
     model layer from the resolved definitions, and assembles a fresh
-    ``PygentAgent`` so concurrent runs never share mutable state.
+    ``ReActAgent`` so concurrent runs never share mutable state.
     """
 
     def __init__(
@@ -258,7 +260,7 @@ class AgentRunner:
         )
         assert effective_system_prompt is not None
         model = self._model_factory(definitions)
-        agent = PygentAgent(
+        agent = ReActAgent(
             system_prompt=effective_system_prompt,
             compression_prompt=(
                 "Compress this agent run's transcript without losing tool errors "
@@ -302,7 +304,7 @@ def build_model_layer_factory(
 ) -> ModelFactory:
     """Build a :class:`ModelFactory` producing concrete model call layers.
 
-    Mirrors ``LaraAgent.new_model_layer`` with background-job retry defaults.
+    Mirrors ``PygentAgent.new_model_layer`` with background-job retry defaults.
     The factory receives the resolved tool definitions of each run, keeping
     model-visible tools and the executable tool surface on one source of
     truth. ``models`` are the group's ``ModelEntry`` values from the run

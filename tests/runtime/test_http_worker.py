@@ -13,7 +13,7 @@ from pygent import (
     ModelCallError,
     ModelContinuation,
     ModelErrorKind,
-    PygentAgentContext,
+    ReActAgentContext,
 )
 from pygent.core import (
     AIMessage,
@@ -1012,7 +1012,7 @@ async def test_agent_context_crosses_http_worker_without_field_loss():
 @pytest.mark.asyncio
 async def test_pygent_agent_context_v3_crosses_http_worker():
     class Echo(Agent[UserMessage, AIMessage]):
-        context_type = PygentAgentContext
+        context_type = ReActAgentContext
 
         async def forward(self, message, context):
             return AIMessage(content=message.content.upper()), context + message
@@ -1054,12 +1054,12 @@ async def test_pygent_agent_context_v3_crosses_http_worker():
         )
         output, context = await remote.invoke(
             UserMessage(content="remote"),
-            PygentAgentContext(),
+            ReActAgentContext(),
             deadline=None,
         )
 
     assert output.content == "REMOTE"
-    assert type(context) is PygentAgentContext
+    assert type(context) is ReActAgentContext
     assert [message.content for message in context.committed_messages] == ["remote"]
     await worker_runtime.close()
 

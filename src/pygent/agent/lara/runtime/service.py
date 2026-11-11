@@ -94,7 +94,7 @@ from ..graph.common import (
 )
 from ..graph.core import (
     LARA_PROJECTION_READY_KIND,
-    LaraAgent,
+    PygentAgent,
     model_retry_policy,
 )
 from ..graph.prompts import PromptRegistry
@@ -143,7 +143,7 @@ AgentDefinitionKey: TypeAlias = tuple[
 
 
 class ModelBoundAgent(Protocol):
-    """The model-facing surface shared by LaraAgent and ForkReplyModule."""
+    """The model-facing surface shared by PygentAgent and ForkReplyModule."""
 
     config: RunConfig
     model_group_name: str
@@ -422,7 +422,7 @@ class LaraRuntimeService:
             foreground_system_prompt=config.system_prompt,
         )
         template = (
-            LaraAgent(
+            PygentAgent(
                 config,
                 prompt_registry=self._prompt_registry,
                 external_tools=self.external_tools,
@@ -436,7 +436,7 @@ class LaraRuntimeService:
             if config.resolved_agent is not None and config.model_config is not None
             else None
         )
-        self._agent_definitions: dict[AgentDefinitionKey, LaraAgent] = (
+        self._agent_definitions: dict[AgentDefinitionKey, PygentAgent] = (
             {
                 (
                     id(config),
@@ -584,7 +584,7 @@ class LaraRuntimeService:
         selected_model_key: str | None = None,
         eternal_memory_enabled: bool | None = None,
         realtime_interaction_enabled: bool | None = None,
-    ) -> LaraAgent:
+    ) -> PygentAgent:
         effective_config = config or self.config
         resolved = effective_config.resolved_agent
         if resolved is None:
@@ -618,7 +618,7 @@ class LaraRuntimeService:
         invoker = (
             self._model_invokers.get(resolved.alias) if resolved is not None else None
         )
-        agent = LaraAgent(
+        agent = PygentAgent(
             effective_config,
             resolved_agent=effective_config.resolved_agent,
             prompt_registry=self._prompt_registry,
@@ -1320,7 +1320,7 @@ class LaraRuntimeService:
         child_config = self._child_agent_config(alias)
         if child_config.resolved_agent is None:
             raise RuntimeError(f"background memory Agent {alias!r} is unconfigured")
-        agent = LaraAgent(
+        agent = PygentAgent(
             child_config,
             managed_model=False,
             model_group_name=child_config.resolved_agent.default_model_group,

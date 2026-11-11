@@ -1,4 +1,4 @@
-# PygentAgent 前台 ReAct SDK
+# ReActAgent 前台 ReAct SDK
 
 > 状态：已实现的公共 SDK 契约。
 >
@@ -9,11 +9,11 @@
 
 ## 1. 定位
 
-`PygentAgent` 是标准前台 ReAct Agent。它复用 `ReActLayer`、`ModelCallLayer`、
+`ReActAgent` 是标准前台 ReAct Agent。它复用 `ReActLayer`、`ModelCallLayer`、
 `ToolCallLayer` 和 Runtime Execution Inbox，不维护第二套循环。
 
 ```text
-PygentAgent
+ReActAgent
 └─ ReActLayer
    ├─ model: context-compression Module
    │  ├─ model: foreground Model Module
@@ -30,7 +30,7 @@ workspace reminder、ToolResult reminder、压缩提示词正文和长期历史�
 ## 2. 公共 API
 
 ```python
-from pygent import PygentAgent, PygentAgentContext
+from pygent import ReActAgent, ReActAgentContext
 from pygent.agent import (
     ContextCompressionLayer,
     ContextCompressionLimitExceeded,
@@ -38,11 +38,11 @@ from pygent.agent import (
 )
 ```
 
-`PygentAgentContext` 是 portable、frozen、slots Context：
+`ReActAgentContext` 是 portable、frozen、slots Context：
 
 ```python
 @dataclass(frozen=True, slots=True)
-class PygentAgentContext(Context):
+class ReActAgentContext(Context):
     context_schema = "pygent.agent-context"
     context_schema_version = 3
 
@@ -53,7 +53,7 @@ class PygentAgentContext(Context):
 ```
 
 - `messages` 是下一次模型调用看到的投影；
-- `committed_messages` 只包含本次 `PygentAgent.forward()` 已正式提交的消息；
+- `committed_messages` 只包含本次 `ReActAgent.forward()` 已正式提交的消息；
 - `projection_revision` 是唯一模型投影 revision；
 - `compression_count` 是本次 Agent 调用已完成的压缩次数；
 - `input_token_scale_ppm` 是根据真实 usage 单调提高的估算系数；
@@ -65,7 +65,7 @@ class PygentAgentContext(Context):
 from pygent import (
     GenerationConfig,
     ModelCallLayer,
-    PygentAgent,
+    ReActAgent,
     RetryPolicy,
     ToolCallLayer,
 )
@@ -93,7 +93,7 @@ compressor = ModelCallLayer(
     tools=(),
 )
 
-agent = PygentAgent(
+agent = ReActAgent(
     system_prompt=SYSTEM_PROMPT,
     compression_prompt=COMPRESSION_PROMPT,
     model=foreground_model,
@@ -239,7 +239,7 @@ ReAct 将附加内容包装为 `<runtime-context>...</runtime-context>`，已规
 
 ## 7. 自动压缩
 
-每次前台模型调用前，PygentAgent 对实际 provider-neutral 投影进行保守 token 估算：
+每次前台模型调用前，ReActAgent 对实际 provider-neutral 投影进行保守 token 估算：
 
 ```text
 System Prompt + Context.messages + current + Context.tools
@@ -286,7 +286,7 @@ capacity 和 managed-effect 规则。
 
 ### 手动触发压缩
 
-`PygentAgent.compress()` 与 `ContextCompressionLayer.compress()` 在任意时刻无条件执行
+`ReActAgent.compress()` 与 `ContextCompressionLayer.compress()` 在任意时刻无条件执行
 一轮压缩，宿主可以在两次调用之间主动收缩投影：
 
 ```python
@@ -301,7 +301,7 @@ answer, context = await agent.invoke(UserMessage(content="next"), compressed)
   由下一次 `forward()` 的自动压缩接手（其预算在调用边界重置）；
 - 空投影历史或压缩请求超窗仍抛 `ContextCompressionUnavailable`。
 
-`ContextCompressionLayer` 可以脱离 `PygentAgent` 单独组装，构造参数与自动路径一致；
+`ContextCompressionLayer` 可以脱离 `ReActAgent` 单独组装，构造参数与自动路径一致；
 在活跃 Execution 内调用时 compressor 作为 Child 运行，否则走独立 Root 调用。
 
 ### 自定义 Compressor
@@ -326,8 +326,8 @@ class ReviewingCompressor(Module[Message, AIMessage]):
 ```
 
 需要长期历史的自定义 Compressor 应通过开发者自己的外部服务或有界输入获得它，不能依赖
-`PygentAgentContext` 跨调用累积完整历史。返回的 fork Context 必须与输入完全相等；
-Snapshot kind、slot、当前调用提交增量和 revision 仍由 PygentAgent 统一处理。
+`ReActAgentContext` 跨调用累积完整历史。返回的 fork Context 必须与输入完全相等；
+Snapshot kind、slot、当前调用提交增量和 revision 仍由 ReActAgent 统一处理。
 
 ## 8. 手动替换投影
 
@@ -401,7 +401,7 @@ attempt 或 request snapshot。全部候选都不兼容而使用请求级不可�
 
 ## 10. 不变量
 
-1. PygentAgent 只使用标准 ReActLayer。
+1. ReActAgent 只使用标准 ReActLayer。
 2. System Prompt 和 Compression Prompt 属于不可变 Agent 定义。
 3. Initial 与 Mid-run 输入都是开发者构造的真实 UserMessage。
 4. Runtime 只管理 Execution Input，不解释 Projection Operation。

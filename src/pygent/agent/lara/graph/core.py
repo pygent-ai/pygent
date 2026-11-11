@@ -15,7 +15,6 @@ from pygent import (
     ModelCallLayer,
     ModelErrorKind,
     ModelGroup,
-    PygentAgent,
     RetryPolicy,
     ToolCallLayer,
     ToolDefinition,
@@ -43,6 +42,10 @@ from pygent.agent.lara.runtime.reminders import ReminderService
 from pygent.agent.lara.schema import ResolvedAgentConfig, RunConfig
 from pygent.agent.lara.sessions import SessionManager
 from pygent.agent.lara.tracing import DIFF_TOOL_SPEC, EventStore
+
+# Imported from the owning module, not top-level pygent: the lara individual
+# loads while pygent's own __init__ is still running (pygent.agent pulls it).
+from pygent.agent.pygent_agent import ReActAgent
 from pygent.core import EffectSafety, ExecutionRequirements, RecoverySafety
 from pygent.llm import ModelCallError, ModelCallPolicy
 from pygent.runtime.codec import context_to_dict
@@ -153,7 +156,7 @@ def _sanitized_model_failure(failure: Any) -> dict[str, Any]:
     return payload
 
 
-class LaraForegroundAgent(PygentAgent):
+class ForegroundAgent(ReActAgent):
     """Pygent foreground Agent with Lara's verified recovery declaration."""
 
     execution_requirements = ExecutionRequirements(
@@ -162,7 +165,7 @@ class LaraForegroundAgent(PygentAgent):
     )
 
 
-class LaraAgent(Agent[UserMessage, AIMessage]):
+class PygentAgent(Agent[UserMessage, AIMessage]):
     execution_requirements = ExecutionRequirements(
         recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
         effect_safety=EffectSafety.MANAGED_EFFECTS,
@@ -205,12 +208,12 @@ class LaraAgent(Agent[UserMessage, AIMessage]):
         resolved = resolved_agent or config.resolved_agent
         if resolved is None:
             raise ValueError(
-                "LaraAgent requires a configured native model configuration"
+                "PygentAgent requires a configured native model configuration"
             )
         self.resolved_agent: ResolvedAgentConfig = resolved
         native = config.model_config
         if native is None:
-            raise ValueError("LaraAgent requires a configured native model configuration")
+            raise ValueError("PygentAgent requires a configured native model configuration")
         self.model_group_name = model_group_name or resolved.default_model_group
         if self.model_group_name not in native.model_groups:
             raise ValueError(f"unknown model group {self.model_group_name!r}")
@@ -316,7 +319,7 @@ class LaraAgent(Agent[UserMessage, AIMessage]):
 
     def new_tool_layer(self, *, max_concurrency: int = 8) -> ToolCallLayer:
         if self._toolkit is None:
-            raise RuntimeError("LaraAgent run graph has not been assembled")
+            raise RuntimeError("PygentAgent run graph has not been assembled")
         realtime_specs = (SPEAK_TOOL_SPEC,) if self.realtime_interaction_enabled else ()
         return ToolCallLayer(
             tools=(
@@ -387,7 +390,7 @@ class LaraAgent(Agent[UserMessage, AIMessage]):
                 if self.config.max_steps > 0
                 else DEFAULT_REACT_MAX_STEPS
             )
-            self.foreground = LaraForegroundAgent(
+            self.foreground = ForegroundAgent(
                 system_prompt="Lara supplies the execution system prompt in LaraContext.",
                 compression_prompt=COMPRESSION_REQUEST_PROMPT,
                 model=prepared_model,
@@ -404,7 +407,7 @@ class LaraAgent(Agent[UserMessage, AIMessage]):
                 max_tool_calls=max(32, max_steps * 4),
             )
             self.foreground.react.model.execution_requirements = (
-                LaraForegroundAgent.execution_requirements
+                ForegroundAgent.execution_requirements
             )
 
     async def forward(
@@ -413,7 +416,7 @@ class LaraAgent(Agent[UserMessage, AIMessage]):
         context: LaraContext,
     ) -> tuple[AIMessage, LaraContext]:
         if not isinstance(context, LaraContext):
-            raise TypeError("LaraAgent requires LaraContext")
+            raise TypeError("PygentAgent requires LaraContext")
         manager = SessionManager(self.config)
         store = EventStore(context.case_run_ref)
         turn_id = context.turn_id

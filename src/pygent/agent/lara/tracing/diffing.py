@@ -8,9 +8,10 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from pygent import IdempotencyPolicy, ToolKit, ToolSideEffect, tool
+from pygent import IdempotencyPolicy, ToolKit, ToolSideEffect
 from pygent.agent.lara.core.io import write_text
 from pygent.agent.lara.schema import CaseRunRef
+from pygent.tool.functional import tool
 
 from .events import EventStore
 
