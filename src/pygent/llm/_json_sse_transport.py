@@ -13,7 +13,8 @@ from typing import cast
 
 import httpx
 
-from pygent import _native
+# Internal code imports the extension by module path, not through the SDK facade.
+import pygent._native as _native  # noqa: PLR0402
 from pygent.core import FrozenJsonObject, freeze_json_object
 
 from .types import ModelErrorKind, ModelFailureReason, ModelProviderError

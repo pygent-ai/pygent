@@ -20,16 +20,16 @@ from .react_projection_operations import (
 )
 from .reminder import InjectionKind, Reminder, format_context
 
-_LARA_EXPORTS = ("PygentAgent",)
+_PYGENT_V1_EXPORTS = ("PygentAgent",)
 
 
 def __getattr__(name: str) -> Any:
-    # The lara individual's class resolves lazily through the ``pygent.agent.lara``
+    # The pygent_v1 individual's class resolves lazily through the ``pygent.agent.pygent_v1``
     # package boundary: an eager import here would make `import pygent.agent` pull
-    # the whole lara stack and cycle against pygent's own __init__, which imports
+    # the whole pygent_v1 stack and cycle against pygent's own __init__, which imports
     # ``.agent`` before ``.core`` and ``.llm`` are bound.
-    if name in _LARA_EXPORTS:
-        from .lara import PygentAgent
+    if name in _PYGENT_V1_EXPORTS:
+        from .pygent_v1 import PygentAgent
 
         globals()["PygentAgent"] = PygentAgent
         return PygentAgent

@@ -4,7 +4,7 @@
 implementations. This package owns the built-in ReAct individual's
 implementation (``agent.py``): the foreground ``ReActAgent`` with
 token-window compression, its portable context, and the compression layer.
-The lara individual lives at ``pygent.agent.lara``; future implementations
+The pygent_v1 individual lives at ``pygent.agent.pygent_v1``; future implementations
 land as sibling subpackages without touching the base capabilities.
 """
 
