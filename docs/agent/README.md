@@ -9,6 +9,15 @@
 
 Agent 是 Module 的语义名称，不是另一套框架对象。内置 Agent 和用户 Agent 使用相同的继承、组合、直接执行、绑定与托管执行协议。
 
+## 包布局：基础能力与独立 Agent 实现
+
+`pygent.agent` 同时承载两类内容：
+
+- **可复用基础能力**：`pygent_agent.py`（带 token 窗口压缩的前台 ReAct 实现）、`react.py`（有界 ReAct 组合）、`reminder.py`（补充上下文构造）——它们不依赖任何具体 Agent 个体；
+- **独立 Agent 实现**：每个实现是一个自包含子包。当前有 `react_agent/`（内置 ReAct 个体入口，重新导出基础实现中的 `PygentAgent`，同一类对象、无拷贝）与 `lara/`（完整 Agent 个体：agent 图、调度器、会话、编排等，位于 `pygent.agent.lara`）。
+
+新增 Agent 实现时在本目录添加同级子包即可：不同实现可以有独立的构造方式、运行方式与会话管理接口，不要求统一协议；新增个体不需要修改基础能力或既有实现，基础能力也不得反向依赖具体实现。
+
 ## ReActLayer
 
 ReActLayer 是可使用、继承或替换的普通 Module。它接收 `(UserMessage, Context)`，执行有界循环并返回 `(AIMessage, Context)`：
