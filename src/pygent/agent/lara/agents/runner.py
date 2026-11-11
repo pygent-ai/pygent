@@ -35,7 +35,7 @@ from pygent import (
     ToolMessage,
     UserMessage,
 )
-from pygent.agent.pygent_agent import (
+from pygent.agent.react_agent import (
     ReActAgent,
 )
 from pygent.core import JsonValue

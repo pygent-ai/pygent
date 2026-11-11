@@ -45,7 +45,7 @@ from pygent.agent.lara.tracing import DIFF_TOOL_SPEC, EventStore
 
 # Imported from the owning module, not top-level pygent: the lara individual
 # loads while pygent's own __init__ is still running (pygent.agent pulls it).
-from pygent.agent.pygent_agent import ReActAgent
+from pygent.agent.react_agent import ReActAgent
 from pygent.core import EffectSafety, ExecutionRequirements, RecoverySafety
 from pygent.llm import ModelCallError, ModelCallPolicy
 from pygent.runtime.codec import context_to_dict

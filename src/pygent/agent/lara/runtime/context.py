@@ -10,7 +10,7 @@ from pygent import (
 )
 from pygent.agent.lara.core.io import plain_object
 from pygent.agent.lara.schema import CaseRunRef
-from pygent.agent.pygent_agent import (
+from pygent.agent.react_agent import (
     ReActAgentContext,
 )
 from pygent.runtime.codec import message_to_dict

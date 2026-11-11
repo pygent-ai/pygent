@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from pygent.agent.pygent_agent import _message_projection as agent_projection
+from pygent.agent.react_agent.agent import _message_projection as agent_projection
 from pygent.llm._request_snapshot import _message_projection as snapshot_projection
 from pygent.llm.layer import _message_effect_value as layer_effect
 from pygent.runtime.codec import message_from_dict, message_to_dict

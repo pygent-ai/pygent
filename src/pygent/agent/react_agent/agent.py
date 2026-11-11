@@ -27,7 +27,7 @@ from pygent.core import (
 from pygent.llm._media_tokens import generic_media_input_tokens
 from pygent.tool import MediaBlock, ToolDefinition
 
-from .react import ReActLayer
+from ..react import ReActLayer
 
 _CONTEXT_SNAPSHOT_KIND = "pygent.context.snapshot"
 _CONTEXT_SNAPSHOT_SLOT = "pygent.context.snapshot"
