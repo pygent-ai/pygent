@@ -36,6 +36,23 @@ class AgentMessage:
     def done(self) -> bool:
         return self.state is AgentMessageState.DELIVERED
 
+    def to_dict(self, *, include_content: bool = False) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "message_id": self.message_id,
+            "submission_id": self.submission_id,
+            "source_session_id": self.source_session_id,
+            "source_agent_alias": self.source_agent_alias,
+            "target_session_id": self.target_session_id,
+            "status": self.state.value,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "delivered_at": self.delivered_at,
+            "delivered_execution_id": self.delivered_execution_id,
+        }
+        if include_content:
+            value["content"] = self.content
+        return value
+
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> AgentMessage:
         return cls(
