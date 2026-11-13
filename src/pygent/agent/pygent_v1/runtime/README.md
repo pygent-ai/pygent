@@ -18,13 +18,16 @@ Owns model execution, tool execution, context management, and the high-level run
 - `context_compression.py`: model-context compaction.
 - `fork_context.py`: shared live/frozen session fork windows for realtime
   fork-replies and memory extraction.
-- `reminders/`: session bootstrap, Git/CLI/Skill observations, and the persistent
-  Agent-message inbox. Rendered runtime context and Agent messages are nested XML,
-  so the reminder module appends both directly to `ToolMessage.content`; Pygent's
-  `format_context` envelope would escape that markup into inert text. Raw
-  ToolResults remain unchanged, and the outer conversation checkpoint persists the
-  exact projection the model receives. There is no legacy system-reminder renderer
-  or v1 adapter.
+- `reminders/`: session bootstrap and Git/CLI/Skill observations. Rendered
+  runtime context is nested XML, so the reminder module appends it directly to
+  `ToolMessage.content`; Pygent's `format_context` envelope would escape that
+  markup into inert text. Raw ToolResults remain unchanged, and the outer
+  conversation checkpoint persists the exact projection the model receives.
+  There is no legacy system-reminder renderer or v1 adapter.
+- `realtime/`: the silent-agent harness. A fork reply's exchange envelope reaches
+  the running turn as a wait-mode steering input on the react layer's execution
+  inbox — the same channel as the memory projection replacement — and is
+  checkpointed like any other steering message.
 - `tools.py`: tool observation and file-effect discovery.
 - `file_effect_models.py`: dependency-light file-effect contracts.
 - `file_effects.py`: deferred file-effect persistence and execution.

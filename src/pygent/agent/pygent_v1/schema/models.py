@@ -286,9 +286,7 @@ def default_cli_bash_presets() -> list[BashCliPreset]:
             command="uv run lara session --help",
             description=(
                 "Session CLI. Use `uv run lara session start` for a new background Agent, "
-                "`uv run lara session send <target> --source-session <current>` for "
-                "tool-boundary Agent messages, and "
-                "`uv run lara session run` or `chat` for user turns."
+                "and `uv run lara session run` or `chat` for user turns."
             ),
         ),
         BashCliPreset(

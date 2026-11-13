@@ -9,16 +9,16 @@ The agent works silently: content/thinking stay out of the user-facing stream an
 - ``fork_agent``     — the fork reply as a minimal managed execution graph
 - ``fork_reasoning`` — fork-only model profiles with reduced reasoning effort
 - ``fork_state``     — per-session supersede-and-merge state
-- ``envelope``       — conversation-exchange injection at the next tool-result boundary
-- ``posting``        — envelope delivery through the agent-message channel
+- ``envelope``       — the conversation-exchange envelope and its steering operation
 - ``nudge``          — N-rounds-without-speak reminder rule and text
 - ``injection``      — the tool-result boundary nudge module
 - ``turn_finalizer`` — end-of-turn bottom-line speak decision rule
 
-Wiring: the envelope rides the existing agent-message queue (claimed by the
-runtime's reminder boundary); the nudge module composes into
-``PreparedToolModule`` behind ``realtime_interaction_enabled``; the fork reply
-runs as a pygent managed execution via ``PygentRuntimeService.send_interrupt``;
-the finalizer round is queued by the session coordinator's lane at turn
-completion.
+Wiring: the envelope reaches the running turn as a wait-mode steering input
+on the react layer's execution inbox (the session coordinator owns that
+routing and holds envelopes for the next turn when no turn can take them);
+the nudge module composes into ``PreparedToolModule`` behind
+``realtime_interaction_enabled``; the fork reply runs as a pygent managed
+execution via ``PygentRuntimeService.send_interrupt``; the finalizer round is
+queued by the session coordinator's lane at turn completion.
 """

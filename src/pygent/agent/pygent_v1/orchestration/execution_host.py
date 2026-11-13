@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal, Self
 
 from pygent.agent.pygent_v1.graph.prompts import PromptRegistry
+from pygent.agent.pygent_v1.runtime.realtime.envelope import ExchangeEnvelope
 from pygent.agent.pygent_v1.runtime.realtime.fork_reply import ForkReplyOutcome
 from pygent.agent.pygent_v1.runtime.service import PygentRuntimeService
 from pygent.agent.pygent_v1.schema import RunConfig
@@ -58,23 +59,29 @@ class LocalExecutionHost:
         self._closed = False
 
     def _build_runtime(self, config: RunConfig, **kwargs: Any) -> PygentRuntimeService:
-        # Pooled runtimes learn about the coordinator through this hook: an
-        # exchange envelope landing in an idle session must drain immediately
-        # (see SessionExecutionCoordinator.submit_pending_drain). The drain
-        # runs detached — send_interrupt must not block on it, and the turn
-        # needs a task generation of its own.
+        # Pooled runtimes reach the coordinator through this hook: the fork
+        # reply's exchange goes to the turn running on the session lane, or
+        # waits for the next turn — which an idle session must start itself
+        # (see SessionExecutionCoordinator.submit_pending_drain).
         return PygentRuntimeService(
             config,
-            on_exchange_queued=partial(self._spawn_exchange_drain, config),
+            on_exchange_ready=partial(self._deliver_exchange, config),
             **kwargs,
         )
 
-    def _spawn_exchange_drain(self, config: RunConfig, session_id: str) -> None:
-        task = asyncio.create_task(self._drain_after_exchange(config, session_id))
+    async def _deliver_exchange(
+        self, config: RunConfig, envelope: ExchangeEnvelope
+    ) -> None:
+        manager = SessionManager(config)
+        if await self.coordinator.deliver_exchange(manager, envelope) == "injected":
+            return
+        # The drain runs detached: send_interrupt must not block on a lease
+        # or on the continuation turn, which needs a task generation of its own.
+        task = asyncio.create_task(self._drain_pending(config, envelope.session_id))
         self._drain_tasks.add(task)
         task.add_done_callback(self._drain_tasks.discard)
 
-    async def _drain_after_exchange(self, config: RunConfig, session_id: str) -> None:
+    async def _drain_pending(self, config: RunConfig, session_id: str) -> None:
         lease = await self.acquire_runtime(config=config)
         turn: Any = None
         try:
@@ -106,8 +113,8 @@ class LocalExecutionHost:
 
         A realtime session with a turn chain on its lane delivers through the
         fork interrupt: the user gets a fast speak ack and an exchange
-        envelope, which the running chain claims at its next tool-result
-        boundary (or a continuation turn drains afterwards). Everything else —
+        envelope, which the running turn applies at its next step boundary
+        (or a continuation turn drains afterwards). Everything else —
         plain sessions at any time, idle realtime sessions, and brand-new
         sessions — starts or queues a real turn. The lane state is the only
         routing signal: an in-flight fork needs no routing, its own

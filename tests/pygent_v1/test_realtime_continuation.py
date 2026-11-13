@@ -2,8 +2,8 @@
 
 Pins the delivery contract for user input arriving around the end of a turn
 chain: lane-queued turns and fork exchange envelopes must reach the main
-agent's context through the coordinator's follow-up rounds — never strand in
-the collaboration store, and never be decided against a stale draft pointer.
+agent's context through the coordinator's follow-up rounds — never strand as
+pending envelopes, and never be decided against a stale draft pointer.
 """
 
 from __future__ import annotations
@@ -27,19 +27,17 @@ from pygent.agent.pygent_v1.runtime.realtime.continuation import (
     CONTINUATION_MESSAGE_KIND,
     render_pending_input_message,
 )
+from pygent.agent.pygent_v1.runtime.realtime.envelope import ExchangeEnvelope
 from pygent.agent.pygent_v1.runtime.realtime.turn_finalizer import (
     FINALIZER_MESSAGE_KIND,
 )
-from pygent.agent.pygent_v1.runtime.reminders.agent_messages import (
-    render_agent_message,
-)
-from pygent.agent.pygent_v1.runtime.reminders.service import ReminderService
 from pygent.agent.pygent_v1.schema import AgentSession, CaseRunRef, RunConfig
-from pygent.agent.pygent_v1.sessions.collaboration import (
-    AgentMessageState,
-    SessionCollaborationStore,
+from pygent.agent.react_projection_operations import (
+    REACT_PROJECTION_OPERATION_KIND,
+    StandaloneUserMessage,
+    decode_react_projection_operation,
 )
-from pygent.agent.pygent_v1.sessions.manager import realtime_enabled_for
+from pygent.core import ExecutionInputDelivery
 
 
 def _run_config(tmp_path: Path) -> RunConfig:
@@ -65,9 +63,10 @@ def _session(mode: str = "pygent.v1-says") -> AgentSession:
 class _Script:
     """One fake turn execution: a history tail and an optional late envelope.
 
-    ``enqueue_after`` models a fork reply that lands while the turn is
-    finishing — after the turn's last claim opportunity, before the drive's
-    tail checks run.
+    ``deliver_after`` models a fork reply that lands while the turn is
+    finishing — after the execution sealed its inbox, before the drive's tail
+    checks run. ``deliver_during`` models one landing mid-turn, while the
+    execution still accepts inputs.
     """
 
     def __init__(
@@ -75,33 +74,43 @@ class _Script:
         *,
         history: list[dict[str, Any]] | None = None,
         gate: asyncio.Event | None = None,
-        enqueue_after: list[str] | None = None,
+        deliver_after: list[str] | None = None,
+        deliver_during: list[str] | None = None,
     ) -> None:
         self.history = history or []
         self.gate = gate
-        self.enqueue_after = enqueue_after or []
-        self.enqueued: list[Any] = []
+        self.deliver_after = deliver_after or []
+        self.deliver_during = deliver_during or []
+        self.deliveries: list[str] = []
 
     async def run(
         self,
-        store: SessionCollaborationStore,
+        coordinator: SessionExecutionCoordinator,
+        manager: Any,
+        handle: _FakeHandle,
         session: AgentSession,
         session_id: str,
     ) -> None:
+        for content in self.deliver_during:
+            self.deliveries.append(
+                await coordinator.deliver_exchange(manager, _envelope(session_id, content))
+            )
         if self.gate is not None:
             await self.gate.wait()
         session.history.extend(self.history)
-        for content in self.enqueue_after:
-            self.enqueued.append(
-                store.enqueue_message(
-                    submission_id=f"realtime-exchange:{content[:12]}",
-                    fingerprint=content,
-                    source_session_id=None,
-                    source_agent_alias=None,
-                    target_session_id=session_id,
-                    content=content,
-                )
+        handle.sealed = True
+        for content in self.deliver_after:
+            self.deliveries.append(
+                await coordinator.deliver_exchange(manager, _envelope(session_id, content))
             )
+
+
+def _envelope(session_id: str, content: str) -> ExchangeEnvelope:
+    return ExchangeEnvelope(
+        exchange_id=f"realtime-exchange:{content[:12]}",
+        session_id=session_id,
+        content=content,
+    )
 
 
 def _spoke_ending(text: str) -> list[dict[str, Any]]:
@@ -120,35 +129,65 @@ def _draft_ending(text: str) -> list[dict[str, Any]]:
 
 
 class _FakeHandle:
+    """A turn execution with a react-style input inbox.
+
+    ``send_input`` accepts wait-mode steering operations until the execution
+    seals its inbox at the final answer; afterwards the delivery reports
+    ``execution_finished`` exactly like a durable execution.
+    """
+
     def __init__(self, execution_id: str) -> None:
         self.execution_id = execution_id
+        self.sealed = False
+        self.inputs: list[str] = []
+        self.finished = asyncio.Event()
+
+    async def send_input(
+        self, *, input_id: str, kind: str, value: Any
+    ) -> ExecutionInputDelivery:
+        assert kind == REACT_PROJECTION_OPERATION_KIND
+        operation = decode_react_projection_operation(value)
+        assert isinstance(operation, StandaloneUserMessage)
+        if self.sealed:
+            return ExecutionInputDelivery(
+                status="execution_finished",
+                execution_id=self.execution_id,
+                input_id=input_id,
+            )
+        self.inputs.append(operation.message.content)
+        return ExecutionInputDelivery(
+            status="accepted",
+            execution_id=self.execution_id,
+            input_id=input_id,
+            sequence=len(self.inputs) - 1,
+        )
 
     async def result(self) -> tuple[Any, None]:
+        await self.finished.wait()
         return SimpleNamespace(data={"result": {"status": "passed"}}), None
 
 
 class _FakeRuntimeService:
-    """Drives the coordinator against the real reminder/message machinery.
+    """Drives the coordinator with scripted turn executions.
 
-    ``start_turn`` mirrors the real opening-context slice of
-    ``PygentRuntimeService.start_turn``: the turn-start claim runs against the
-    real ``ReminderService``/store, the claimed envelopes render into the
-    recorded opening, and the acknowledged state is what production leaves
-    behind.
+    ``start_turn`` mirrors the opening-context contract of
+    ``PygentRuntimeService.start_turn``: the pending envelopes the coordinator
+    hands over render into the recorded opening. The scripted execution then
+    runs detached, as a real execution would, so exchange deliveries can
+    land while the turn is RUNNING.
     """
 
-    def __init__(self, reminders: ReminderService) -> None:
-        self.reminders = reminders
+    def __init__(self, coordinator: SessionExecutionCoordinator) -> None:
+        self.coordinator = coordinator
         self.scripts: dict[str, _Script] = {}
         self.started: asyncio.Queue[str] = asyncio.Queue()
         self.completed: asyncio.Queue[str] = asyncio.Queue()
         self.messages: dict[str, str] = {}
         self.kinds: dict[str, str] = {}
         self.openings: dict[str, str] = {}
+        self.handles: dict[str, _FakeHandle] = {}
+        self._tasks: set[asyncio.Task[None]] = set()
         self._counter = 0
-
-    async def pending_agent_messages(self, session_id: str) -> tuple[Any, ...]:
-        return await self.reminders.pending_agent_messages(session_id)
 
     async def start_turn(
         self,
@@ -161,37 +200,37 @@ class _FakeRuntimeService:
         message_kind: str,
         message_data: dict[str, object],
         attachments: Any,
+        opening_exchanges: tuple[ExchangeEnvelope, ...] = (),
         deadline: float | None = None,
     ) -> _FakeHandle:
         del interactive_approvals, message_data, attachments, deadline
         self._counter += 1
         session = manager.load(run_ref.session_id)
-        initial = await self.reminders.claim_turn_opening(
-            run_ref.session_id,
-            turn_id=turn_id,
-            message_kind=message_kind,
-            realtime_enabled=realtime_enabled_for(session),
-        )
         self.started.put_nowait(turn_id)
         self.messages[turn_id] = message
         self.kinds[turn_id] = message_kind
-        self.openings[turn_id] = "\n".join(
-            render_agent_message(item) for item in initial
-        )
+        self.openings[turn_id] = "\n".join(item.content for item in opening_exchanges)
         session.history.append({"role": "user", "content": message})
+        handle = _FakeHandle(f"exec-{self._counter}")
+        self.handles[turn_id] = handle
         script = self.scripts.get(
             turn_id, _Script(history=_spoke_ending(f"reply: {message}"))
         )
-        await script.run(self.reminders.message_store, session, run_ref.session_id)
-        claim_id = self.reminders.turn_opening_claim_id(run_ref.session_id, turn_id)
-        for item in initial:
-            await self.reminders.acknowledge_agent_message(
-                item.message_id,
-                claim_id=claim_id,
-                execution_id=f"exec-{self._counter}",
+
+        async def execute() -> None:
+            # Yield once so the coordinator marks the turn RUNNING before the
+            # script delivers anything into it.
+            await asyncio.sleep(0)
+            await script.run(
+                self.coordinator, manager, handle, session, run_ref.session_id
             )
-        self.completed.put_nowait(turn_id)
-        return _FakeHandle(f"exec-{self._counter}")
+            self.completed.put_nowait(turn_id)
+            handle.finished.set()
+
+        task = asyncio.create_task(execute())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return handle
 
 
 class _FakeManager:
@@ -246,16 +285,11 @@ async def _completed(service: _FakeRuntimeService, count: int) -> list[str]:
 
 async def _harness(
     tmp_path: Path, *, mode: str = "pygent.v1-says"
-) -> tuple[
-    SessionExecutionCoordinator, _FakeManager, _FakeRuntimeService,
-    SessionCollaborationStore,
-]:
-    store = SessionCollaborationStore(tmp_path / "pygent_v1")
-    reminders = ReminderService(_run_config(tmp_path), message_store=store)
+) -> tuple[SessionExecutionCoordinator, _FakeManager, _FakeRuntimeService]:
     manager = _FakeManager(_session(mode), tmp_path)
-    service = _FakeRuntimeService(reminders)
     coordinator = SessionExecutionCoordinator()
-    return coordinator, manager, service, store  # type: ignore[return-value]
+    service = _FakeRuntimeService(coordinator)
+    return coordinator, manager, service
 
 
 async def _submit(
@@ -270,31 +304,47 @@ async def _submit(
     )
 
 
-async def test_envelope_queued_after_chain_end_gets_drained(tmp_path: Path) -> None:
-    coordinator, manager, service, store = await _harness(tmp_path)
+async def test_envelope_during_turn_is_injected_into_its_execution(
+    tmp_path: Path,
+) -> None:
+    coordinator, manager, service = await _harness(tmp_path)
     script = _Script(
-        history=_spoke_ending("work done"), enqueue_after=["user asked: status?"]
+        history=_spoke_ending("work done"), deliver_during=["user asked: status?"]
+    )
+    service.scripts["turn-1"] = script
+    lease = _lease(manager, service)
+    await _submit(coordinator, lease, "turn-1", "do work")
+
+    assert await _completed(service, 1) == ["turn-1"]
+    assert script.deliveries == ["injected"]
+    assert service.handles["turn-1"].inputs == ["user asked: status?"]
+    assert set(service.kinds) == {"turn-1"}
+
+
+async def test_envelope_pending_after_chain_end_gets_drained(tmp_path: Path) -> None:
+    coordinator, manager, service = await _harness(tmp_path)
+    script = _Script(
+        history=_spoke_ending("work done"), deliver_after=["user asked: status?"]
     )
     service.scripts["turn-1"] = script
     lease = _lease(manager, service)
     await _submit(coordinator, lease, "turn-1", "do work")
 
     assert await _completed(service, 2) == ["turn-1", "turn-1:cont"]
+    assert script.deliveries == ["pending"]
+    assert service.handles["turn-1"].inputs == []
     assert service.kinds["turn-1:cont"] == CONTINUATION_MESSAGE_KIND
     assert service.messages["turn-1:cont"] == render_pending_input_message()
     assert "user asked: status?" in service.openings["turn-1:cont"]
-    assert (
-        store.get_message(script.enqueued[0].message_id).state
-        is AgentMessageState.DELIVERED
-    )
     assert FINALIZER_MESSAGE_KIND not in service.kinds.values()
+    assert not await coordinator._has_pending_exchanges(manager, "session-1")
 
 
 async def test_envelope_at_pure_text_end_defers_finalizer(tmp_path: Path) -> None:
-    coordinator, manager, service, _store = await _harness(tmp_path)
+    coordinator, manager, service = await _harness(tmp_path)
     script = _Script(
         history=_draft_ending("重构完成,改动 A/B/C"),
-        enqueue_after=["user asked: 影响性能吗?"],
+        deliver_after=["user asked: 影响性能吗?"],
     )
     service.scripts["turn-1"] = script
     lease = _lease(manager, service)
@@ -310,7 +360,7 @@ async def test_envelope_at_pure_text_end_defers_finalizer(tmp_path: Path) -> Non
 async def test_queued_user_turn_defers_finalizer_into_continuation(
     tmp_path: Path,
 ) -> None:
-    coordinator, manager, service, _store = await _harness(tmp_path)
+    coordinator, manager, service = await _harness(tmp_path)
     gate = asyncio.Event()
     service.scripts["turn-1"] = _Script(
         history=_draft_ending("重构完成,改动 A/B/C"), gate=gate
@@ -334,7 +384,7 @@ async def test_queued_user_turn_defers_finalizer_into_continuation(
 
 
 async def test_quiet_pure_text_end_keeps_plain_finalizer(tmp_path: Path) -> None:
-    coordinator, manager, service, _store = await _harness(tmp_path)
+    coordinator, manager, service = await _harness(tmp_path)
     service.scripts["turn-1"] = _Script(history=_draft_ending("draft text"))
     lease = _lease(manager, service)
     await _submit(coordinator, lease, "turn-1", "do work")
@@ -346,10 +396,10 @@ async def test_quiet_pure_text_end_keeps_plain_finalizer(tmp_path: Path) -> None
 
 
 async def test_envelope_during_finalizer_chain_gets_drained(tmp_path: Path) -> None:
-    coordinator, manager, service, _store = await _harness(tmp_path)
+    coordinator, manager, service = await _harness(tmp_path)
     service.scripts["turn-1"] = _Script(history=_draft_ending("draft text"))
     service.scripts["turn-1:finalize"] = _Script(
-        history=_spoke_ending("delivered"), enqueue_after=["user asked: late?"]
+        history=_spoke_ending("delivered"), deliver_after=["user asked: late?"]
     )
     lease = _lease(manager, service)
     await _submit(coordinator, lease, "turn-1", "do work")
@@ -365,7 +415,7 @@ async def test_envelope_during_finalizer_chain_gets_drained(tmp_path: Path) -> N
 
 
 async def test_plain_session_neither_finalizes_nor_drains(tmp_path: Path) -> None:
-    coordinator, manager, service, _store = await _harness(tmp_path, mode="e2e")
+    coordinator, manager, service = await _harness(tmp_path, mode="e2e")
     service.scripts["turn-1"] = _Script(history=_draft_ending("draft text"))
     lease = _lease(manager, service)
     await _submit(coordinator, lease, "turn-1", "do work")
@@ -374,44 +424,56 @@ async def test_plain_session_neither_finalizes_nor_drains(tmp_path: Path) -> Non
     assert set(service.kinds.values()) == {"pygent.v1.chat.turn"}
 
 
-def test_pending_messages_peeks_without_claiming(tmp_path: Path) -> None:
-    store = SessionCollaborationStore(tmp_path / "pygent_v1")
-    first = store.enqueue_message(
-        submission_id="s1",
-        fingerprint="a",
-        source_session_id=None,
-        source_agent_alias=None,
-        target_session_id="session-1",
-        content="a",
+async def test_envelope_in_idle_session_waits_for_next_turn(tmp_path: Path) -> None:
+    """With no turn on the lane the coordinator only holds the envelope; the
+    host decides whether to start a drain turn (``submit_pending_drain``)."""
+
+    coordinator, manager, service = await _harness(tmp_path)
+    assert (
+        await coordinator.deliver_exchange(manager, _envelope("session-1", "early"))
+        == "pending"
     )
-    second = store.enqueue_message(
-        submission_id="s2",
-        fingerprint="b",
-        source_session_id=None,
-        source_agent_alias=None,
-        target_session_id="session-1",
-        content="b",
-    )
-    other = store.enqueue_message(
-        submission_id="s3",
-        fingerprint="c",
-        source_session_id=None,
-        source_agent_alias=None,
-        target_session_id="session-2",
-        content="c",
+    assert await coordinator._has_pending_exchanges(manager, "session-1")
+
+    lease = _lease(manager, service)
+    drain = await coordinator.submit_pending_drain(lease=lease, session_id="session-1")
+    assert drain is not None
+    drain_id = drain.command.turn_id
+    assert drain_id is not None
+    assert await _completed(service, 1) == [drain_id]
+    assert service.kinds[drain_id] == CONTINUATION_MESSAGE_KIND
+    assert service.openings[drain_id] == "early"
+    assert not await coordinator._has_pending_exchanges(manager, "session-1")
+    assert (
+        await coordinator.submit_pending_drain(lease=lease, session_id="session-1")
+        is None
     )
 
-    store.claim_messages("session-1", claim_id="claim-1", lease_seconds=3600.0)
-    assert store.get_message(second.message_id).state is AgentMessageState.CLAIMED
-    assert store.pending_messages("session-1") == []
 
-    store.release_message(first.message_id, claim_id="claim-1")
-    assert [
-        message.message_id for message in store.pending_messages("session-1")
-    ] == [first.message_id]
+async def test_finalizer_turn_leaves_pending_envelopes_to_continuation(
+    tmp_path: Path,
+) -> None:
+    """The finalizer decides only its own bottom line: an envelope that lands
+    between the turn's end and the finalizer's start is not consumed by the
+    finalizer's opening context."""
 
-    store.claim_messages("session-2", claim_id="claim-2", lease_seconds=3600.0)
-    store.acknowledge_message(
-        other.message_id, claim_id="claim-2", execution_id="exec-1"
+    coordinator, manager, service = await _harness(tmp_path)
+    gate = asyncio.Event()
+    service.scripts["turn-1"] = _Script(history=_draft_ending("draft text"))
+    service.scripts["turn-1:finalize"] = _Script(
+        history=_spoke_ending("delivered"), gate=gate
     )
-    assert store.pending_messages("session-2") == []
+    lease = _lease(manager, service)
+    await _submit(coordinator, lease, "turn-1", "do work")
+    assert await _completed(service, 1) == ["turn-1"]
+    assert await service.started.get() == "turn-1"
+    assert await service.started.get() == "turn-1:finalize"
+    assert (
+        await coordinator.deliver_exchange(manager, _envelope("session-1", "late?"))
+        == "pending"
+    )
+    gate.set()
+
+    assert await _completed(service, 2) == ["turn-1:finalize", "turn-1:finalize:cont"]
+    assert service.openings["turn-1:finalize"] == ""
+    assert service.openings["turn-1:finalize:cont"] == "late?"

@@ -18,16 +18,12 @@ from pygent.agent.pygent_v1.runtime.file_effects import (
     FILE_EFFECT_TOOL_SPEC,
     DeferredFileEffectBatch,
 )
+from pygent.agent.pygent_v1.runtime.realtime.envelope import EXCHANGE_MESSAGE_KIND
 from pygent.agent.pygent_v1.runtime.realtime.injection import RealtimeNudgeModule
 from pygent.agent.pygent_v1.runtime.reminders import ReminderService
-from pygent.agent.pygent_v1.runtime.reminders.agent_messages import render_agent_message
 from pygent.agent.pygent_v1.runtime.tools import ToolObserver
 from pygent.agent.pygent_v1.schema import RunConfig
-from pygent.agent.pygent_v1.sessions import (
-    AgentMessage,
-    AgentMessageState,
-    SessionManager,
-)
+from pygent.agent.pygent_v1.sessions import SessionManager
 from pygent.agent.pygent_v1.tracing import EventStore
 from pygent.core import (
     AIMessage,
@@ -72,6 +68,11 @@ from .media_offload import (
 from .prompts import AgentContextManager, PromptRegistry
 
 MAX_EMPTY_TOOL_FOLLOWUP_RETRIES = 5
+
+# User-role messages the react layer drains from its execution inbox mid-turn.
+# They enter context between steps, so the model-side checkpoint persists them
+# rather than the turn opening.
+_STEERING_MESSAGE_KINDS = frozenset({"pygent.v1.user.steering", EXCHANGE_MESSAGE_KIND})
 
 EFFECT_FREE_RECOVERY = ExecutionRequirements(
     recovery_safety=RecoverySafety.MODULE_BOUNDARY_RETRY,
@@ -127,9 +128,16 @@ async def checkpoint_conversation_message(
                 "tool": "conversation.tool_message",
             }.get(message.role, "conversation.user_message")
             event_actor = message.role
+            # Harness-authored user-role messages are not the user speaking:
+            # the transcript records who actually produced them.
+            origin = "user"
             if message.kind == "pygent.v1.automation.trigger":
                 event_type = "conversation.automation_trigger"
                 event_actor = "system"
+                origin = "automation"
+            elif message.kind == EXCHANGE_MESSAGE_KIND:
+                event_actor = "system"
+                origin = "realtime"
             event_payload = {
                 **payload,
                 "checkpoint_id": checkpoint_id,
@@ -149,12 +157,8 @@ async def checkpoint_conversation_message(
                             else message.content
                         ),
                         "user_identity": config.user_identity,
-                        "wrapped": message.kind != "pygent.v1.automation.trigger",
-                        "origin": (
-                            "automation"
-                            if message.kind == "pygent.v1.automation.trigger"
-                            else "user"
-                        ),
+                        "wrapped": origin == "user",
+                        "origin": origin,
                     }
                 )
             store.append(
@@ -462,7 +466,7 @@ class ConversationCheckpointModelModule(Module[Message, AIMessage]):
         # Pygent can consume several queued user inputs at one ReAct boundary.
         # Persist each consumed input, including those now in context.messages.
         for candidate in (*context.messages, message):
-            if candidate.kind != "pygent.v1.user.steering":
+            if candidate.kind not in _STEERING_MESSAGE_KINDS:
                 continue
             data = plain_data(candidate.data)
             if data.get("case_run_id") != context.case_run_id:
@@ -479,7 +483,7 @@ class ConversationCheckpointModelModule(Module[Message, AIMessage]):
                     kind="pygent.v1.runtime.message",
                     data={
                         "role": "user",
-                        "kind": "pygent.v1.user.steering",
+                        "kind": candidate.kind,
                         "content": candidate.content,
                         "message_type": "conversation.user_message",
                         "data": {
@@ -665,15 +669,6 @@ class RuntimeReminderModule(Module[ToolMessage, ToolMessage]):
         infrastructure = active_infrastructure()
         if infrastructure is None:  # pragma: no cover - managed graph invariant
             raise RuntimeError("runtime context requires managed execution")
-        execution_id = infrastructure.managed_execution_id
-        if execution_id is None:
-            raise RuntimeError("runtime context requires an execution id")
-        identity = hashlib.sha256(
-            json.dumps(
-                [context.turn_id, [result.call_id for result in message.results]]
-            ).encode()
-        ).hexdigest()
-        claim_id = f"agent-messages:{execution_id}:{identity}"
         assistant = context.messages[-1] if context.messages else None
         calls = (
             {call.call_id: call for call in assistant.tool_calls}
@@ -704,18 +699,7 @@ class RuntimeReminderModule(Module[ToolMessage, ToolMessage]):
                 file_mutation=bool(mutation_indexes),
                 has_results=bool(message.results),
             )
-            agent_messages = await self.reminders.claim_agent_messages(
-                context.session_id,
-                claim_id=claim_id,
-            )
-            return freeze_json(
-                {
-                    "content": reminder,
-                    "agent_messages": [
-                        item.to_dict(include_content=True) for item in agent_messages
-                    ],
-                }
-            )
+            return freeze_json({"content": reminder})
 
         effect = await infrastructure.execute_effect(
             spec=EffectSpec(
@@ -733,7 +717,6 @@ class RuntimeReminderModule(Module[ToolMessage, ToolMessage]):
                         else None
                     ),
                     "turn_id": context.turn_id,
-                    "agent_message_claim_id": claim_id,
                 }
             ),
             operation=operation,
@@ -744,58 +727,10 @@ class RuntimeReminderModule(Module[ToolMessage, ToolMessage]):
         content = replayed.get("content")
         if content is not None and not isinstance(content, str):
             raise TypeError("replayed runtime context content is invalid")
-        raw_agent_messages = replayed.get("agent_messages", [])
-        if not isinstance(raw_agent_messages, list):
-            raise TypeError("replayed agent messages are invalid")
-        delivered: list[AgentMessage] = []
-        for raw in raw_agent_messages:
-            if not isinstance(raw, dict):
-                raise TypeError("replayed agent message is invalid")
-            candidate = AgentMessage.from_dict(raw)
-            claimed = await self.reminders.claimed_agent_message(
-                candidate.message_id,
-                claim_id=claim_id,
-            )
-            if claimed is not None:
-                delivered.append(claimed)
-                continue
-            current = await self.reminders.agent_message_status(candidate.message_id)
-            if (
-                current.state is AgentMessageState.DELIVERED
-                and current.delivered_execution_id == execution_id
-            ):
-                delivered.append(candidate)
-        if delivered:
-            agent_context = "\n".join(render_agent_message(item) for item in delivered)
-            message = replace(
-                message,
-                content=(
-                    agent_context
-                    if not message.content
-                    else f"{message.content}\n{agent_context}"
-                ),
-            )
-            try:
-                for item in delivered:
-                    current = await self.reminders.agent_message_status(item.message_id)
-                    if current.state is AgentMessageState.DELIVERED:
-                        continue
-                    await self.reminders.acknowledge_agent_message(
-                        item.message_id,
-                        claim_id=claim_id,
-                        execution_id=execution_id,
-                    )
-            except BaseException:
-                for item in delivered:
-                    await self.reminders.release_agent_message(
-                        item.message_id,
-                        claim_id=claim_id,
-                    )
-                raise
         if content:
             # Pygent's runtime-context envelope escapes its payload, which would
-            # flatten this nested XML body into inert text. Append it like the
-            # agent messages so the model sees the rendered markup itself.
+            # flatten this nested XML body into inert text. Append the rendered
+            # markup itself so the model sees the structure.
             message = replace(
                 message,
                 content=(

@@ -72,7 +72,6 @@ def test_known_envelopes_register_all_classes() -> None:
     assert set(KNOWN_ENVELOPES) == {
         "system-reminder",
         "runtime-context",
-        "agent-message",
         "git-context",
         "skills-context",
         "cli-context",
