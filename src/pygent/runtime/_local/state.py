@@ -18,6 +18,7 @@ from pygent.core import (
     JsonValue,
     Message,
     Module,
+    ToolMessage,
     freeze_json_object,
 )
 from pygent.core.execution import _trusted_execution_event
@@ -115,6 +116,11 @@ class _ExecutionRecord:
     # the terminal event by ``finalize``. Written synchronously from a
     # cancellation cleanup that must never await.
     cancellation_artifacts: list[FrozenJsonObject] = field(default_factory=list)
+    # Transcript output the cancelled tool batch would have returned: the
+    # paired ToolMessage the conversation checkpoint module persists while the
+    # cancellation unwinds. Lives only in memory next to the journal
+    # artifact; written synchronously from the same cleanup.
+    cancelled_tool_output: ToolMessage | None = None
 
     @property
     def terminal(self) -> bool:

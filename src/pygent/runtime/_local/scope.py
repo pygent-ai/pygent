@@ -28,6 +28,7 @@ from pygent.core import (
     ModuleDependency,
     RemoteModule,
     StepInterrupted,
+    ToolMessage,
     freeze_json,
     freeze_json_object,
 )
@@ -260,6 +261,27 @@ class _ManagedScope(ExecutionScope):
         if self.record.phase is ExecutionPhase.FINALIZING or self.record.terminal:
             return
         self.record.cancellation_artifacts.append(freeze_json_object(dict(payload)))
+
+    def record_cancelled_tool_output(self, message: ToolMessage) -> None:
+        """Record the transcript output a cancelled tool batch would return.
+
+        Called from a Module's execution-cancel cleanup and from its normal
+        completion path (the would-be ``ToolMessage`` of the batch). The
+        conversation checkpoint module reads it back while the cancellation
+        unwinds and persists it, so the transcript never keeps assistant
+        ``tool_calls`` without a paired tool message. Synchronous by
+        contract: the cancel-path caller runs inside an ``except
+        CancelledError`` unwinding that must never await.
+        """
+
+        if self.record.phase is ExecutionPhase.FINALIZING or self.record.terminal:
+            return
+        self.record.cancelled_tool_output = message
+
+    def peek_cancelled_tool_output(self) -> ToolMessage | None:
+        """Synchronous read for a Module's cancellation unwinding."""
+
+        return self.record.cancelled_tool_output
 
     async def invoke_module_until(
         self,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from dataclasses import replace
@@ -900,16 +901,71 @@ class ConversationCheckpointToolModule(Module[AIMessage, ToolMessage]):
     async def forward(
         self, message: AIMessage, context: PygentContext
     ) -> tuple[ToolMessage, PygentContext]:
-        tool_message, next_context = await self.inner(message, context)
-        await checkpoint_conversation_message(
-            self.config,
-            next_context,
-            tool_message,
-            boundary=_message_boundary(
-                context,
-                phase="tool",
-                current=message,
-                output=tool_message,
-            ),
-        )
+        try:
+            tool_message, next_context = await self.inner(message, context)
+            await checkpoint_conversation_message(
+                self.config,
+                next_context,
+                tool_message,
+                boundary=_message_boundary(
+                    context,
+                    phase="tool",
+                    current=message,
+                    output=tool_message,
+                ),
+            )
+        except (asyncio.CancelledError, TimeoutError):
+            await self._checkpoint_cancelled_batch(message, context)
+            raise
         return tool_message, next_context
+
+    async def _checkpoint_cancelled_batch(
+        self, message: AIMessage, context: PygentContext
+    ) -> None:
+        """Persist the tool batch the cancellation interrupted.
+
+        The tool layer rebuilds a paired ``ToolResult`` for every call its
+        execution-level cancel killed and records the would-be
+        ``ToolMessage`` on the execution (``record_cancelled_tool_output``)
+        before re-raising; a cancel landing after the batch already returned
+        finds the returned message in the same slot. Without this handler
+        the transcript keeps assistant ``tool_calls`` with no paired tool
+        message, and every later turn replays a dangling tool_use that
+        strict providers reject with HTTP 400, permanently wedging the
+        session. ``TimeoutError`` catches the deadline kill, which the
+        runtime unwinds as ``_ExecutionDeadlineExpired`` (a TimeoutError
+        subclass) instead of ``CancelledError``.
+        """
+
+        infrastructure = active_infrastructure()
+        peek = getattr(infrastructure, "peek_cancelled_tool_output", None)
+        pending = peek() if callable(peek) else None
+        if not isinstance(pending, ToolMessage) or not pending.results:
+            return
+        if [result.call_id for result in pending.results] != [
+            call.call_id for call in message.tool_calls
+        ]:
+            return
+        writer = asyncio.create_task(
+            checkpoint_conversation_message(
+                self.config,
+                context,
+                pending,
+                boundary=_message_boundary(
+                    context,
+                    phase="tool",
+                    current=message,
+                    output=pending,
+                ),
+            )
+        )
+        while True:
+            try:
+                await asyncio.shield(writer)
+                return
+            except asyncio.CancelledError:
+                # A re-delivered cancellation must not kill the durable
+                # write; drain it to completion, then resume the unwind.
+                if writer.done():
+                    return
+                continue

@@ -300,8 +300,13 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                     )
                 )
             self._record_cancel_artifact(message.tool_calls, tuple(rebuilt))
+            self._record_cancel_output(
+                ToolMessage(results=cast(tuple[ToolResult, ...], tuple(rebuilt)))
+            )
             raise
-        return ToolMessage(results=cast(tuple[ToolResult, ...], results)), context
+        output = ToolMessage(results=cast(tuple[ToolResult, ...], results))
+        self._record_cancel_output(output)
+        return output, context
 
     async def _handle_call(
         self,
@@ -477,6 +482,22 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
                 "results": [_artifact_result_value(result) for result in results],
             }
         )
+
+    @staticmethod
+    def _record_cancel_output(output: ToolMessage) -> None:
+        """Hand the batch output to the execution's transcript slot.
+
+        Synchronous by contract: the cancel-path caller runs inside an
+        ``except CancelledError`` cleanup that must complete without
+        awaiting. The conversation checkpoint module reads the slot back
+        while the cancellation unwinds and persists the paired tool message
+        the journal artifact alone does not cover.
+        """
+
+        infrastructure = current_infrastructure()
+        record = getattr(infrastructure, "record_cancelled_tool_output", None)
+        if callable(record):
+            record(output)
 
     async def _interrupted_call_result(
         self, call: ToolCall, spec: ToolSpec | None, started: bool
