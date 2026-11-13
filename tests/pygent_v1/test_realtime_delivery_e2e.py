@@ -1,21 +1,20 @@
 """Full-chain realtime delivery tests against a scripted model endpoint.
 
 Real ``PygentRuntimeService``, real agent graph, real fork reply, real
-collaboration store and real session coordinator — the only stub is the
+durable execution inbox and real session coordinator — the only stub is the
 model wire: an in-process OpenAI-compatible endpoint serving scripted
 completions. The chain under test is the one users experience: user input
 rides the fork, lands as an exchange envelope, and must reach the main
-agent's context through a continuation turn instead of stranding.
+agent's context — inside the running turn when one accepts it, through a
+continuation turn otherwise — instead of stranding.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 import time
 from collections.abc import Mapping
-from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -23,10 +22,10 @@ from typing import Any
 from pygent.agent.pygent_v1.core.io import read_json
 from pygent.agent.pygent_v1.orchestration.execution_host import LocalExecutionHost
 from pygent.agent.pygent_v1.orchestration.models import TurnCommand
+from pygent.agent.pygent_v1.runtime.realtime.envelope import EXCHANGE_MESSAGE_KIND
 from pygent.agent.pygent_v1.runtime.realtime.speak import SPEAK_TOOL_NAME
 from pygent.agent.pygent_v1.schema import build_run_config
 from pygent.agent.pygent_v1.schema.models import RealtimeInteractionConfig
-from pygent.agent.pygent_v1.sessions import SessionCollaborationStore
 from pygent.agent.pygent_v1.sessions.manager import SessionManager
 
 _DRAFT = "重构完成,改动 A/B/C"
@@ -289,7 +288,6 @@ async def _harness(tmp_path: Path, script: list[dict[str, Any]]) -> SimpleNamesp
         selected_model_key="scripted",
     )
     host = LocalExecutionHost(credential_environ={})
-    store = SessionCollaborationStore(config.pygent_root)
     return SimpleNamespace(
         server=server,
         config=config,
@@ -297,7 +295,6 @@ async def _harness(tmp_path: Path, script: list[dict[str, Any]]) -> SimpleNamesp
         session_id=ref.session_id,
         session_dir=ref.session_dir,
         host=host,
-        store=store,
     )
 
 
@@ -308,14 +305,14 @@ async def _acquire_service(harness: SimpleNamespace) -> Any:
     return service
 
 
-def _envelope_state(store_path: Path, submission_id: str) -> str:
-    with closing(sqlite3.connect(store_path)) as connection:
-        row = connection.execute(
-            "SELECT state FROM agent_messages WHERE submission_id = ?",
-            (submission_id,),
-        ).fetchone()
-    assert row is not None, f"no envelope {submission_id!r} in the store"
-    return str(row[0])
+def _exchange_messages(harness: SimpleNamespace) -> list[dict[str, Any]]:
+    """Exchange envelopes the main agent consumed, as persisted in history."""
+
+    return [
+        item
+        for item in harness.manager.load(harness.session_id).history
+        if isinstance(item, dict) and item.get("kind") == EXCHANGE_MESSAGE_KIND
+    ]
 
 
 def _speak_from_event(event: Any) -> str | None:
@@ -433,8 +430,8 @@ async def test_fork_reply_in_idle_session_drains_immediately(tmp_path: Path) -> 
         assert outcome.speak_args.text == _FORK_REPLY
 
         # The delivery hook must have submitted the continuation turn: the
-        # model round after the fork sees the envelope and answers through
-        # speak, and the envelope ends delivered — nothing strands.
+        # model round after the fork sees the envelope in its opening context
+        # and answers through speak — nothing strands.
         await _eventually(
             lambda: _answer_spoken(service, harness.session_dir)
         )
@@ -442,7 +439,9 @@ async def test_fork_reply_in_idle_session_drains_immediately(tmp_path: Path) -> 
         assert texts == [_ANSWER]
         history = harness.manager.load(harness.session_id).history
         assert "顺便问下,影响性能吗?" in str(history)
-        assert harness.store.pending_messages(harness.session_id) == []
+        assert not await harness.host.coordinator._has_pending_exchanges(
+            harness.manager, harness.session_id
+        )
     finally:
         await harness.host.aclose()
         await harness.server.aclose()
@@ -517,16 +516,14 @@ async def test_fork_reply_after_finalizer_chain_gets_delivered(
         assert outcome.speak_args.text == _FORK_REPLY
 
         assert turn1.status == "passed"
-        await _eventually(
-            lambda: _envelope_state(harness.store.path, "realtime-exchange:i1")
-            == "delivered"
-        )
         texts = await _speak_texts(service, harness.session_dir)
         assert texts == ["开始重构", _DRAFT, _ANSWER]
         history = harness.manager.load(harness.session_id).history
         assert "顺便问下,影响性能吗?" in str(history)
         assert _DRAFT in str(history)
-        assert harness.store.pending_messages(harness.session_id) == []
+        assert not await harness.host.coordinator._has_pending_exchanges(
+            harness.manager, harness.session_id
+        )
     finally:
         await harness.host.aclose()
         await harness.server.aclose()
@@ -569,8 +566,8 @@ async def test_delivery_entry_interrupts_busy_realtime_session(
 ) -> None:
     """Full user-experience chain through the unified entry: the first
     message starts a real turn; a second message while the lane is busy is
-    routed to a real fork, whose envelope is claimed by a continuation turn
-    and answered through speak.
+    routed to a real fork, whose envelope the running turn applies at its
+    next step boundary and answers through speak — no continuation turn.
     """
 
     after_interrupt = asyncio.Event()
@@ -579,17 +576,13 @@ async def test_delivery_entry_interrupts_busy_realtime_session(
         script=[
             {"response": _speak_call_response("t1-ack", "开始重构")},
             {"response": _tool_call_response("t1-bash", "bash", '{"command": "echo hi"}')},
-            # Held: turn1 stays mid-flight while the interrupt arrives. The
-            # turn ends pure-text after a non-speak tool round, so its draft
-            # needs the bottom-line decision.
+            # Held: turn1 stays mid-flight while the interrupt arrives and the
+            # fork reply lands. The envelope is accepted into turn1's inbox.
             {"response": _text_response(_DRAFT), "gate": after_interrupt},
             {"response": _speak_call_response("fork", _FORK_REPLY)},
-            # The envelope drain continuation serializes behind turn1.
-            {"response": _speak_call_response("cont", _ANSWER)},
-            {"response": _text_response("done")},
-            # The pure-text turn1 ending defers its bottom-line decision
-            # into a draft-delivery continuation (queued input present).
-            {"response": _speak_call_response("draft-cont", _DRAFT)},
+            # The wait-mode envelope applies after the draft and before the
+            # turn can seal: turn1 gets another round and answers it.
+            {"response": _speak_call_response("answer", _ANSWER)},
             {"response": _text_response("done")},
         ],
     )
@@ -620,23 +613,104 @@ async def test_delivery_entry_interrupts_busy_realtime_session(
         assert delivery2.outcome.speak_args.text == _FORK_REPLY
         assert await harness.server.wait_received(1) == [3]
 
-        # Give the envelope's drain turn time to queue behind turn1, then
-        # let turn1 end pure-text: the finalizer defers into a continuation.
-        await asyncio.sleep(0.2)
+        # Let turn1's held round return: the envelope is already in its inbox,
+        # so the turn continues instead of ending on the pure-text draft.
         after_interrupt.set()
-        assert await harness.server.wait_received(4) == [4, 5, 6, 7]
+        assert await harness.server.wait_received(2) == [4, 5]
         await asyncio.wait_for(delivery1.turn.result(), 30)
         assert delivery1.turn.status == "passed"
 
-        await _eventually(
-            lambda: _envelope_state(harness.store.path, "realtime-exchange:i2")
-            == "delivered"
-        )
         texts = await _speak_texts(service, harness.session_dir)
-        assert texts == ["开始重构", _ANSWER, _DRAFT]
+        assert texts == ["开始重构", _ANSWER]
+        exchanges = _exchange_messages(harness)
+        assert len(exchanges) == 1
+        assert "顺便问下,影响性能吗?" in str(exchanges[0]["content"])
+        assert _FORK_REPLY in str(exchanges[0]["content"])
+        assert not await harness.host.coordinator._has_pending_exchanges(
+            harness.manager, harness.session_id
+        )
+        # One turn, one fork: no continuation turn was needed.
+        runs = sorted(Path(harness.session_dir).rglob("run_metadata.json"))
+        assert len(runs) == 2
+    finally:
+        await harness.host.aclose()
+        await harness.server.aclose()
+
+
+async def test_envelope_lands_at_tool_result_boundary(tmp_path: Path) -> None:
+    """The interrupt arrives while turn1 is mid tool round: the envelope is
+    applied after the tool result and before the next model call, which sees
+    both. This is the boundary the 0.6.0 claim path used to crash on.
+    """
+
+    before_bash = asyncio.Event()
+    harness = await _harness(
+        tmp_path,
+        script=[
+            {"response": _speak_call_response("t1-ack", "开始重构")},
+            # Held: the interrupt lands while turn1 waits for this tool call.
+            {
+                "response": _tool_call_response(
+                    "t1-bash", "bash", '{"command": "echo hi"}'
+                ),
+                "gate": before_bash,
+            },
+            {"response": _speak_call_response("fork", _FORK_REPLY)},
+            # Model call after the bash result: tool result + envelope.
+            {"response": _speak_call_response("answer", _ANSWER)},
+            {"response": _text_response("done")},
+        ],
+    )
+    try:
+        service = await _acquire_service(harness)
+        delivery1 = await harness.host.deliver_user_message(
+            config=harness.config,
+            manager=harness.manager,
+            message="帮我重构这个模块",
+            session_id=harness.session_id,
+            input_id="t1",
+            interactive_approvals=False,
+        )
+        assert delivery1.mode == "turn"
+        assert await harness.server.wait_received(2) == [0, 1]
+
+        delivery2 = await harness.host.deliver_user_message(
+            config=harness.config,
+            manager=harness.manager,
+            message="顺便问下,影响性能吗?",
+            session_id=harness.session_id,
+            input_id="i2",
+        )
+        assert delivery2.mode == "interrupt"
+        assert delivery2.outcome is not None
+        assert delivery2.outcome.speak_args is not None
+        assert delivery2.outcome.speak_args.text == _FORK_REPLY
+        assert await harness.server.wait_received(1) == [2]
+
+        before_bash.set()
+        assert await harness.server.wait_received(2) == [3, 4]
+        await asyncio.wait_for(delivery1.turn.result(), 30)
+        assert delivery1.turn.status == "passed"
+
+        texts = await _speak_texts(service, harness.session_dir)
+        assert texts == ["开始重构", _ANSWER]
         history = harness.manager.load(harness.session_id).history
-        assert "顺便问下,影响性能吗?" in str(history)
-        assert harness.store.pending_messages(harness.session_id) == []
+        roles = [item.get("role") for item in history if isinstance(item, dict)]
+        kinds = [item.get("kind") for item in history if isinstance(item, dict)]
+        # ... speak round, bash round, then the envelope as a user-role message
+        # right after the tool result, then the answering round.
+        bash_index = next(
+            index
+            for index, item in enumerate(history)
+            if isinstance(item, dict)
+            and item.get("role") == "tool"
+            and any(result.get("name") == "bash" for result in item.get("results", []))
+        )
+        assert roles[bash_index + 1] == "user"
+        assert kinds[bash_index + 1] == EXCHANGE_MESSAGE_KIND
+        assert len(_exchange_messages(harness)) == 1
+        runs = sorted(Path(harness.session_dir).rglob("run_metadata.json"))
+        assert len(runs) == 2
     finally:
         await harness.host.aclose()
         await harness.server.aclose()

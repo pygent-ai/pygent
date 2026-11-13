@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 # The internal bottom-line round a pure-text ending spawns (session_execution).
 # Its key ends with ":finalize" and is accepted as a deliberate silent finish,
-# so queued agent messages deliberately wait for the continuation turn.
+# so pending exchange envelopes deliberately wait for the continuation turn.
 FINALIZER_MESSAGE_KIND = "pygent.v1.realtime.finalizer"
 
 TURN_FINALIZER_REMINDER = (

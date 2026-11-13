@@ -9,7 +9,10 @@ control plane.
 - `managed_turn.py`: one submitted turn's state, readiness/finalization signals,
   result, cancellation, and raw execution subscription.
 - `session_execution.py`: submits and recovers turns while owning per-session
-  execution lanes, active indexes, and coordinated shutdown.
+  execution lanes, active indexes, and coordinated shutdown. It also routes
+  realtime exchange envelopes: into the turn running on the lane, or held in
+  memory for the next turn's opening context (pending envelopes share the fate
+  of lane-queued turns).
 - `runtime_keys.py`: stable workspace scope and configuration-generation keys.
 - `runtime_lease.py`: the runtime bundle and idempotent ownership lease.
 - `runtime_pool.py`: creates, reuses, retires, and closes runtime generations.

@@ -13,9 +13,5 @@ Starting a case records its history boundary and publishes the running case ID
 in session metadata. Native assistant messages preserve usage counters and
 reasoning display metadata across checkpoints and application restarts.
 
-Agent-message inboxes are stored in `runtime/session-collaboration-v1.sqlite3`.
-Submission IDs are unique and bound to a request fingerprint; FIFO message
-claims provide durable, retryable delivery into a target execution.
-
-Session addressing is project-local: a target session must live in the
-caller's project store, and unknown sessions fail closed.
+Session addressing is project-local: a session must live in the caller's
+project store, and unknown sessions fail closed.

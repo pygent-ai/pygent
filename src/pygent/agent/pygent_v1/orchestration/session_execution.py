@@ -15,12 +15,14 @@ from pygent.agent.pygent_v1.runtime.realtime.continuation import (
     render_draft_delivery_message,
     render_pending_input_message,
 )
+from pygent.agent.pygent_v1.runtime.realtime.envelope import ExchangeEnvelope
 from pygent.agent.pygent_v1.runtime.realtime.speak import SPEAK_TOOL_NAME
 from pygent.agent.pygent_v1.runtime.realtime.turn_finalizer import (
     FINALIZER_MESSAGE_KIND,
     decide_turn_finalization,
 )
 from pygent.agent.pygent_v1.sessions import realtime_enabled_for
+from pygent.agent.react_projection_operations import REACT_PROJECTION_OPERATION_KIND
 
 from .managed_turn import ManagedSessionTurn
 from .models import TurnCommand, TurnState
@@ -45,6 +47,9 @@ class SessionExecutionKey:
 class _SessionLane:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     users: int = 0
+    # The turn currently driving inside the lane lock; None while no turn
+    # holds the lock or between a turn's exit and the next one's entry.
+    active: ManagedSessionTurn | None = None
 
 
 class SessionExecutionCoordinator:
@@ -53,6 +58,11 @@ class SessionExecutionCoordinator:
     def __init__(self) -> None:
         self._managed_runs: dict[int, ManagedSessionTurn] = {}
         self._session_lanes: dict[SessionExecutionKey, _SessionLane] = {}
+        # Exchange envelopes that found no running turn to join: the next turn
+        # that starts on the session carries them in its opening context.
+        # Pending envelopes share the fate of lane-queued turns — both live
+        # only in this process.
+        self._pending_exchanges: dict[SessionExecutionKey, list[ExchangeEnvelope]] = {}
         self._lock = asyncio.Lock()
         self._closing = False
         self._finalized_turns: set[str] = set()
@@ -89,6 +99,7 @@ class SessionExecutionCoordinator:
                 turn.manager,
                 turn.command.session_id,
                 admitted=True,
+                active=turn,
             ):
                 await self._drive_in_session_lane(turn)
         except asyncio.CancelledError:
@@ -128,6 +139,7 @@ class SessionExecutionCoordinator:
                     message_kind=turn.command.message_kind,
                     message_data=turn.command.message_data,
                     attachments=turn.command.attachments,
+                    opening_exchanges=await self._take_opening_exchanges(turn),
                 )
             else:
                 turn.execution_handle = await turn.runtime_service.recover_turn(
@@ -266,28 +278,24 @@ class SessionExecutionCoordinator:
 
     async def _has_pending_input(self, turn: ManagedSessionTurn) -> bool:
         """Whether user input is waiting at this turn's ending: lane-queued
-        turns or queued exchange envelopes. Both defer the bottom-line
+        turns or pending exchange envelopes. Both defer the bottom-line
         decision into a continuation turn.
         """
 
         if self._lane_has_waiters(turn.manager, turn.command.session_id):
             return True
-        return bool(
-            await turn.runtime_service.pending_agent_messages(
-                turn.command.session_id
-            )
+        return await self._has_pending_exchanges(
+            turn.manager, turn.command.session_id
         )
 
     async def _maybe_drain_pending(self, turn: ManagedSessionTurn) -> None:
-        """Submit a continuation turn for exchange envelopes queued after the
-        whole turn chain ended (an interrupt that lost the race with turn
+        """Submit a continuation turn for exchange envelopes left pending after
+        the whole turn chain ended (a fork reply that lost the race with turn
         completion). Without the drain the envelope would wait for the next
         user turn's opening context — or strand forever when none comes.
         """
 
-        if await self._pending_drain_gate(
-            turn.manager, turn.runtime_service, turn.command.session_id
-        ):
+        if await self._pending_drain_gate(turn.manager, turn.command.session_id):
             await self.submit_turn(
                 lease=turn.lease,
                 command=self._drain_command(
@@ -300,18 +308,16 @@ class SessionExecutionCoordinator:
     async def submit_pending_drain(
         self, *, lease: Any, session_id: str
     ) -> ManagedSessionTurn | None:
-        """Submit a continuation turn for envelopes queued in an idle session.
+        """Submit a continuation turn for envelopes pending in an idle session.
 
-        Called by the interrupt delivery after an exchange envelope lands: if
-        no turn chain is active, no drive tail will ever drain the queue, so
-        the delivery itself must. Returns the submitted turn, or ``None`` when
-        the session is busy (its own tail will drain) or has nothing pending.
+        Called by the exchange delivery when :meth:`deliver_exchange` could not
+        inject: if no turn chain is active, no drive tail will ever pick the
+        envelope up, so the delivery itself must. Returns the submitted turn,
+        or ``None`` when the session is busy (its own tail will drain) or has
+        nothing pending.
         """
 
-        runtime = lease.runtime
-        if not await self._pending_drain_gate(
-            runtime.manager, runtime.runtime_service, session_id
-        ):
+        if not await self._pending_drain_gate(lease.runtime.manager, session_id):
             return None
         return await self.submit_turn(
             lease=lease,
@@ -320,9 +326,7 @@ class SessionExecutionCoordinator:
             ),
         )
 
-    async def _pending_drain_gate(
-        self, manager: Any, runtime_service: Any, session_id: str
-    ) -> bool:
+    async def _pending_drain_gate(self, manager: Any, session_id: str) -> bool:
         """Whether an idle realtime session holds undelivered envelopes.
 
         Both drain entry points share the gate: the chain's own tail (a turn
@@ -335,7 +339,66 @@ class SessionExecutionCoordinator:
             return False
         if self._lane_has_waiters(manager, session_id):
             return False
-        return bool(await runtime_service.pending_agent_messages(session_id))
+        return await self._has_pending_exchanges(manager, session_id)
+
+    async def deliver_exchange(
+        self, manager: Any, envelope: ExchangeEnvelope
+    ) -> str:
+        """Hand one fork-reply exchange to the session's main agent.
+
+        A turn running on the lane receives it as a wait-mode steering input,
+        which the react layer applies after its pending tool results and
+        before the next model call. Anything else — no turn, a turn still
+        starting, a turn whose execution already sealed its inbox, or the
+        finalizer round (which decides only its own turn's bottom line) —
+        holds the envelope for the next turn's opening context. Returns
+        ``"injected"`` or ``"pending"``; the caller decides whether a pending
+        envelope needs a continuation turn (:meth:`submit_pending_drain`).
+        """
+
+        key = SessionExecutionKey.from_manager(manager, envelope.session_id)
+        async with self._lock:
+            lane = self._session_lanes.get(key)
+            active = lane.active if lane is not None else None
+        if (
+            active is not None
+            and active.state is TurnState.RUNNING
+            and active.command.message_kind != FINALIZER_MESSAGE_KIND
+            and active.execution_handle is not None
+            and active.run_ref is not None
+        ):
+            delivery = await active.execution_handle.send_input(
+                input_id=envelope.exchange_id,
+                kind=REACT_PROJECTION_OPERATION_KIND,
+                value=envelope.projection_operation(
+                    case_run_id=active.run_ref.case_run_id
+                ),
+            )
+            if delivery.status in {"accepted", "duplicate"}:
+                return "injected"
+        async with self._lock:
+            self._pending_exchanges.setdefault(key, []).append(envelope)
+        return "pending"
+
+    async def _has_pending_exchanges(self, manager: Any, session_id: str) -> bool:
+        key = SessionExecutionKey.from_manager(manager, session_id)
+        async with self._lock:
+            return bool(self._pending_exchanges.get(key))
+
+    async def _take_opening_exchanges(
+        self, turn: ManagedSessionTurn
+    ) -> tuple[ExchangeEnvelope, ...]:
+        """Pending envelopes for this turn's opening context.
+
+        The finalizer round decides only its own turn's bottom line and leaves
+        pending envelopes to the continuation turn that follows it.
+        """
+
+        if turn.command.message_kind == FINALIZER_MESSAGE_KIND:
+            return ()
+        key = SessionExecutionKey.from_manager(turn.manager, turn.command.session_id)
+        async with self._lock:
+            return tuple(self._pending_exchanges.pop(key, ()))
 
     def _drain_command(
         self, session_id: str, case_id: str, turn_id: str
@@ -356,6 +419,7 @@ class SessionExecutionCoordinator:
         session_id: str,
         *,
         admitted: bool = False,
+        active: ManagedSessionTurn | None = None,
     ) -> AsyncIterator[None]:
         key = SessionExecutionKey.from_manager(manager, session_id)
         async with self._lock:
@@ -365,7 +429,11 @@ class SessionExecutionCoordinator:
             lane.users += 1
         try:
             async with lane.lock:
-                yield
+                lane.active = active
+                try:
+                    yield
+                finally:
+                    lane.active = None
         finally:
             async with self._lock:
                 lane.users -= 1

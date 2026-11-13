@@ -70,9 +70,10 @@ class _FakeRuntimeService:
         message_kind: str = "pygent.v1.chat.turn",
         message_data: dict[str, object] | None = None,
         attachments: Sequence[str] = (),
+        opening_exchanges: Sequence[Any] = (),
     ) -> _FakeHandle:
         del manager, run_ref, turn_id, interactive_approvals
-        del message_kind, message_data, attachments
+        del message_kind, message_data, attachments, opening_exchanges
         self.started_turns.append(message)
         if self.turn_gate is not None:
             await self.turn_gate.wait()
@@ -95,10 +96,6 @@ class _FakeRuntimeService:
             text="ack",
             message=AIMessage(content="ack"),
         )
-
-    async def pending_agent_messages(self, session_id: str) -> tuple[Any, ...]:
-        del session_id
-        return ()
 
 
 class _Harness:

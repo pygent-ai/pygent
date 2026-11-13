@@ -33,9 +33,12 @@ from pygent.agent.pygent_v1.runtime.context_compression import (
 from pygent.agent.pygent_v1.runtime.eternal_conversation import (
     render_memory_access_instruction,
 )
-from pygent.agent.pygent_v1.runtime.realtime.envelope import render_exchange_envelope
+from pygent.agent.pygent_v1.runtime.realtime.envelope import (
+    EXCHANGE_MESSAGE_KIND,
+    ExchangeEnvelope,
+    render_exchange_envelope,
+)
 from pygent.agent.pygent_v1.runtime.realtime.speak import render_reply_instruction
-from pygent.agent.pygent_v1.runtime.reminders.agent_messages import render_agent_message
 from pygent.agent.pygent_v1.runtime.reminders.bootstrap import build_initial_snapshot
 from pygent.agent.pygent_v1.runtime.reminders.cli_context import collect_initial_cli
 from pygent.agent.pygent_v1.runtime.reminders.git_context import render_git_section
@@ -54,9 +57,12 @@ from pygent.agent.pygent_v1.schema import (
     CaseRunRef,
     RunConfig,
 )
-from pygent.agent.pygent_v1.sessions import AgentMessage
-from pygent.agent.pygent_v1.sessions.collaboration import AgentMessageState
 from pygent.agent.pygent_v1.sessions.manager import PYGENT_SAYS_SESSION_MODE
+from pygent.agent.react_projection_operations import (
+    StandaloneUserMessage,
+    SteeringMode,
+    decode_react_projection_operation,
+)
 from pygent.runtime.codec import message_to_dict
 
 
@@ -101,26 +107,39 @@ def test_reply_instruction_golden() -> None:
     )
 
 
-def test_agent_message_golden() -> None:
-    message = AgentMessage(
-        message_id="msg-1",
-        submission_id="sub-1",
-        source_session_id="source-1",
-        source_agent_alias="pygent.v1-child",
-        target_session_id="target-1",
-        content="line <one>\nline & two",
-        state=AgentMessageState.QUEUED,
-        created_at="2026-01-01T00:00:00+00:00",
-        updated_at="2026-01-01T00:00:00+00:00",
+def test_exchange_steering_message_golden() -> None:
+    """The main agent reads the envelope markup itself, never an escaped copy:
+    the exchange rides a wait-mode steering operation whose user message
+    carries the rendered envelope verbatim and is bound to one case run."""
+
+    envelope = ExchangeEnvelope(
+        exchange_id="realtime-exchange:i1",
+        session_id="session-1",
+        content=render_exchange_envelope(
+            user_asked="line <one>\nline & two", response="noted"
+        ),
     )
+    operation = decode_react_projection_operation(
+        envelope.projection_operation(case_run_id="run-1")
+    )
+    assert isinstance(operation, StandaloneUserMessage)
+    assert operation.mode is SteeringMode.WAIT
+    assert operation.message.kind == EXCHANGE_MESSAGE_KIND
+    assert dict(operation.message.data) == {
+        "case_run_id": "run-1",
+        "input_id": "realtime-exchange:i1",
+    }
     _assert_exact(
-        render_agent_message(message),
-        """<runtime-context>
-  <agent-message message-id="msg-1" source-session-id="source-1" source-agent-alias="pygent.v1-child">
-    line &lt;one&gt;
-    line &amp; two
-  </agent-message>
-</runtime-context>""",
+        operation.message.content,
+        """<system-reminder>
+<user-asked>
+line <one>
+line & two
+</user-asked>
+<your-response-in-another-session>
+noted
+</your-response-in-another-session>
+</system-reminder>""",
     )
 
 

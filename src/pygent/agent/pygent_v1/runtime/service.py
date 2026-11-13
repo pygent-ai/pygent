@@ -5,7 +5,7 @@ import hashlib
 import os
 import time
 import warnings
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from html import escape
 from pathlib import Path
@@ -39,17 +39,12 @@ from pygent.agent.pygent_v1.runtime.attachments import (
 from pygent.agent.pygent_v1.runtime.bash_tasks import BashTaskObservations
 from pygent.agent.pygent_v1.runtime.mcp import ReadinessRetryingTransport
 from pygent.agent.pygent_v1.runtime.reminders import ReminderService
-from pygent.agent.pygent_v1.runtime.reminders.agent_messages import render_agent_message
 from pygent.agent.pygent_v1.scheduler.tools import (
     SCHEDULER_TOOL_SPECS,
     SchedulerToolExecutor,
 )
 from pygent.agent.pygent_v1.schema import AgentSession, CaseRunRef, RunConfig
-from pygent.agent.pygent_v1.sessions import (
-    AgentMessage,
-    SessionManager,
-    realtime_enabled_for,
-)
+from pygent.agent.pygent_v1.sessions import SessionManager, realtime_enabled_for
 from pygent.agent.pygent_v1.tracing import DIFF_TOOL_SPEC, DiffTool
 from pygent.agent.react_projection_operations import (
     REACT_PROJECTION_OPERATION_KIND,
@@ -113,12 +108,15 @@ from .fork_context import (
 )
 from .model_configuration import preferred_models, preferred_profile_name
 from .realtime.continuation import CONTINUATION_MESSAGE_KIND
-from .realtime.envelope import format_user_asked
+from .realtime.envelope import (
+    ExchangeEnvelope,
+    format_user_asked,
+    render_exchange_envelope,
+)
 from .realtime.fork_agent import ForkReplyModule, outcome_from_result
 from .realtime.fork_reasoning import ForkModelProfile, fork_model_profiles
 from .realtime.fork_reply import build_fork_context
 from .realtime.fork_state import SessionForkState
-from .realtime.posting import queue_exchange_envelope
 from .realtime.speak import (
     SILENT_ACKNOWLEDGEMENT,
     SPEAK_TOOL_SPEC,
@@ -275,16 +273,16 @@ class PygentRuntimeService:
         credential_environ: Mapping[str, str] | None = None,
         run_config_loader: Callable[..., RunConfig] | None = None,
         prompt_registry: PromptRegistry | None = None,
-        on_exchange_queued: Callable[[str], None] | None = None,
+        on_exchange_ready: Callable[[ExchangeEnvelope], Awaitable[None]] | None = None,
     ) -> None:
         self.config = config
         self._credential_environ = credential_environ
         self._run_config_loader = run_config_loader
         self._prompt_registry = prompt_registry
-        # Fired after an interrupt delivery queues its exchange envelope: when
-        # the session chain is idle no drive tail will ever drain the queue,
-        # so the delivery itself must trigger the continuation turn.
-        self._on_exchange_queued = on_exchange_queued
+        # Receives each fork reply's exchange envelope. The host owns the
+        # session's turn chain, so only it can inject into the running turn or
+        # hold the envelope for the next turn's opening context.
+        self._on_exchange_ready = on_exchange_ready
         self.reminders = reminders or ReminderService(config)
         self._owns_reminders = (
             reminders is None if own_reminders is None else own_reminders
@@ -780,6 +778,7 @@ class PygentRuntimeService:
         message_kind: str = "pygent.v1.chat.turn",
         message_data: dict[str, object] | None = None,
         attachments: Sequence[str] = (),
+        opening_exchanges: Sequence[ExchangeEnvelope] = (),
         deadline: float | None = None,
     ) -> Any:
         await self.initialize()
@@ -793,22 +792,6 @@ class PygentRuntimeService:
             eternal_memory_enabled=eternal_enabled_for(session, self.config),
             realtime_interaction_enabled=realtime_enabled,
         )
-        initial_claim_id = self.reminders.turn_opening_claim_id(
-            run_ref.session_id, turn_id
-        )
-        initial_agent_messages = await self.reminders.claim_turn_opening(
-            run_ref.session_id,
-            turn_id=turn_id,
-            message_kind=message_kind,
-            realtime_enabled=realtime_enabled,
-        )
-        initial_agent_context = (
-            "\n".join(
-                render_agent_message(item) for item in initial_agent_messages
-            )
-            if initial_agent_messages
-            else None
-        )
         try:
             turn_message, turn_context = await self._prepare_turn(
                 manager=manager,
@@ -819,7 +802,9 @@ class PygentRuntimeService:
                 message_kind=message_kind,
                 message_data=message_data,
                 attachments=attachments,
-                initial_agent_context=initial_agent_context,
+                exchange_context=(
+                    "\n".join(item.content for item in opening_exchanges) or None
+                ),
             )
             bound = await self.bind(agent, agent)
             handle = await self._start_agent_execution(
@@ -842,30 +827,13 @@ class PygentRuntimeService:
             )
         except BaseException:
             await self.reminders.release_initial(run_ref.session_id, turn_id)
-            for item in initial_agent_messages:
-                await self.reminders.release_agent_message(
-                    item.message_id, claim_id=initial_claim_id
-                )
             raise
         await self.reminders.acknowledge_initial(
             run_ref.session_id, turn_id, handle.execution_id
         )
-        for item in initial_agent_messages:
-            await self.reminders.acknowledge_agent_message(
-                item.message_id,
-                claim_id=initial_claim_id,
-                execution_id=handle.execution_id,
-            )
         self._record_execution_id(run_ref, handle.execution_id)
         self._track_turn_context(handle.execution_id, turn_context)
         return handle
-
-    async def pending_agent_messages(
-        self, session_id: str
-    ) -> tuple[AgentMessage, ...]:
-        """Peek the session's queued agent messages without claiming them."""
-
-        return await self.reminders.pending_agent_messages(session_id)
 
     async def send_interrupt(
         self,
@@ -890,6 +858,11 @@ class PygentRuntimeService:
         session = manager.load(session_id)
         if not realtime_enabled_for(session):
             raise RuntimeError("realtime interaction is not enabled for this session")
+        if self._on_exchange_ready is None:
+            raise RuntimeError(
+                "realtime interrupts require an exchange delivery hook; "
+                "run the service through an execution host"
+            )
         run_ref = manager.start_case_run(session_id, case_id)
         state = self._fork_states.setdefault(session_id, SessionForkState())
         async with state.lock:
@@ -948,18 +921,18 @@ class PygentRuntimeService:
                 response_text = outcome.speak_args.text or ""
             else:
                 response_text = outcome.text or ""
-            queue_exchange_envelope(
-                self.reminders.message_store,
+            envelope = ExchangeEnvelope(
+                exchange_id=f"realtime-exchange:{fork_input_id}",
                 session_id=session_id,
-                submission_id=f"realtime-exchange:{fork_input_id}",
-                user_asked=tuple(fork_messages),
-                response=response_text or "(no verbal reply)",
+                content=render_exchange_envelope(
+                    user_asked=tuple(fork_messages),
+                    response=response_text or "(no verbal reply)",
+                ),
             )
             state.handle = None
             state.finished = False
             state.pending = []
-        if self._on_exchange_queued is not None:
-            self._on_exchange_queued(session_id)
+        await self._on_exchange_ready(envelope)
         return outcome
 
     async def _start_fork_reply(
@@ -1171,7 +1144,7 @@ class PygentRuntimeService:
         message_kind: str = "pygent.v1.chat.turn",
         message_data: dict[str, object] | None = None,
         attachments: Sequence[str] = (),
-        initial_agent_context: str | None = None,
+        exchange_context: str | None = None,
     ) -> tuple[UserMessage, PygentContext]:
         if session is None:
             session = manager.load(run_ref.session_id)
@@ -1214,11 +1187,9 @@ class PygentRuntimeService:
             reminder = (
                 f"{reminder}\n\n{dynamic_reminder}" if reminder else dynamic_reminder
             )
-        if initial_agent_context:
+        if exchange_context:
             reminder = (
-                f"{reminder}\n\n{initial_agent_context}"
-                if reminder
-                else initial_agent_context
+                f"{reminder}\n\n{exchange_context}" if reminder else exchange_context
             )
         if reminder:
             wrapped = f"{wrapped}\n\n{reminder}"

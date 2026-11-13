@@ -57,8 +57,7 @@ class RealtimeNudgeModule(Module[ToolMessage, ToolMessage]):
     The first-result reminder fires at most once per turn: after the first
     tool result, when the turn has not called speak, and when no earlier
     module already injected content into this boundary. A boundary that
-    carries an exchange envelope or runtime reminder keeps that injection
-    only.
+    carries a runtime reminder keeps that injection only.
 
     The counter is a trusted live resource: deliberately ephemeral (lost on
     crash, which restarts counting) and never checkpointed.

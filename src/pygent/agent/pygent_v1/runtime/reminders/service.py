@@ -5,11 +5,7 @@ from functools import partial
 from pathlib import Path
 
 from pygent.agent.pygent_v1.core.io import read_json
-from pygent.agent.pygent_v1.runtime.realtime.turn_finalizer import (
-    FINALIZER_MESSAGE_KIND,
-)
 from pygent.agent.pygent_v1.schema import RunConfig
-from pygent.agent.pygent_v1.sessions import AgentMessage, SessionCollaborationStore
 
 from .bootstrap import build_initial_snapshot
 from .cli_context import detect_cli_changes
@@ -21,20 +17,16 @@ from .store import ReminderStateStore
 
 
 class ReminderService:
-    """Session bootstrap, runtime observations, and the Agent-message inbox."""
+    """Session bootstrap and runtime observations."""
 
     def __init__(
         self,
         config: RunConfig,
         *,
         store: ReminderStateStore | None = None,
-        message_store: SessionCollaborationStore | None = None,
     ) -> None:
         self.config = config
         self.store = store or ReminderStateStore()
-        self.message_store = message_store or SessionCollaborationStore(
-            config.pygent_root
-        )
         self._preparations: dict[str, asyncio.Task[None]] = {}
         self._observations: dict[str, asyncio.Task[ReminderSection | None]] = {}
         self._queued_observations: set[str] = set()
@@ -174,98 +166,6 @@ class ReminderService:
     async def collect_pending(self, session_id: str) -> str | None:
         result = self._take_completed_observation(session_id)
         return render_context_body([result]) if result is not None else None
-
-    async def claim_agent_messages(
-        self,
-        session_id: str,
-        *,
-        claim_id: str,
-        lease_seconds: float = 30.0,
-    ) -> tuple[AgentMessage, ...]:
-        messages = await asyncio.to_thread(
-            self.message_store.claim_messages,
-            session_id,
-            claim_id=claim_id,
-            lease_seconds=lease_seconds,
-        )
-        return tuple(messages)
-
-    def turn_opening_claim_id(self, session_id: str, turn_id: str) -> str:
-        """The idempotent claim id for one turn's opening-context claim."""
-
-        return f"agent-messages:initial:{session_id}:{turn_id}"
-
-    async def claim_turn_opening(
-        self,
-        session_id: str,
-        *,
-        turn_id: str,
-        message_kind: str,
-        realtime_enabled: bool,
-    ) -> tuple[AgentMessage, ...]:
-        """Claim envelopes queued since the previous turn for this turn's
-        opening context.
-
-        Envelopes queued after the previous turn ended (including an interrupt
-        that lost the race with turn completion) must reach this turn's opening
-        context, not wait for a tool boundary that may never come. The
-        finalizer round decides only its own turn's bottom line and leaves
-        pending messages to the continuation turn.
-        """
-
-        if not realtime_enabled or message_kind == FINALIZER_MESSAGE_KIND:
-            return ()
-        return await self.claim_agent_messages(
-            session_id,
-            claim_id=self.turn_opening_claim_id(session_id, turn_id),
-        )
-
-    async def pending_agent_messages(
-        self,
-        session_id: str,
-    ) -> tuple[AgentMessage, ...]:
-        """Queued or lease-expired agent messages, without claiming them."""
-
-        messages = await asyncio.to_thread(
-            self.message_store.pending_messages, session_id
-        )
-        return tuple(messages)
-
-    async def claimed_agent_message(
-        self,
-        message_id: str,
-        *,
-        claim_id: str,
-    ) -> AgentMessage | None:
-        return await asyncio.to_thread(
-            self.message_store.get_claimed_message,
-            message_id,
-            claim_id=claim_id,
-        )
-
-    async def agent_message_status(self, message_id: str) -> AgentMessage:
-        return await asyncio.to_thread(self.message_store.get_message, message_id)
-
-    async def acknowledge_agent_message(
-        self,
-        message_id: str,
-        *,
-        claim_id: str,
-        execution_id: str,
-    ) -> None:
-        await asyncio.to_thread(
-            self.message_store.acknowledge_message,
-            message_id,
-            claim_id=claim_id,
-            execution_id=execution_id,
-        )
-
-    async def release_agent_message(self, message_id: str, *, claim_id: str) -> None:
-        await asyncio.to_thread(
-            self.message_store.release_message,
-            message_id,
-            claim_id=claim_id,
-        )
 
     async def close(self) -> None:
         if self._closed:

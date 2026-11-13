@@ -3,28 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 from pygent import AIMessage
 from pygent.agent.pygent_v1.runtime.realtime.envelope import (
+    ExchangeEnvelope,
     format_user_asked,
     render_exchange_envelope,
 )
 from pygent.agent.pygent_v1.runtime.realtime.fork_agent import FORK_RESULT_KIND
 from pygent.agent.pygent_v1.runtime.service import PygentRuntimeService
 from pygent.agent.pygent_v1.schema import AgentSession, CaseRunRef, RunConfig
-
-
-class _Store:
-    def __init__(self) -> None:
-        self.messages: list[dict[str, object]] = []
-
-    def enqueue_message(self, **kwargs: object) -> object:
-        self.messages.append(kwargs)
-        return SimpleNamespace(**kwargs)
 
 
 class _Handle:
@@ -57,8 +48,6 @@ class _Handle:
 
 
 class _FakeService:
-    _on_exchange_queued: Callable[[str], object] | None = None
-
     def __init__(self, *, final_index: int, late_first: bool = False) -> None:
         self.config = RunConfig(
             workspace_root="C:/workspace",
@@ -66,7 +55,7 @@ class _FakeService:
             realtime_interaction={"enabled": True},  # type: ignore[arg-type]
         )
         self._fork_states: dict[str, object] = {}
-        self.reminders = SimpleNamespace(message_store=_Store())
+        self.envelopes: list[ExchangeEnvelope] = []
         self.handles: list[_Handle] = []
         self.started: asyncio.Queue[str] = asyncio.Queue()
         self.final_index = final_index
@@ -74,6 +63,9 @@ class _FakeService:
 
     async def initialize(self) -> None:
         return None
+
+    async def _on_exchange_ready(self, envelope: ExchangeEnvelope) -> None:
+        self.envelopes.append(envelope)
 
     async def _start_fork_reply(
         self,
@@ -142,8 +134,10 @@ async def test_three_interrupts_supersede_and_merge(tmp_path: Path) -> None:
     await asyncio.gather(first, second, third)
     assert service.handles[0].cancel_count == 1
     assert service.handles[1].cancel_count == 1
-    content = str(service.reminders.message_store.messages[-1]["content"])
-    assert "1. first\n2. second\n3. third" in content
+    assert [item.exchange_id for item in service.envelopes] == [
+        "realtime-exchange:i3:g3"
+    ]
+    assert "1. first\n2. second\n3. third" in service.envelopes[-1].content
 
 
 async def test_stale_generation_drops_late_envelope(tmp_path: Path) -> None:
@@ -156,10 +150,8 @@ async def test_stale_generation_drops_late_envelope(tmp_path: Path) -> None:
     await first
     service.handles[1].release.set()
     await second
-    assert len(service.reminders.message_store.messages) == 1
-    assert "1. first\n2. second" in str(
-        service.reminders.message_store.messages[0]["content"]
-    )
+    assert len(service.envelopes) == 1
+    assert "1. first\n2. second" in service.envelopes[0].content
 
 
 def test_merged_user_asked_format_is_numbered() -> None:

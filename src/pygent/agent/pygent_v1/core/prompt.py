@@ -29,10 +29,7 @@ KNOWN_ENVELOPES: dict[str, EnvelopeInfo] = {
     "system-reminder": EnvelopeInfo(
         False, "Agent steering and realtime exchange envelope."
     ),
-    "runtime-context": EnvelopeInfo(
-        False, "Reminder wrapper for runtime context and agent messages."
-    ),
-    "agent-message": EnvelopeInfo(False, "Collaborator message from another session."),
+    "runtime-context": EnvelopeInfo(False, "Reminder wrapper for runtime context."),
     "git-context": EnvelopeInfo(False, "Git status snapshot or delta."),
     "skills-context": EnvelopeInfo(False, "Available or newly discovered skills."),
     "cli-context": EnvelopeInfo(False, "Available or newly installed CLI tools."),
