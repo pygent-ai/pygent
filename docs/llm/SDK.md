@@ -242,7 +242,14 @@ Gemini generateContent 使用 `inlineData` part。Wire codec 会序列化 `media
 
 ## Direct：Anthropic Messages
 
-Anthropic Messages 使用独立的 client 和 Adapter。该协议要求每次请求显式设置正整数 `max_output_tokens`：
+Anthropic Messages 使用独立的 client 和 Adapter。该协议的 wire 格式要求每次请求携带 `max_tokens`，而 OpenAI 与 Gemini 协议允许省略并由服务端决定。Pygent 不为此发明数字，而是按固定顺序解析：
+
+1. 调用级 `ModelCallOptions.max_output_tokens`（受 `ModelCallPolicy` 约束）；
+2. `ModelCallLayer` 的 `GenerationConfig.max_output_tokens`，即本次调用的输出预算；
+3. 模型 `capabilities.limits.max_output_tokens`，即模型的输出能力上限，只在协议必填时充当回退；
+4. 以上都没有（limits 显式为 `null`）时，在 Provider I/O 前以 `INVALID_REQUEST` 失败，错误信息指出两条修复路径。
+
+解析后的有效值写入 `model.request.prepared` 的 `generation.max_output_tokens`；来自 limits 的字段同时记录在 `generation_sources`（如 `{"max_output_tokens": "capabilities.limits"}`），显式设置的字段不出现在其中。回退值是模型上限而非合理预算：长上下文下 Anthropic 可能因 `输入 + max_tokens` 超过上下文窗口而拒绝请求，需要控制输出长度时请显式设置 `GenerationConfig.max_output_tokens`。不声明必填字段的协议（OpenAI、Gemini）不受影响：未设置时请求体不含该字段。
 
 ```python
 from pygent.llm import AnthropicMessagesAdapter, AnthropicMessagesClient

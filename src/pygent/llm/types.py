@@ -411,6 +411,13 @@ class RetryPolicy:
 
 @dataclass(frozen=True, slots=True)
 class GenerationConfig:
+    """Provider-neutral generation intent for one call.
+
+    ``max_output_tokens`` is the per-call output budget. Protocols that treat
+    it as optional omit it from the wire when unset; protocols that require it
+    fall back to the model's declared ``capabilities.limits.max_output_tokens``.
+    """
+
     temperature: float | None = None
     max_output_tokens: int | None = None
     response_schema: JsonObjectInput | None = None

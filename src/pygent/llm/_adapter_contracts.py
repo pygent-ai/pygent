@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, NoReturn, Protocol, runtime_checkable
 
 from pygent.core import (
@@ -287,6 +288,7 @@ class ModelProviderRequest:
     generation: GenerationConfig
     tools: tuple[ToolDefinition, ...] = ()
     media_projections: tuple[MediaProjectionTrace, ...] = ()
+    generation_sources: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         projections = tuple(self.media_projections)
@@ -295,6 +297,13 @@ class ModelProviderRequest:
                 "media_projections must contain MediaProjectionTrace values"
             )
         object.__setattr__(self, "media_projections", projections)
+        sources = dict(self.generation_sources)
+        if any(
+            not isinstance(key, str) or not isinstance(value, str) or not value
+            for key, value in sources.items()
+        ):
+            raise TypeError("generation_sources must map field names to source names")
+        object.__setattr__(self, "generation_sources", MappingProxyType(sources))
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,6 +442,19 @@ class ModelProviderSpecValidator(Protocol):
     """Optional protocol-owned validation for non-empty model options."""
 
     def validate_model(self, model: ModelSpec) -> None: ...
+
+
+@runtime_checkable
+class ModelProviderGenerationRequirements(Protocol):
+    """Optional protocol-declared generation fields the wire format cannot omit.
+
+    The invoker resolves a missing required field from the model's declared
+    ``capabilities.limits`` before Provider I/O and records the source in the
+    prepared-request snapshot. Only ``max_output_tokens`` has a limits
+    counterpart today.
+    """
+
+    required_generation: frozenset[str]
 
 
 @runtime_checkable
@@ -771,11 +793,18 @@ def _validate_public_model_event(kind: ModelEventKind, data: FrozenJsonObject) -
             "current_message",
             "tools",
             "generation",
+            "generation_sources",
             "projection_revision",
             "media_projections",
         }
         if set(request) != expected_request_fields:
             raise ValueError("prepared request fields do not match the contract")
+        sources = request["generation_sources"]
+        if not isinstance(sources, Mapping) or any(
+            not isinstance(key, str) or not isinstance(value, str) or not value
+            for key, value in sources.items()
+        ):
+            raise ValueError("prepared generation_sources must map fields to sources")
         projections = request["media_projections"]
         if not isinstance(projections, tuple):
             raise ValueError("prepared request media_projections must be an array")

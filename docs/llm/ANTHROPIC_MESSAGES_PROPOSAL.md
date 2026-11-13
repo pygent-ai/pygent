@@ -104,7 +104,7 @@ Anthropic 的 `/v1/models` 结果继续投影为现有 `ModelCatalog`。RFC 3339
 - `GenerationConfig.temperature` 映射为 `temperature`；
 - `GenerationConfig.max_output_tokens` 映射为必填的 `max_tokens`。
 
-Anthropic 调用缺少 `GenerationConfig.max_output_tokens` 时，在 Provider I/O 前失败。框架不偷偷使用模型能力上限，也不设置隐藏默认值。
+`max_tokens` 是 Messages wire 格式的必填字段，Adapter 通过 `required_generation` 向 Invoker 声明。Invoker 在 Provider I/O 前按 调用级覆盖 → `GenerationConfig` → `capabilities.limits.max_output_tokens` 解析；来自 limits 的回退记录在 prepared-request snapshot 的 `generation_sources` 中，不是隐藏默认值。limits 显式为 `null` 表示部署方不知道模型输出上限，此时调用以 `INVALID_REQUEST` 失败并指出两条修复路径；框架不猜测数字。Adapter 的 `build_request` 仍保留必填检查，作为直接使用 Adapter 时的 wire 边界防线。
 
 第一版 Adapter 只发送当前 Pygent Message 和 Tool 契约能够无损表达的输入。目录可以如实声明模型具有图像能力，但这不改变当前 Message 的输入类型。
 

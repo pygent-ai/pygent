@@ -3649,7 +3649,7 @@
         },
         "limits": {
           "context_tokens": null,
-          "max_output_tokens": null
+          "max_output_tokens": 128000
         }
       }
     },
@@ -3692,7 +3692,7 @@
         },
         "limits": {
           "context_tokens": null,
-          "max_output_tokens": null
+          "max_output_tokens": 128000
         }
       }
     },
@@ -3735,7 +3735,7 @@
         },
         "limits": {
           "context_tokens": null,
-          "max_output_tokens": null
+          "max_output_tokens": 128000
         }
       }
     },
@@ -3821,7 +3821,7 @@
         },
         "limits": {
           "context_tokens": null,
-          "max_output_tokens": null
+          "max_output_tokens": 128000
         }
       }
     },

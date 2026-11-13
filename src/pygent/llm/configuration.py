@@ -281,6 +281,14 @@ class ModelReasoningCapabilities:
 
 @dataclass(frozen=True, slots=True)
 class ModelLimits:
+    """Declared model ceilings; ``None`` means the deployment does not know.
+
+    ``max_output_tokens`` is what the model can emit, not what a call wants.
+    The invoker uses it as the fallback for protocols whose wire format
+    requires an output limit on every request (Anthropic Messages) when
+    ``GenerationConfig.max_output_tokens`` is unset.
+    """
+
     context_tokens: int | None
     max_output_tokens: int | None
 

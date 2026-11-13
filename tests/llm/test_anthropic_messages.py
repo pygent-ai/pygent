@@ -23,10 +23,12 @@ from pygent.llm import (
     AnthropicMessagesAdapter,
     AnthropicMessagesClient,
     DefaultModelInvoker,
+    ModelCallError,
     ModelEntry,
     ModelErrorKind,
     ModelFailureReason,
     ModelGroup,
+    ModelLimits,
     ModelModalities,
     ModelProviderError,
     ModelProviderRequest,
@@ -827,3 +829,129 @@ async def test_anthropic_http_stream_reaches_common_invoker_reducer() -> None:
     assert all("continuation" not in event.kind for event in public_events)
     await invoker.aclose()
     await http.aclose()
+
+
+_MINIMAL_STREAM = [
+    {"type": "message_start", "message": {"id": "msg-1", "usage": {"input_tokens": 1}}},
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "text", "text": ""},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "ok"},
+    },
+    {"type": "content_block_stop", "index": 0},
+    {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn"},
+        "usage": {"output_tokens": 1},
+    },
+    {"type": "message_stop"},
+]
+
+
+async def _run_through_invoker(
+    entry: ModelEntry, generation: GenerationConfig
+) -> tuple[list[dict[str, object]], list[object], BaseException | None]:
+    bodies: list[dict[str, object]] = []
+
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(http_request.content))
+        return httpx.Response(
+            200,
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in _MINIMAL_STREAM),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AnthropicMessagesClient(base_url="https://api.anthropic.com", client=http)
+    invoker = DefaultModelInvoker(
+        adapters={entry.spec.protocol: AnthropicMessagesAdapter()},
+        clients={entry.key: client},
+    )
+    execution = invoker.execute(
+        model_group=ModelGroup("assistant", (entry,)),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=generation,
+        message=UserMessage(content="question"),
+        context=Context(),
+    )
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+    error: BaseException | None = None
+    try:
+        await execution.result()
+    except ModelCallError as exc:
+        error = exc
+    await invoker.aclose()
+    await http.aclose()
+    return bodies, events, error
+
+
+async def test_invoker_fills_max_output_tokens_from_declared_limits() -> None:
+    entry = anthropic_entry()
+    limit = entry.spec.capabilities.limits.max_output_tokens
+    assert limit is not None
+
+    bodies, events, error = await _run_through_invoker(entry, GenerationConfig())
+
+    assert error is None
+    assert bodies[0]["max_tokens"] == limit
+    prepared = next(event for event in events if event.kind == "model.request.prepared")
+    request = prepared.data["request"]
+    assert request["generation"]["max_output_tokens"] == limit
+    assert dict(request["generation_sources"]) == {
+        "max_output_tokens": "capabilities.limits"
+    }
+
+
+async def test_invoker_prefers_explicit_max_output_tokens_over_limits() -> None:
+    bodies, events, error = await _run_through_invoker(
+        anthropic_entry(), GenerationConfig(max_output_tokens=64)
+    )
+
+    assert error is None
+    assert bodies[0]["max_tokens"] == 64
+    prepared = next(event for event in events if event.kind == "model.request.prepared")
+    assert prepared.data["request"]["generation"]["max_output_tokens"] == 64
+    assert dict(prepared.data["request"]["generation_sources"]) == {}
+
+
+async def test_invoker_fails_before_io_when_max_output_tokens_has_no_source() -> None:
+    source = anthropic_entry()
+    entry = ModelEntry(
+        source.key,
+        replace(
+            source.spec,
+            capabilities=replace(
+                source.spec.capabilities, limits=ModelLimits(None, None)
+            ),
+        ),
+    )
+
+    bodies, events, error = await _run_through_invoker(entry, GenerationConfig())
+
+    assert bodies == []
+    assert isinstance(error, ModelCallError)
+    assert error.kind is ModelErrorKind.INVALID_REQUEST
+    message = error.failure.message
+    assert "GenerationConfig.max_output_tokens" in message
+    assert "capabilities.limits.max_output_tokens" in message
+    assert "'main'" in message
+    kinds = [event.kind for event in events]
+    assert kinds == ["model.started", "model.failed"]
+
+
+async def test_invoker_surfaces_adapter_request_errors_before_io() -> None:
+    bodies, events, error = await _run_through_invoker(
+        anthropic_entry(), GenerationConfig(max_output_tokens=64, tool_choice="auto")
+    )
+
+    assert bodies == []
+    assert isinstance(error, ModelCallError)
+    assert error.kind is ModelErrorKind.INVALID_REQUEST
+    assert error.failure.message == "tool_choice requires at least one visible tool"
+    assert "model.attempt.started" not in [event.kind for event in events]

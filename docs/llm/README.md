@@ -57,7 +57,7 @@ Provider 是 Connection 上的开放字符串。Provider preset 只提供 UI/配
 
 Provider 私有生成语义放在 `ModelSpec.provider_options`。连接、secret、认证头、代理、TLS、retry、deadline、stream 开关和框架保留请求字段不能放入其中。第三方 Adapter 只有实现 `ModelProviderSpecValidator` 才能接受非空选项。
 
-Anthropic Messages 请求必须由 `GenerationConfig.max_output_tokens` 提供正整数，没有框架默认值。需要工具循环回传的 Provider 私有 thinking/reasoning 状态保存在 `AIMessage.continuation`；该值记录实际生产它的 `model_key`，并只交给 `model_key`、Provider、model ID 与 protocol 都匹配的后续请求。工具结果返回后，模型组优先续接原生产模型；如果该模型失败，后续 fallback 仍接收完整的 assistant tool call 与 tool result 历史，但不接收原模型的私有 continuation。其原始 `data` 不进入公开事件、请求摘要或 `repr`。Anthropic 官方 thinking block 必须携带 signature；其他 Anthropic-compatible Provider 可以返回无 signature 的 thinking block，Adapter 会保持原形回传。OpenAI Chat Completions 不维护 Provider 白名单：响应实际携带合法 `reasoning_content` 时才创建对应 continuation。
+Anthropic Messages 的 wire 格式要求每次请求携带 `max_tokens`；Adapter 通过 `ModelProviderGenerationRequirements` 声明该协议必填字段，Invoker 按 调用级覆盖 → `GenerationConfig.max_output_tokens` → `capabilities.limits.max_output_tokens` 的顺序解析，并在 `model.request.prepared` 的 `generation_sources` 中记录回退来源；没有任何来源时在 Provider I/O 前失败，不设置隐藏默认值。不声明必填字段的协议未设置时不发送该字段。需要工具循环回传的 Provider 私有 thinking/reasoning 状态保存在 `AIMessage.continuation`；该值记录实际生产它的 `model_key`，并只交给 `model_key`、Provider、model ID 与 protocol 都匹配的后续请求。工具结果返回后，模型组优先续接原生产模型；如果该模型失败，后续 fallback 仍接收完整的 assistant tool call 与 tool result 历史，但不接收原模型的私有 continuation。其原始 `data` 不进入公开事件、请求摘要或 `repr`。Anthropic 官方 thinking block 必须携带 signature；其他 Anthropic-compatible Provider 可以返回无 signature 的 thinking block，Adapter 会保持原形回传。OpenAI Chat Completions 不维护 Provider 白名单：响应实际携带合法 `reasoning_content` 时才创建对应 continuation。
 
 ## Layer 与执行
 

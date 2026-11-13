@@ -245,6 +245,8 @@ class AnthropicMessagesAdapter:
     """Strict codec for Anthropic Messages-compatible providers."""
 
     protocol = _PROTOCOL
+    # The Messages wire format rejects requests without ``max_tokens``.
+    required_generation = frozenset({"max_output_tokens"})
 
     def __init__(
         self,

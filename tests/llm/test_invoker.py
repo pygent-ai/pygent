@@ -266,6 +266,35 @@ def image_model_entry(name: str, *, max_width: int):
 
 
 @pytest.mark.asyncio
+async def test_protocols_without_required_generation_leave_max_output_tokens_unset() -> (
+    None
+):
+    entry = model_entry("primary", "openai", "first", streaming=False)
+    assert entry.spec.capabilities.limits.max_output_tokens is not None
+    client = RecordingClient([completion("ok")])
+    invoker = DefaultModelInvoker(
+        adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
+        clients={"primary": client},
+    )
+    execution = invoker.execute(
+        model_group=make_model_group("assistant", (entry,)),
+        retry_policy=RetryPolicy(max_attempts_per_model=1),
+        generation=GenerationConfig(),
+        message=UserMessage(content="hi"),
+        context=Context(),
+    )
+    async with execution.subscribe() as subscription:
+        events = [event async for event in subscription]
+    await execution.result()
+
+    assert "max_tokens" not in client.payloads[0]
+    prepared = next(event for event in events if event.kind == "model.request.prepared")
+    assert prepared.data["request"]["generation"]["max_output_tokens"] is None
+    assert dict(prepared.data["request"]["generation_sources"]) == {}
+    await invoker.aclose()
+
+
+@pytest.mark.asyncio
 async def test_fallback_reprojects_canonical_media_for_each_model() -> None:
     message = projectable_image_message()
     original = message.results[0].content[0]

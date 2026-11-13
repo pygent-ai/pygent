@@ -26,6 +26,7 @@ from ._adapter_contracts import (
     ModelEventKind,
     ModelProviderAdapter,
     ModelProviderClient,
+    ModelProviderGenerationRequirements,
     ModelProviderMediaTokenEstimator,
     ModelProviderRequest,
     ModelProviderResponse,
@@ -551,9 +552,12 @@ class DefaultModelInvoker:
                 )
             adapter, client = self._resolve(entry)
             _validate_model_for_request(adapter, model)
+            model_generation, generation_sources = _resolve_required_generation(
+                adapter, model_key=model_key, model=model, generation=generation
+            )
             missing_capabilities = _missing_capabilities(
                 model,
-                generation=generation,
+                generation=model_generation,
                 tools=tools,
             )
             if missing_capabilities:
@@ -583,11 +587,17 @@ class DefaultModelInvoker:
                 model=model,
                 message=request_message,
                 context=model_context,
-                generation=generation,
+                generation=model_generation,
                 tools=tuple(tools),
                 media_projections=media_projections,
+                generation_sources=generation_sources,
             )
-            payload = adapter.build_request(request)
+            try:
+                payload = adapter.build_request(request)
+            except ModelProviderError as exc:
+                # Request construction happens before Provider I/O, so the
+                # adapter-authored message is safe to surface.
+                raise ModelCallError(str(exc), kind=exc.kind) from None
             for number in range(1, retry_policy.max_attempts_per_model + 1):
                 prepared_event = prepared_request_event(request, attempt=number)
                 emitted = False
@@ -970,6 +980,50 @@ def _merge_provider_options(
         else:
             merged[key] = value
     return merged
+
+
+_GENERATION_LIMIT_SOURCE = "capabilities.limits"
+_RESOLVABLE_GENERATION_FIELDS = frozenset({"max_output_tokens"})
+
+
+def _resolve_required_generation(
+    adapter: ModelProviderAdapter,
+    *,
+    model_key: str,
+    model: ModelSpec,
+    generation: GenerationConfig,
+) -> tuple[GenerationConfig, dict[str, str]]:
+    """Fill protocol-required generation fields from declared model limits.
+
+    Resolution order is caller value, then ``capabilities.limits``. A declared
+    ``null`` limit means the deployment does not know the model's output
+    ceiling, so the call fails before Provider I/O instead of guessing.
+    """
+    if not isinstance(adapter, ModelProviderGenerationRequirements):
+        return generation, {}
+    required = frozenset(adapter.required_generation)
+    unsupported = required - _RESOLVABLE_GENERATION_FIELDS
+    if unsupported:
+        raise ModelCallError(
+            f"protocol {adapter.protocol!r} requires unsupported generation "
+            f"fields: {', '.join(sorted(unsupported))}",
+            kind=ModelErrorKind.INVALID_REQUEST,
+        )
+    sources: dict[str, str] = {}
+    if "max_output_tokens" in required and generation.max_output_tokens is None:
+        limit = model.capabilities.limits.max_output_tokens
+        if limit is None:
+            raise ModelCallError(
+                f"protocol {adapter.protocol!r} requires max_output_tokens on "
+                f"every request, but model {model_key!r} did not receive one: "
+                "set GenerationConfig.max_output_tokens (per-call output budget) "
+                "or declare capabilities.limits.max_output_tokens (the model's "
+                "output ceiling, used as the fallback); its declared limit is null",
+                kind=ModelErrorKind.INVALID_REQUEST,
+            )
+        generation = replace(generation, max_output_tokens=limit)
+        sources["max_output_tokens"] = _GENERATION_LIMIT_SOURCE
+    return generation, sources
 
 
 def _validate_model_for_request(
