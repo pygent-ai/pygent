@@ -27,6 +27,7 @@ from pygent.agent.pygent_v1.sessions import SessionManager
 from pygent.agent.pygent_v1.tracing import EventStore
 from pygent.core import (
     AIMessage,
+    CancellationRecorder,
     Context,
     EffectIdempotency,
     EffectRetryPolicy,
@@ -873,9 +874,10 @@ class ConversationCheckpointToolModule(Module[AIMessage, ToolMessage]):
         """
 
         infrastructure = active_infrastructure()
-        peek = getattr(infrastructure, "peek_cancelled_tool_output", None)
-        pending = peek() if callable(peek) else None
-        if not isinstance(pending, ToolMessage) or not pending.results:
+        if not isinstance(infrastructure, CancellationRecorder):
+            return
+        pending = infrastructure.peek_cancelled_tool_output()
+        if pending is None or not pending.results:
             return
         if [result.call_id for result in pending.results] != [
             call.call_id for call in message.tool_calls

@@ -247,7 +247,7 @@ class _ManagedScope(ExecutionScope):
             return replace(task, state=ToolTaskState.RUNNING)
         return task
 
-    def record_cancellation_artifact(self, payload: Mapping[str, JsonValue]) -> None:
+    def record_cancellation_artifact(self, payload: Mapping[str, object]) -> None:
         """Record one module cancellation artifact for the terminal journal.
 
         Called from a Module's execution-cancel cleanup (currently the tool

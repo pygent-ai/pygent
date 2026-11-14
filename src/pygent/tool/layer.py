@@ -14,6 +14,7 @@ from jsonschema import ValidationError
 
 from pygent.core import (
     AIMessage,
+    CancellationRecorder,
     Context,
     EffectIdempotency,
     EffectRetryPolicy,
@@ -473,10 +474,9 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
         event ordered ahead of the terminal event.
         """
         infrastructure = current_infrastructure()
-        record = getattr(infrastructure, "record_cancellation_artifact", None)
-        if not callable(record):
+        if not isinstance(infrastructure, CancellationRecorder):
             return
-        record(
+        infrastructure.record_cancellation_artifact(
             {
                 "call_ids": [call.call_id for call in calls],
                 "results": [_artifact_result_value(result) for result in results],
@@ -495,9 +495,8 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
         """
 
         infrastructure = current_infrastructure()
-        record = getattr(infrastructure, "record_cancelled_tool_output", None)
-        if callable(record):
-            record(output)
+        if isinstance(infrastructure, CancellationRecorder):
+            infrastructure.record_cancelled_tool_output(output)
 
     async def _interrupted_call_result(
         self, call: ToolCall, spec: ToolSpec | None, started: bool

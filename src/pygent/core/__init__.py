@@ -5,6 +5,7 @@ from ._message_fields import (
     project_message_fields,
 )
 from ._module_contracts import (
+    CancellationRecorder,
     CapacityPermit,
     DirectExecutionError,
     EffectIdempotency,
@@ -72,6 +73,7 @@ __all__ = [
     "EXECUTION_EVENT_SCHEMA_VERSION",
     "AIMessage",
     "Agent",
+    "CancellationRecorder",
     "CapacityPermit",
     "Context",
     "DirectExecutionError",

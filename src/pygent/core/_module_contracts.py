@@ -22,7 +22,7 @@ from .execution import EffectOutcome, ExecutionInput
 from .json_values import (
     JsonValue,
 )
-from .values import Context, Message
+from .values import Context, Message, ToolMessage
 
 if TYPE_CHECKING:
     from ._module_definition import Module
@@ -194,6 +194,24 @@ class Infrastructure(Protocol):
     def resolve_tool_task_manager(self) -> object | None: ...
 
     async def wait_tool_task(self, task_id: str, timeout: float) -> object | None: ...
+
+
+@runtime_checkable
+class CancellationRecorder(Protocol):
+    """Optional infrastructure capability: stash what a cancelled Module batch
+    would have produced so the terminal journal and the transcript stay paired.
+
+    Every method is synchronous by contract: callers run inside an ``except
+    CancelledError`` unwinding that must never await. Managed execution scopes
+    provide it; direct execution does not, so callers probe with
+    ``isinstance`` and skip when absent.
+    """
+
+    def record_cancellation_artifact(self, payload: Mapping[str, object]) -> None: ...
+
+    def record_cancelled_tool_output(self, message: ToolMessage) -> None: ...
+
+    def peek_cancelled_tool_output(self) -> ToolMessage | None: ...
 
 
 class ExecutionScope(Infrastructure, Protocol):
