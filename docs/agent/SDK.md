@@ -1,6 +1,6 @@
 # Agent SDK
 
-本文是 Agent 的第二级契约，必须服从 [Agent 第一原则](FEATURES.md)。框架演进应保持这些使用方式成立。
+本文是 Agent 的第二级契约，必须服从 [Agent 第一原则](FEATURES.md)。框架演进应保持这些使用方式成立。本文覆盖自定义 Agent 的组合、调用与绑定方式；内置前台 Agent `ReActAgent`（自动压缩、运行中输入、请求快照）的使用方式见 [ReActAgent 前台 ReAct SDK](../agents/REACT_AGENT_SDK.md)。
 
 ## 自定义 Agent
 

@@ -1,6 +1,6 @@
-# Basic PygentAgent Example
+# Basic ReActAgent Example
 
-最小可用的 `PygentAgent` 示例：你只需要提供**模型**、**系统提示词**和**上下文压缩提示词**，
+最小可用的 `ReActAgent` 示例：你只需要提供**模型**、**系统提示词**和**上下文压缩提示词**，
 其余（ReAct 循环、模型层、压缩器、工具占位层）由 `build_agent()` 固定组装。
 
 ## 前置条件
@@ -62,7 +62,7 @@ uv run python -m examples.basic_agent "帮我审查这段代码" `
 
 ## 加工具
 
-`PygentAgent` 需要工具 Module；当前示例使用空 `ToolCallLayer(tools=())`。
+`ReActAgent` 需要工具 Module；当前示例使用空 `ToolCallLayer(tools=())`。
 要加工具，用 `@tool` 声明函数、`ToolKit` 收集定义，再把
 `ToolCallLayer(tools=kit.specs, authorization=...)` 传给 `build_agent()`，
 并把 `ModelCallLayer` 的 `tools` 换成 `kit.definitions`。完整写法见

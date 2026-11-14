@@ -1,4 +1,13 @@
-# Pygent 0.2 Examples
+# Pygent Examples
+
+`basic_agent/` is the smallest live `ReActAgent`: one OpenAI-compatible model,
+a system prompt, and a compression prompt. It needs provider credentials and
+runs single-turn or as an interactive REPL; see
+[`basic_agent/README.md`](basic_agent/README.md).
+
+```bash
+uv run python -m examples.basic_agent "用一句话介绍你自己"
+```
 
 `tutorial/` is the progressive, zero-credential starting point. It reuses one
 Agent graph across direct invoke, stream, an opt-in OpenAI-compatible provider,
@@ -22,7 +31,7 @@ It demonstrates the second-level SDK contracts documented under `docs/`:
 - finite ReAct budgets, Execution deadline, and Binding capacity declarations;
 - inherited `emit()` plus the same Module graph for invoke and stream.
 
-Execution the managed invoke/stream flow with:
+Run the managed invoke/stream flow with:
 
 ```bash
 uv sync --all-extras

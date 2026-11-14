@@ -1,6 +1,6 @@
-# Pygent 0.3
+# Pygent
 
-Pygent is a PyTorch-like framework for composing LLM agents with no hidden per-call state from reusable `Module` graphs. Version 0.3 provides a single Execution owner for direct and managed calls, an asyncio Runtime, observable model/tool events, OpenAI-compatible adapters, portable tools and MCP adapters, ReAct, SQLite recovery, and HTTP/SSE workers.
+Pygent is a PyTorch-like framework for composing LLM agents with no hidden per-call state from reusable `Module` graphs. It provides a single Execution owner for direct and managed calls, an asyncio Runtime, observable model/tool events, OpenAI-compatible and Anthropic Messages adapters, portable tools and MCP adapters, ReAct, SQLite recovery, and HTTP/SSE workers. The documentation contract is versioned 0.3 independently of the package version (see `pyproject.toml`).
 
 ## Resource benchmark
 
@@ -52,7 +52,8 @@ installed `av` package or system `ffmpeg`/`ffprobe` is detected automatically.
 - [Execution contract](docs/EXECUTION.md)
 - [Module](docs/module/README.md), [Context](docs/context/README.md), [Runtime](docs/runtime/README.md)
 - [Agent](docs/agent/README.md), [LLM](docs/llm/README.md), [Tool](docs/tool/README.md)
-- [Executionnable service example](examples/service/README.md)
+- [ReActAgent foreground SDK](docs/agents/REACT_AGENT_SDK.md) and the [minimal live example](examples/basic_agent/README.md)
+- [Runnable service example](examples/service/README.md)
 - [Runnable tutorial example](examples/tutorial/)
 - [Native full-path load system](benchmarks/README.md)
 - [Cross-framework resource benchmark](benchmarks/FRAMEWORK_RESOURCE_BENCHMARK.md)
