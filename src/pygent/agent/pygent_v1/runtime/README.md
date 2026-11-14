@@ -27,7 +27,13 @@ Owns model execution, tool execution, context management, and the high-level run
 - `realtime/`: the silent-agent harness. A fork reply's exchange envelope reaches
   the running turn as a wait-mode steering input on the react layer's execution
   inbox — the same channel as the memory projection replacement — and is
-  checkpointed like any other steering message.
+  checkpointed like any other steering message. Until it is checkpointed the
+  envelope is transient by design: an envelope the inbox rejects (no turn, inbox
+  already sealed, finalizer round) waits in the coordinator's process memory
+  for the next turn's opening context, and a process exit before that turn
+  drops it. The fork reply never enters the transcript on its own, so a lost
+  reply is re-asked rather than recovered; persisting undelivered envelopes
+  would make the harness a second session-state source.
 - `tools.py`: tool observation and file-effect discovery.
 - `file_effect_models.py`: dependency-light file-effect contracts.
 - `file_effects.py`: deferred file-effect persistence and execution.

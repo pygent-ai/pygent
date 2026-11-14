@@ -63,6 +63,12 @@ class SessionExecutionCoordinator:
         # Pending envelopes share the fate of lane-queued turns — both live
         # only in this process.
         self._pending_exchanges: dict[SessionExecutionKey, list[ExchangeEnvelope]] = {}
+        # Continuation turns admitted for pending envelopes but not yet opened.
+        # Admission increments the lane's user count only once the turn's task
+        # runs, so this reservation is what keeps the chain's tail and the
+        # host's detached delivery from both admitting a drain for the same
+        # envelopes (the second would open empty).
+        self._admitted_drains: dict[SessionExecutionKey, ManagedSessionTurn] = {}
         self._lock = asyncio.Lock()
         self._closing = False
         self._finalized_turns: set[str] = set()
@@ -84,14 +90,17 @@ class SessionExecutionCoordinator:
 
     async def _admit(self, turn: ManagedSessionTurn) -> None:
         async with self._lock:
-            if self._closing:
-                raise RuntimeError("session execution coordinator is closing")
-            self._managed_runs[id(turn)] = turn
-            identity = turn.command.submission_id or turn.command.session_id
-            turn.task = asyncio.create_task(
-                self._drive_turn(turn),
-                name=f"session-turn:{identity}",
-            )
+            self._admit_locked(turn)
+
+    def _admit_locked(self, turn: ManagedSessionTurn) -> None:
+        if self._closing:
+            raise RuntimeError("session execution coordinator is closing")
+        self._managed_runs[id(turn)] = turn
+        identity = turn.command.submission_id or turn.command.session_id
+        turn.task = asyncio.create_task(
+            self._drive_turn(turn),
+            name=f"session-turn:{identity}",
+        )
 
     async def _drive_turn(self, turn: ManagedSessionTurn) -> None:
         try:
@@ -295,15 +304,13 @@ class SessionExecutionCoordinator:
         user turn's opening context — or strand forever when none comes.
         """
 
-        if await self._pending_drain_gate(turn.manager, turn.command.session_id):
-            await self.submit_turn(
-                lease=turn.lease,
-                command=self._drain_command(
-                    turn.command.session_id,
-                    turn.command.case_id,
-                    f"{_turn_key(turn)}:cont",
-                ),
-            )
+        await self._admit_pending_drain(
+            lease=turn.lease,
+            manager=turn.manager,
+            session_id=turn.command.session_id,
+            case_id=turn.command.case_id,
+            turn_id=f"{_turn_key(turn)}:cont",
+        )
 
     async def submit_pending_drain(
         self, *, lease: Any, session_id: str
@@ -317,29 +324,52 @@ class SessionExecutionCoordinator:
         nothing pending.
         """
 
-        if not await self._pending_drain_gate(lease.runtime.manager, session_id):
-            return None
-        return await self.submit_turn(
+        return await self._admit_pending_drain(
             lease=lease,
-            command=self._drain_command(
-                session_id, "chat", f"drain-{uuid.uuid4().hex[:12]}"
-            ),
+            manager=lease.runtime.manager,
+            session_id=session_id,
+            case_id="chat",
+            turn_id=f"drain-{uuid.uuid4().hex[:12]}",
         )
 
-    async def _pending_drain_gate(self, manager: Any, session_id: str) -> bool:
-        """Whether an idle realtime session holds undelivered envelopes.
+    async def _admit_pending_drain(
+        self,
+        *,
+        lease: Any,
+        manager: Any,
+        session_id: str,
+        case_id: str,
+        turn_id: str,
+    ) -> ManagedSessionTurn | None:
+        """Admit one continuation turn when a realtime session holds undelivered
+        envelopes and no admitted turn will open with them.
 
-        Both drain entry points share the gate: the chain's own tail (a turn
-        just ended) and the interrupt delivery (an envelope just landed with
-        no turn chain left that would run a tail).
+        Both drain entry points share this: the chain's own tail (a turn just
+        ended) and the interrupt delivery (an envelope just landed with no turn
+        chain left that would run a tail). The gate and the admission hold one
+        lock so the two cannot both admit a drain for the same envelopes; a
+        lane-queued user turn or an already admitted drain opens with them.
         """
 
         session = manager.load(session_id)
         if not realtime_enabled_for(session):
-            return False
-        if self._lane_has_waiters(manager, session_id):
-            return False
-        return await self._has_pending_exchanges(manager, session_id)
+            return None
+        key = SessionExecutionKey.from_manager(manager, session_id)
+        async with self._lock:
+            lane = self._session_lanes.get(key)
+            if lane is not None and lane.users > 1:
+                return None
+            if key in self._admitted_drains:
+                return None
+            if not self._pending_exchanges.get(key):
+                return None
+            turn = ManagedSessionTurn(
+                lease=lease,
+                command=self._drain_command(session_id, case_id, turn_id),
+            )
+            self._admit_locked(turn)
+            self._admitted_drains[key] = turn
+        return turn
 
     async def deliver_exchange(
         self, manager: Any, envelope: ExchangeEnvelope
@@ -398,6 +428,8 @@ class SessionExecutionCoordinator:
             return ()
         key = SessionExecutionKey.from_manager(turn.manager, turn.command.session_id)
         async with self._lock:
+            if self._admitted_drains.get(key) is turn:
+                del self._admitted_drains[key]
             return tuple(self._pending_exchanges.pop(key, ()))
 
     def _drain_command(
@@ -443,6 +475,11 @@ class SessionExecutionCoordinator:
     async def _remove(self, turn: ManagedSessionTurn) -> None:
         async with self._lock:
             self._managed_runs.pop(id(turn), None)
+            # A drain that never opened (cancelled or failed at startup) must
+            # not keep later drains out; its envelopes are still pending.
+            key = SessionExecutionKey.from_manager(turn.manager, turn.command.session_id)
+            if self._admitted_drains.get(key) is turn:
+                del self._admitted_drains[key]
         await turn.lease.release()
 
     async def close(self) -> None:

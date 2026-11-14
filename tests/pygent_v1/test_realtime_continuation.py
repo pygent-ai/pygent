@@ -340,6 +340,53 @@ async def test_envelope_pending_after_chain_end_gets_drained(tmp_path: Path) -> 
     assert not await coordinator._has_pending_exchanges(manager, "session-1")
 
 
+async def test_both_drain_entry_points_deliver_a_late_envelope_once(
+    tmp_path: Path,
+) -> None:
+    """A sealed-inbox rejection reaches both drain paths: the host's detached
+    ``submit_pending_drain`` and the finishing turn's own tail. Whichever
+    admits first wins; the other yields, so the envelope renders into exactly
+    one continuation opening and is never duplicated or stranded."""
+
+    coordinator, manager, service = await _harness(tmp_path)
+    lease = _lease(manager, service)
+    host_drains: list[Any] = []
+
+    class _HostRacingScript(_Script):
+        async def run(self, *args: Any) -> None:
+            await super().run(*args)
+            host_drains.append(
+                await coordinator.submit_pending_drain(
+                    lease=lease, session_id="session-1"
+                )
+            )
+
+    script = _HostRacingScript(
+        history=_spoke_ending("work done"), deliver_after=["user asked: status?"]
+    )
+    service.scripts["turn-1"] = script
+    await _submit(coordinator, lease, "turn-1", "do work")
+
+    completed = await _completed(service, 2)
+    assert script.deliveries == ["pending"]
+    continuations = [
+        turn_id
+        for turn_id, kind in service.kinds.items()
+        if kind == CONTINUATION_MESSAGE_KIND
+    ]
+    assert len(continuations) == 1
+    assert completed == ["turn-1", continuations[0]]
+    assert service.openings[continuations[0]] == "user asked: status?"
+    assert len(host_drains) == 1
+    if host_drains[0] is None:
+        assert continuations == ["turn-1:cont"]
+    else:
+        assert host_drains[0].command.turn_id == continuations[0]
+    assert not await coordinator._has_pending_exchanges(manager, "session-1")
+    await asyncio.sleep(0)
+    assert service.completed.empty()
+
+
 async def test_envelope_at_pure_text_end_defers_finalizer(tmp_path: Path) -> None:
     coordinator, manager, service = await _harness(tmp_path)
     script = _Script(
@@ -448,6 +495,33 @@ async def test_envelope_in_idle_session_waits_for_next_turn(tmp_path: Path) -> N
         await coordinator.submit_pending_drain(lease=lease, session_id="session-1")
         is None
     )
+
+
+async def test_concurrent_idle_deliveries_share_one_drain_turn(tmp_path: Path) -> None:
+    """Two envelopes landing in an idle session each ask the host for a drain;
+    only the first admission goes through and its opening carries both."""
+
+    coordinator, manager, service = await _harness(tmp_path)
+    lease = _lease(manager, service)
+    for content in ("first", "second"):
+        assert (
+            await coordinator.deliver_exchange(manager, _envelope("session-1", content))
+            == "pending"
+        )
+
+    drains = await asyncio.gather(
+        coordinator.submit_pending_drain(lease=lease, session_id="session-1"),
+        coordinator.submit_pending_drain(lease=lease, session_id="session-1"),
+    )
+    admitted = [turn for turn in drains if turn is not None]
+    assert len(admitted) == 1
+    drain_id = admitted[0].command.turn_id
+    assert drain_id is not None
+    assert await _completed(service, 1) == [drain_id]
+    assert service.openings[drain_id] == "first\nsecond"
+    assert not await coordinator._has_pending_exchanges(manager, "session-1")
+    await asyncio.sleep(0)
+    assert service.completed.empty()
 
 
 async def test_finalizer_turn_leaves_pending_envelopes_to_continuation(
