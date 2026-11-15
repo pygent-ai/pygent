@@ -5,8 +5,9 @@ Generated images reach the conversation as multi-megabyte payloads: markdown
 tool results, and markdown links to remote hosts. Storing them verbatim makes
 every session open transfer and decode the full bytes again, and remote links
 keep the image hostage to the host staying reachable and CORS-open. The
-checkpoint boundary rewrites all three shapes into workspace files under
-``.pygent_v1/uploads`` and keeps only resource references, which the uploads
+checkpoint boundary rewrites all three shapes into workspace files under the
+uploads directory (``.pygent_v1/uploads`` by default; hosts pass their own
+``uploads_dir``) and keeps only resource references, which the uploads
 endpoint and the pygent workspace media resolver both resolve back to bytes.
 """
 
@@ -22,11 +23,14 @@ import re
 import urllib.request
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ..runtime.attachments import MEDIA_MAX_BYTES
 
+# Default uploads directory, relative to the workspace root; the pipeline
+# derives the real one from ``RunConfig.workspace_runtime_dir``.
 UPLOADS_SUBDIR = Path(".pygent_v1") / "uploads"
 
 # Only rendered markdown images are rewritten; a bare data URI inside prose
@@ -62,22 +66,27 @@ _MIME_EXTENSIONS = {
 
 
 def offload_inline_media(
-    payload: dict[str, Any], *, workspace_root: str | Path
+    payload: dict[str, Any],
+    *,
+    workspace_root: str | Path,
+    uploads_dir: str | Path = UPLOADS_SUBDIR,
 ) -> dict[str, Any]:
     """Return `payload` with large inline images replaced by file references.
 
-    The input is never mutated. Any storage failure returns the original
+    ``uploads_dir`` is the workspace-relative directory that receives the
+    stored files; references are written relative to the workspace. The
+    input is never mutated. Any storage failure returns the original
     payload, so history persistence degrades to inline bytes instead of
     failing the turn that produced the image.
     """
 
     if not str(workspace_root or "").strip():
         return payload
-    root = Path(workspace_root)
+    store = _MediaStore.create(workspace_root, uploads_dir)
     try:
         return _walk_media(
             copy.deepcopy(payload),
-            lambda node: _offload_inline_node(node, root),
+            lambda node: _offload_inline_node(node, store),
         )
     except OSError:
         return payload
@@ -93,12 +102,13 @@ async def offload_remote_media(
     *,
     workspace_root: str | Path,
     fetch_url: RemoteMediaFetcher | None,
+    uploads_dir: str | Path = UPLOADS_SUBDIR,
 ) -> dict[str, Any]:
     """Return `payload` with remote image URLs replaced by workspace files.
 
     Markdown image links and ``kind: "url"`` media blocks pointing at
     ``http(s)`` hosts are downloaded once and rewritten to the same stored
-    ``.pygent_v1/uploads`` references the inline path produces, so copies and
+    ``uploads_dir`` references the inline path produces, so copies and
     replays stop depending on the remote host. Fetch failures, sub-thumbnail
     images, and oversized payloads keep their remote link: a dead host
     degrades to the previous behavior instead of failing the turn. Storage
@@ -108,16 +118,51 @@ async def offload_remote_media(
 
     if fetch_url is None or not str(workspace_root or "").strip():
         return payload
-    root = Path(workspace_root)
+    store = _MediaStore.create(workspace_root, uploads_dir)
     fetcher = fetch_url
+    # One memo per payload: every node referencing the same URL shares the
+    # download (or the cached failure).
+    fetched: dict[str, bytes | None] = {}
 
     def handle(node: dict[str, Any]) -> Awaitable[None]:
-        return _offload_remote_node(node, root, fetcher, {})
+        return _offload_remote_node(node, store, fetcher, fetched)
 
     try:
         return await _walk_media_async(copy.deepcopy(payload), handle)
     except OSError:
         return payload
+
+
+@dataclass(frozen=True, slots=True)
+class _MediaStore:
+    """Content-addressed file storage under one workspace's uploads directory."""
+
+    workspace_root: Path
+    uploads_dir: Path
+
+    @classmethod
+    def create(cls, workspace_root: str | Path, uploads_dir: str | Path) -> _MediaStore:
+        relative = Path(uploads_dir)
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise ValueError(
+                "uploads_dir must be a relative path inside the workspace"
+            )
+        return cls(workspace_root=Path(workspace_root), uploads_dir=relative)
+
+    def store(self, data: bytes, extension: str) -> str:
+        """Write `data` once and return its workspace-relative POSIX path."""
+        digest = hashlib.sha256(data).hexdigest()
+        relative = (self.uploads_dir / f"media-{digest[:16]}{extension}").as_posix()
+        target = self.workspace_root / relative
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Content-addressed names make retries idempotent; the temp-file
+            # rename keeps a crash mid-write from leaving a truncated image
+            # behind under its final name.
+            tmp = target.with_name(f"{target.name}.{uuid.uuid4().hex[:8]}.tmp")
+            tmp.write_bytes(data)
+            os.replace(tmp, target)
+        return relative
 
 
 def _iter_media_nodes(node: Any) -> Iterator[dict[str, Any]]:
@@ -147,7 +192,7 @@ async def _walk_media_async(
     return node
 
 
-def _offload_inline_node(node: dict[str, Any], workspace_root: Path) -> None:
+def _offload_inline_node(node: dict[str, Any], store: _MediaStore) -> None:
     source = node.get("source")
     if (
         node.get("type") == "media"
@@ -157,18 +202,18 @@ def _offload_inline_node(node: dict[str, Any], workspace_root: Path) -> None:
         replacement = _resource_source(
             source.get("base64_data"),
             node.get("mime_type"),
-            workspace_root,
+            store,
         )
         if replacement is not None:
             node["source"] = replacement
     content = node.get("content")
     if isinstance(content, str):
-        node["content"] = _offload_content_data_uris(content, workspace_root)
+        node["content"] = _offload_content_data_uris(content, store)
 
 
 async def _offload_remote_node(
     node: dict[str, Any],
-    workspace_root: Path,
+    store: _MediaStore,
     fetch_url: RemoteMediaFetcher,
     fetched: dict[str, bytes | None],
 ) -> None:
@@ -181,7 +226,7 @@ async def _offload_remote_node(
         replacement = await _remote_resource_source(
             source.get("url"),
             node.get("mime_type"),
-            workspace_root,
+            store,
             fetch_url,
             fetched,
         )
@@ -190,18 +235,17 @@ async def _offload_remote_node(
     content = node.get("content")
     if isinstance(content, str):
         node["content"] = await _offload_remote_content(
-            content, workspace_root, fetch_url, fetched
+            content, store, fetch_url, fetched
         )
 
 
-def _offload_content_data_uris(content: str, workspace_root: Path) -> str:
+def _offload_content_data_uris(content: str, store: _MediaStore) -> str:
     def replace(match: re.Match[str]) -> str:
         data = _decode_inline(match.group(3))
         if data is None or len(data) < _INLINE_OFFLOAD_MIN_BYTES:
             return match.group(0)
-        relative = _store_media_bytes(
+        relative = store.store(
             data,
-            workspace_root,
             _MIME_EXTENSIONS.get(match.group(2).lower(), ".png"),
         )
         return f"{match.group(1)}{relative}{match.group(4)}"
@@ -211,13 +255,13 @@ def _offload_content_data_uris(content: str, workspace_root: Path) -> str:
 
 async def _offload_remote_content(
     content: str,
-    workspace_root: Path,
+    store: _MediaStore,
     fetch_url: RemoteMediaFetcher,
     fetched: dict[str, bytes | None],
 ) -> str:
     async def replace(match: re.Match[str]) -> str:
         source = await _remote_resource_source(
-            match.group(2), None, workspace_root, fetch_url, fetched
+            match.group(2), None, store, fetch_url, fetched
         )
         if source is None:
             return match.group(0)
@@ -244,7 +288,7 @@ async def _sub_async(
 async def _remote_resource_source(
     url: Any,
     mime: Any,
-    workspace_root: Path,
+    store: _MediaStore,
     fetch_url: RemoteMediaFetcher,
     fetched: dict[str, bytes | None],
 ) -> dict[str, Any] | None:
@@ -253,22 +297,22 @@ async def _remote_resource_source(
         return None
     if not (isinstance(mime, str) and mime.startswith("image/")):
         mime = _sniff_image_mime(data)
-    return _stored_resource_source(data, mime, workspace_root)
+    return _stored_resource_source(data, mime, store)
 
 
 def _resource_source(
-    encoded: Any, mime: Any, workspace_root: Path
+    encoded: Any, mime: Any, store: _MediaStore
 ) -> dict[str, Any] | None:
     data = _decode_inline(encoded)
     if data is None or len(data) < _INLINE_OFFLOAD_MIN_BYTES:
         return None
-    return _stored_resource_source(data, mime, workspace_root)
+    return _stored_resource_source(data, mime, store)
 
 
 def _stored_resource_source(
-    data: bytes, mime: Any, workspace_root: Path
+    data: bytes, mime: Any, store: _MediaStore
 ) -> dict[str, Any]:
-    relative = _store_media_bytes(data, workspace_root, _mime_extension(mime))
+    relative = store.store(data, _mime_extension(mime))
     return {
         "kind": "resource",
         "uri": relative,
@@ -357,22 +401,3 @@ def _decode_inline(value: Any) -> bytes | None:
 def _mime_extension(mime: Any) -> str:
     subtype = str(mime or "").rpartition("/")[2].lower()
     return _MIME_EXTENSIONS.get(subtype, ".png")
-
-
-def _store_media_bytes(
-    data: bytes, workspace_root: Path, extension: str
-) -> str:
-    digest = hashlib.sha256(data).hexdigest()
-    relative = (
-        UPLOADS_SUBDIR / f"media-{digest[:16]}{extension}"
-    ).as_posix()
-    target = workspace_root / relative
-    if not target.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # Content-addressed names make retries idempotent; the temp-file
-        # rename keeps a crash mid-write from leaving a truncated image
-        # behind under its final name.
-        tmp = target.with_name(f"{target.name}.{uuid.uuid4().hex[:8]}.tmp")
-        tmp.write_bytes(data)
-        os.replace(tmp, target)
-    return relative

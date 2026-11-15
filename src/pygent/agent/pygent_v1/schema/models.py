@@ -335,6 +335,11 @@ class RunConfig:
     bash_full_output_allowlist: list[str] = field(default_factory=list)
     allow_read_outside_workspace: bool = True
     user_pygent_root: str = ""
+    # Name of the runtime-owned directory inside the workspace (media uploads
+    # live under it, and file-effect tracking skips it). A single path
+    # component; hosts that brand their data directory differently (``.lara``)
+    # set it so the project does not grow a second runtime directory.
+    workspace_runtime_dir: str = ".pygent_v1"
     context_window: int | None = None
     context_compression_enabled: bool = True
     context_compression_trigger_ratio: float = 0.9
@@ -391,6 +396,16 @@ class RunConfig:
         elif self.model_configuration_status == "configured":
             raise ValueError("configured model status requires model_config")
         self.user_identity = _require(self.user_identity or "default", "user_identity")
+        self.workspace_runtime_dir = _require(
+            self.workspace_runtime_dir, "workspace_runtime_dir"
+        ).strip()
+        if (
+            self.workspace_runtime_dir in {".", ".."}
+            or Path(self.workspace_runtime_dir).name != self.workspace_runtime_dir
+        ):
+            raise ValueError(
+                "workspace_runtime_dir must be a single directory name"
+            )
         self.cli_bash_presets = [
             preset if isinstance(preset, BashCliPreset) else BashCliPreset(**preset)
             for preset in self.cli_bash_presets

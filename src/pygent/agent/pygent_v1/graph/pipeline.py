@@ -101,11 +101,15 @@ async def checkpoint_conversation_message(
     # dependent on the host staying reachable. The checkpoint copy references
     # workspace files instead while the in-memory message keeps its original
     # bytes for this run.
-    payload = offload_inline_media(payload, workspace_root=config.workspace_root)
+    uploads_dir = Path(config.workspace_runtime_dir) / "uploads"
+    payload = offload_inline_media(
+        payload, workspace_root=config.workspace_root, uploads_dir=uploads_dir
+    )
     payload = await offload_remote_media(
         payload,
         workspace_root=config.workspace_root,
         fetch_url=default_remote_fetcher,
+        uploads_dir=uploads_dir,
     )
     metadata = plain_data(context.metadata)
     include_in_session = not (
@@ -561,6 +565,7 @@ class ToolAuditModule(Module[ToolMessage, ToolMessage]):
                 defer_file_effects=True,
                 allow_read_outside_workspace=self.config.allow_read_outside_workspace,
                 bash_full_output_allowlist=self.config.bash_full_output_allowlist,
+                ignored_dirs=(self.config.workspace_runtime_dir,),
             )
             for result in message.results:
                 call = calls.get(result.call_id)
@@ -745,10 +750,17 @@ class PersistedDiffModule(Module[ToolMessage, ToolMessage]):
     execution_requirements = EFFECT_FREE_RECOVERY
     trusted_live_resource_attributes = ("workspace_root",)
 
-    def __init__(self, workspace_root: Path, tasks: ToolCallLayer) -> None:
+    def __init__(
+        self,
+        workspace_root: Path,
+        tasks: ToolCallLayer,
+        *,
+        ignored_dirs: tuple[str, ...] = (),
+    ) -> None:
         super().__init__()
         self.workspace_root = workspace_root
         self.tasks = tasks
+        self.ignored_dirs = ignored_dirs
 
     async def forward(
         self, message: ToolMessage, context: PygentContext
@@ -759,6 +771,7 @@ class PersistedDiffModule(Module[ToolMessage, ToolMessage]):
                 case_run_ref=context.case_run_ref,
                 workspace_root=self.workspace_root,
                 jobs=list(jobs),
+                ignored_dirs=self.ignored_dirs,
             )
             await self.tasks(
                 AIMessage(

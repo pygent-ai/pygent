@@ -168,6 +168,19 @@ class SpeakRenderer(Protocol):
         ...
 
 
+class SpeakChannel(Protocol):
+    """A host-provided side channel that mirrors delivered speak text.
+
+    The runtime calls ``deliver`` in a worker thread, fire-and-forget, after
+    the stream event is emitted; failures never affect the tool result.
+    Attachments arrive appended to ``text`` as workspace-relative paths.
+    """
+
+    def deliver(self, text: str) -> bool:
+        """Push one message; return whether it was accepted."""
+        ...
+
+
 def resolve_speak_attachments(
     workspace_root: Path, raw: Sequence[str]
 ) -> tuple[Path, ...]:
@@ -202,6 +215,7 @@ __all__ = [
     "SPEAK_TOOL_SPEC",
     "SpeakArgs",
     "SpeakArgsError",
+    "SpeakChannel",
     "SpeakRenderer",
     "execute_speak",
     "parse_speak_args",

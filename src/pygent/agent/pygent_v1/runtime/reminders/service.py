@@ -44,6 +44,7 @@ class ReminderService:
             cli_bash_presets=tuple(self.config.cli_bash_presets),
             user_skills_dir=(user_pygent_root / "skills").expanduser().resolve(),
             project_skills_dir=(project_pygent_root / "skills").expanduser().resolve(),
+            workspace_runtime_dir=self.config.workspace_runtime_dir,
         )
 
     def prewarm_session(self, session_id: str) -> asyncio.Task[None] | None:
@@ -265,7 +266,11 @@ class ReminderService:
     def _observe_git_sync(self, scope: ReminderScope) -> ReminderSection | None:
         observations = self.store.load_observations(scope)
         git_state = dict(observations.get("git") or {})
-        section = detect_git_change(scope.workspace_root, git_state)
+        section = detect_git_change(
+            scope.workspace_root,
+            git_state,
+            exclude_dirs=(scope.workspace_runtime_dir,),
+        )
         observations["git"] = git_state
         self.store.save_observations(scope, observations)
         return section

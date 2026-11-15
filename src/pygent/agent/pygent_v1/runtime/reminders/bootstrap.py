@@ -20,7 +20,9 @@ def build_initial_snapshot(
     prepared_at = _now()
     cli_section, cli_state = collect_initial_cli(scope.cli_bash_presets)
     skills_section, skills_state = collect_initial_skills(scope)
-    git_snapshot = capture_git_snapshot(scope.workspace_root)
+    git_snapshot = capture_git_snapshot(
+        scope.workspace_root, exclude_dirs=(scope.workspace_runtime_dir,)
+    )
     git_section = (
         render_git_section(git_snapshot, reason="session-baseline")
         if git_snapshot is not None

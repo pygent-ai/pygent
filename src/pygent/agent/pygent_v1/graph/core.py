@@ -368,7 +368,11 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
                     tools=self.new_tool_layer(),
                     audit=ToolAuditModule(self.config, bash_tasks=self.bash_tasks),
                     reminders=RuntimeReminderModule(self.reminders),
-                    persisted_diff=PersistedDiffModule(self.workspace_root, diff_tasks),
+                    persisted_diff=PersistedDiffModule(
+                        self.workspace_root,
+                        diff_tasks,
+                        ignored_dirs=(self.config.workspace_runtime_dir,),
+                    ),
                     realtime_nudge=(
                         RealtimeNudgeModule(
                             interval=self.config.realtime_interaction.nudge_interval

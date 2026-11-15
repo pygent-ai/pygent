@@ -5,7 +5,7 @@ import hashlib
 import os
 import time
 import warnings
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from html import escape
 from pathlib import Path
@@ -75,7 +75,7 @@ from pygent.tool import (
     ToolKit,
     ToolSpec,
 )
-from pygent.tool.executors import ToolExecutionContext
+from pygent.tool.executors import ToolExecutionContext, ToolExecutor
 from pygent.tool.mcp import MCPClientPool
 
 from ..graph.common import (
@@ -120,6 +120,7 @@ from .realtime.fork_state import SessionForkState
 from .realtime.speak import (
     SILENT_ACKNOWLEDGEMENT,
     SPEAK_TOOL_SPEC,
+    SpeakChannel,
     parse_speak_args,
     render_reply_instruction,
 )
@@ -129,6 +130,12 @@ RECOVERY_CLAIM_WAIT_SECONDS = 31.0
 # Pygent agent graphs declare requires_finite_deadline=True, so an unlimited
 # deadline is rejected at admission; this ceiling is the practical maximum.
 TURN_DEADLINE_SECONDS = 24 * 60 * 60
+
+# Model-visible names of the kernel's standard tools; host tools and MCP
+# servers must not shadow them.
+BUILTIN_VISIBLE_TOOL_NAMES = frozenset(
+    {"bash", "read", "write", "edit", "glob", "grep", "diff"}
+)
 
 AgentDefinitionKey: TypeAlias = tuple[
     int, bool, str, str | None, bool, bool
@@ -192,7 +199,9 @@ class _SpeakExecutor:
     none by default.
     """
 
-    def __init__(self, service: PygentRuntimeService, channels: Sequence[Any] = ()) -> None:
+    def __init__(
+        self, service: PygentRuntimeService, channels: Sequence[SpeakChannel] = ()
+    ) -> None:
         self.service = service
         self.channels = tuple(channels)
         self._delivery_tasks: set[asyncio.Task[bool]] = set()
@@ -274,7 +283,16 @@ class PygentRuntimeService:
         run_config_loader: Callable[..., RunConfig] | None = None,
         prompt_registry: PromptRegistry | None = None,
         on_exchange_ready: Callable[[ExchangeEnvelope], Awaitable[None]] | None = None,
+        speak_channels: Sequence[SpeakChannel] = (),
+        external_tools: Iterable[tuple[ToolSpec, ToolExecutor]] = (),
     ) -> None:
+        """Compose the runtime for one workspace.
+
+        ``speak_channels`` receive every delivered speak text in addition to
+        the stream event; ``external_tools`` are host-provided tool/executor
+        pairs that join the scheduler tools in the model-visible tool set from
+        the first turn. The kernel ships neither by default.
+        """
         self.config = config
         self._credential_environ = credential_environ
         self._run_config_loader = run_config_loader
@@ -347,12 +365,23 @@ class PygentRuntimeService:
                 # The speak channel slot stays generic; delivery channels are
                 # host-provided integrations (e.g. a standalone Feishu
                 # package) and the kernel ships none by default.
-                channels=(),
+                channels=speak_channels,
             ),
         )
         scheduler_executor = SchedulerToolExecutor(config)
         for spec in SCHEDULER_TOOL_SPECS:
             self.runtime.register_tool(spec, scheduler_executor)
+        host_tools = tuple(external_tools)
+        visible_names = {
+            *BUILTIN_VISIBLE_TOOL_NAMES,
+            *(spec.definition.name for spec in SCHEDULER_TOOL_SPECS),
+        }
+        for spec, _executor in host_tools:
+            name = spec.definition.name
+            if name in visible_names:
+                raise ValueError(f"duplicate host model-visible tool name: {name}")
+            visible_names.add(name)
+        self.runtime.register_tools(host_tools)
         self.bash_tasks = BashTaskObservations(
             config,
             self.runtime,
@@ -399,7 +428,10 @@ class PygentRuntimeService:
             ),
             durability=DurabilityPolicy(DurabilityMode(config.runtime_durability.mode)),
         )
-        self.external_tools: tuple[ToolSpec, ...] = (*SCHEDULER_TOOL_SPECS,)
+        self.external_tools: tuple[ToolSpec, ...] = (
+            *SCHEDULER_TOOL_SPECS,
+            *(spec for spec, _executor in host_tools),
+        )
         self._turn_contexts: dict[str, PygentContext] = {}
         self._fork_agents: dict[tuple, ForkReplyModule] = {}
         self._fork_states: dict[str, SessionForkState] = {}
@@ -504,13 +536,7 @@ class PygentRuntimeService:
         await self.history.open()
         discovered = list(self.external_tools)
         visible_names: set[str] = {
-            "bash",
-            "read",
-            "write",
-            "edit",
-            "glob",
-            "grep",
-            "diff",
+            *BUILTIN_VISIBLE_TOOL_NAMES,
             *(spec.definition.name for spec in discovered),
         }
         for server in self.config.mcp_servers:
@@ -635,7 +661,9 @@ class PygentRuntimeService:
 
     def _child_agent_config(self, alias: str) -> RunConfig:
         if alias == self.config.agent_alias:
-            return RunConfig.from_dict(self.config.to_dict())
+            # Round-trip through the host's own RunConfig type: a subclass may
+            # carry extension fields the base deserializer would reject.
+            return type(self.config).from_dict(self.config.to_dict())
         if self._run_config_loader is None:
             raise RuntimeError(
                 "child agent configuration requires an injected run-config loader"

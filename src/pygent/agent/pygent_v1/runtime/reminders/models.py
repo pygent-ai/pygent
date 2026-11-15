@@ -24,6 +24,9 @@ class ReminderScope:
     cli_bash_presets: tuple[BashCliPreset, ...]
     user_skills_dir: Path
     project_skills_dir: Path
+    # Runtime-owned directory inside the workspace (RunConfig.workspace_runtime_dir);
+    # git observations exclude it so runtime writes never read as user changes.
+    workspace_runtime_dir: str = ".pygent_v1"
 
 
 @dataclass(frozen=True, slots=True)

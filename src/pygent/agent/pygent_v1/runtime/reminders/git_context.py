@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import time
+from collections.abc import Sequence
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -41,7 +42,14 @@ def capture_git_snapshot(
     workspace_root: Path,
     *,
     repository_root: str = "",
+    exclude_dirs: Sequence[str] = (),
 ) -> dict[str, Any] | None:
+    """Snapshot ``git status`` for the workspace.
+
+    ``exclude_dirs`` are workspace-relative directory names left out of the
+    status (the runtime's own directory, so its session files never read as
+    user changes).
+    """
     resolved_workspace = workspace_root.expanduser().resolve()
     resolved_repository = repository_root.strip()
     if not resolved_repository:
@@ -58,7 +66,7 @@ def capture_git_snapshot(
         "--untracked-files=normal",
         "--",
         ".",
-        ":(exclude).pygent_v1",
+        *(f":(exclude){name}" for name in exclude_dirs),
     )
     if status is None:
         return None
@@ -176,7 +184,10 @@ def render_git_section(
 
 
 def detect_git_change(
-    workspace_root: Path, state: dict[str, Any]
+    workspace_root: Path,
+    state: dict[str, Any],
+    *,
+    exclude_dirs: Sequence[str] = (),
 ) -> ReminderSection | None:
     now_epoch = time.time()
     if now_epoch - float(
@@ -187,6 +198,7 @@ def detect_git_change(
     snapshot = capture_git_snapshot(
         workspace_root,
         repository_root=str(state.get("repository_root") or ""),
+        exclude_dirs=exclude_dirs,
     )
     state["last_checked_at"] = _now()
     state["last_checked_epoch"] = now_epoch
