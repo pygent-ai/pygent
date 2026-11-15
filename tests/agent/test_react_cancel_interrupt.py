@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -143,6 +144,15 @@ def both_calls_answer() -> AIMessage:
 async def collect_events(handle) -> list[Any]:
     async with handle.subscribe() as stream:
         return [event async for event in stream]
+
+
+async def wait_for_event(handle, predicate: Callable[[Any], bool]) -> Any:
+    """Return the first live event matching ``predicate``."""
+    async with handle.subscribe() as stream:
+        async for event in stream:
+            if predicate(event):
+                return event
+    raise AssertionError("execution finished before the expected event")
 
 
 def artifact_events(events: list[Any]) -> list[Any]:
@@ -804,6 +814,16 @@ async def test_durable_cancel_journals_artifact_before_terminal(tmp_path) -> Non
             execution=options(),
         )
         await slow_entered.wait()
+        # The fast call's result is final only after its tool.execute effect
+        # has been journaled; in durable mode that is several SQLite writes,
+        # which a fixed sleep did not reliably cover on slow CI runners. Wait
+        # for the journal event (the slow call never reaches it), then yield
+        # once so the layer records the outcome before the cancel lands.
+        await wait_for_event(
+            handle,
+            lambda event: event.kind.startswith("effect.")
+            and event.data.get("effect_type") == "tool.execute",
+        )
         await asyncio.sleep(0.05)
         assert await handle.cancel() is True
         outcome = await handle.outcome()
