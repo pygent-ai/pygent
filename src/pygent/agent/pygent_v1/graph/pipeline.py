@@ -565,7 +565,7 @@ class ToolAuditModule(Module[ToolMessage, ToolMessage]):
                 defer_file_effects=True,
                 allow_read_outside_workspace=self.config.allow_read_outside_workspace,
                 bash_full_output_allowlist=self.config.bash_full_output_allowlist,
-                ignored_dirs=(self.config.workspace_runtime_dir,),
+                root_ignored_dirs=(self.config.workspace_runtime_dir,),
             )
             for result in message.results:
                 call = calls.get(result.call_id)
@@ -755,12 +755,12 @@ class PersistedDiffModule(Module[ToolMessage, ToolMessage]):
         workspace_root: Path,
         tasks: ToolCallLayer,
         *,
-        ignored_dirs: tuple[str, ...] = (),
+        root_ignored_dirs: tuple[str, ...] = (),
     ) -> None:
         super().__init__()
         self.workspace_root = workspace_root
         self.tasks = tasks
-        self.ignored_dirs = ignored_dirs
+        self.root_ignored_dirs = root_ignored_dirs
 
     async def forward(
         self, message: ToolMessage, context: PygentContext
@@ -771,7 +771,7 @@ class PersistedDiffModule(Module[ToolMessage, ToolMessage]):
                 case_run_ref=context.case_run_ref,
                 workspace_root=self.workspace_root,
                 jobs=list(jobs),
-                ignored_dirs=self.ignored_dirs,
+                root_ignored_dirs=self.root_ignored_dirs,
             )
             await self.tasks(
                 AIMessage(

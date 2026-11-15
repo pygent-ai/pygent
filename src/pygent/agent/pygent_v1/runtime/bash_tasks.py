@@ -52,7 +52,7 @@ class BashTaskObservations:
                 return
             tracker = FileEffectTracker(
                 workspace_root=self.config.workspace_root, store=store,
-                ignored_dirs=(self.config.workspace_runtime_dir,),
+                root_ignored_dirs=(self.config.workspace_runtime_dir,),
             )
             try:
                 baseline.save(tracker.snapshot_workspace())
@@ -158,7 +158,7 @@ class BashTaskObservations:
             defer_file_effects=True,
             allow_read_outside_workspace=self.config.allow_read_outside_workspace,
             bash_full_output_allowlist=self.config.bash_full_output_allowlist,
-            ignored_dirs=(self.config.workspace_runtime_dir,),
+            root_ignored_dirs=(self.config.workspace_runtime_dir,),
         )
         # Reuse the persisted audit call on restart. The command is only observed,
         # never run; retain the observation until file-effect processing completes.
@@ -180,7 +180,7 @@ class BashTaskObservations:
         if job is not None:
             process_file_effect_batch(DeferredFileEffectBatch.create(
                 case_run_ref=run, workspace_root=self.config.workspace_root, jobs=[job],
-                ignored_dirs=(self.config.workspace_runtime_dir,),
+                root_ignored_dirs=(self.config.workspace_runtime_dir,),
             ))
         path.unlink(missing_ok=True)
 

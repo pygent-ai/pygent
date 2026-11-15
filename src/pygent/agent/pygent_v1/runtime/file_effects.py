@@ -113,7 +113,7 @@ def _process_file_effect_batch(batch: DeferredFileEffectBatch) -> None:
     tracker = FileEffectTracker(
         workspace_root=batch.workspace_root,
         store=EventStore(batch.case_run_ref),
-        ignored_dirs=batch.ignored_dirs,
+        root_ignored_dirs=batch.root_ignored_dirs,
     )
     declared = [effect for job in batch.jobs if job.include_declared for effect in job.declared]
     if not any(job.requires_snapshot for job in batch.jobs):

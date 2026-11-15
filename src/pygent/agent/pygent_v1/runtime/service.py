@@ -7,6 +7,7 @@ import time
 import warnings
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
+from functools import partial
 from html import escape
 from pathlib import Path
 from typing import Any, Protocol, TypeAlias, cast
@@ -131,10 +132,22 @@ RECOVERY_CLAIM_WAIT_SECONDS = 31.0
 # deadline is rejected at admission; this ceiling is the practical maximum.
 TURN_DEADLINE_SECONDS = 24 * 60 * 60
 
-# Model-visible names of the kernel's standard tools; host tools and MCP
-# servers must not shadow them.
-BUILTIN_VISIBLE_TOOL_NAMES = frozenset(
-    {"bash", "read", "write", "edit", "glob", "grep", "diff"}
+# Tool names the kernel registers itself: the standard workspace tools plus
+# every spec the service installs in __init__. Host tools and MCP servers
+# must not shadow any of them; both registration paths check this one set.
+RESERVED_TOOL_NAMES = frozenset(
+    {
+        "bash",
+        "read",
+        "write",
+        "edit",
+        "glob",
+        "grep",
+        DIFF_TOOL_SPEC.definition.name,
+        FILE_EFFECT_TOOL_SPEC.definition.name,
+        SPEAK_TOOL_SPEC.definition.name,
+        *(spec.definition.name for spec in SCHEDULER_TOOL_SPECS),
+    }
 )
 
 AgentDefinitionKey: TypeAlias = tuple[
@@ -194,10 +207,13 @@ class _SpeakExecutor:
     ``say_nothing`` emits nothing and acknowledges silently. Attachments are
     validated against the workspace and reported as workspace-relative paths.
     Configured external channels receive the same text fire-and-forget —
-    channel failures never affect the tool result. Channels are supplied by
-    the host application through the speak channel slot; the kernel ships
-    none by default.
+    channel failures never affect the tool result; they are recorded on
+    ``service.warnings`` and surfaced as ``RuntimeWarning`` so the host can
+    observe them. Channels are supplied by the host application through the
+    speak channel slot; the kernel ships none by default.
     """
+
+    DRAIN_TIMEOUT_SECONDS = 5.0
 
     def __init__(
         self, service: PygentRuntimeService, channels: Sequence[SpeakChannel] = ()
@@ -205,6 +221,40 @@ class _SpeakExecutor:
         self.service = service
         self.channels = tuple(channels)
         self._delivery_tasks: set[asyncio.Task[bool]] = set()
+
+    async def drain(self) -> None:
+        """Wait briefly for in-flight channel deliveries at shutdown.
+
+        ``deliver`` runs in a worker thread and cannot be cancelled; deliveries
+        still pending after the timeout are abandoned and reported.
+        """
+        pending = set(self._delivery_tasks)
+        if not pending:
+            return
+        _done, still_pending = await asyncio.wait(
+            pending, timeout=self.DRAIN_TIMEOUT_SECONDS
+        )
+        if still_pending:
+            self._warn(
+                f"{len(still_pending)} speak channel deliveries still pending at "
+                "runtime close; abandoned"
+            )
+
+    def _finish_delivery(self, channel: SpeakChannel, task: asyncio.Task[bool]) -> None:
+        self._delivery_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            self._warn(
+                f"speak channel {type(channel).__name__} failed: {error!r}"
+            )
+        elif task.result() is False:
+            self._warn(f"speak channel {type(channel).__name__} declined the message")
+
+    def _warn(self, message: str) -> None:
+        self.service.warnings.append(message)
+        warnings.warn(message, RuntimeWarning, stacklevel=2)
 
     async def execute(
         self, spec: ToolSpec, call: Any, context: ToolExecutionContext
@@ -235,7 +285,7 @@ class _SpeakExecutor:
                     asyncio.to_thread(channel.deliver, text)
                 )
                 self._delivery_tasks.add(task)
-                task.add_done_callback(self._delivery_tasks.discard)
+                task.add_done_callback(partial(self._finish_delivery, channel))
         return "delivered"
 
 
@@ -358,24 +408,19 @@ class PygentRuntimeService:
         )
         self.runtime.register_tool(FILE_EFFECT_TOOL_SPEC, FileEffectToolExecutor())
         self.runtime.register_tool(DIFF_TOOL_SPEC, self._diff_executor)
-        self.runtime.register_tool(
-            SPEAK_TOOL_SPEC,
-            _SpeakExecutor(
-                self,
-                # The speak channel slot stays generic; delivery channels are
-                # host-provided integrations (e.g. a standalone Feishu
-                # package) and the kernel ships none by default.
-                channels=speak_channels,
-            ),
+        self._speak_executor = _SpeakExecutor(
+            self,
+            # The speak channel slot stays generic; delivery channels are
+            # host-provided integrations (e.g. a standalone Feishu
+            # package) and the kernel ships none by default.
+            channels=speak_channels,
         )
+        self.runtime.register_tool(SPEAK_TOOL_SPEC, self._speak_executor)
         scheduler_executor = SchedulerToolExecutor(config)
         for spec in SCHEDULER_TOOL_SPECS:
             self.runtime.register_tool(spec, scheduler_executor)
         host_tools = tuple(external_tools)
-        visible_names = {
-            *BUILTIN_VISIBLE_TOOL_NAMES,
-            *(spec.definition.name for spec in SCHEDULER_TOOL_SPECS),
-        }
+        visible_names = set(RESERVED_TOOL_NAMES)
         for spec, _executor in host_tools:
             name = spec.definition.name
             if name in visible_names:
@@ -536,7 +581,7 @@ class PygentRuntimeService:
         await self.history.open()
         discovered = list(self.external_tools)
         visible_names: set[str] = {
-            *BUILTIN_VISIBLE_TOOL_NAMES,
+            *RESERVED_TOOL_NAMES,
             *(spec.definition.name for spec in discovered),
         }
         for server in self.config.mcp_servers:
@@ -1375,6 +1420,7 @@ class PygentRuntimeService:
         self._closed = True
         await self.memory_harness.close()
         await self.runtime.close(cancel=cancel)
+        await self._speak_executor.drain()
         await self.bash_tasks.close()
         await self._standard_tools.aclose()
         await self._memory_job_tools.aclose()

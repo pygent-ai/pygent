@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -107,3 +109,36 @@ def test_uploads_dir_must_stay_inside_workspace(
         uploads_dir = str(tmp_path / "uploads")
     with pytest.raises(ValueError, match="uploads_dir"):
         offload_inline_media({}, workspace_root=tmp_path, uploads_dir=uploads_dir)
+
+
+def test_symlinked_uploads_dir_cannot_escape_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    (workspace / ".lara").mkdir(parents=True)
+    outside.mkdir()
+    link = workspace / ".lara" / "uploads"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        # Unprivileged Windows accounts cannot create symlinks; a junction
+        # redirects the same way and needs no privilege.
+        if os.name != "nt":
+            pytest.skip(f"symlink creation unavailable: {exc}")
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(outside)],
+            check=True,
+            capture_output=True,
+        )
+
+    payload = {
+        "type": "media",
+        "mime_type": "image/png",
+        "source": {"kind": "inline", "base64_data": base64.b64encode(_IMAGE).decode()},
+    }
+    result = offload_inline_media(
+        payload, workspace_root=workspace, uploads_dir=".lara/uploads"
+    )
+
+    # Storage is refused and the payload degrades to inline bytes.
+    assert result == payload
+    assert list(outside.iterdir()) == []

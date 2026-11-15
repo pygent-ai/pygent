@@ -36,6 +36,9 @@ def _workspace(tmp_path: Path) -> Path:
     (workspace / ".pygent_v1" / "state.json").write_text("{}")
     (workspace / "src").mkdir()
     (workspace / "src" / "app.py").write_text("print()")
+    # A same-named directory deeper in the project belongs to the user.
+    (workspace / "src" / ".lara").mkdir()
+    (workspace / "src" / ".lara" / "fixture.json").write_text("{}")
     return workspace
 
 
@@ -45,18 +48,21 @@ def test_snapshot_skips_configured_runtime_dir_and_default(tmp_path: Path) -> No
 
     default_tracker = FileEffectTracker(workspace_root=workspace, store=store)
     host_tracker = FileEffectTracker(
-        workspace_root=workspace, store=store, ignored_dirs=(".lara",)
+        workspace_root=workspace, store=store, root_ignored_dirs=(".lara",)
     )
 
     default_paths = {Path(p).as_posix() for p in default_tracker.snapshot_workspace()}
     host_paths = {Path(p).as_posix() for p in host_tracker.snapshot_workspace()}
 
     assert any(p.endswith("src/app.py") for p in default_paths)
-    assert any(".lara/" in p for p in default_paths)
+    assert any(p.endswith(".lara/uploads/media.png") for p in default_paths)
     assert not any(".pygent_v1/" in p for p in default_paths)
     assert any(p.endswith("src/app.py") for p in host_paths)
-    assert not any(".lara/" in p for p in host_paths)
+    assert not any(p.endswith(".lara/uploads/media.png") for p in host_paths)
     assert not any(".pygent_v1/" in p for p in host_paths)
+    # Root-anchored: the nested user directory is still tracked.
+    assert any(p.endswith("src/.lara/fixture.json") for p in host_paths)
+    assert any(p.endswith("src/.lara/fixture.json") for p in default_paths)
 
 
 def test_deferred_batch_round_trips_ignored_dirs(tmp_path: Path) -> None:
@@ -66,16 +72,16 @@ def test_deferred_batch_round_trips_ignored_dirs(tmp_path: Path) -> None:
         turn_id="turn-1", declared=[], include_declared=False,
     )
     batch = DeferredFileEffectBatch.create(
-        case_run_ref=ref, workspace_root=tmp_path, jobs=[job], ignored_dirs=(".lara",)
+        case_run_ref=ref, workspace_root=tmp_path, jobs=[job], root_ignored_dirs=(".lara",)
     )
 
     restored = DeferredFileEffectBatch.from_dict(batch.to_dict())
 
-    assert restored.ignored_dirs == (".lara",)
+    assert restored.root_ignored_dirs == (".lara",)
     # Batches persisted before the field existed still load.
     legacy = batch.to_dict()
-    del legacy["ignored_dirs"]
-    assert DeferredFileEffectBatch.from_dict(legacy).ignored_dirs == ()
+    del legacy["root_ignored_dirs"]
+    assert DeferredFileEffectBatch.from_dict(legacy).root_ignored_dirs == ()
 
 
 def test_git_snapshot_excludes_configured_runtime_dir(tmp_path: Path) -> None:

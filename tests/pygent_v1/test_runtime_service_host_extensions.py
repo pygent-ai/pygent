@@ -7,6 +7,7 @@ subclass-preserving child-config copy, and the public fork-profile export.
 from __future__ import annotations
 
 import asyncio
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from pygent.agent.pygent_v1.runtime import (
 )
 from pygent.agent.pygent_v1.runtime.realtime.speak import SPEAK_TOOL_SPEC
 from pygent.agent.pygent_v1.runtime.service import (
+    RESERVED_TOOL_NAMES,
     PygentRuntimeService,
     _SpeakExecutor,
 )
@@ -98,8 +100,11 @@ def test_external_tools_join_model_visible_set(tmp_path: Path) -> None:
         asyncio.run(_close(service))
 
 
-@pytest.mark.parametrize("name", ["bash", "schedule_task"])
-def test_external_tools_cannot_shadow_builtin_names(tmp_path: Path, name: str) -> None:
+@pytest.mark.parametrize(
+    "name", ["bash", "diff", "speak", "pygent_persist_file_effects", "schedule_task"]
+)
+def test_external_tools_cannot_shadow_reserved_names(tmp_path: Path, name: str) -> None:
+    assert name in RESERVED_TOOL_NAMES
     with pytest.raises(ValueError, match=f"duplicate host model-visible tool name: {name}"):
         PygentRuntimeService(_config(tmp_path), external_tools=[_host_tool(name)])
 
@@ -155,7 +160,87 @@ def test_speak_channels_receive_delivered_text(tmp_path: Path) -> None:
         asyncio.run(_close(service))
 
 
-# --- item 2: child config keeps the host's RunConfig type --------------------
+class _FailingChannel:
+    def deliver(self, text: str) -> bool:
+        raise ConnectionError("webhook down")
+
+
+class _DecliningChannel:
+    def deliver(self, text: str) -> bool:
+        return False
+
+
+def _speak(service: PygentRuntimeService, text: str) -> None:
+    executor = service.executor_registry.resolve(
+        SPEAK_TOOL_SPEC.tool_id, SPEAK_TOOL_SPEC.version
+    )
+    assert isinstance(executor, _SpeakExecutor)
+
+    async def emit(kind: str, payload: Any) -> None:
+        del kind, payload
+
+    async def run() -> None:
+        result = await executor.execute(
+            SPEAK_TOOL_SPEC,
+            SimpleNamespace(arguments={"text": text}),
+            ToolExecutionContext(emit=emit),
+        )
+        assert result == "delivered"
+        await asyncio.gather(*executor._delivery_tasks, return_exceptions=True)
+        # Let the done callbacks run.
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
+
+
+def test_speak_channel_failures_are_recorded_not_raised(tmp_path: Path) -> None:
+    service = PygentRuntimeService(
+        _config(tmp_path), speak_channels=(_FailingChannel(), _DecliningChannel())
+    )
+    try:
+        with pytest.warns(RuntimeWarning) as captured:
+            _speak(service, "hello")
+        messages = [str(item.message) for item in captured]
+        assert any("_FailingChannel failed" in m and "webhook down" in m for m in messages)
+        assert any("_DecliningChannel declined" in m for m in messages)
+        assert any("_FailingChannel failed" in m for m in service.warnings)
+        assert any("_DecliningChannel declined" in m for m in service.warnings)
+    finally:
+        asyncio.run(_close(service))
+
+
+def test_close_drains_pending_speak_deliveries(tmp_path: Path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class _SlowChannel:
+        def deliver(self, text: str) -> bool:
+            started.set()
+            release.wait(5)
+            return True
+
+    service = PygentRuntimeService(_config(tmp_path), speak_channels=(_SlowChannel(),))
+    executor = service._speak_executor
+    executor.DRAIN_TIMEOUT_SECONDS = 0.2
+
+    async def run() -> None:
+        async def emit(kind: str, payload: Any) -> None:
+            del kind, payload
+
+        await executor.execute(
+            SPEAK_TOOL_SPEC,
+            SimpleNamespace(arguments={"text": "slow"}),
+            ToolExecutionContext(emit=emit),
+        )
+        # Yield so the delivery task starts its worker thread.
+        assert await asyncio.to_thread(started.wait, 2)
+        with pytest.warns(RuntimeWarning, match="still pending at runtime close"):
+            await service.close()
+        release.set()
+        await asyncio.gather(*executor._delivery_tasks, return_exceptions=True)
+
+    asyncio.run(run())
+    assert any("still pending" in m for m in service.warnings)
 
 
 @dataclass(slots=True)

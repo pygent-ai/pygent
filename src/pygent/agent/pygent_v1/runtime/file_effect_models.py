@@ -90,14 +90,14 @@ class DeferredFileEffectBatch:
     workspace_root: str
     jobs: list[DeferredFileEffectJob]
     turn_id: str | None
-    # Extra directory names the processing tracker skips; persisted so a
-    # batch replayed after restart ignores the same runtime directory.
-    ignored_dirs: tuple[str, ...] = ()
+    # Workspace-root directory names the processing tracker skips; persisted
+    # so a batch replayed after restart ignores the same runtime directory.
+    root_ignored_dirs: tuple[str, ...] = ()
 
     @classmethod
     def create(
         cls, *, case_run_ref: CaseRunRef, workspace_root: str | Path,
-        jobs: list[DeferredFileEffectJob], ignored_dirs: Iterable[str] = (),
+        jobs: list[DeferredFileEffectJob], root_ignored_dirs: Iterable[str] = (),
     ) -> DeferredFileEffectBatch:
         turn_id = jobs[0].turn_id if jobs else None
         identity = "\0".join(job.tool_call_id for job in jobs) or uuid.uuid4().hex
@@ -107,7 +107,7 @@ class DeferredFileEffectBatch:
             workspace_root=str(Path(workspace_root).expanduser().resolve()),
             jobs=list(jobs),
             turn_id=turn_id,
-            ignored_dirs=tuple(ignored_dirs),
+            root_ignored_dirs=tuple(root_ignored_dirs),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -117,7 +117,7 @@ class DeferredFileEffectBatch:
             "workspace_root": self.workspace_root,
             "jobs": [job.to_dict() for job in self.jobs],
             "turn_id": self.turn_id,
-            "ignored_dirs": list(self.ignored_dirs),
+            "root_ignored_dirs": list(self.root_ignored_dirs),
         }
 
     @classmethod
@@ -128,7 +128,7 @@ class DeferredFileEffectBatch:
             workspace_root=str(data["workspace_root"]),
             jobs=[DeferredFileEffectJob.from_dict(job) for job in data.get("jobs", [])],
             turn_id=data.get("turn_id"),
-            ignored_dirs=tuple(str(item) for item in data.get("ignored_dirs", ())),
+            root_ignored_dirs=tuple(str(item) for item in data.get("root_ignored_dirs", ())),
         )
 
 

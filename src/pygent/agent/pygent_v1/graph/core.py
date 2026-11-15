@@ -371,7 +371,7 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
                     persisted_diff=PersistedDiffModule(
                         self.workspace_root,
                         diff_tasks,
-                        ignored_dirs=(self.config.workspace_runtime_dir,),
+                        root_ignored_dirs=(self.config.workspace_runtime_dir,),
                     ),
                     realtime_nudge=(
                         RealtimeNudgeModule(

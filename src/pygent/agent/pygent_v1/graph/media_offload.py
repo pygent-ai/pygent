@@ -150,12 +150,26 @@ class _MediaStore:
         return cls(workspace_root=Path(workspace_root), uploads_dir=relative)
 
     def store(self, data: bytes, extension: str) -> str:
-        """Write `data` once and return its workspace-relative POSIX path."""
+        """Write `data` once and return its workspace-relative POSIX path.
+
+        Raises `PermissionError` (an `OSError`, so callers degrade to the
+        inline payload) when the uploads directory resolves outside the
+        workspace, e.g. through a symlinked intermediate directory.
+        """
         digest = hashlib.sha256(data).hexdigest()
         relative = (self.uploads_dir / f"media-{digest[:16]}{extension}").as_posix()
-        target = self.workspace_root / relative
+        logical = self.workspace_root / relative
+        logical.parent.mkdir(parents=True, exist_ok=True)
+        # Resolve after mkdir so the check sees the real directory, and write
+        # through the resolved path so a symlink swapped in afterwards cannot
+        # redirect the temp file or the rename.
+        parent = logical.parent.resolve(strict=True)
+        if not parent.is_relative_to(self.workspace_root.resolve()):
+            raise PermissionError(
+                f"uploads directory {logical.parent} resolves outside the workspace"
+            )
+        target = parent / logical.name
         if not target.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
             # Content-addressed names make retries idempotent; the temp-file
             # rename keeps a crash mid-write from leaving a truncated image
             # behind under its final name.

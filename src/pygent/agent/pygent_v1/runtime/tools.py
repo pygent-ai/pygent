@@ -47,14 +47,16 @@ class FileEffectTracker:
         store: EventStore,
         *,
         allow_read_outside_workspace: bool = True,
-        ignored_dirs: Iterable[str] = (),
+        root_ignored_dirs: Iterable[str] = (),
     ):
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.store = store
         self.allow_read_outside_workspace = allow_read_outside_workspace
-        # The runtime's own in-workspace directory (RunConfig.workspace_runtime_dir)
-        # joins the static ignore set so runtime writes never surface as effects.
-        self.ignored_dirs = self.IGNORED_DIRS | frozenset(ignored_dirs)
+        # IGNORED_DIRS matches at any depth (caches, VCS, build output).
+        # The runtime's own directory (RunConfig.workspace_runtime_dir) is
+        # matched at the workspace root only, so a same-named directory deeper
+        # in the user's project is still tracked.
+        self.root_ignored_dirs = frozenset(root_ignored_dirs)
         self._appended_keys: set[tuple[Any, ...]] = set()
 
     SNAPSHOT_MAX_SECONDS = 5.0
@@ -383,7 +385,10 @@ class FileEffectTracker:
             relative = path.relative_to(self.workspace_root)
         except ValueError:
             return True
-        return any(part in self.ignored_dirs or part.startswith(".venv-") for part in relative.parts)
+        parts = relative.parts
+        if parts and parts[0] in self.root_ignored_dirs:
+            return True
+        return any(part in self.IGNORED_DIRS or part.startswith(".venv-") for part in parts)
 
     def _bash_read_effects(
         self, args: dict[str, Any], tool_call_id: str
@@ -461,7 +466,7 @@ class ToolObserver:
         defer_file_effects: bool = False,
         allow_read_outside_workspace: bool = True,
         bash_full_output_allowlist: list[str] | None = None,
-        ignored_dirs: Iterable[str] = (),
+        root_ignored_dirs: Iterable[str] = (),
     ):
         self.store = store
         self.bash_full_output_allowlist = list(bash_full_output_allowlist or [])
@@ -473,7 +478,7 @@ class ToolObserver:
                 workspace_root=workspace_root,
                 store=store,
                 allow_read_outside_workspace=allow_read_outside_workspace,
-                ignored_dirs=ignored_dirs,
+                root_ignored_dirs=root_ignored_dirs,
             )
             if track_file_effects and workspace_root is not None
             else None
