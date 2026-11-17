@@ -206,11 +206,12 @@ class _SpeakExecutor:
     The event (``pygent.v1.realtime.speak``) is the bubble the desktop renders;
     ``say_nothing`` emits nothing and acknowledges silently. Attachments are
     validated against the workspace and reported as workspace-relative paths.
-    Configured external channels receive the same text fire-and-forget —
-    channel failures never affect the tool result; they are recorded on
-    ``service.warnings`` and surfaced as ``RuntimeWarning`` so the host can
-    observe them. Channels are supplied by the host application through the
-    speak channel slot; the kernel ships none by default.
+    Configured external channels receive the same text plus the resolved
+    attachment paths fire-and-forget — channel failures never affect the tool
+    result; they are recorded on ``service.warnings`` and surfaced as
+    ``RuntimeWarning`` so the host can observe them. Channels are supplied by
+    the host application through the speak channel slot; the kernel ships
+    none by default.
     """
 
     DRAIN_TIMEOUT_SECONDS = 5.0
@@ -265,27 +266,24 @@ class _SpeakExecutor:
             return SILENT_ACKNOWLEDGEMENT
         if context.emit is None:  # pragma: no cover - managed executions carry emit
             raise RuntimeError("speak delivery requires an execution event emitter")
-        attachments: list[str] = []
+        text = args.text or ""
+        attachments: tuple[ResolvedAttachment, ...] = ()
         if args.attachments:
-            resolved = resolve_attachments(
+            attachments = resolve_attachments(
                 args.attachments, self.service.config.workspace_root
             )
-            attachments = [item.relative for item in resolved]
         speak_event: Mapping[str, Any] = {
-            "text": args.text or "",
-            "attachments": attachments,
+            "text": text,
+            "attachments": [item.relative for item in attachments],
         }
         await context.emit("pygent.v1.realtime.speak", speak_event)
-        if self.channels:
-            text = args.text or ""
-            if attachments:
-                text = "\n".join([text, *attachments]) if text else "\n".join(attachments)
-            for channel in self.channels:
-                task = asyncio.create_task(
-                    asyncio.to_thread(channel.deliver, text)
-                )
-                self._delivery_tasks.add(task)
-                task.add_done_callback(partial(self._finish_delivery, channel))
+        paths = tuple(item.path for item in attachments)
+        for channel in self.channels:
+            task = asyncio.create_task(
+                asyncio.to_thread(channel.deliver, text, paths)
+            )
+            self._delivery_tasks.add(task)
+            task.add_done_callback(partial(self._finish_delivery, channel))
         return "delivered"
 
 

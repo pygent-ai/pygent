@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -121,10 +122,10 @@ def test_default_service_registers_no_host_tools(tmp_path: Path) -> None:
 
 class _RecordingChannel:
     def __init__(self) -> None:
-        self.texts: list[str] = []
+        self.messages: list[tuple[str, tuple[Path, ...]]] = []
 
-    def deliver(self, text: str) -> bool:
-        self.texts.append(text)
+    def deliver(self, text: str, attachments: Sequence[Path]) -> bool:
+        self.messages.append((text, tuple(attachments)))
         return True
 
 
@@ -155,18 +156,56 @@ def test_speak_channels_receive_delivered_text(tmp_path: Path) -> None:
 
         assert asyncio.run(run()) == "delivered"
         assert events == [("pygent.v1.realtime.speak", {"text": "hello host", "attachments": []})]
-        assert channel.texts == ["hello host"]
+        assert channel.messages == [("hello host", ())]
+    finally:
+        asyncio.run(_close(service))
+
+
+def test_speak_channels_receive_resolved_attachment_paths(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    report = Path(config.workspace_root) / "out" / "report.txt"
+    report.parent.mkdir()
+    report.write_text("done", encoding="utf-8")
+    channel = _RecordingChannel()
+    service = PygentRuntimeService(config, speak_channels=(channel,))
+    try:
+        executor = service._speak_executor
+        events: list[tuple[str, Any]] = []
+
+        async def emit(kind: str, payload: Any) -> None:
+            events.append((kind, payload))
+
+        async def run() -> None:
+            await executor.execute(
+                SPEAK_TOOL_SPEC,
+                SimpleNamespace(
+                    arguments={"text": "finished", "attachments": ["out/report.txt"]}
+                ),
+                ToolExecutionContext(emit=emit),
+            )
+            await asyncio.gather(*executor._delivery_tasks)
+
+        asyncio.run(run())
+        # The stream event keeps workspace-relative names; the channel gets
+        # resolved paths it can open, and the text stays untouched.
+        assert events == [
+            (
+                "pygent.v1.realtime.speak",
+                {"text": "finished", "attachments": ["out/report.txt"]},
+            )
+        ]
+        assert channel.messages == [("finished", (report.resolve(),))]
     finally:
         asyncio.run(_close(service))
 
 
 class _FailingChannel:
-    def deliver(self, text: str) -> bool:
+    def deliver(self, text: str, attachments: Sequence[Path]) -> bool:
         raise ConnectionError("webhook down")
 
 
 class _DecliningChannel:
-    def deliver(self, text: str) -> bool:
+    def deliver(self, text: str, attachments: Sequence[Path]) -> bool:
         return False
 
 
@@ -214,7 +253,7 @@ def test_close_drains_pending_speak_deliveries(tmp_path: Path) -> None:
     release = threading.Event()
 
     class _SlowChannel:
-        def deliver(self, text: str) -> bool:
+        def deliver(self, text: str, attachments: Sequence[Path]) -> bool:
             started.set()
             release.wait(5)
             return True
