@@ -12,6 +12,7 @@ continuation turn otherwise — instead of stranding.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
 from collections.abc import Mapping
@@ -33,7 +34,9 @@ _FORK_REPLY = "收到,我看一下"
 _ANSWER = "性能影响很小,已经做了缓存"
 
 
-def _model_mapping(base_url: str) -> dict[str, Any]:
+def _model_mapping(
+    base_url: str, *, input_modalities: tuple[str, ...] = ("text",)
+) -> dict[str, Any]:
     return {
         "connections": {
             "facade": {
@@ -50,7 +53,10 @@ def _model_mapping(base_url: str) -> dict[str, Any]:
                 "model_id": "scripted",
                 "protocol": "openai_chat_completions",
                 "capabilities": {
-                    "modalities": {"input": ["text"], "output": ["text"]},
+                    "modalities": {
+                        "input": list(input_modalities),
+                        "output": ["text"],
+                    },
                     "streaming": {"output": []},
                     "tools": {
                         "call": True,
@@ -193,6 +199,7 @@ class _ScriptedModelServer:
         self._cursor = 0
         self.received: asyncio.Queue[int] = asyncio.Queue()
         self.completed: asyncio.Queue[int] = asyncio.Queue()
+        self.requests: list[dict[str, Any]] = []
         self._server: asyncio.Server | None = None
         self.url = ""
 
@@ -252,6 +259,7 @@ class _ScriptedModelServer:
         if method == "POST" and path.endswith("/chat/completions"):
             index = self._cursor
             self._cursor += 1
+            self.requests.append(json.loads(body))
             self.received.put_nowait(index)
             entry = (
                 self.script[index]
@@ -266,12 +274,19 @@ class _ScriptedModelServer:
         return 404, {"error": {"message": f"unexpected {method} {path}"}}
 
 
-async def _harness(tmp_path: Path, script: list[dict[str, Any]]) -> SimpleNamespace:
+async def _harness(
+    tmp_path: Path,
+    script: list[dict[str, Any]],
+    *,
+    input_modalities: tuple[str, ...] = ("text",),
+) -> SimpleNamespace:
     server = _ScriptedModelServer(script)
     await server.start()
     config = build_run_config(
         workspace_root=tmp_path / "workspace",
-        model_config_mapping=_model_mapping(server.url),
+        model_config_mapping=_model_mapping(
+            server.url, input_modalities=input_modalities
+        ),
         default_model_group="default",
         user_pygent_root=tmp_path / "home" / ".pygent_v1",
         system_prompt="You are a realtime coding assistant. The user sees only speak calls.",
@@ -632,6 +647,84 @@ async def test_delivery_entry_interrupts_busy_realtime_session(
         # One turn, one fork: no continuation turn was needed.
         runs = sorted(Path(harness.session_dir).rglob("run_metadata.json"))
         assert len(runs) == 2
+    finally:
+        await harness.host.aclose()
+        await harness.server.aclose()
+
+
+async def test_interrupt_with_attachment_reaches_fork_and_main_agent(
+    tmp_path: Path,
+) -> None:
+    """An image sent mid-turn is seen natively by the fork's single model
+    call (inline base64 on the wire) and listed for the main agent in the
+    exchange envelope and its checkpointed steering message."""
+
+    after_interrupt = asyncio.Event()
+    harness = await _harness(
+        tmp_path,
+        script=[
+            {"response": _speak_call_response("t1-ack", "开始重构")},
+            {"response": _text_response(_DRAFT), "gate": after_interrupt},
+            {"response": _speak_call_response("fork", _FORK_REPLY)},
+            {"response": _speak_call_response("answer", _ANSWER)},
+            {"response": _text_response("done")},
+        ],
+        input_modalities=("text", "image"),
+    )
+    try:
+        workspace = Path(harness.config.workspace_root)
+        workspace.mkdir(parents=True, exist_ok=True)
+        image = workspace / "shot.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+        delivery1 = await harness.host.deliver_user_message(
+            config=harness.config,
+            manager=harness.manager,
+            message="帮我重构这个模块",
+            session_id=harness.session_id,
+            input_id="t1",
+            interactive_approvals=False,
+        )
+        assert delivery1.mode == "turn"
+        assert await harness.server.wait_received(2) == [0, 1]
+
+        delivery2 = await harness.host.deliver_user_message(
+            config=harness.config,
+            manager=harness.manager,
+            message="这张图里的报错是什么?",
+            session_id=harness.session_id,
+            input_id="i2",
+            attachments=["shot.png"],
+        )
+        assert delivery2.mode == "interrupt"
+        assert delivery2.outcome is not None
+        assert delivery2.outcome.speak_args is not None
+        assert delivery2.outcome.speak_args.text == _FORK_REPLY
+        assert await harness.server.wait_received(1) == [2]
+
+        fork_request = harness.server.requests[2]
+        fork_user = fork_request["messages"][-1]
+        assert fork_user["role"] == "user"
+        parts = fork_user["content"]
+        assert isinstance(parts, list)
+        texts = [part["text"] for part in parts if part.get("type") == "text"]
+        assert any("这张图里的报错是什么?" in text for text in texts)
+        assert any('path="shot.png"' in text for text in texts)
+        images = [part for part in parts if part.get("type") == "image_url"]
+        assert len(images) == 1
+        expected = base64.b64encode(image.read_bytes()).decode("ascii")
+        assert images[0]["image_url"]["url"] == f"data:image/png;base64,{expected}"
+
+        after_interrupt.set()
+        assert await harness.server.wait_received(2) == [3, 4]
+        await asyncio.wait_for(delivery1.turn.result(), 30)
+        assert delivery1.turn.status == "passed"
+
+        exchanges = _exchange_messages(harness)
+        assert len(exchanges) == 1
+        content = str(exchanges[0]["content"])
+        assert "这张图里的报错是什么?" in content
+        assert '<attachment delivery="media" name="shot.png" path="shot.png"' in content
+        assert list(exchanges[0]["data"]["attachments"]) == ["shot.png"]
     finally:
         await harness.host.aclose()
         await harness.server.aclose()

@@ -20,5 +20,7 @@ routing and holds envelopes for the next turn when no turn can take them);
 the nudge module composes into ``PreparedToolModule`` behind
 ``realtime_interaction_enabled``; the fork reply runs as a pygent managed
 execution via ``PygentRuntimeService.send_interrupt``; the finalizer round is
-queued by the session coordinator's lane at turn completion.
+queued by the session coordinator's lane at turn completion. Interrupt
+attachments resolve like a turn's: the fork sees image/video media natively
+and the envelope lists every file of the merged batch for the main agent.
 """

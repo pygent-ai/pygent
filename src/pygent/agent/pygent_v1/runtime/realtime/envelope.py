@@ -12,10 +12,15 @@ timing diagrams.
 
 from __future__ import annotations
 
+import textwrap
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pygent.agent.pygent_v1.core.prompt import Prompt, system_reminder
+from pygent.agent.pygent_v1.runtime.attachments import (
+    ResolvedAttachment,
+    render_attachments_xml,
+)
 from pygent.agent.react_projection_operations import (
     StandaloneUserMessage,
     SteeringMode,
@@ -39,8 +44,21 @@ def format_user_asked(user_asked: str | Sequence[str]) -> str:
     )
 
 
+def render_interrupt_attachments(attachments: Sequence[ResolvedAttachment]) -> str:
+    """The ``<attachments>`` block as a sibling of unindented interrupt frames.
+
+    ``render_attachments_xml`` indents for its place inside ``<user-context>``;
+    the fork request and the exchange envelope place it at the top level.
+    """
+
+    return textwrap.dedent(render_attachments_xml(attachments))
+
+
 def render_exchange_envelope(
-    *, user_asked: str | Sequence[str], response: str
+    *,
+    user_asked: str | Sequence[str],
+    response: str,
+    attachments: Sequence[ResolvedAttachment] = (),
 ) -> str:
     """Build the ``<system-reminder>`` envelope for one fork-reply exchange."""
 
@@ -48,7 +66,11 @@ def render_exchange_envelope(
     response_block = Prompt(response.strip()).wrap(
         "your-response-in-another-session"
     )
-    return system_reminder("\n".join((str(asked_block), str(response_block))))
+    parts = [str(asked_block)]
+    if attachments:
+        parts.append(render_interrupt_attachments(attachments))
+    parts.append(str(response_block))
+    return system_reminder("\n".join(parts))
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,20 +85,30 @@ class ExchangeEnvelope:
     exchange_id: str
     session_id: str
     content: str
+    # Workspace-relative paths of the user's attachments; the transcript
+    # checkpoint records them on the steering message the main agent reads.
+    attachments: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("exchange_id", "session_id", "content"):
             if not getattr(self, name).strip():
                 raise ValueError(f"ExchangeEnvelope.{name} must be non-empty")
+        object.__setattr__(self, "attachments", tuple(self.attachments))
 
     def as_user_message(self, *, case_run_id: str) -> UserMessage:
         """The message the main agent reads; ``data`` binds it to one run so
         the transcript checkpoint can tell it apart from carried history."""
 
+        data: dict[str, JsonValue] = {
+            "case_run_id": case_run_id,
+            "input_id": self.exchange_id,
+        }
+        if self.attachments:
+            data["attachments"] = self.attachments
         return UserMessage(
             content=self.content,
             kind=EXCHANGE_MESSAGE_KIND,
-            data={"case_run_id": case_run_id, "input_id": self.exchange_id},
+            data=data,
         )
 
     def projection_operation(self, *, case_run_id: str) -> JsonValue:
@@ -95,4 +127,5 @@ __all__ = [
     "ExchangeEnvelope",
     "format_user_asked",
     "render_exchange_envelope",
+    "render_interrupt_attachments",
 ]

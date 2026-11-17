@@ -15,8 +15,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from pygent import AIMessage
 from pygent.agent.pygent_v1.orchestration.execution_host import LocalExecutionHost
 from pygent.agent.pygent_v1.orchestration.runtime_pool import WorkspaceRuntimePool
@@ -50,7 +48,7 @@ class _FakeRuntimeService:
         self.config = config
         self.reminders = SimpleNamespace(prewarm_session=lambda _sid: None)
         self.started_turns: list[str] = []
-        self.interrupts: list[tuple[str, str]] = []
+        self.interrupts: list[tuple[str, str, tuple[str, ...]]] = []
         self.turn_gate: asyncio.Event | None = None
 
     async def initialize(self) -> None:
@@ -87,9 +85,10 @@ class _FakeRuntimeService:
         input_id: str,
         message: str,
         case_id: str = "chat",
+        attachments: Sequence[str] = (),
     ) -> ForkReplyOutcome:
         del manager, session_id, case_id
-        self.interrupts.append((input_id, message))
+        self.interrupts.append((input_id, message, tuple(attachments)))
         return ForkReplyOutcome(
             via="text",
             speak_args=None,
@@ -182,7 +181,7 @@ async def test_busy_realtime_session_interrupts(tmp_path: Path) -> None:
     assert second.turn is None
     assert second.outcome is not None
     assert second.outcome.text == "ack"
-    assert service.interrupts == [("i1", "第二条")]
+    assert service.interrupts == [("i1", "第二条", ())]
     gate.set()
     await first.turn.result()
 
@@ -207,7 +206,7 @@ async def test_plain_busy_session_queues_turns_never_interrupts(
     assert service.started_turns == ["第一条", "第二条"]
 
 
-async def test_attachments_on_interrupt_rejected(tmp_path: Path) -> None:
+async def test_attachments_on_interrupt_reach_the_fork(tmp_path: Path) -> None:
     harness = _Harness(tmp_path, create_session=True, mode="pygent.v1-says")
     service = await harness.service_eagerly()
     gate = asyncio.Event()
@@ -215,10 +214,10 @@ async def test_attachments_on_interrupt_rejected(tmp_path: Path) -> None:
     first = await harness.deliver("第一条", input_id="t1")
     await harness.wait_turn_started()
 
-    with pytest.raises(ValueError, match="attachments"):
-        await harness.deliver("带图的消息", input_id="i1", attachments=["a.png"])
+    second = await harness.deliver("带图的消息", input_id="i1", attachments=["a.png"])
 
-    assert service.interrupts == []
+    assert second.mode == "interrupt"
+    assert service.interrupts == [("i1", "带图的消息", ("a.png",))]
     gate.set()
     await first.turn.result()
 

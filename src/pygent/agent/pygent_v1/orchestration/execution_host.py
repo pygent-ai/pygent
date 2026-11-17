@@ -127,11 +127,6 @@ class LocalExecutionHost:
                 realtime_enabled_for(session)
                 and self.coordinator.has_active_execution(manager, session_id)
             ):
-                if attachments:
-                    raise ValueError(
-                        "attachments are only supported on turns; the fork "
-                        "interrupt path is text-only"
-                    )
                 lease = await self.acquire_runtime(config=config, manager=manager)
                 try:
                     outcome = await lease.runtime.runtime_service.send_interrupt(
@@ -140,6 +135,7 @@ class LocalExecutionHost:
                         input_id=input_id or uuid.uuid4().hex,
                         message=message,
                         case_id=case_id,
+                        attachments=attachments,
                     )
                 finally:
                     await lease.release()

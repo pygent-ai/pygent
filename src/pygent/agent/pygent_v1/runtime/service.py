@@ -113,6 +113,7 @@ from .realtime.envelope import (
     ExchangeEnvelope,
     format_user_asked,
     render_exchange_envelope,
+    render_interrupt_attachments,
 )
 from .realtime.fork_agent import ForkReplyModule, outcome_from_result
 from .realtime.fork_reasoning import ForkModelProfile, fork_model_profiles
@@ -914,6 +915,7 @@ class PygentRuntimeService:
         input_id: str,
         message: str,
         case_id: str = "chat",
+        attachments: Sequence[str] = (),
     ) -> Any:
         """Fork-reply path for a user message arriving mid-turn (D-RT2/3).
 
@@ -922,6 +924,10 @@ class PygentRuntimeService:
         messages are merged into a numbered batch, and a new generation starts
         with a fresh deadline. A late result from an older generation is
         discarded before it can queue an exchange envelope.
+
+        Attachments resolve under the same rules as a turn's: the fork sees
+        images and videos natively and other files as references, and the
+        exchange envelope lists them so the main agent can inspect them.
         """
 
         await self.initialize()
@@ -934,11 +940,17 @@ class PygentRuntimeService:
                 "realtime interrupts require an exchange delivery hook; "
                 "run the service through an execution host"
             )
+        resolved_attachments: tuple[ResolvedAttachment, ...] = ()
+        if attachments:
+            resolved_attachments = resolve_attachments(
+                attachments, config.workspace_root
+            )
         run_ref = manager.start_case_run(session_id, case_id)
         state = self._fork_states.setdefault(session_id, SessionForkState())
         async with state.lock:
             if state.handle is not None and not state.finished:
                 state.pending.append(message)
+                state.merge_attachments(resolved_attachments)
                 state.generation += 1
                 generation = state.generation
                 fork_messages = list(state.pending)
@@ -950,6 +962,8 @@ class PygentRuntimeService:
                 state.generation += 1
                 generation = state.generation
                 state.pending = [message]
+                state.attachments = []
+                state.merge_attachments(resolved_attachments)
                 fork_messages = [message]
                 fork_input_id = (
                     input_id
@@ -957,6 +971,7 @@ class PygentRuntimeService:
                     else f"{input_id}:g{generation}"
                 )
                 request_message = message
+            fork_attachments = tuple(state.attachments)
             state.finished = False
             handle = await self._start_fork_reply(
                 session=session,
@@ -964,6 +979,7 @@ class PygentRuntimeService:
                 config=config,
                 input_id=fork_input_id,
                 message=request_message,
+                attachments=fork_attachments,
             )
             state.handle = handle
 
@@ -977,6 +993,7 @@ class PygentRuntimeService:
                     state.handle = None
                     state.finished = False
                     state.pending = []
+                    state.attachments = []
             raise
         if output is None:
             return None
@@ -998,11 +1015,14 @@ class PygentRuntimeService:
                 content=render_exchange_envelope(
                     user_asked=tuple(fork_messages),
                     response=response_text or "(no verbal reply)",
+                    attachments=fork_attachments,
                 ),
+                attachments=tuple(item.relative for item in fork_attachments),
             )
             state.handle = None
             state.finished = False
             state.pending = []
+            state.attachments = []
         await self._on_exchange_ready(envelope)
         return outcome
 
@@ -1014,6 +1034,7 @@ class PygentRuntimeService:
         config: RunConfig,
         input_id: str,
         message: str,
+        attachments: Sequence[ResolvedAttachment] = (),
     ) -> Any:
         main_agent = self.new_agent(
             interactive_approvals=False,
@@ -1075,8 +1096,20 @@ class PygentRuntimeService:
             if main_agent.llm is not None
             else {}
         )
+        fork_content = message
+        fork_data: dict[str, object] = {}
+        if attachments:
+            fork_content = "\n".join(
+                (message, render_interrupt_attachments(attachments))
+            )
+            fork_data["attachments"] = [item.relative for item in attachments]
         return await bound.start(
-            UserMessage(content=message, kind="pygent.v1.user.interrupt"),
+            UserMessage(
+                content=fork_content,
+                kind="pygent.v1.user.interrupt",
+                data=freeze_json_object(fork_data),
+                media=build_media_blocks(attachments),
+            ),
             request,
             execution=ExecutionOptions(
                 request_id=f"fork:{input_id}",

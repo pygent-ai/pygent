@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from pygent import AIMessage
+from pygent.agent.pygent_v1.runtime.attachments import ResolvedAttachment
 from pygent.agent.pygent_v1.runtime.realtime.envelope import (
     ExchangeEnvelope,
     format_user_asked,
@@ -19,8 +20,16 @@ from pygent.agent.pygent_v1.schema import AgentSession, CaseRunRef, RunConfig
 
 
 class _Handle:
-    def __init__(self, message: str, *, final: bool, late: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        final: bool,
+        late: bool = False,
+        attachments: tuple[ResolvedAttachment, ...] = (),
+    ) -> None:
         self.message = message
+        self.attachments = attachments
         self.final = final
         self.late = late
         self.release = asyncio.Event()
@@ -48,9 +57,15 @@ class _Handle:
 
 
 class _FakeService:
-    def __init__(self, *, final_index: int, late_first: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        final_index: int,
+        late_first: bool = False,
+        workspace_root: str = "C:/workspace",
+    ) -> None:
         self.config = RunConfig(
-            workspace_root="C:/workspace",
+            workspace_root=workspace_root,
             user_pygent_root="C:/user",
             realtime_interaction={"enabled": True},  # type: ignore[arg-type]
         )
@@ -75,6 +90,7 @@ class _FakeService:
         config: RunConfig,
         input_id: str,
         message: str,
+        attachments: tuple[ResolvedAttachment, ...] = (),
     ) -> _Handle:
         del session, run_ref, config, input_id
         index = len(self.handles)
@@ -82,6 +98,7 @@ class _FakeService:
             message,
             final=index == self.final_index,
             late=self.late_first and index == 0,
+            attachments=attachments,
         )
         self.handles.append(handle)
         await self.started.put(message)
@@ -112,13 +129,20 @@ def _run_ref(tmp_path: Path) -> CaseRunRef:
     )
 
 
-async def _send(service: _FakeService, tmp_path: Path, message: str, input_id: str):
+async def _send(
+    service: _FakeService,
+    tmp_path: Path,
+    message: str,
+    input_id: str,
+    attachments: tuple[str, ...] = (),
+):
     return await PygentRuntimeService.send_interrupt(
         service,  # type: ignore[arg-type]
         manager=_manager(tmp_path),  # type: ignore[arg-type]
         session_id="session-1",
         input_id=input_id,
         message=message,
+        attachments=attachments,
     )
 
 
@@ -152,6 +176,43 @@ async def test_stale_generation_drops_late_envelope(tmp_path: Path) -> None:
     await second
     assert len(service.envelopes) == 1
     assert "1. first\n2. second" in service.envelopes[0].content
+
+
+async def test_superseded_attachments_carry_into_merged_fork(tmp_path: Path) -> None:
+    """A cancelled generation's files stay visible to the fork that replaces
+    it, and the final envelope lists the whole batch's attachments."""
+
+    (tmp_path / "shot.png").write_bytes(b"PNG")
+    (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
+    service = _FakeService(final_index=1, workspace_root=str(tmp_path))
+    first = asyncio.create_task(
+        _send(service, tmp_path, "look at this", "i1", ("shot.png",))
+    )
+    assert await service.started.get() == "look at this"
+    assert [item.relative for item in service.handles[0].attachments] == ["shot.png"]
+    second = asyncio.create_task(
+        _send(service, tmp_path, "and this", "i2", ("notes.txt", "shot.png"))
+    )
+    assert await service.started.get() == "1. look at this\n2. and this"
+    assert [item.relative for item in service.handles[1].attachments] == [
+        "shot.png",
+        "notes.txt",
+    ]
+    service.handles[1].release.set()
+    await asyncio.gather(first, second)
+    envelope = service.envelopes[-1]
+    assert envelope.attachments == ("shot.png", "notes.txt")
+    assert '<attachment delivery="media" name="shot.png" path="shot.png"' in envelope.content
+    assert '<attachment delivery="inline" name="notes.txt" path="notes.txt"' in envelope.content
+    message = envelope.as_user_message(case_run_id="run-1")
+    assert tuple(message.data["attachments"]) == ("shot.png", "notes.txt")
+    # The next interrupt after the batch settled starts clean.
+    third = asyncio.create_task(_send(service, tmp_path, "plain", "i3"))
+    assert await service.started.get() == "plain"
+    assert service.handles[2].attachments == ()
+    service.handles[2].release.set()
+    await third
+    assert service.envelopes[-1].attachments == ()
 
 
 def test_merged_user_asked_format_is_numbered() -> None:

@@ -95,6 +95,38 @@ I fixed it.
     )
 
 
+def test_exchange_envelope_with_attachments_golden(tmp_path: Path) -> None:
+    """Interrupt attachments sit between the two frames, unindented like them."""
+
+    items = (
+        ResolvedAttachment(
+            path=tmp_path / "photo.png",
+            relative="photo.png",
+            name="photo.png",
+            size=10,
+            mime="image/png",
+            delivery="media",
+            media_type="image",
+        ),
+    )
+    _assert_exact(
+        render_exchange_envelope(
+            user_asked="what is this?", response="A chart.", attachments=items
+        ),
+        """<system-reminder>
+<user-asked>
+what is this?
+</user-asked>
+<attachments>
+  <attachment delivery="media" name="photo.png" path="photo.png" size="10" mime="image/png" note="media attached natively to this user message"/>
+</attachments>
+<your-response-in-another-session>
+A chart.
+</your-response-in-another-session>
+</system-reminder>""",
+    )
+
+
 def test_reply_instruction_golden() -> None:
     _assert_exact(
         render_reply_instruction(),
