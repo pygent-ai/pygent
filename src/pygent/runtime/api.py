@@ -522,6 +522,8 @@ class Runtime(Protocol):
 
     async def purge_execution(self, execution_id: str) -> None: ...
 
+    async def prune(self) -> int: ...
+
 
 __all__ = [
     "Binding",

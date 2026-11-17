@@ -429,6 +429,21 @@ class ExecutionHistoryMixin:
             (execution_id,),
         )
 
+    async def list_prunable_executions(
+        self, *, updated_before_unix_ns: int, limit: int
+    ) -> tuple[str, ...]:
+        """Executions last touched before the cutoff that no live owner holds."""
+
+        rows = await self._db().execute_fetchall(
+            "SELECT execution_id FROM executions WHERE updated_at_unix_ns<? "
+            "AND NOT EXISTS(SELECT 1 FROM execution_claims "
+            "WHERE execution_claims.execution_id=executions.execution_id "
+            "AND expires_at>unixepoch('subsec')) "
+            "ORDER BY updated_at_unix_ns LIMIT ?",
+            (updated_before_unix_ns, limit),
+        )
+        return tuple(str(row[0]) for row in rows)
+
     @_execution_write
     async def delete_execution(self, execution_id: str) -> None:
         db = self._db()
@@ -441,6 +456,8 @@ class ExecutionHistoryMixin:
             "execution_inputs",
             "execution_inboxes",
             "execution_cancellations",
+            "execution_step_interrupts",
+            "execution_claims",
         ):
             await db.execute(
                 f"DELETE FROM {table} WHERE execution_id=?", (execution_id,)

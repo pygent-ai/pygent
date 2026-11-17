@@ -64,7 +64,9 @@ def validate_config_mapping(data: dict[str, Any]) -> None:
     runtime = data.get("runtime")
     if isinstance(runtime, dict):
         _validate_mapping(
-            runtime.get("durability"), {"mode", "history_path"}, "runtime.durability"
+            runtime.get("durability"),
+            {"mode", "history_path", "retention_seconds"},
+            "runtime.durability",
         )
         _validate_mapping(runtime.get("steering"), {"mode"}, "runtime.steering")
         _validate_mapping(

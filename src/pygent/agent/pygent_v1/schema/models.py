@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -76,11 +77,22 @@ class ResolvedAgentConfig:
 class RuntimeDurabilityConfig:
     mode: Literal["disabled", "preferred", "required"] = "preferred"
     history_path: str = "runtime/executions-v1.sqlite3"
+    retention_seconds: float | None = 7 * 24 * 3600.0
 
     def __post_init__(self) -> None:
         if self.mode not in {"disabled", "preferred", "required"}:
             raise ValueError("runtime durability mode is invalid")
         self.history_path = _require(self.history_path, "runtime history_path")
+        if self.retention_seconds is not None:
+            if isinstance(self.retention_seconds, bool) or not isinstance(
+                self.retention_seconds, (int, float)
+            ):
+                raise ValueError("runtime retention_seconds must be a number or null")
+            self.retention_seconds = float(self.retention_seconds)
+            if not math.isfinite(self.retention_seconds) or self.retention_seconds <= 0:
+                raise ValueError(
+                    "runtime retention_seconds must be a positive finite number"
+                )
 
 
 @dataclass(slots=True)

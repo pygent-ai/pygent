@@ -110,6 +110,7 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
         deployment_namespace: str = "default",
         max_retained_executions: int = 1024,
         cleanup_budget_seconds: float = 10.0,
+        journal_retention_seconds: float | None = 7 * 24 * 3600.0,
         context_codecs: tuple[ContextCodec, ...] = (),
     ) -> None:
         wire_values = (input_schema, output_schema, serializer)
@@ -132,9 +133,21 @@ class LocalRuntime(_LifecycleMixin, _RecoveryMixin, _ToolJobsMixin):
             or cleanup_budget_seconds <= 0
         ):
             raise ValueError("cleanup_budget_seconds must be a positive finite number")
+        if journal_retention_seconds is not None and (
+            not isinstance(journal_retention_seconds, (int, float))
+            or isinstance(journal_retention_seconds, bool)
+            or not math.isfinite(journal_retention_seconds)
+            or journal_retention_seconds <= 0
+        ):
+            raise ValueError(
+                "journal_retention_seconds must be a positive finite number or None"
+            )
         self._closed = False
         self.max_retained_executions = max_retained_executions
         self.cleanup_budget_seconds = cleanup_budget_seconds
+        self.journal_retention_seconds = (
+            None if journal_retention_seconds is None else float(journal_retention_seconds)
+        )
         self._binding_states: dict[object, _BindingState] = {}
         self._shared_resource_gates: dict[
             tuple[str, str], tuple[CapacityPolicy, _ResourceGate]

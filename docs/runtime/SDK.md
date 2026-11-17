@@ -661,6 +661,15 @@ durable Handle，历史读取必须显式调用 `get_execution_handle()`。恢�
 只订阅当前 attempt 的内存事件段；完整 Journal 由 durable Handle 分页读取。
 四个 SQLite batch/capacity 参数和 `max_retained_executions` 都必须是正整数，
 `timeout_seconds` 必须是正数。
+
+Journal 只保留最近 `LocalRuntime(journal_retention_seconds=7 天)` 内更新过的 Execution。
+`await runtime.prune()` 删除超出该窗口且没有活跃 claim 的 Execution（所有表中的行、
+model admission pin），随后 `PRAGMA incremental_vacuum` 归还页面，返回删除数量；
+`None` 表示不限期保留，此时 `prune()` 固定返回 0。崩溃后未被 recover 的
+Execution 仍持有已过期的 claim，到期后与终态 Execution 一样被删除；正在运行的
+Execution 由 claim 续租豁免。被删除的 Execution 与从未存在的 Execution 不可区分：
+`get_execution_handle()` 与 `recover()` 都抛 `KeyError`。Runtime 不自动调度
+`prune()`，宿主在打开 journal 后和运行期间按需调用。
 普通 Journal 写入只让出一个事件循环轮次来聚合并发事件，并让同一批事件共享提交回执；
 生产者只在有界 pending event 容量耗尽时等待，订阅游标仍只推进到已经提交的 sequence。
 并发 Execution create/claim/renew/update、effect begin/complete、Inbox receive 和 terminal 操作共享有界物理事务；任一请求失败时整批

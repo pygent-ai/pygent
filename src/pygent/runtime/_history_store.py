@@ -120,6 +120,10 @@ class SQLiteHistoryStore(
         self._connection = await aiosqlite.connect(
             self.path, timeout=self._timeout_seconds
         )
+        # Pruned executions hand their pages back through incremental_vacuum().
+        # auto_vacuum is fixed by the first write to the file, so it precedes
+        # every other pragma.
+        await self._connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
         # SQLite has no cross-process fairness of its own: without an explicit
         # busy handler, a write that arrives while another runtime process holds
         # the WAL write lock fails after sqlite3's implicit 5s default instead
@@ -340,6 +344,14 @@ class SQLiteHistoryStore(
         connection, self._connection = self._connection, None
         if connection is not None:
             await connection.close()
+
+    async def incremental_vacuum(self) -> None:
+        """Return every freed page to the filesystem."""
+
+        async with self._write_lock:
+            # The pragma yields one empty row per freed page; executescript is
+            # the only sqlite3 entry point that steps it through to the end.
+            await self._db().executescript("PRAGMA incremental_vacuum;")
 
     async def _queue_event(self, execution_id: str, index: int, payload: str) -> None:
         await self._reserve_event_slot()

@@ -132,6 +132,7 @@ RECOVERY_CLAIM_WAIT_SECONDS = 31.0
 # Pygent agent graphs declare requires_finite_deadline=True, so an unlimited
 # deadline is rejected at admission; this ceiling is the practical maximum.
 TURN_DEADLINE_SECONDS = 24 * 60 * 60
+JOURNAL_PRUNE_INTERVAL_SECONDS = 60 * 60
 
 # Tool names the kernel registers itself: the standard workspace tools plus
 # every spec the service installs in __init__. Host tools and MCP servers
@@ -373,6 +374,7 @@ class PygentRuntimeService:
             capacity_coordinator=self.capacity,
             model_deployment_store=self.model_store,
             deployment_namespace=str(Path(config.workspace_root).resolve()),
+            journal_retention_seconds=config.runtime_durability.retention_seconds,
             context_codecs=(PYGENT_CONTEXT_CODEC,),
         )
         self.runtime.attach_executor_registry(self.executor_registry)
@@ -482,6 +484,7 @@ class PygentRuntimeService:
         self.warnings: list[str] = []
         self._initialized = False
         self._initializing_task: asyncio.Task[None] | None = None
+        self._journal_prune_task: asyncio.Task[None] | None = None
         self._closed = False
         self._mcp_pools: list[MCPClientPool] = []
         self.memory_harness = EternalConversationHarness(
@@ -578,6 +581,9 @@ class PygentRuntimeService:
         ):
             path.parent.mkdir(parents=True, exist_ok=True)
         await self.history.open()
+        self._journal_prune_task = asyncio.create_task(
+            self._prune_journal_periodically(), name="pygent-journal-prune"
+        )
         discovered = list(self.external_tools)
         visible_names: set[str] = {
             *RESERVED_TOOL_NAMES,
@@ -615,6 +621,16 @@ class PygentRuntimeService:
         self.external_tools = tuple(discovered)
         await self.bash_tasks.restore()
         self._initialized = True
+
+    async def _prune_journal_periodically(self) -> None:
+        while True:
+            try:
+                await self.runtime.prune()
+            except Exception as exc:  # noqa: BLE001 - pruning never takes a turn down
+                message = f"execution journal prune failed: {exc}"
+                self.warnings.append(message)
+                warnings.warn(message, RuntimeWarning, stacklevel=2)
+            await asyncio.sleep(JOURNAL_PRUNE_INTERVAL_SECONDS)
 
     async def _mcp_pool(self, server: Any) -> MCPClientPool:
         if server.transport != "stdio":
@@ -1450,6 +1466,10 @@ class PygentRuntimeService:
             return
         self._closed = True
         await self.memory_harness.close()
+        prune_task, self._journal_prune_task = self._journal_prune_task, None
+        if prune_task is not None:
+            prune_task.cancel()
+            await asyncio.gather(prune_task, return_exceptions=True)
         await self.runtime.close(cancel=cancel)
         await self._speak_executor.drain()
         await self.bash_tasks.close()

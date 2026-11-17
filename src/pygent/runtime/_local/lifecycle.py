@@ -27,7 +27,8 @@ from pygent.llm import ModelCallLayer, ModelCallOptions, ModelProfileSelectionEr
 from .._cleanup import track_cleanup, wait_cleanup
 from .._deadline import _ExecutionDeadlineExpired
 from .._history_ownership import owner_scope
-from .._history_types import HistoryConflictError
+from .._history_store import SQLiteHistoryStore
+from .._history_types import HistoryConflictError, StoredExecution
 from ..api import (
     ExecutionAdmissionError,
     ExecutionDeadlineExceeded,
@@ -52,10 +53,13 @@ from .state import _execution_frame, _ExecutionFrame, _ExecutionRecord, _module_
 InputMessageT = TypeVar("InputMessageT", bound=Message)
 OutputMessageT = TypeVar("OutputMessageT", bound=Message)
 
+_PRUNE_BATCH_SIZE = 100
+
 
 class _LifecycleMixin:
     _closed: bool
     _completed_executions: deque[_ExecutionRecord]
+    journal_retention_seconds: float | None
 
     async def start(
         self,
@@ -839,7 +843,7 @@ class _LifecycleMixin:
                 admission_ids = await self.history.list_model_admission_refs(
                     execution_id
                 )
-                await self.history.delete_execution(execution_id)
+                await self._delete_stored_execution(self.history, stored)
         retained = set(admission_ids)
         if admission_id is not None:
             retained.add(admission_id)
@@ -858,6 +862,52 @@ class _LifecycleMixin:
         for identity, (_, record) in tuple(self._idempotency_records.items()):
             if record.execution_id == execution_id:
                 del self._idempotency_records[identity]
+
+    async def _delete_stored_execution(
+        self, history: SQLiteHistoryStore, stored: StoredExecution
+    ) -> None:
+        if stored.terminal_sequence is not None:
+            await history.delete_execution(stored.execution_id)
+            return
+        # An unfinished execution is deleted under the same fencing as recovery:
+        # taking the claim excludes a live or concurrent owner.
+        owner_id = f"{self._recovery_owner_id}:purge"
+        fencing_token = await history.claim_execution(
+            execution_id=stored.execution_id,
+            owner_id=owner_id,
+            lease_ttl=self._recovery_lease_ttl,
+        )
+        if fencing_token is None:
+            raise ExecutionAdmissionError("cannot purge an execution with a live owner")
+        with owner_scope(stored.execution_id, owner_id, fencing_token):
+            await history.delete_execution(stored.execution_id)
+
+    async def prune(self) -> int:
+        """Delete every execution outside ``journal_retention_seconds``.
+
+        Executions held by a live claim are kept regardless of age, including
+        one claimed between listing and deletion. Returns the number deleted.
+        """
+
+        if self.history is None or self.journal_retention_seconds is None:
+            return 0
+        cutoff_unix_ns = time.time_ns() - int(self.journal_retention_seconds * 1e9)
+        deleted = 0
+        while True:
+            batch = await self.history.list_prunable_executions(
+                updated_before_unix_ns=cutoff_unix_ns, limit=_PRUNE_BATCH_SIZE
+            )
+            for execution_id in batch:
+                try:
+                    await self.purge_execution(execution_id)
+                except ExecutionAdmissionError:
+                    continue
+                deleted += 1
+            if len(batch) < _PRUNE_BATCH_SIZE:
+                break
+        if deleted:
+            await self.history.incremental_vacuum()
+        return deleted
 
     async def close(self, *, cancel: bool = True) -> None:
         if self._closed:
