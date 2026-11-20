@@ -854,7 +854,7 @@ def _validated_headers(value: object) -> Mapping[str, str] | None:
     for name, header_value in value.items():
         name = _non_empty(name, "header name")
         if not isinstance(header_value, str):
-            raise ValueError(f"header {name!r} value must be a string")
+            raise TypeError(f"header {name!r} value must be a string")
         headers[name] = header_value
     return MappingProxyType(headers)
 
