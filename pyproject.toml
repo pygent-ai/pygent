@@ -62,7 +62,7 @@ dev = [
 module-name = "pygent._native"
 python-source = "src"
 features = ["pyo3/extension-module"]
-exclude = [".lora/**", "logs/**", "todo/**"]
+exclude = [".lara/**", "logs/**", "todo/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
