@@ -6,6 +6,7 @@ import json
 import locale
 import os
 import random
+import re
 import shutil
 import struct
 import subprocess
@@ -15,6 +16,7 @@ import time
 import zlib
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -1263,7 +1265,8 @@ async def test_glob_finds_relative_files_and_exposes_pi_schema(tmp_path):
     parameters = _parameters(tools.glob)
     assert parameters["required"] == ["pattern"]
     assert parameters["additionalProperties"] is False
-    assert set(parameters["properties"]) == {"pattern", "path", "limit"}
+    assert set(parameters["properties"]) == {"pattern", "path", "limit", "include_ignored"}
+    assert parameters["properties"]["include_ignored"]["default"] is False
     assert parameters["properties"]["path"]["type"] == "string"
     assert parameters["properties"]["limit"]["default"] == 1000
 
@@ -1282,6 +1285,7 @@ def test_grep_tool_exposes_pi_input_schema(tmp_path):
         "literal",
         "context",
         "limit",
+        "include_ignored",
     }
     assert parameters["required"] == ["pattern"]
     assert properties["path"]["type"] == "string"
@@ -1290,6 +1294,7 @@ def test_grep_tool_exposes_pi_input_schema(tmp_path):
     assert properties["literal"]["default"] is False
     assert properties["context"]["default"] == 0
     assert properties["limit"]["default"] == 100
+    assert properties["include_ignored"]["default"] is False
 
 
 @pytest.mark.asyncio
@@ -1363,6 +1368,202 @@ async def test_glob_and_grep_respect_gitignore_but_include_unignored_hidden_file
     assert ".venv/ignored.py" not in grep_output
 
 
+def _collapsed_workspace(root: Path) -> None:
+    (root / ".gitignore").write_text("build/\n", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "app.py").write_text("needle\n", encoding="utf-8")
+    (root / "src" / "other.txt").write_text("no\n", encoding="utf-8")
+    (root / ".venv" / "lib").mkdir(parents=True)
+    (root / ".venv" / "lib" / "dep.py").write_text("needle\nneedle\n", encoding="utf-8")
+    (root / ".venv" / "lib" / "more.py").write_text("needle\n", encoding="utf-8")
+    (root / "build").mkdir()
+    (root / "build" / "out.py").write_text("needle\n", encoding="utf-8")
+    (root / ".git").mkdir()
+    (root / ".git" / "config.py").write_text("needle\n", encoding="utf-8")
+    (root / ".github").mkdir()
+    (root / ".github" / "ci.py").write_text("needle\n", encoding="utf-8")
+
+
+COLLAPSED_HINT = (
+    "Pass path=<dir> to search inside one, or include_ignored=true to search them all"
+)
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.asyncio
+async def test_grep_collapses_skipped_directories_largest_first(
+    tmp_path, monkeypatch, fallback
+):
+    _collapsed_workspace(tmp_path)
+    if fallback:
+        monkeypatch.setattr(file_module, "_search_executable", lambda *_names: None)
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle")
+
+    body, notice = output.split("\n\n", 1)
+    assert set(body.splitlines()) == {".github/ci.py:1: needle", "src/app.py:1: needle"}
+    assert notice == (
+        "[Collapsed ignored directories: .venv/ 3 matches in 2 files; "
+        f"build/ 1 match in 1 file. {COLLAPSED_HINT}]"
+    )
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.asyncio
+async def test_glob_collapses_skipped_directories(tmp_path, monkeypatch, fallback):
+    _collapsed_workspace(tmp_path)
+    if fallback:
+        monkeypatch.setattr(file_module, "_search_executable", lambda *_names: None)
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.glob, pattern="**/*.py")
+
+    body, notice = output.split("\n\n", 1)
+    assert set(body.splitlines()) == {".github/ci.py", "src/app.py"}
+    assert notice == (
+        f"[Collapsed ignored directories: .venv/ 2 files; build/ 1 file. {COLLAPSED_HINT}]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_collapsed_notice_appears_even_without_visible_matches(tmp_path):
+    _collapsed_workspace(tmp_path)
+    tools = FileTools(workspace_root=tmp_path)
+
+    grep_output = await succeeded(tools.grep, pattern="needle", glob="dep.py")
+    glob_output = await succeeded(tools.glob, pattern="**/dep.py")
+
+    assert grep_output.startswith("No matches found\n\n[Collapsed ignored directories: .venv/ 2 matches in 1 file.")
+    assert glob_output.startswith("No files found matching pattern\n\n[Collapsed ignored directories: .venv/ 1 file.")
+
+
+@pytest.mark.asyncio
+async def test_search_output_is_unchanged_when_skipped_directories_have_no_hits(tmp_path):
+    _collapsed_workspace(tmp_path)
+    tools = FileTools(workspace_root=tmp_path)
+
+    assert await succeeded(tools.grep, pattern="^no") == "src/other.txt:1: no"
+    assert await succeeded(tools.glob, pattern="**/*.txt") == "src/other.txt"
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.asyncio
+async def test_include_ignored_searches_everything_but_vcs_internals(
+    tmp_path, monkeypatch, fallback
+):
+    _collapsed_workspace(tmp_path)
+    if fallback:
+        monkeypatch.setattr(file_module, "_search_executable", lambda *_names: None)
+    tools = FileTools(workspace_root=tmp_path)
+
+    grep_output = await succeeded(tools.grep, pattern="needle", include_ignored=True)
+    glob_output = await succeeded(tools.glob, pattern="**/*.py", include_ignored=True)
+
+    assert set(grep_output.splitlines()) == {
+        ".github/ci.py:1: needle",
+        ".venv/lib/dep.py:1: needle",
+        ".venv/lib/dep.py:2: needle",
+        ".venv/lib/more.py:1: needle",
+        "build/out.py:1: needle",
+        "src/app.py:1: needle",
+    }
+    assert set(glob_output.splitlines()) == {
+        ".github/ci.py",
+        ".venv/lib/dep.py",
+        ".venv/lib/more.py",
+        "build/out.py",
+        "src/app.py",
+    }
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.asyncio
+async def test_path_inside_skipped_directory_lifts_ignore_rules(
+    tmp_path, monkeypatch, fallback
+):
+    _collapsed_workspace(tmp_path)
+    if fallback:
+        monkeypatch.setattr(file_module, "_search_executable", lambda *_names: None)
+    tools = FileTools(workspace_root=tmp_path)
+
+    assert set(
+        (await succeeded(tools.grep, pattern="needle", path=".venv/lib")).splitlines()
+    ) == {"dep.py:1: needle", "dep.py:2: needle", "more.py:1: needle"}
+    assert await succeeded(tools.glob, pattern="*.py", path="build") == "out.py"
+    assert (
+        await succeeded(tools.grep, pattern="needle", path=".venv/lib/more.py")
+        == "more.py:1: needle"
+    )
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.asyncio
+async def test_collapsed_counts_stop_at_the_configured_cap(tmp_path, monkeypatch, fallback):
+    _collapsed_workspace(tmp_path)
+    if fallback:
+        monkeypatch.setattr(file_module, "_search_executable", lambda *_names: None)
+    tools = FileTools(workspace_root=tmp_path, max_collapsed_matches=2)
+
+    output = await succeeded(tools.grep, pattern="needle")
+
+    # File order inside .venv/ is up to the backend, so the cap may be passed by one file.
+    assert re.search(
+        r"\[Collapsed ignored directories: \.venv/ \u2265[23] matches; build/ 1 match in 1 file\.",
+        output,
+    )
+
+
+@pytest.mark.asyncio
+async def test_collapsed_counts_report_partial_results_after_the_probe_deadline(tmp_path):
+    _collapsed_workspace(tmp_path)
+    tools = FileTools(workspace_root=tmp_path, collapsed_probe_seconds=1e-9)
+
+    output = await succeeded(tools.grep, pattern="needle")
+
+    assert output.endswith(
+        "[Collapsed ignored directories: 2 directories not probed before the time limit. "
+        f"{COLLAPSED_HINT}]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_collapsed_fallback_keeps_directories_finished_before_the_deadline_exact(
+    tmp_path, monkeypatch
+):
+    _collapsed_workspace(tmp_path)
+    monkeypatch.setattr(file_module, "_search_executable", lambda *_names: None)
+    ticks = iter(range(100))
+    # One second per clock read: the deadline passes while the second directory is scanned.
+    monkeypatch.setattr(file_module, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    tools = FileTools(workspace_root=tmp_path, collapsed_probe_seconds=2.5)
+
+    output = await succeeded(tools.grep, pattern="needle")
+
+    assert output.endswith(
+        "[Collapsed ignored directories: .venv/ 3 matches in 2 files; "
+        f"1 directory not probed before the time limit. {COLLAPSED_HINT}]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_collapsed_notice_lists_at_most_five_directories(tmp_path):
+    for index in range(7):
+        directory = tmp_path / f"pkg{index}" / "__pycache__"
+        directory.mkdir(parents=True)
+        (directory / "cached.txt").write_text("needle\n" * (index + 1), encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    output = await succeeded(tools.grep, pattern="needle")
+
+    assert output == (
+        "No matches found\n\n[Collapsed ignored directories: "
+        "pkg6/__pycache__/ 7 matches in 1 file; pkg5/__pycache__/ 6 matches in 1 file; "
+        "pkg4/__pycache__/ 5 matches in 1 file; pkg3/__pycache__/ 4 matches in 1 file; "
+        f"pkg2/__pycache__/ 3 matches in 1 file; and 2 more directories with matches. {COLLAPSED_HINT}]"
+    )
+
+
 @pytest.mark.asyncio
 async def test_glob_supports_directory_prefixed_patterns_and_limits_results(tmp_path):
     target = tmp_path / "src" / "nested" / "example.spec.py"
@@ -1381,6 +1582,30 @@ async def test_glob_supports_directory_prefixed_patterns_and_limits_results(tmp_
     assert "other.py" in await succeeded(tools.glob, pattern="**/*.py")
     limited = await succeeded(tools.glob, pattern="**/*.py", limit=1)
     assert "1 results limit reached" in limited
+
+
+@pytest.mark.asyncio
+async def test_anchored_gitignore_rules_only_match_at_their_own_level(tmp_path):
+    (tmp_path / ".gitignore").write_text("/pygent/\nsrc/*.log\n**/deep/\n", encoding="utf-8")
+    for directory in ("pygent", "src/pygent", "src/a/deep", "deep"):
+        (tmp_path / directory).mkdir(parents=True)
+        (tmp_path / directory / "file.py").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "src" / "root.log").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "src" / "a" / "nested.log").write_text("needle\n", encoding="utf-8")
+    tools = FileTools(workspace_root=tmp_path)
+
+    skipped = sorted(
+        path.relative_to(tmp_path).as_posix()
+        for path in file_module._skipped_directories(tmp_path, tmp_path)
+    )
+    walked = sorted(
+        path.relative_to(tmp_path).as_posix()
+        for path in file_module._walk_search_files(tmp_path, tmp_path, 100, False)
+    )
+
+    assert skipped == ["deep", "pygent", "src/a/deep"]
+    assert walked == [".gitignore", "src/a/nested.log", "src/pygent/file.py"]
+    assert "src/pygent/file.py:1: needle" in await succeeded(tools.grep, pattern="needle")
 
 
 @pytest.mark.asyncio
@@ -1412,10 +1637,15 @@ async def test_glob_and_grep_fall_back_without_external_search_binaries(
     monkeypatch.setattr(file_module, "_search_executable", lambda *_names: None)
     tools = FileTools(workspace_root=tmp_path)
 
-    assert await succeeded(tools.glob, pattern="**/*.py") == "src/visible.py"
-    assert (
-        await succeeded(tools.grep, pattern="needle", ignoreCase=True, glob="*.py")
-        == "src/visible.py:1: Needle"
+    collapsed = "Collapsed ignored directories: ignored/ "
+    glob_output = await succeeded(tools.glob, pattern="**/*.py")
+    grep_output = await succeeded(
+        tools.grep, pattern="needle", ignoreCase=True, glob="*.py"
+    )
+
+    assert glob_output.startswith("src/visible.py\n\n[" + collapsed + "1 file")
+    assert grep_output.startswith(
+        "src/visible.py:1: Needle\n\n[" + collapsed + "1 match in 1 file"
     )
 
 
@@ -1938,8 +2168,8 @@ def test_file_tools_publish_explicit_02_side_effect_and_permission_policies(tmp_
     assert specs["read"].side_effect is ToolSideEffect.READ
     assert specs["glob"].side_effect is ToolSideEffect.READ
     assert specs["grep"].side_effect is ToolSideEffect.READ
-    assert specs["glob"].version == "3.0.0"
-    assert specs["grep"].version == "3.0.0"
+    assert specs["glob"].version == "3.1.0"
+    assert specs["grep"].version == "3.1.0"
     assert specs["read_lints"].side_effect is ToolSideEffect.READ
     assert specs["write"].side_effect is ToolSideEffect.WRITE
     assert specs["edit"].side_effect is ToolSideEffect.WRITE

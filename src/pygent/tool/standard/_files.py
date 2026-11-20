@@ -12,7 +12,9 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import warnings
+from collections.abc import Callable, Coroutine, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 from fractions import Fraction
@@ -119,16 +121,15 @@ _EDIT_TOOL_DESCRIPTION = (
     "occurrence; do not include long runs of unchanged text.\n"
     "- Use write instead when intentionally replacing the whole file."
 )
+# Version-control internals are never searched, not even with include_ignored.
+_VCS_DIRECTORIES = frozenset({".git", ".hg", ".svn"})
 _DEFAULT_SEARCH_IGNORES = frozenset(
     {
-        ".git",
-        ".hg",
-        ".lora",
+        ".lara",
         ".mypy_cache",
         ".nox",
         ".pytest_cache",
         ".ruff_cache",
-        ".svn",
         ".tox",
         ".venv",
         "__pycache__",
@@ -136,6 +137,9 @@ _DEFAULT_SEARCH_IGNORES = frozenset(
         "venv",
     }
 )
+_DEFAULT_COLLAPSED_LIMIT = 1000
+_DEFAULT_COLLAPSED_PROBE_SECONDS = 1.5
+_COLLAPSED_NOTICE_ENTRIES = 5
 _READ_TOOL_DESCRIPTION = (
     "Read text, PDF, image, or video content from a workspace file. "
     "PDF files return extracted text by default; when pages is provided, the "
@@ -1485,17 +1489,59 @@ def _search_executable(*names: str) -> str | None:
     return None
 
 
+def _compile_search_pattern(
+    pattern: str, ignore_case: bool, literal: bool
+) -> re.Pattern[str]:
+    flags = re.IGNORECASE if ignore_case else 0
+    try:
+        return re.compile(re.escape(pattern) if literal else pattern, flags)
+    except re.error as exc:
+        raise ToolExecutionError(
+            f"invalid search pattern: {exc}",
+            kind="filesystem_error",
+            code="search_backend_failed",
+            side_effect_committed=False,
+        ) from exc
+
+
+def _read_text_lines(path: Path) -> list[str] | None:
+    """Decode a file into lines with its sniffed code page.
+
+    Returns None for binary or unreadable files.
+    """
+
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in data[:8192]:
+        return None
+    encoding = text_code_page(data[:_TEXT_SNIFF_BYTES])
+    return (
+        data.decode(encoding, errors="replace")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .split("\n")
+    )
+
+
 def _inside_git_tree(path: Path) -> bool:
     return any((parent / ".git").exists() for parent in (path, *path.parents))
 
 
-def _gitignore_rules(path: Path) -> tuple[tuple[str, bool, bool], ...]:
+_GitignoreRule = tuple[str, bool, bool, bool]
+"""``(pattern, negated, directory_only, anchored)`` parsed from one .gitignore line."""
+_GitignoreRules = tuple[tuple[PurePosixPath, tuple[_GitignoreRule, ...]], ...]
+"""Rule sets paired with the directory, relative to the search base, they apply to."""
+
+
+def _gitignore_rules(path: Path) -> tuple[_GitignoreRule, ...]:
     ignore_file = path / ".gitignore"
     try:
         lines = ignore_file.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return ()
-    rules: list[tuple[str, bool, bool]] = []
+    rules: list[_GitignoreRule] = []
     for raw in lines:
         value = raw.strip()
         if not value or value.startswith("#"):
@@ -1503,20 +1549,19 @@ def _gitignore_rules(path: Path) -> tuple[tuple[str, bool, bool], ...]:
         negated = value.startswith("!")
         if negated:
             value = value[1:]
-        value = value.replace("\\", "/").lstrip("/")
+        value = value.replace("\\", "/")
         directory_only = value.endswith("/")
         value = value.rstrip("/")
+        # A slash anywhere but the end pins the pattern to the .gitignore
+        # directory; a leading "**/" explicitly lifts that pin again.
+        anchored = "/" in value and not value.startswith("**/")
+        value = value.removeprefix("**/").lstrip("/")
         if value:
-            rules.append((value, negated, directory_only))
+            rules.append((value, negated, directory_only, anchored))
     return tuple(rules)
 
 
-def _gitignore_matches(
-    relative: str,
-    *,
-    is_dir: bool,
-    rules: tuple[tuple[PurePosixPath, tuple[tuple[str, bool, bool], ...]], ...],
-) -> bool:
+def _gitignore_matches(relative: str, *, is_dir: bool, rules: _GitignoreRules) -> bool:
     ignored = False
     candidate = PurePosixPath(relative)
     for base, entries in rules:
@@ -1524,11 +1569,15 @@ def _gitignore_matches(
             scoped = candidate.relative_to(base) if base.parts else candidate
         except ValueError:
             continue
-        for pattern, negated, directory_only in entries:
+        for pattern, negated, directory_only, anchored in entries:
             if directory_only and not is_dir:
                 continue
-            if "/" in pattern:
-                matched = scoped.match(pattern) or scoped.match(f"**/{pattern}")
+            if anchored:
+                matched = len(scoped.parts) == len(
+                    PurePosixPath(pattern).parts
+                ) and scoped.match(pattern)
+            elif "/" in pattern:
+                matched = scoped.match(pattern)
             else:
                 matched = any(fnmatch.fnmatchcase(part, pattern) for part in scoped.parts)
             if matched:
@@ -1580,44 +1629,63 @@ def _relative_search_path(candidate: Path, root: Path) -> str:
     return value
 
 
-def _walk_search_files(
-    root: Path,
-    workspace_root: Path,
-    limit: int,
-    cancelled: threading.Event | None = None,
-) -> list[Path]:
-    """Bounded fallback traversal with default and hierarchical git ignores."""
+@dataclass(frozen=True, slots=True)
+class _SearchScope:
+    """How the ignore rules see a search root.
 
+    ``relative`` is the root relative to the directory whose rules apply,
+    ``rules`` are the ``.gitignore`` rules inherited from its ancestors and
+    ``skipped`` tells whether the default rules would never descend into it.
+    """
+
+    relative: PurePosixPath
+    rules: _GitignoreRules
+    skipped: bool
+
+
+def _search_scope(root: Path, workspace_root: Path) -> _SearchScope:
     try:
-        root_relative = root.relative_to(workspace_root)
-        rule_root = workspace_root
+        parts = root.relative_to(workspace_root).parts
+        current = workspace_root
     except ValueError:
-        root_relative = Path()
-        rule_root = root
-
-    inherited: list[
-        tuple[PurePosixPath, tuple[tuple[str, bool, bool], ...]]
-    ] = []
-    current = rule_root
+        parts = ()
+        current = root
+    rules: _GitignoreRules = ()
     relative = PurePosixPath()
-    for part in root_relative.parts:
-        rules = _gitignore_rules(current)
-        if rules:
-            inherited.append((relative, rules))
+    skipped = False
+    for part in parts:
+        local_rules = _gitignore_rules(current)
+        if local_rules:
+            rules += ((relative, local_rules),)
         current /= part
         relative /= part
+        skipped = (
+            skipped
+            or part in _DEFAULT_SEARCH_IGNORES
+            or _gitignore_matches(relative.as_posix(), is_dir=True, rules=rules)
+        )
+    return _SearchScope(relative, rules, skipped)
 
-    files: list[Path] = []
+
+def _walk_search_tree(
+    root: Path,
+    workspace_root: Path,
+    *,
+    include_ignored: bool,
+    cancelled: threading.Event | None,
+) -> Iterator[tuple[Path, bool]]:
+    """Yield ``(file, False)`` for kept files, ``(directory, True)`` for skipped ones.
+
+    Default ignore names and hierarchical ``.gitignore`` rules apply unless
+    ``include_ignored`` is set; version-control internals are always skipped
+    without being reported.
+    """
 
     def visit(
         directory: Path,
         relative_directory: PurePosixPath,
-        parent_rules: tuple[
-            tuple[PurePosixPath, tuple[tuple[str, bool, bool], ...]], ...
-        ],
-    ) -> None:
-        if len(files) >= limit or (cancelled is not None and cancelled.is_set()):
-            return
+        parent_rules: _GitignoreRules,
+    ) -> Iterator[tuple[Path, bool]]:
         local_rules = _gitignore_rules(directory)
         rules = parent_rules + (
             ((relative_directory, local_rules),) if local_rules else ()
@@ -1627,28 +1695,184 @@ def _walk_search_files(
         except OSError:
             return
         for entry in entries:
-            if len(files) >= limit or (cancelled is not None and cancelled.is_set()):
+            if cancelled is not None and cancelled.is_set():
                 return
-            entry_relative = relative_directory / entry.name
-            entry_text = entry_relative.as_posix()
+            entry_text = (relative_directory / entry.name).as_posix()
             try:
                 is_dir = entry.is_dir(follow_symlinks=False)
                 is_file = entry.is_file(follow_symlinks=False)
             except OSError:
                 continue
             if is_dir:
-                if entry.name in _DEFAULT_SEARCH_IGNORES or _gitignore_matches(
-                    entry_text, is_dir=True, rules=rules
-                ):
+                if entry.name in _VCS_DIRECTORIES:
                     continue
-                visit(Path(entry.path), entry_relative, rules)
-            elif is_file and not _gitignore_matches(
-                entry_text, is_dir=False, rules=rules
+                if not include_ignored and (
+                    entry.name in _DEFAULT_SEARCH_IGNORES
+                    or _gitignore_matches(entry_text, is_dir=True, rules=rules)
+                ):
+                    yield Path(entry.path), True
+                    continue
+                yield from visit(
+                    Path(entry.path), relative_directory / entry.name, rules
+                )
+            elif is_file and (
+                include_ignored
+                or not _gitignore_matches(entry_text, is_dir=False, rules=rules)
             ):
-                files.append(Path(entry.path))
+                yield Path(entry.path), False
 
-    visit(root, PurePosixPath(root_relative.as_posix()), tuple(inherited))
+    scope = _search_scope(root, workspace_root)
+    yield from visit(root, scope.relative, scope.rules)
+
+
+def _walk_search_files(
+    root: Path,
+    workspace_root: Path,
+    limit: int,
+    include_ignored: bool,
+    cancelled: threading.Event | None = None,
+) -> list[Path]:
+    """Bounded fallback traversal honouring the ignore rules."""
+
+    files: list[Path] = []
+    for path, skipped in _walk_search_tree(
+        root, workspace_root, include_ignored=include_ignored, cancelled=cancelled
+    ):
+        if not skipped:
+            files.append(path)
+            if len(files) >= limit:
+                break
     return files
+
+
+def _skipped_directories(
+    root: Path, workspace_root: Path, cancelled: threading.Event | None = None
+) -> list[Path]:
+    """Directories under root that the default ignore rules keep out of results."""
+
+    return [
+        path
+        for path, skipped in _walk_search_tree(
+            root, workspace_root, include_ignored=False, cancelled=cancelled
+        )
+        if skipped
+    ]
+
+
+@dataclass(slots=True)
+class _CollapsedCount:
+    """Hits inside one skipped directory.
+
+    ``complete`` turns False once the cap or the probe deadline cut counting short.
+    """
+
+    matches: int = 0
+    files: int = 0
+    complete: bool = True
+
+
+def _plural(count: int, singular: str, plural: str) -> str:
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _collapsed_notice(
+    counts: dict[Path, _CollapsedCount],
+    workspace_root: Path,
+    unit: Literal["matches", "files"],
+) -> str | None:
+    """Summarise hits in skipped directories, largest first, as one notice.
+
+    Directories the probe never reached before its deadline carry no count
+    worth listing, so they are only tallied.
+    """
+
+    with_hits = sorted(
+        ((path, count) for path, count in counts.items() if count.matches),
+        key=lambda item: (-item[1].matches, item[0]),
+    )
+    unprobed = sum(
+        1 for count in counts.values() if not count.matches and not count.complete
+    )
+    if not with_hits and not unprobed:
+        return None
+    entries = []
+    for path, count in with_hits[:_COLLAPSED_NOTICE_ENTRIES]:
+        label = _relative_search_path(path, workspace_root)
+        if not count.complete:
+            entries.append(f"{label} \u2265{count.matches} {unit}")
+        elif unit == "matches":
+            entries.append(
+                f"{label} {_plural(count.matches, 'match', 'matches')} "
+                f"in {_plural(count.files, 'file', 'files')}"
+            )
+        else:
+            entries.append(f"{label} {_plural(count.files, 'file', 'files')}")
+    if len(with_hits) > _COLLAPSED_NOTICE_ENTRIES:
+        entries.append(
+            f"and {len(with_hits) - _COLLAPSED_NOTICE_ENTRIES} more directories "
+            f"with {unit}"
+        )
+    if unprobed:
+        entries.append(
+            f"{_plural(unprobed, 'directory', 'directories')} "
+            "not probed before the time limit"
+        )
+    return (
+        f"Collapsed ignored directories: {'; '.join(entries)}. "
+        "Pass path=<dir> to search inside one, or include_ignored=true to search "
+        "them all"
+    )
+
+
+def _rg_ignore_arguments(include_ignored: bool) -> list[str]:
+    arguments: list[str] = []
+    if include_ignored:
+        arguments.append("--no-ignore")
+        names = _VCS_DIRECTORIES
+    else:
+        names = _VCS_DIRECTORIES | _DEFAULT_SEARCH_IGNORES
+    for name in sorted(names):
+        arguments.extend(("--glob", f"!**/{name}/**"))
+    return arguments
+
+
+def _fd_ignore_arguments(include_ignored: bool) -> list[str]:
+    arguments: list[str] = []
+    if include_ignored:
+        arguments.append("--no-ignore")
+        names = _VCS_DIRECTORIES
+    else:
+        names = _VCS_DIRECTORIES | _DEFAULT_SEARCH_IGNORES
+    for name in sorted(names):
+        arguments.extend(("--exclude", name))
+    return arguments
+
+
+def _render_search_result(output: str, notices: list[str]) -> str:
+    return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
+
+
+async def _search_with_probe(
+    search: Coroutine[Any, Any, tuple[str, list[str]]],
+    probe: Coroutine[Any, Any, dict[Path, _CollapsedCount]] | None,
+) -> tuple[str, list[str], dict[Path, _CollapsedCount]]:
+    """Run the search and the skipped-directory probe together.
+
+    The probe only adds a notice, so a failed or cancelled search takes it down
+    instead of waiting for it.
+    """
+
+    probe_task = asyncio.create_task(probe) if probe is not None else None
+    try:
+        output, notices = await search
+    except BaseException:
+        if probe_task is not None:
+            probe_task.cancel()
+            with suppress(BaseException):
+                await probe_task
+        raise
+    counts = await probe_task if probe_task is not None else {}
+    return output, notices, counts
 
 
 async def _run_owned_thread(function, *args):
@@ -1725,6 +1949,8 @@ class FileTools:
         max_search_files: int = 10_000,
         max_search_output_bytes: int = _DEFAULT_SEARCH_MAX_BYTES,
         max_grep_line_length: int = _DEFAULT_GREP_MAX_LINE_LENGTH,
+        max_collapsed_matches: int = _DEFAULT_COLLAPSED_LIMIT,
+        collapsed_probe_seconds: float = _DEFAULT_COLLAPSED_PROBE_SECONDS,
     ) -> None:
         if any(
             limit <= 0
@@ -1743,6 +1969,8 @@ class FileTools:
                 max_search_files,
                 max_search_output_bytes,
                 max_grep_line_length,
+                max_collapsed_matches,
+                collapsed_probe_seconds,
             )
         ):
             raise ValueError("file tool limits must be positive")
@@ -1764,6 +1992,8 @@ class FileTools:
         self.max_search_files = max_search_files
         self.max_search_output_bytes = max_search_output_bytes
         self.max_grep_line_length = max_grep_line_length
+        self.max_collapsed_matches = max_collapsed_matches
+        self.collapsed_probe_seconds = collapsed_probe_seconds
         self._mutation_locks = tuple(threading.Lock() for _ in range(64))
         self._io_service = FileIOService(
             lambda *args: self._read(*args),
@@ -2380,7 +2610,7 @@ class FileTools:
 
     @tool(
         tool_id="standard.files.glob",
-        version="3.0.0",
+        version="3.1.0",
         side_effect=ToolSideEffect.READ,
         timeout=30,
         resource_key="filesystem",
@@ -2406,12 +2636,23 @@ class FileTools:
             int,
             Field(gt=0, description="Maximum number of results (default: 1000)"),
         ] = 1000,
+        include_ignored: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Also search directories hidden by the default excludes and "
+                    ".gitignore, which are otherwise only summarised (default: false)"
+                )
+            ),
+        ] = False,
     ) -> str:
         """Search for files by glob pattern while respecting ignore files."""
 
-        return await self._search_service.glob(pattern, path, limit)
+        return await self._search_service.glob(pattern, path, limit, include_ignored)
 
-    async def _glob(self, pattern: str, path: str | None, limit: int) -> str:
+    async def _glob(
+        self, pattern: str, path: str | None, limit: int, include_ignored: bool
+    ) -> str:
         root = resolve_dir_path(path, self.path_context)
         if not root.exists():
             _fail(f"path does not exist: {root}", "file_not_found")
@@ -2423,17 +2664,36 @@ class FileTools:
                 "glob pattern must stay within workspace_root",
                 "path_outside_workspace",
             )
+        # A root the default rules skip is only reachable by lifting them.
+        include_ignored = (
+            include_ignored or _search_scope(root, self.workspace_root).skipped
+        )
+        output, notices, counts = await _search_with_probe(
+            self._glob_files(
+                root, pattern, min(limit, self.max_search_files), include_ignored
+            ),
+            None if include_ignored else self._count_collapsed_files(root, pattern),
+        )
+        notice = _collapsed_notice(counts, self.workspace_root, "files")
+        if notice:
+            notices.append(notice)
+        return _render_search_result(output, notices)
 
-        effective_limit = min(limit, self.max_search_files)
+    async def _glob_files(
+        self, root: Path, pattern: str, limit: int, include_ignored: bool
+    ) -> tuple[str, list[str]]:
         executable = _search_executable("fd", "fdfind")
         process_cwd: Path | None = None
         if executable:
-            arguments = ["--glob", "--color=never", "--hidden"]
-            for ignored in sorted(_DEFAULT_SEARCH_IGNORES):
-                arguments.extend(("--exclude", ignored))
+            arguments = [
+                "--glob",
+                "--color=never",
+                "--hidden",
+                *_fd_ignore_arguments(include_ignored),
+            ]
             if not _inside_git_tree(root):
                 arguments.append("--no-require-git")
-            arguments.extend(("--max-results", str(effective_limit)))
+            arguments.extend(("--max-results", str(limit)))
             effective_pattern = pattern
             if "/" in pattern:
                 arguments.append("--full-path")
@@ -2450,14 +2710,9 @@ class FileTools:
             executable = _search_executable("rg")
             if executable is None:
                 return await _run_cancellable_search_thread(
-                    self._glob_fallback, root, pattern, effective_limit
+                    self._glob_fallback, root, pattern, limit, include_ignored
                 )
-            arguments = [
-                "--files",
-                "--hidden",
-            ]
-            for ignored in sorted(_DEFAULT_SEARCH_IGNORES):
-                arguments.extend(("--glob", f"!**/{ignored}/**"))
+            arguments = ["--files", "--hidden", *_rg_ignore_arguments(include_ignored)]
             if not _inside_git_tree(root):
                 arguments.append("--no-require-git")
             arguments.extend(("--", "."))
@@ -2484,7 +2739,7 @@ class FileTools:
                 if not _matches_search_glob(relative.rstrip("/"), pattern):
                     continue
                 lines.append(relative)
-                if len(lines) >= effective_limit:
+                if len(lines) >= limit:
                     reached_limit = True
                     await _terminate_search_process(process, stderr_task)
                     break
@@ -2505,31 +2760,32 @@ class FileTools:
             else:
                 self._raise_search_failure(stderr, code, "file search backend")
         if not lines:
-            return "No files found matching pattern"
+            return "No files found matching pattern", notices
         output, bytes_truncated = _truncate_search_output(
             lines, self.max_search_output_bytes
         )
         if reached_limit:
             notices.append(
-                f"{effective_limit} results limit reached. Use limit="
-                f"{effective_limit * 2} for more, or refine pattern"
+                f"{limit} results limit reached. Use limit={limit * 2} for more, "
+                "or refine pattern"
             )
         if bytes_truncated:
             notices.append(
                 f"{_search_output_budget_label(self.max_search_output_bytes)} "
                 "limit reached"
             )
-        return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
+        return output, notices
 
     def _glob_fallback(
         self,
         root: Path,
         pattern: str,
         limit: int,
+        include_ignored: bool,
         cancelled: threading.Event | None = None,
-    ) -> str:
+    ) -> tuple[str, list[str]]:
         candidates = _walk_search_files(
-            root, self.workspace_root, self.max_search_files, cancelled
+            root, self.workspace_root, self.max_search_files, include_ignored, cancelled
         )
         lines = []
         for candidate in candidates:
@@ -2541,7 +2797,7 @@ class FileTools:
         reached_limit = len(lines) > limit
         lines = lines[:limit]
         if not lines:
-            return "No files found matching pattern"
+            return "No files found matching pattern", []
         output, bytes_truncated = _truncate_search_output(
             lines, self.max_search_output_bytes
         )
@@ -2556,11 +2812,36 @@ class FileTools:
                 f"{_search_output_budget_label(self.max_search_output_bytes)} "
                 "limit reached"
             )
-        return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
+        return output, notices
+
+    async def _count_collapsed_files(
+        self, root: Path, pattern: str
+    ) -> dict[Path, _CollapsedCount]:
+        skipped = await _run_cancellable_search_thread(
+            _skipped_directories, root, self.workspace_root
+        )
+        if not skipped:
+            return {}
+        executable = _search_executable("rg")
+        if executable is None:
+            return await _run_cancellable_search_thread(
+                self._count_collapsed_fallback,
+                skipped,
+                lambda path: int(
+                    _matches_search_glob(path.relative_to(root).as_posix(), pattern)
+                ),
+            )
+        return await self._count_collapsed_with_rg(
+            executable,
+            ["--files", "--hidden", *_rg_ignore_arguments(True), "--"],
+            root,
+            skipped,
+            lambda text: (text, int(_matches_search_glob(text, pattern))),
+        )
 
     @tool(
         tool_id="standard.files.grep",
-        version="3.0.0",
+        version="3.1.0",
         side_effect=ToolSideEffect.READ,
         timeout=30,
         resource_key="filesystem",
@@ -2602,11 +2883,20 @@ class FileTools:
             int,
             Field(gt=0, description="Maximum number of matches to return (default: 100)"),
         ] = 100,
+        include_ignored: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Also search directories hidden by the default excludes and "
+                    ".gitignore, which are otherwise only summarised (default: false)"
+                )
+            ),
+        ] = False,
     ) -> str:
         """Search file contents with ripgrep while respecting ignore files."""
 
         return await self._search_service.grep(
-            pattern, path, glob, ignoreCase, literal, context, limit
+            pattern, path, glob, ignoreCase, literal, context, limit, include_ignored
         )
 
     async def _grep(
@@ -2618,10 +2908,49 @@ class FileTools:
         literal: bool,
         context: int,
         limit: int,
+        include_ignored: bool,
     ) -> str:
         root = resolve_tool_path(path, self.path_context, default=".")
         if not root.exists():
             _fail(f"path does not exist: {root}", "file_not_found")
+        search_root = root if root.is_dir() else root.parent
+        # A root the default rules skip is only reachable by lifting them.
+        include_ignored = (
+            include_ignored or _search_scope(search_root, self.workspace_root).skipped
+        )
+        output, notices, counts = await _search_with_probe(
+            self._grep_matches(
+                root,
+                pattern,
+                glob,
+                ignore_case,
+                literal,
+                context,
+                min(limit, self.max_search_files),
+                include_ignored,
+            ),
+            None
+            if include_ignored or not root.is_dir()
+            else self._count_collapsed_matches(
+                root, pattern, glob, ignore_case, literal
+            ),
+        )
+        notice = _collapsed_notice(counts, self.workspace_root, "matches")
+        if notice:
+            notices.append(notice)
+        return _render_search_result(output, notices)
+
+    async def _grep_matches(
+        self,
+        root: Path,
+        pattern: str,
+        glob: str | None,
+        ignore_case: bool,
+        literal: bool,
+        context: int,
+        limit: int,
+        include_ignored: bool,
+    ) -> tuple[str, list[str]]:
         executable = _search_executable("rg")
         if executable is None:
             return await _run_cancellable_search_thread(
@@ -2632,12 +2961,16 @@ class FileTools:
                 ignore_case,
                 literal,
                 context,
-                min(limit, self.max_search_files),
+                limit,
+                include_ignored,
             )
-        effective_limit = min(limit, self.max_search_files)
-        arguments = ["--json", "--line-number", "--color=never", "--hidden"]
-        for ignored in sorted(_DEFAULT_SEARCH_IGNORES):
-            arguments.extend(("--glob", f"!**/{ignored}/**"))
+        arguments = [
+            "--json",
+            "--line-number",
+            "--color=never",
+            "--hidden",
+            *_rg_ignore_arguments(include_ignored),
+        ]
         if ignore_case:
             arguments.append("--ignore-case")
         if literal:
@@ -2669,7 +3002,7 @@ class FileTools:
                 root=root,
                 search_root=search_root,
                 glob=glob,
-                limit=effective_limit - len(matches),
+                limit=limit - len(matches),
                 code_pages=code_pages,
                 seen=seen,
                 matches=matches,
@@ -2680,7 +3013,7 @@ class FileTools:
                 break
 
         if not matches:
-            return "No matches found"
+            return "No matches found", notices
 
         # Windows of lines each match needs from its file: context around the
         # match, or the match line itself when the file must be re-decoded.
@@ -2757,8 +3090,8 @@ class FileTools:
         )
         if reached_limit:
             notices.append(
-                f"{effective_limit} matches limit reached. Use limit="
-                f"{effective_limit * 2} for more, or refine pattern"
+                f"{limit} matches limit reached. Use limit={limit * 2} for more, "
+                "or refine pattern"
             )
         if bytes_truncated:
             notices.append(
@@ -2770,7 +3103,7 @@ class FileTools:
                 f"Some lines truncated to {self.max_grep_line_length} chars. "
                 "Use read tool to see full lines"
             )
-        return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
+        return output, notices
 
     async def _run_ripgrep_pass(
         self,
@@ -2899,23 +3232,18 @@ class FileTools:
         literal: bool,
         context: int,
         limit: int,
+        include_ignored: bool,
         cancelled: threading.Event | None = None,
-    ) -> str:
-        flags = re.IGNORECASE if ignore_case else 0
-        try:
-            matcher = re.compile(re.escape(pattern) if literal else pattern, flags)
-        except re.error as exc:
-            raise ToolExecutionError(
-                f"invalid search pattern: {exc}",
-                kind="filesystem_error",
-                code="search_backend_failed",
-                side_effect_committed=False,
-            ) from exc
-
+    ) -> tuple[str, list[str]]:
+        matcher = _compile_search_pattern(pattern, ignore_case, literal)
         search_root = root if root.is_dir() else root.parent
         candidates = (
             _walk_search_files(
-                root, self.workspace_root, self.max_search_files, cancelled
+                root,
+                self.workspace_root,
+                self.max_search_files,
+                include_ignored,
+                cancelled,
             )
             if root.is_dir()
             else [root]
@@ -2928,16 +3256,9 @@ class FileTools:
             relative = _relative_search_path(candidate, search_root)
             if glob and not _matches_search_glob(relative, glob):
                 continue
-            try:
-                data = candidate.read_bytes()
-            except OSError:
+            lines = _read_text_lines(candidate)
+            if lines is None:
                 continue
-            if b"\x00" in data[:8192]:
-                continue
-            encoding = text_code_page(data[:_TEXT_SNIFF_BYTES])
-            lines = data.decode(encoding, errors="replace").replace(
-                "\r\n", "\n"
-            ).replace("\r", "\n").split("\n")
             for line_number, line in enumerate(lines, start=1):
                 if cancelled is not None and cancelled.is_set():
                     break
@@ -2950,7 +3271,7 @@ class FileTools:
             if reached_limit:
                 break
         if not matches:
-            return "No matches found"
+            return "No matches found", []
 
         output_lines: list[str] = []
         lines_truncated = False
@@ -2991,7 +3312,144 @@ class FileTools:
                 f"{_search_output_budget_label(self.max_search_output_bytes)} "
                 "limit reached"
             )
-        return output + (f"\n\n[{'. '.join(notices)}]" if notices else "")
+        return output, notices
+
+    async def _count_collapsed_matches(
+        self,
+        root: Path,
+        pattern: str,
+        glob: str | None,
+        ignore_case: bool,
+        literal: bool,
+    ) -> dict[Path, _CollapsedCount]:
+        skipped = await _run_cancellable_search_thread(
+            _skipped_directories, root, self.workspace_root
+        )
+        if not skipped:
+            return {}
+        executable = _search_executable("rg")
+        if executable is None:
+            matcher = _compile_search_pattern(pattern, ignore_case, literal)
+
+            def count_file(path: Path) -> int:
+                if glob and not _matches_search_glob(
+                    path.relative_to(root).as_posix(), glob
+                ):
+                    return 0
+                lines = _read_text_lines(path)
+                if lines is None:
+                    return 0
+                return sum(1 for line in lines if matcher.search(line))
+
+            return await _run_cancellable_search_thread(
+                self._count_collapsed_fallback, skipped, count_file
+            )
+        arguments = ["--count", "--null", "--hidden", *_rg_ignore_arguments(True)]
+        if glob:
+            arguments.extend(("--glob", glob))
+        if ignore_case:
+            arguments.append("--ignore-case")
+        if literal:
+            arguments.append("--fixed-strings")
+
+        def parse(text: str) -> tuple[str, int]:
+            relative, _, count = text.partition("\0")
+            return relative, int(count)
+
+        return await self._count_collapsed_with_rg(
+            executable, [*arguments, "--", pattern], root, skipped, parse
+        )
+
+    async def _count_collapsed_with_rg(
+        self,
+        executable: str,
+        arguments: list[str],
+        root: Path,
+        skipped: list[Path],
+        parse: Callable[[str], tuple[str, int]],
+    ) -> dict[Path, _CollapsedCount]:
+        """Count hits per skipped directory with one unrestricted ripgrep run.
+
+        ripgrep walks the whole root so the skipped directories never have to
+        fit on a command line; hits outside them are dropped here.  Counting
+        stops for a directory once it reaches ``max_collapsed_matches`` and for
+        every directory once ``collapsed_probe_seconds`` has elapsed; both
+        leave the affected counts marked incomplete.
+        """
+
+        targets = {
+            PurePosixPath(directory.relative_to(root).as_posix()): directory
+            for directory in skipped
+        }
+        counts = {directory: _CollapsedCount() for directory in skipped}
+        process = await self._start_search_process(
+            executable, [*arguments, "."], cwd=root
+        )
+        assert process.stdout is not None and process.stderr is not None
+        stderr_task = asyncio.create_task(process.stderr.read())
+        try:
+            async with asyncio.timeout(self.collapsed_probe_seconds):
+                while raw_line := await process.stdout.readline():
+                    text = raw_line.rstrip(b"\r\n").decode("utf-8", errors="replace")
+                    relative, hits = parse(text.replace("\\", "/"))
+                    if not hits:
+                        continue
+                    path = PurePosixPath(relative)
+                    owner = next(
+                        (targets[parent] for parent in path.parents if parent in targets),
+                        None,
+                    )
+                    if owner is None or not (count := counts[owner]).complete:
+                        continue
+                    count.matches += hits
+                    count.files += 1
+                    if count.matches >= self.max_collapsed_matches:
+                        count.complete = False
+                        if not any(entry.complete for entry in counts.values()):
+                            break
+        except TimeoutError:
+            for count in counts.values():
+                count.complete = False
+        finally:
+            await _terminate_search_process(process, stderr_task)
+        return counts
+
+    def _count_collapsed_fallback(
+        self,
+        skipped: list[Path],
+        count_file: Callable[[Path], int],
+        cancelled: threading.Event,
+    ) -> dict[Path, _CollapsedCount]:
+        """Count hits per skipped directory in Python, one directory at a time.
+
+        Directories finished before the deadline stay exact; the one in
+        progress and every later one are marked incomplete.
+        """
+
+        deadline = time.monotonic() + self.collapsed_probe_seconds
+        counts = {directory: _CollapsedCount() for directory in skipped}
+        pending = iter(counts.items())
+        for directory, count in pending:
+            for path, _skipped in _walk_search_tree(
+                directory,
+                self.workspace_root,
+                include_ignored=True,
+                cancelled=cancelled,
+            ):
+                if time.monotonic() >= deadline or cancelled.is_set():
+                    count.complete = False
+                    for _directory, later in pending:
+                        later.complete = False
+                    return counts
+                hits = count_file(path)
+                if not hits:
+                    continue
+                count.matches += hits
+                count.files += 1
+                if count.matches >= self.max_collapsed_matches:
+                    count.complete = False
+                    break
+        return counts
 
     @staticmethod
     async def _start_search_process(

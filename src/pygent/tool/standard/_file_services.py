@@ -61,13 +61,15 @@ class FileDiagnosticsService:
 
 @dataclass(frozen=True, slots=True)
 class FileSearchService:
-    glob_backend: Callable[[str, str | None, int], Awaitable[str]]
+    glob_backend: Callable[[str, str | None, int, bool], Awaitable[str]]
     grep_backend: Callable[
-        [str, str | None, str | None, bool, bool, int, int], Awaitable[str]
+        [str, str | None, str | None, bool, bool, int, int, bool], Awaitable[str]
     ]
 
-    async def glob(self, pattern: str, path: str | None, limit: int) -> str:
-        return await self.glob_backend(pattern, path, limit)
+    async def glob(
+        self, pattern: str, path: str | None, limit: int, include_ignored: bool
+    ) -> str:
+        return await self.glob_backend(pattern, path, limit, include_ignored)
 
     async def grep(
         self,
@@ -78,9 +80,10 @@ class FileSearchService:
         literal: bool,
         context: int,
         limit: int,
+        include_ignored: bool,
     ) -> str:
         return await self.grep_backend(
-            pattern, path, glob, ignore_case, literal, context, limit
+            pattern, path, glob, ignore_case, literal, context, limit, include_ignored
         )
 
 

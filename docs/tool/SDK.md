@@ -105,14 +105,27 @@ read_only_tools = ToolKit(
 `glob` 与 `grep` 保留 Pygent 的工具名，并采用 Pi coding agent 的精简模型接口：
 
 ```text
-glob(pattern, path?, limit=1000)
-grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=100)
+glob(pattern, path?, limit=1000, include_ignored=false)
+grep(pattern, path?, glob?, ignoreCase=false, literal=false, context=0, limit=100, include_ignored=false)
 ```
 
 `glob` 返回相对于搜索目录的路径；`grep` 返回
 `path:line: content`，并在 `context > 0` 时使用 `-` 标记上下文行。两者都会搜索
 未被忽略的隐藏文件并遵守默认排除目录与分层 `.gitignore`；没有匹配时分别返回
-`No files found matching pattern` 与 `No matches found`。本地实现优先使用 `fd`
+`No files found matching pattern` 与 `No matches found`。
+
+被排除的目录不会被静默丢弃：搜索与一次并发探测同时进行，探测统计每个被跳过目录
+（如 `.venv/`、`node_modules/`、被 `.gitignore` 排除的 `build/`）中的命中数，并以
+`[Collapsed ignored directories: .venv/ 3 matches in 2 files; ...]` 的形式追加到结果
+末尾，只列出有命中的目录、按命中数降序最多 5 条。单个目录的计数在达到
+`max_collapsed_matches`（默认 1000）后停止并显示为 `≥N`；探测整体受
+`collapsed_probe_seconds`（默认 1.5 秒）约束，未在期限内完成的目录以
+`N directories not probed before the time limit` 汇总。两者都是 `FileTools` 构造参数。
+模型可以用两种方式下钻：把 `path` 指向被排除目录内部时会自动解除排除规则；或者传
+`include_ignored=true` 在整棵树上一次搜全。版本控制内部目录（`.git`、`.hg`、`.svn`）
+在任何模式下都不会被搜索或统计。
+
+本地实现优先使用 `fd`
 执行 glob，并以 `rg --files` 作为高性能兼容后端；grep 优先使用 `rg --json`。
 部署环境未安装这些二进制时，框架使用有界 Python fallback，继续遵守 ignore、glob
 和结果限制，因此标准工具仍可开箱即用。安装 `rg`，以及可选的 `fd`（部分 Linux
