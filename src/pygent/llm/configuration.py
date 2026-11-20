@@ -30,7 +30,7 @@ _MODEL_FIELDS = frozenset(
     }
 )
 _CONNECTION_FIELDS = frozenset(
-    {"provider", "credential", "protocols", "verify_ssl", "proxy"}
+    {"provider", "credential", "protocols", "verify_ssl", "proxy", "headers"}
 )
 _PROTOCOL_ENDPOINT_FIELDS = frozenset({"base_url"})
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -845,6 +845,20 @@ def _validated_url(value: object, label: str) -> str:
     return url.rstrip("/")
 
 
+def _validated_headers(value: object) -> Mapping[str, str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise TypeError("headers must be a mapping")
+    headers: dict[str, str] = {}
+    for name, header_value in value.items():
+        name = _non_empty(name, "header name")
+        if not isinstance(header_value, str):
+            raise ValueError(f"header {name!r} value must be a string")
+        headers[name] = header_value
+    return MappingProxyType(headers)
+
+
 @dataclass(frozen=True, slots=True)
 class ConnectionConfig:
     provider: str
@@ -852,6 +866,7 @@ class ConnectionConfig:
     protocols: Mapping[str, str]
     verify_ssl: bool = True
     proxy: str | None = None
+    headers: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
         _non_empty(self.provider, "provider")
@@ -869,6 +884,7 @@ class ConnectionConfig:
             raise TypeError("verify_ssl must be a bool")
         if self.proxy is not None:
             object.__setattr__(self, "proxy", _validated_url(self.proxy, "proxy"))
+        object.__setattr__(self, "headers", _validated_headers(self.headers))
         object.__setattr__(self, "protocols", MappingProxyType(protocols))
 
     @classmethod
@@ -898,6 +914,7 @@ class ConnectionConfig:
             protocols=protocols,
             verify_ssl=_bool(value.get("verify_ssl", True), "verify_ssl"),
             proxy=(None if value.get("proxy") is None else cast(str, value["proxy"])),
+            headers=_validated_headers(value.get("headers")),
         )
 
     def to_mapping(self) -> dict[str, object]:
@@ -910,6 +927,8 @@ class ConnectionConfig:
             },
             "verify_ssl": self.verify_ssl,
         }
+        if self.headers is not None:
+            value["headers"] = dict(self.headers)
         if self.proxy is not None:
             value["proxy"] = self.proxy
         return value
@@ -924,6 +943,7 @@ class ResolvedModelConnection:
     credential: CredentialRef
     verify_ssl: bool = True
     proxy: str | None = None
+    headers: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("connection_key", "provider", "protocol"):
@@ -935,6 +955,7 @@ class ResolvedModelConnection:
             raise TypeError("verify_ssl must be a bool")
         if self.proxy is not None:
             object.__setattr__(self, "proxy", _validated_url(self.proxy, "proxy"))
+        object.__setattr__(self, "headers", _validated_headers(self.headers))
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -1092,6 +1113,7 @@ class ModelConfig:
             credential=connection.credential,
             verify_ssl=connection.verify_ssl,
             proxy=connection.proxy,
+            headers=connection.headers,
         )
 
 

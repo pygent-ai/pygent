@@ -245,6 +245,7 @@ def _create_client(
             base_url=connection.base_url,
             api_key=api_key,
             verify_ssl=connection.verify_ssl,
+            headers=connection.headers,
         )
     http_client = httpx.AsyncClient(
         proxy=connection.proxy,
@@ -254,6 +255,7 @@ def _create_client(
         base_url=connection.base_url,
         api_key=api_key,
         client=http_client,
+        headers=connection.headers,
     )
     return _OwnedProviderClient(inner, http_client)
 

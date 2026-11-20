@@ -233,6 +233,7 @@ def test_model_config_parses_named_semantics_and_connection_projection() -> None
     assert connection.credential == CredentialRef.environment("DEEPSEEK_API_KEY")
     assert connection.verify_ssl is True
     assert connection.proxy is None
+    assert connection.headers is None
 
     model_values = raw["models"]
     assert isinstance(model_values, Mapping)
@@ -246,6 +247,25 @@ def test_model_config_parses_named_semantics_and_connection_projection() -> None
     assert entry.spec.provider_options["thinking"]["type"] == "disabled"
     with pytest.raises(TypeError):
         config.models["other"] = entry  # type: ignore[index]
+
+
+def test_connection_headers_parse_project_and_round_trip() -> None:
+    value = _mapping()
+    connections = value["connections"]
+    assert isinstance(connections, dict)
+    connections["deepseek_official"]["headers"] = {  # type: ignore[union-attr]
+        "HTTP-Referer": "https://example.com"
+    }
+
+    config = ModelConfig.from_mapping(value)
+    configured = config.connections["deepseek_official"]
+    connection = config.connection_for("deepseek_primary")
+
+    assert configured.headers == {"HTTP-Referer": "https://example.com"}
+    assert connection.headers == {"HTTP-Referer": "https://example.com"}
+    assert ConnectionConfig.from_mapping(configured.to_mapping()) == configured
+    with pytest.raises(TypeError):
+        configured.headers["X-Title"] = "pygent"  # type: ignore[index]
 
 
 def test_models_share_connection_and_resolve_protocol_independently() -> None:
@@ -524,6 +544,24 @@ def test_credential_resolution_is_explicit_and_secret_free() -> None:
                 {"provider": "deepseek"}
             ),
             "unknown model fields",
+        ),
+        (
+            lambda value: value["connections"]["deepseek_official"].update(  # type: ignore[index,union-attr]
+                {"headers": "not-a-mapping"}
+            ),
+            "headers must be a mapping",
+        ),
+        (
+            lambda value: value["connections"]["deepseek_official"].update(  # type: ignore[index,union-attr]
+                {"headers": {"X-Title": 123}}
+            ),
+            "value must be a string",
+        ),
+        (
+            lambda value: value["connections"]["deepseek_official"].update(  # type: ignore[index,union-attr]
+                {"headers": {"": "pygent"}}
+            ),
+            "header name must be a non-empty string",
         ),
         (
             lambda value: value["models"]["deepseek_primary"].update(  # type: ignore[index,union-attr]

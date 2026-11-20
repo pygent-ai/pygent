@@ -32,6 +32,8 @@ connections:
     credential:
       env: MODEL_API_KEY
     verify_ssl: true
+    headers:
+      HTTP-Referer: https://example.com
     protocols:
       openai_chat_completions:
         base_url: https://gateway.example.com/v1
@@ -65,6 +67,8 @@ model_groups:
 `company_gateway` 是 `connection_key`，`deepseek_primary` 是用户定义的 `model_key`（UI 可显示为“模型别名”），`assistant` 是模型组名称。`model_id` 是服务商提供的真实模型 ID，与 `model_key` 含义不同。Connection 的 `provider` 是开放字符串；内置 Provider 与自定义 Provider 使用相同结构。Model 的 `protocol` 必须引用所选 Connection 的 `protocols` 条目。解析器用 Connection 的 Provider 与 Model 的 model ID、protocol、options 和 capabilities 构造完整 `ModelSpec`，因此 Model 不重复保存 Provider。
 
 解析严格拒绝未知字段、空名称、重复组条目、未知 Connection/Model 引用、Connection 中不存在的 protocol、不完整 capabilities、非法 URL、URL 内嵌凭据，以及同时设置 `credential.env` 和 `credential.none`。模态只能是 `text`、`image`、`audio`、`video`，`streaming.output` 必须属于输出模态；无法确认的 token limit 显式写 `null`。解析阶段不会读取 `MODEL_API_KEY`。
+
+`headers` 是可选的自定义 HTTP 请求头（键和值都必须是字符串，键非空），随该 Connection 的每个请求发送，作用于其全部协议。客户端用 `setdefault` 合并内置默认头，因此自定义头优先：`anthropic-version` 可以覆盖默认 API 版本，但写 `x-api-key` 或 `Authorization` 会覆盖 credential 解析出的认证头。认证凭据仍应通过 `credential` 提供；`headers` 适合放网关路由头、`HTTP-Referer`、`X-Title` 这类非密钥头。
 
 ## 逐级校验和保存
 
@@ -130,6 +134,7 @@ client = OpenAICompatibleClient(
     base_url=connection.base_url,
     api_key=api_key,
     verify_ssl=connection.verify_ssl,
+    headers=connection.headers,
 )
 invoker = DefaultModelInvoker(
     adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
@@ -157,6 +162,7 @@ shared_client = OpenAICompatibleClient(
     base_url=connection.base_url,
     api_key=connection.credential.resolve(),
     verify_ssl=connection.verify_ssl,
+    headers=connection.headers,
 )
 invoker = DefaultModelInvoker(
     adapters={"openai_chat_completions": OpenAICompatibleAdapter()},
@@ -260,6 +266,7 @@ client = AnthropicMessagesClient(
     base_url=connection.base_url,
     api_key=connection.credential.resolve(),
     verify_ssl=connection.verify_ssl,
+    headers=connection.headers,
 )
 invoker = DefaultModelInvoker(
     adapters={"anthropic_messages": AnthropicMessagesAdapter()},
