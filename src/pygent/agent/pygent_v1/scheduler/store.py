@@ -36,7 +36,8 @@ TASK_STATUSES = (
     "paused",
 )
 SUBMISSION_STATUSES = ("unverified", "verified", "quarantined", "rejected")
-RUN_STATUSES = ("success", "failed", "rejected")
+RUN_STATUSES = ("running", "success", "failed", "rejected", "interrupted")
+EVENT_DELIVERY_STATUSES = ("claimed", "done", "failed", "skipped")
 SUBMISSION_SOURCES = ("user", "agent", "timer", "event")
 INTERNAL_SOURCES = ("timer", "event")
 TASK_ORIGINS = ("user", "timer", "event")
@@ -305,13 +306,15 @@ class SchedulerStore:
                 lease_expires_at TEXT,
                 origin TEXT NOT NULL DEFAULT 'user',
                 delivery TEXT NOT NULL DEFAULT 'fire-and-forget',
-                priority TEXT NOT NULL DEFAULT 'normal'
+                priority TEXT NOT NULL DEFAULT 'normal',
+                submission_id TEXT
             );
             CREATE INDEX IF NOT EXISTS tasks_due
                 ON tasks(status, next_run_at, lease_expires_at);
             CREATE TABLE IF NOT EXISTS runs (
                 id TEXT PRIMARY KEY,
                 task_id TEXT NOT NULL,
+                lease_id TEXT,
                 started_at TEXT NOT NULL,
                 finished_at TEXT,
                 status TEXT NOT NULL,
@@ -322,6 +325,20 @@ class SchedulerStore:
             );
             CREATE INDEX IF NOT EXISTS runs_task_started
                 ON runs(task_id, started_at);
+            CREATE INDEX IF NOT EXISTS runs_status
+                ON runs(status);
+            CREATE TABLE IF NOT EXISTS event_deliveries (
+                submission_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                run_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                error TEXT,
+                PRIMARY KEY (submission_id, task_id)
+            );
+            CREATE INDEX IF NOT EXISTS event_deliveries_status
+                ON event_deliveries(status);
             """
         )
         columns = {
@@ -342,6 +359,22 @@ class SchedulerStore:
                 connection.execute(
                     f"ALTER TABLE tasks ADD COLUMN {name} {definition}"
                 )
+        if "submission_id" not in columns:
+            connection.execute("ALTER TABLE tasks ADD COLUMN submission_id TEXT")
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS tasks_submission_id "
+            "ON tasks(submission_id) WHERE submission_id IS NOT NULL"
+        )
+        run_columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        if "lease_id" not in run_columns:
+            connection.execute("ALTER TABLE runs ADD COLUMN lease_id TEXT")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS runs_task_status "
+            "ON runs(task_id, status)"
+        )
 
     def migrate(self) -> None:
         """Create or upgrade the schema. Only the daemon calls this."""
@@ -458,6 +491,69 @@ class SchedulerStore:
                 ),
             )
 
+    @staticmethod
+    def _validate_task_fields(
+        *, status: str, origin: str, delivery: str, priority: str
+    ) -> None:
+        if status not in TASK_STATUSES:
+            raise ValueError(f"unsupported scheduler task status: {status!r}")
+        if origin not in TASK_ORIGINS:
+            raise ValueError(f"unsupported scheduler task origin: {origin!r}")
+        if delivery not in TASK_DELIVERIES:
+            raise ValueError(f"unsupported scheduler task delivery: {delivery!r}")
+        if priority not in TASK_PRIORITIES:
+            raise ValueError(f"unsupported scheduler task priority: {priority!r}")
+
+    @staticmethod
+    def _insert_task(
+        connection: sqlite3.Connection,
+        *,
+        identifier: str,
+        name: str,
+        schedule: str,
+        prompt: str,
+        session: str,
+        source: str,
+        status: str,
+        next_run_at: datetime | None,
+        instructions: str,
+        origin: str,
+        delivery: str,
+        priority: str,
+        created_at: datetime,
+        submission_id: str | None = None,
+    ) -> Task:
+        connection.execute(
+            "INSERT INTO tasks "
+            "(id, name, schedule, prompt, prompt_hash, session, source, status, "
+            "next_run_at, created_at, updated_at, instructions, origin, delivery, "
+            "priority, submission_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                identifier,
+                name,
+                schedule,
+                prompt,
+                prompt_hash(prompt),
+                session,
+                source,
+                status,
+                None if next_run_at is None else iso(next_run_at),
+                iso(created_at),
+                iso(created_at),
+                instructions,
+                origin,
+                delivery,
+                priority,
+                submission_id,
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM tasks WHERE id=?", (identifier,)
+        ).fetchone()
+        assert row is not None
+        return _task(row)
+
     def create_task(
         self,
         *,
@@ -474,48 +570,182 @@ class SchedulerStore:
         priority: str = DEFAULT_PRIORITY,
         created_at: datetime | None = None,
         task_id: str | None = None,
+        submission_id: str | None = None,
     ) -> Task:
-        if status not in TASK_STATUSES:
-            raise ValueError(f"unsupported scheduler task status: {status!r}")
-        if origin not in TASK_ORIGINS:
-            raise ValueError(f"unsupported scheduler task origin: {origin!r}")
-        if delivery not in TASK_DELIVERIES:
-            raise ValueError(f"unsupported scheduler task delivery: {delivery!r}")
-        if priority not in TASK_PRIORITIES:
-            raise ValueError(f"unsupported scheduler task priority: {priority!r}")
+        self._validate_task_fields(
+            status=status, origin=origin, delivery=delivery, priority=priority
+        )
         now = created_at or utc_now()
         identifier = task_id or f"task-{uuid.uuid4().hex}"
         with self._connect() as connection:
             self._ensure_schema(connection)
-            connection.execute(
-                "INSERT INTO tasks "
-                "(id, name, schedule, prompt, prompt_hash, session, source, status, "
-                "next_run_at, created_at, updated_at, instructions, origin, delivery, "
-                "priority) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    identifier,
-                    name,
-                    schedule,
-                    prompt,
-                    prompt_hash(prompt),
-                    session,
-                    source,
-                    status,
-                    None if next_run_at is None else iso(next_run_at),
-                    iso(now),
-                    iso(now),
-                    instructions,
-                    origin,
-                    delivery,
-                    priority,
-                ),
+            return self._insert_task(
+                connection,
+                identifier=identifier,
+                name=name,
+                schedule=schedule,
+                prompt=prompt,
+                session=session,
+                source=source,
+                status=status,
+                next_run_at=next_run_at,
+                instructions=instructions,
+                origin=origin,
+                delivery=delivery,
+                priority=priority,
+                created_at=now,
+                submission_id=submission_id,
             )
-            row = connection.execute(
-                "SELECT * FROM tasks WHERE id=?", (identifier,)
+
+    def promote_task_submission(
+        self,
+        *,
+        submission_id: str,
+        name: str,
+        schedule: str,
+        prompt: str,
+        session: str,
+        source: str,
+        status: str,
+        next_run_at: datetime | None,
+        instructions: str = "",
+        origin: str = "user",
+        delivery: str = DEFAULT_DELIVERY,
+        priority: str = DEFAULT_PRIORITY,
+        note: str | None = None,
+        created_at: datetime | None = None,
+    ) -> Task:
+        """Create at most one task for a submission and mark it verified."""
+
+        self._validate_task_fields(
+            status=status, origin=origin, delivery=delivery, priority=priority
+        )
+        now = created_at or utc_now()
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            submission = connection.execute(
+                "SELECT status, task_id FROM submissions WHERE id=?",
+                (submission_id,),
             ).fetchone()
-        assert row is not None
-        return _task(row)
+            if submission is None:
+                raise ValueError(f"unknown scheduler submission: {submission_id!r}")
+            existing_task_id = submission["task_id"]
+            if existing_task_id:
+                row = connection.execute(
+                    "SELECT * FROM tasks WHERE id=?", (existing_task_id,)
+                ).fetchone()
+                if row is not None:
+                    connection.commit()
+                    return _task(row)
+            if submission["status"] != "unverified":
+                raise ValueError(
+                    f"scheduler submission is already {submission['status']}: "
+                    f"{submission_id!r}"
+                )
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE submission_id=?", (submission_id,)
+            ).fetchone()
+            if row is not None:
+                task = _task(row)
+            else:
+                task = self._insert_task(
+                    connection,
+                    identifier=f"task-{uuid.uuid4().hex}",
+                    name=name,
+                    schedule=schedule,
+                    prompt=prompt,
+                    session=session,
+                    source=source,
+                    status=status,
+                    next_run_at=next_run_at,
+                    instructions=instructions,
+                    origin=origin,
+                    delivery=delivery,
+                    priority=priority,
+                    created_at=now,
+                    submission_id=submission_id,
+                )
+            connection.execute(
+                "UPDATE submissions SET status='verified', processed_at=?, "
+                "task_id=?, error=? WHERE id=? AND status='unverified'",
+                (iso(now), task.id, note, submission_id),
+            )
+            connection.commit()
+        return task
+
+    def apply_control_and_mark(
+        self,
+        *,
+        submission_id: str,
+        action: str,
+        task_id: str,
+        next_run_at: datetime | None = None,
+        now: datetime | None = None,
+    ) -> str:
+        """Apply one control action and mark its submission in one transaction."""
+
+        if action not in {"approve", "reject", "pause", "resume", "delete"}:
+            raise ValueError(f"unsupported control action {action!r}")
+        current = now or utc_now()
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            submission = connection.execute(
+                "SELECT status, task_id FROM submissions WHERE id=?",
+                (submission_id,),
+            ).fetchone()
+            if submission is None:
+                raise ValueError(f"unknown scheduler submission: {submission_id!r}")
+            existing_task_id = submission["task_id"]
+            if existing_task_id:
+                row = connection.execute(
+                    "SELECT 1 FROM tasks WHERE id=?", (existing_task_id,)
+                ).fetchone()
+                if row is not None or submission["status"] == "verified":
+                    connection.commit()
+                    return str(existing_task_id)
+            if submission["status"] != "unverified":
+                raise ValueError(
+                    f"scheduler submission is already {submission['status']}: "
+                    f"{submission_id!r}"
+                )
+            task = connection.execute(
+                "SELECT 1 FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if task is None:
+                raise ValueError(f"unknown task {task_id!r}")
+            if action in {"approve", "resume"}:
+                connection.execute(
+                    "UPDATE tasks SET next_run_at=?, status='approved', "
+                    "lease_id=NULL, lease_expires_at=NULL, updated_at=? WHERE id=?",
+                    (
+                        None if next_run_at is None else iso(next_run_at),
+                        iso(current),
+                        task_id,
+                    ),
+                )
+            elif action == "reject":
+                connection.execute(
+                    "UPDATE tasks SET status='rejected', lease_id=NULL, "
+                    "lease_expires_at=NULL, updated_at=? WHERE id=?",
+                    (iso(current), task_id),
+                )
+            elif action == "pause":
+                connection.execute(
+                    "UPDATE tasks SET status='paused', lease_id=NULL, "
+                    "lease_expires_at=NULL, updated_at=? WHERE id=?",
+                    (iso(current), task_id),
+                )
+            else:
+                connection.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+            connection.execute(
+                "UPDATE submissions SET status='verified', processed_at=?, "
+                "task_id=?, error=NULL WHERE id=? AND status='unverified'",
+                (iso(current), task_id, submission_id),
+            )
+            connection.commit()
+        return task_id
 
     def task(self, task_id: str) -> Task | None:
         with self._connect() as connection:
@@ -702,6 +932,206 @@ class SchedulerStore:
         assert row is not None
         return _run(row)
 
+    def begin_run(
+        self,
+        *,
+        task_id: str,
+        lease_id: str,
+        started_at: datetime,
+        missed: bool,
+        run_id: str | None = None,
+    ) -> Run:
+        """Record a run that is about to execute so recovery can see it."""
+
+        identifier = run_id or f"run-{uuid.uuid4().hex}"
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO runs "
+                "(id, task_id, lease_id, started_at, finished_at, status, "
+                "exit_code, output, error, missed) "
+                "VALUES (?, ?, ?, ?, NULL, 'running', NULL, '', NULL, ?)",
+                (identifier, task_id, lease_id, iso(started_at), 1 if missed else 0),
+            )
+            row = connection.execute(
+                "SELECT * FROM runs WHERE id=?", (identifier,)
+            ).fetchone()
+        assert row is not None
+        return _run(row)
+
+    def running_run(self, task_id: str) -> Run | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM runs WHERE task_id=? AND status='running' "
+                "ORDER BY started_at DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+        return None if row is None else _run(row)
+
+    def list_running_runs(self) -> list[Run]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM runs WHERE status='running' "
+                "ORDER BY started_at, id"
+            ).fetchall()
+        return [_run(row) for row in rows]
+
+    def finalize_run(
+        self,
+        *,
+        run_id: str,
+        task_id: str,
+        lease_id: str | None,
+        status: str,
+        started_at: datetime,
+        finished_at: datetime | None,
+        exit_code: int | None,
+        output: str,
+        error: str | None,
+        missed: bool,
+        next_run_at: datetime | None,
+        task_status: str | None = None,
+    ) -> None:
+        """Finalize a run and its task in one transaction."""
+
+        if status not in RUN_STATUSES:
+            raise ValueError(f"unsupported scheduler run status: {status!r}")
+        if task_status is not None and task_status not in TASK_STATUSES:
+            raise ValueError(f"unsupported scheduler task status: {task_status!r}")
+        current = utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO runs "
+                "(id, task_id, lease_id, started_at, finished_at, status, "
+                "exit_code, output, error, missed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "finished_at=excluded.finished_at, status=excluded.status, "
+                "exit_code=excluded.exit_code, output=excluded.output, "
+                "error=excluded.error, missed=excluded.missed",
+                (
+                    run_id,
+                    task_id,
+                    lease_id,
+                    iso(started_at),
+                    None if finished_at is None else iso(finished_at),
+                    status,
+                    exit_code,
+                    output,
+                    error,
+                    1 if missed else 0,
+                ),
+            )
+            if task_status is None:
+                if lease_id is None:
+                    connection.execute(
+                        "UPDATE tasks SET next_run_at=?, lease_id=NULL, "
+                        "lease_expires_at=NULL, updated_at=? WHERE id=?",
+                        (
+                            None if next_run_at is None else iso(next_run_at),
+                            iso(current),
+                            task_id,
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        "UPDATE tasks SET next_run_at=?, lease_id=NULL, "
+                        "lease_expires_at=NULL, updated_at=? "
+                        "WHERE id=? AND (lease_id=? OR lease_id IS NULL)",
+                        (
+                            None if next_run_at is None else iso(next_run_at),
+                            iso(current),
+                            task_id,
+                            lease_id,
+                        ),
+                    )
+            else:
+                if lease_id is None:
+                    connection.execute(
+                        "UPDATE tasks SET next_run_at=?, status=?, lease_id=NULL, "
+                        "lease_expires_at=NULL, updated_at=? WHERE id=?",
+                        (
+                            None if next_run_at is None else iso(next_run_at),
+                            task_status,
+                            iso(current),
+                            task_id,
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        "UPDATE tasks SET next_run_at=?, status=?, lease_id=NULL, "
+                        "lease_expires_at=NULL, updated_at=? "
+                        "WHERE id=? AND (lease_id=? OR lease_id IS NULL)",
+                        (
+                            None if next_run_at is None else iso(next_run_at),
+                            task_status,
+                            iso(current),
+                            task_id,
+                            lease_id,
+                        ),
+                    )
+            connection.commit()
+
+    def claim_event_delivery(
+        self,
+        submission_id: str,
+        task_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        """Claim one event/task delivery; false means it was already handled."""
+
+        current = now or utc_now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status FROM event_deliveries "
+                "WHERE submission_id=? AND task_id=?",
+                (submission_id, task_id),
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    "INSERT INTO event_deliveries "
+                    "(submission_id, task_id, status, created_at, updated_at) "
+                    "VALUES (?, ?, 'claimed', ?, ?)",
+                    (submission_id, task_id, iso(current), iso(current)),
+                )
+                connection.commit()
+                return True
+            if row["status"] in {"failed", "skipped"}:
+                connection.execute(
+                    "UPDATE event_deliveries SET status='claimed', error=NULL, "
+                    "updated_at=? WHERE submission_id=? AND task_id=?",
+                    (iso(current), submission_id, task_id),
+                )
+                connection.commit()
+                return True
+            connection.commit()
+            return False
+
+    def finish_event_delivery(
+        self,
+        submission_id: str,
+        task_id: str,
+        *,
+        status: str,
+        error: str | None = None,
+        run_id: str | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        if status not in EVENT_DELIVERY_STATUSES:
+            raise ValueError(
+                f"unsupported event delivery status: {status!r}"
+            )
+        current = now or utc_now()
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE event_deliveries SET status=?, error=?, "
+                "run_id=COALESCE(?, run_id), updated_at=? "
+                "WHERE submission_id=? AND task_id=?",
+                (status, error, run_id, iso(current), submission_id, task_id),
+            )
+
     def list_runs(self, *, task_id: str | None = None) -> list[Run]:
         query = "SELECT * FROM runs"
         parameters: tuple[Any, ...] = ()
@@ -719,6 +1149,7 @@ class SchedulerStore:
 __all__ = [
     "DEFAULT_DELIVERY",
     "DEFAULT_PRIORITY",
+    "EVENT_DELIVERY_STATUSES",
     "INTERNAL_SOURCES",
     "RUN_STATUSES",
     "SUBMISSION_SOURCES",

@@ -16,10 +16,10 @@ priority is normalized to ``normal`` with an audit note on the submission.
 
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 import sys
 import threading
-import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -150,7 +150,6 @@ class SchedulerDaemon:
             user_identity=config.user_identity
         )
         self.clock = clock or (lambda: datetime.now(UTC))
-        self.sleeper = sleeper or time.sleep
         self.alert_callback = alert
         self.owner = f"scheduler-{uuid.uuid4().hex}"
         self.lease_seconds = lease_seconds or max(
@@ -159,31 +158,180 @@ class SchedulerDaemon:
         self.session_id = session_id or config.scheduler.session
         self.alerts_path = Path(config.pygent_root) / "scheduler" / "alerts.jsonl"
         self.alerts: list[str] = []
+        self.alert_sink_error: str | None = None
+        self.running = False
+        self.consecutive_failures = 0
+        self.last_error: str | None = None
+        self.last_error_at: datetime | None = None
+        self.last_success_at: datetime | None = None
+        self._started = False
+        self._start_lock = threading.Lock()
+        self._active_tasks: set[str] = set()
+        self._active_lock = threading.Lock()
         self._stop = threading.Event()
+        self.sleeper = sleeper or self._stop.wait
 
     def stop(self) -> None:
         self._stop.set()
 
+    def health(self) -> dict[str, Any]:
+        return {
+            "running": self.running,
+            "started": self._started,
+            "consecutive_failures": self.consecutive_failures,
+            "last_error": self.last_error,
+            "last_error_at": (
+                None if self.last_error_at is None else iso(self.last_error_at)
+            ),
+            "last_success_at": (
+                None if self.last_success_at is None else iso(self.last_success_at)
+            ),
+        }
+
     def run_forever(self) -> None:
-        self._startup()
         startup = True
-        while not self._stop.is_set():
-            self.run_once(startup=startup)
-            startup = False
-            self.sleeper(float(self.config.scheduler.poll_seconds))
+        failures = 0
+        self.running = True
+        try:
+            while not self._stop.is_set():
+                try:
+                    self.run_once(startup=startup)
+                except Exception as exc:
+                    self.consecutive_failures = failures + 1
+                    self.last_error = f"{type(exc).__name__}: {exc}"
+                    self.last_error_at = self.clock()
+                    if not self._is_recoverable(exc):
+                        self._alert(f"scheduler fatal: {self.last_error}")
+                        raise
+                    failures += 1
+                    self.consecutive_failures = failures
+                    if failures == 1 or failures & (failures - 1) == 0:
+                        self._alert(
+                            f"scheduler loop failed ({failures}x): {self.last_error}"
+                        )
+                    delay = self._retry_delay(failures)
+                else:
+                    if failures:
+                        self._alert(
+                            f"scheduler recovered after {failures} failure(s); "
+                            f"last error: {self.last_error}"
+                        )
+                    failures = 0
+                    self.consecutive_failures = 0
+                    self.last_success_at = self.clock()
+                    startup = False
+                    delay = float(self.config.scheduler.poll_seconds)
+                if self._stop.is_set():
+                    break
+                self.sleeper(delay)
+        finally:
+            self.running = False
+
+    @staticmethod
+    def _is_recoverable(exc: BaseException) -> bool:
+        if isinstance(exc, sqlite3.OperationalError):
+            message = str(exc).lower()
+            return any(
+                marker in message
+                for marker in (
+                    "locked",
+                    "busy",
+                    "disk i/o",
+                    "disk is full",
+                    "unable to open",
+                )
+            )
+        return isinstance(exc, OSError)
+
+    def _retry_delay(self, failures: int) -> float:
+        base = max(1.0, float(self.config.scheduler.poll_seconds))
+        return min(max(60.0, base), base * (2 ** min(failures - 1, 6)))
 
     def run_once(self, *, now: datetime | None = None, startup: bool = False) -> dict[str, int]:
-        self._startup()
+        self._ensure_started()
         current = now or self.clock()
+        self._recover_stale_runs(current)
         submissions = self._process_submissions(current)
         tasks = self._run_due_tasks(current, startup=startup)
         return {"submissions": submissions, "tasks": tasks}
+
+    def _ensure_started(self) -> None:
+        if self._started:
+            return
+        with self._start_lock:
+            if self._started:
+                return
+            self._startup()
+            self._started = True
 
     def _startup(self) -> None:
         self.store.migrate()
         for source in ("user", "agent"):
             load_secret(self.user_pygent_root, source)
         self.alerts_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _recover_stale_runs(self, now: datetime) -> int:
+        recovered = 0
+        for run in self.store.list_running_runs():
+            task = self.store.task(run.task_id)
+            if task is None:
+                self.store.finalize_run(
+                    run_id=run.id,
+                    task_id=run.task_id,
+                    lease_id=None,
+                    status="interrupted",
+                    started_at=run.started_at,
+                    finished_at=utc_now(),
+                    exit_code=None,
+                    output=run.output,
+                    error="previous execution outcome unknown",
+                    missed=run.missed,
+                    next_run_at=None,
+                )
+                self._alert(
+                    f"task {run.task_id} interrupted: task no longer exists"
+                )
+                recovered += 1
+                continue
+            with self._active_lock:
+                if task.id in self._active_tasks:
+                    continue
+            if task.lease_expires_at is not None and task.lease_expires_at > now:
+                continue
+            try:
+                spec = parse_schedule(task.schedule)
+            except ValueError:
+                spec = None
+            next_at = (
+                advance(spec, fired_at=now)
+                if spec is not None and spec.kind not in {"once", "event"}
+                else None
+            )
+            self.store.finalize_run(
+                run_id=run.id,
+                task_id=task.id,
+                lease_id=task.lease_id,
+                status="interrupted",
+                started_at=run.started_at,
+                finished_at=utc_now(),
+                exit_code=None,
+                output=run.output,
+                error="previous execution outcome unknown",
+                missed=run.missed,
+                next_run_at=next_at,
+                task_status=(
+                    "paused"
+                    if spec is not None
+                    and spec.kind == "once"
+                    and task.status == "approved"
+                    else None
+                ),
+            )
+            self._alert(
+                f"task {task.id} interrupted: previous execution outcome unknown"
+            )
+            recovered += 1
+        return recovered
 
     def _process_submissions(self, now: datetime) -> int:
         submissions = self.store.pending_submissions(limit=1000)
@@ -211,21 +359,15 @@ class SchedulerDaemon:
                 continue
             try:
                 if submission.kind == "task":
-                    task, note = self._promote_task(submission, now)
-                    self.store.mark_submission(
-                        submission.id, "verified", task_id=task.id, error=note
-                    )
+                    self._promote_task(submission, now)
                 elif submission.kind == "control":
-                    task_id = self._apply_control(submission.payload, now)
-                    self.store.mark_submission(
-                        submission.id, "verified", task_id=task_id
-                    )
+                    self._apply_control(submission.id, submission.payload, now)
                 elif submission.kind == "event":
                     events.append(submission)
                 else:
                     raise ValueError(f"unsupported submission kind {submission.kind!r}")
                 processed += 1
-            except Exception as exc:  # noqa: BLE001 - rejected submissions stay auditable
+            except (ValueError, KeyError, TypeError) as exc:
                 self.store.mark_submission(
                     submission.id, "rejected", error=f"{type(exc).__name__}: {exc}"
                 )
@@ -234,10 +376,10 @@ class SchedulerDaemon:
         # same poll can receive an event emitted with it.
         for submission in events:
             try:
-                self._consume_event(submission.payload, now)
+                self._consume_event(submission, now)
                 self.store.mark_submission(submission.id, "verified")
                 processed += 1
-            except Exception as exc:  # noqa: BLE001 - keep event evidence
+            except (ValueError, KeyError, TypeError) as exc:
                 self.store.mark_submission(
                     submission.id, "rejected", error=f"{type(exc).__name__}: {exc}"
                 )
@@ -248,9 +390,7 @@ class SchedulerDaemon:
         self.store.mark_submission(submission_id, "quarantined", error=reason)
         self._alert(f"quarantined submission {submission_id}: {reason}")
 
-    def _promote_task(
-        self, submission: Submission, now: datetime
-    ) -> tuple[Task, str | None]:
+    def _promote_task(self, submission: Submission, now: datetime) -> Task:
         source = submission.source
         payload = submission.payload
         name = str(payload.get("name") or "").strip()
@@ -280,7 +420,8 @@ class SchedulerDaemon:
                 priority = DEFAULT_PRIORITY
                 note = "agent-requested-high normalized"
         origin = source if source in TASK_ORIGINS else "user"
-        task = self.store.create_task(
+        return self.store.promote_task_submission(
+            submission_id=submission.id,
             name=name,
             schedule=schedule_text,
             prompt=prompt,
@@ -292,11 +433,13 @@ class SchedulerDaemon:
             origin=origin,
             delivery=delivery,
             priority=priority,
+            note=note,
             created_at=now,
         )
-        return task, note
 
-    def _apply_control(self, payload: dict[str, Any], now: datetime) -> str | None:
+    def _apply_control(
+        self, submission_id: str, payload: dict[str, Any], now: datetime
+    ) -> str:
         action = str(payload.get("action") or "").strip()
         task_id = str(payload.get("task_id") or "").strip()
         if not task_id:
@@ -304,27 +447,18 @@ class SchedulerDaemon:
         task = self.store.task(task_id)
         if task is None:
             raise ValueError(f"unknown task {task_id!r}")
-        if action == "approve":
-            self.store.update_task_next_run(
-                task_id,
-                self._next_for_resume(task, now),
-                status="approved",
-            )
-        elif action == "reject":
-            self.store.set_task_status(task_id, "rejected")
-        elif action == "pause":
-            self.store.set_task_status(task_id, "paused")
-        elif action == "resume":
-            self.store.update_task_next_run(
-                task_id,
-                self._next_for_resume(task, now),
-                status="approved",
-            )
-        elif action == "delete":
-            self.store.delete_task(task_id)
-        else:
-            raise ValueError(f"unsupported control action {action!r}")
-        return task_id
+        next_at = (
+            self._next_for_resume(task, now)
+            if action in {"approve", "resume"}
+            else None
+        )
+        return self.store.apply_control_and_mark(
+            submission_id=submission_id,
+            action=action,
+            task_id=task_id,
+            next_run_at=next_at,
+            now=now,
+        )
 
     @staticmethod
     def _next_for_resume(task: Task, now: datetime) -> datetime | None:
@@ -333,8 +467,8 @@ class SchedulerDaemon:
             return spec.at
         return next_run(spec, after=now, now=now)
 
-    def _consume_event(self, payload: dict[str, Any], now: datetime) -> None:
-        event = str(payload.get("event") or "").strip()
+    def _consume_event(self, submission: Submission, now: datetime) -> None:
+        event = str(submission.payload.get("event") or "").strip()
         if not event:
             raise ValueError("event submission requires event")
         for task in self.store.list_tasks(status="approved"):
@@ -344,14 +478,35 @@ class SchedulerDaemon:
                 continue
             if spec.kind != "event" or spec.event != event:
                 continue
-            claimed = self.store.claim_task(
-                task.id,
-                now=now,
-                lease_id=self.owner,
-                lease_seconds=self.lease_seconds,
+            if not self.store.claim_event_delivery(
+                submission.id, task.id, now=now
+            ):
+                continue
+            try:
+                claimed = self.store.claim_task(
+                    task.id,
+                    now=now,
+                    lease_id=self.owner,
+                    lease_seconds=self.lease_seconds,
+                )
+            except Exception as exc:
+                self.store.finish_event_delivery(
+                    submission.id,
+                    task.id,
+                    status="failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                    now=now,
+                )
+                raise
+            if claimed is None:
+                self.store.finish_event_delivery(
+                    submission.id, task.id, status="skipped", now=now
+                )
+                continue
+            self._execute_task(claimed, now, missed=False)
+            self.store.finish_event_delivery(
+                submission.id, task.id, status="done", now=now
             )
-            if claimed is not None:
-                self._execute_task(claimed, now, missed=False)
 
     def _run_due_tasks(self, now: datetime, *, startup: bool) -> int:
         tasks = self.store.claim_due_tasks(
@@ -383,12 +538,13 @@ class SchedulerDaemon:
 
     def _execute_task(self, task: Task, now: datetime, missed: bool) -> None:
         started = utc_now()
+        spec = parse_schedule(task.schedule)
         if task.prompt_hash != prompt_hash(task.prompt):
             message = f"prompt hash mismatch for task {task.id}"
-            self.store.set_task_status(task.id, "rejected")
-            self.store.update_task_next_run(task.id, None)
-            self.store.append_run(
+            self.store.finalize_run(
+                run_id=f"run-{uuid.uuid4().hex}",
                 task_id=task.id,
+                lease_id=self.owner,
                 status="rejected",
                 started_at=started,
                 finished_at=utc_now(),
@@ -396,45 +552,100 @@ class SchedulerDaemon:
                 output="",
                 error=message,
                 missed=missed,
+                next_run_at=None,
+                task_status="rejected",
             )
-            self.store.release_task(task.id, lease_id=self.owner)
             self._alert(message)
             return
-        try:
-            result = self.runner.run(task)
-        except Exception as exc:  # noqa: BLE001 - a failed task must become an audit run
-            result = TaskResult(
-                exit_code=None,
-                error=f"{type(exc).__name__}: {exc}",
-                started_at=started,
+        stale = self.store.running_run(task.id)
+        if stale is not None:
+            next_at = None if spec.kind == "once" else advance(spec, fired_at=now)
+            self.store.finalize_run(
+                run_id=stale.id,
+                task_id=task.id,
+                lease_id=self.owner,
+                status="interrupted",
+                started_at=stale.started_at,
                 finished_at=utc_now(),
+                exit_code=None,
+                output=stale.output,
+                error="previous execution outcome unknown",
+                missed=stale.missed,
+                next_run_at=next_at,
+                task_status=(
+                    "paused"
+                    if spec.kind == "once" and task.status == "approved"
+                    else None
+                ),
             )
-        status = "success" if result.exit_code == 0 else "failed"
-        finished = result.finished_at or utc_now()
-        self.store.append_run(
+            self._alert(
+                f"task {task.id} interrupted: previous execution outcome unknown"
+            )
+            return
+        run = self.store.begin_run(
             task_id=task.id,
-            status=status,
-            started_at=result.started_at or started,
-            finished_at=finished,
-            exit_code=result.exit_code,
-            output=result.output,
-            error=result.error,
+            lease_id=self.owner,
+            started_at=started,
             missed=missed,
         )
-        spec = parse_schedule(task.schedule)
-        self.store.update_task_next_run(task.id, advance(spec, fired_at=finished))
-        self.store.release_task(task.id, lease_id=self.owner)
+        with self._active_lock:
+            self._active_tasks.add(task.id)
+        try:
+            try:
+                result = self.runner.run(task)
+            except Exception as exc:  # noqa: BLE001 - a failed task must become an audit run
+                result = TaskResult(
+                    exit_code=None,
+                    error=f"{type(exc).__name__}: {exc}",
+                    started_at=started,
+                    finished_at=utc_now(),
+                )
+            status = "success" if result.exit_code == 0 else "failed"
+            finished = result.finished_at or utc_now()
+            self.store.finalize_run(
+                run_id=run.id,
+                task_id=task.id,
+                lease_id=self.owner,
+                status=status,
+                started_at=result.started_at or started,
+                finished_at=finished,
+                exit_code=result.exit_code,
+                output=result.output,
+                error=result.error,
+                missed=missed,
+                next_run_at=advance(spec, fired_at=finished),
+            )
+        finally:
+            with self._active_lock:
+                self._active_tasks.discard(task.id)
         if status == "failed":
             self._alert(f"task {task.id} failed: {result.error or result.output}")
 
     def _alert(self, message: str) -> None:
         self.alerts.append(message)
-        append_jsonl(
-            self.alerts_path,
-            {"at": iso(utc_now()), "message": message},
-        )
+        try:
+            append_jsonl(
+                self.alerts_path,
+                {"at": iso(utc_now()), "message": message},
+            )
+        except Exception as exc:  # noqa: BLE001 - alerting must not stop the loop
+            self.alert_sink_error = f"{type(exc).__name__}: {exc}"
+            self._write_alert_fallback(message)
         if self.alert_callback is not None:
-            self.alert_callback(message)
+            try:
+                self.alert_callback(message)
+            except Exception as exc:  # noqa: BLE001 - callbacks must not stop scheduling
+                self.alert_sink_error = f"{type(exc).__name__}: {exc}"
+                self._write_alert_fallback(message)
+
+    def _write_alert_fallback(self, message: str) -> None:
+        try:
+            print(
+                f"scheduler alert sink failed ({self.alert_sink_error}): {message}",
+                file=sys.stderr,
+            )
+        except OSError:
+            pass
 
 
 __all__ = [

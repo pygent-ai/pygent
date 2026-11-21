@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+import time
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from pygent.agent.pygent_v1.scheduler.daemon import SchedulerDaemon, TaskResult
-from pygent.agent.pygent_v1.scheduler.keys import init_keys, load_secret, sign
+from pygent.agent.pygent_v1.scheduler.keys import (
+    SchedulerKeysMissing,
+    init_keys,
+    load_secret,
+    sign,
+)
 from pygent.agent.pygent_v1.scheduler.store import (
     SchedulerStore,
     prompt_hash,
@@ -434,3 +443,283 @@ def test_internal_timer_and_event_submissions_are_unsigned(
     event_submission = store.submission(event.id)
     assert timer_submission is not None and timer_submission.status == "verified"
     assert event_submission is not None and event_submission.status == "verified"
+
+
+def test_initialization_runs_once_across_loops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    daemon, store, _user_root = _daemon(tmp_path)
+    calls: list[int] = []
+    original = store.migrate
+
+    def migrate() -> None:
+        calls.append(1)
+        original()
+
+    monkeypatch.setattr(store, "migrate", migrate)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    daemon.run_once(now=now)
+    daemon.run_once(now=now)
+    assert calls == [1]
+    assert daemon.health()["started"] is True
+
+
+def test_transient_startup_failure_retries_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    daemon, store, _user_root = _daemon(tmp_path)
+    calls: list[int] = []
+    original = store.migrate
+
+    def migrate() -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        original()
+
+    monkeypatch.setattr(store, "migrate", migrate)
+    delays: list[float] = []
+
+    def sleeper(seconds: float) -> None:
+        delays.append(seconds)
+        if len(delays) >= 2:
+            daemon.stop()
+
+    daemon.sleeper = sleeper
+    daemon.run_forever()
+    assert calls == [1, 1]
+    assert delays == [10, 10]
+    assert daemon.health()["started"] is True
+    assert daemon.consecutive_failures == 0
+    assert daemon.last_error is not None
+    assert "OperationalError" in daemon.last_error
+    assert daemon.last_success_at is not None
+    assert any("scheduler loop failed" in alert for alert in daemon.alerts)
+    assert any("recovered after 1 failure" in alert for alert in daemon.alerts)
+
+
+def test_fatal_startup_error_alerts_and_raises(tmp_path: Path) -> None:
+    daemon, _store, user_root = _daemon(tmp_path)
+    (user_root / "scheduler" / "keys" / "agent.key").unlink()
+    with pytest.raises(SchedulerKeysMissing):
+        daemon.run_forever()
+    assert daemon.running is False
+    assert daemon.consecutive_failures == 1
+    assert daemon.last_error is not None
+    assert "SchedulerKeysMissing" in daemon.last_error
+    assert any("scheduler fatal" in alert for alert in daemon.alerts)
+
+
+def test_alert_failure_does_not_abort_task_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = _Runner(exit_code=1)
+    daemon, store, _user_root = _daemon(tmp_path, runner=runner)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    task = store.create_task(
+        name="fails",
+        schedule="every 1h",
+        prompt="fail",
+        session="scheduler-session",
+        source="user",
+        status="approved",
+        next_run_at=now - timedelta(seconds=1),
+    )
+
+    def broken_append(*args: object, **kwargs: object) -> None:
+        raise OSError("alert disk full")
+
+    monkeypatch.setattr(
+        "pygent.agent.pygent_v1.scheduler.daemon.append_jsonl", broken_append
+    )
+
+    def broken_callback(message: str) -> None:
+        raise RuntimeError("callback down")
+
+    daemon.alert_callback = broken_callback
+    daemon.run_once(now=now)
+    assert [run.status for run in store.list_runs(task_id=task.id)] == ["failed"]
+    assert any("failed" in alert for alert in daemon.alerts)
+    assert daemon.alert_sink_error is not None
+    assert "scheduler alert sink failed" in capsys.readouterr().err
+
+
+def test_stop_interrupts_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    daemon, _store, _user_root = _daemon(tmp_path)
+
+    def broken_run_once(*, now: datetime | None = None, startup: bool = False) -> dict[str, int]:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(daemon, "run_once", broken_run_once)
+    thread = threading.Thread(target=daemon.run_forever, daemon=True)
+    thread.start()
+    deadline = time.time() + 2
+    while daemon.consecutive_failures == 0 and time.time() < deadline:
+        time.sleep(0.01)
+    assert daemon.consecutive_failures == 1
+    daemon.stop()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+
+def test_transient_poll_error_recovers_and_runs_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = _Runner()
+    daemon, store, _user_root = _daemon(tmp_path, runner=runner)
+    now = datetime.now(UTC)
+    task = store.create_task(
+        name="recover",
+        schedule="every 1h",
+        prompt="run after recovery",
+        session="scheduler-session",
+        source="user",
+        status="approved",
+        next_run_at=now - timedelta(seconds=1),
+    )
+    original = store.pending_submissions
+    calls: list[int] = []
+
+    def flaky(*, limit: int = 100):  # type: ignore[no-untyped-def]
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("disk I/O error")
+        return original(limit=limit)
+
+    monkeypatch.setattr(store, "pending_submissions", flaky)
+    delays: list[float] = []
+
+    def sleeper(seconds: float) -> None:
+        delays.append(seconds)
+        if len(delays) >= 2:
+            daemon.stop()
+
+    daemon.sleeper = sleeper
+    daemon.run_forever()
+    assert len(runner.tasks) == 1
+    assert delays == [10, 10]
+    assert daemon.consecutive_failures == 0
+    assert daemon.last_error is not None
+    assert "OperationalError" in daemon.last_error
+    assert daemon.last_success_at is not None
+    assert len(store.list_runs(task_id=task.id)) == 1
+    assert any("scheduler loop failed" in alert for alert in daemon.alerts)
+    assert any("recovered after 1 failure" in alert for alert in daemon.alerts)
+
+
+def test_run_finalize_failure_is_interrupted_without_reexecution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = _Runner()
+    daemon, store, _user_root = _daemon(tmp_path, runner=runner)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    task = store.create_task(
+        name="interrupt",
+        schedule="every 1h",
+        prompt="run once",
+        session="scheduler-session",
+        source="user",
+        status="approved",
+        next_run_at=now - timedelta(seconds=1),
+    )
+    original = store.finalize_run
+    calls: list[int] = []
+
+    def flaky(**kwargs: object) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("disk I/O error")
+        original(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store, "finalize_run", flaky)
+    with pytest.raises(sqlite3.OperationalError):
+        daemon.run_once(now=now)
+    assert len(runner.tasks) == 1
+    assert store.running_run(task.id) is not None
+
+    daemon.run_once(now=now + timedelta(seconds=61))
+    assert len(runner.tasks) == 1
+    assert [run.status for run in store.list_runs(task_id=task.id)] == [
+        "interrupted"
+    ]
+    assert store.task(task.id).next_run_at is not None  # type: ignore[union-attr]
+
+
+def test_stale_event_run_is_interrupted_on_next_poll(
+    tmp_path: Path,
+) -> None:
+    runner = _Runner()
+    daemon, store, _user_root = _daemon(tmp_path, runner=runner)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    task = store.create_task(
+        name="event",
+        schedule="on build",
+        prompt="event run",
+        session="scheduler-session",
+        source="user",
+        status="approved",
+        next_run_at=None,
+    )
+    store.claim_task(
+        task.id,
+        now=now - timedelta(seconds=120),
+        lease_id="old-daemon",
+        lease_seconds=60,
+    )
+    store.begin_run(
+        task_id=task.id,
+        lease_id="old-daemon",
+        started_at=now - timedelta(seconds=120),
+        missed=False,
+    )
+    daemon.run_once(now=now)
+    assert runner.tasks == []
+    assert [run.status for run in store.list_runs(task_id=task.id)] == [
+        "interrupted"
+    ]
+    updated = store.task(task.id)
+    assert updated is not None
+    assert updated.lease_id is None
+
+
+def test_event_mark_failure_does_not_replay_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = _Runner()
+    daemon, store, user_root = _daemon(tmp_path, runner=runner)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    store.create_task(
+        name="event",
+        schedule="on build",
+        prompt="event run",
+        session="scheduler-session",
+        source="user",
+        status="approved",
+        next_run_at=None,
+    )
+    submission_id = _submit(
+        store,
+        user_root,
+        kind="event",
+        source="user",
+        payload={"event": "build", "data": {}},
+    )
+    original = store.mark_submission
+    calls: list[int] = []
+
+    def flaky(*args: object, **kwargs: object) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("disk I/O error")
+        original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store, "mark_submission", flaky)
+    with pytest.raises(sqlite3.OperationalError):
+        daemon.run_once(now=now)
+    daemon.run_once(now=now)
+    assert len(runner.tasks) == 1
+    assert store.submission(submission_id).status == "verified"  # type: ignore[union-attr]

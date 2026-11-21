@@ -270,3 +270,131 @@ def test_claim_orders_by_priority_then_next_run(tmp_path: Path) -> None:
         normal_early,
         low_late,
     ]
+
+
+def test_promote_task_submission_is_idempotent(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    submission = store.submit(
+        kind="task",
+        source="user",
+        payload={"name": "created", "schedule": "every 1h", "prompt": "p"},
+        signature="sig",
+    )
+    fields: dict[str, Any] = {
+        "submission_id": submission.id,
+        "name": "created",
+        "schedule": "every 1h",
+        "prompt": "p",
+        "session": "scheduler-session",
+        "source": "user",
+        "status": "approved",
+        "next_run_at": now,
+    }
+    first = store.promote_task_submission(**fields)
+    second = store.promote_task_submission(**{**fields, "name": "ignored"})
+    assert second.id == first.id
+    assert [task.id for task in store.list_tasks()] == [first.id]
+    stored = store.submission(submission.id)
+    assert stored is not None
+    assert stored.status == "verified"
+    assert stored.task_id == first.id
+
+
+def test_apply_control_and_mark_is_idempotent(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    task = store.create_task(
+        name="review",
+        schedule="every 1h",
+        prompt="p",
+        session="scheduler-session",
+        source="user",
+        status="needs_review",
+        next_run_at=None,
+    )
+    submission = store.submit(
+        kind="control",
+        source="user",
+        payload={"action": "approve", "task_id": task.id},
+        signature="sig",
+    )
+    assert (
+        store.apply_control_and_mark(
+            submission_id=submission.id,
+            action="approve",
+            task_id=task.id,
+            next_run_at=now,
+            now=now,
+        )
+        == task.id
+    )
+    approved = store.task(task.id)
+    assert approved is not None
+    assert approved.status == "approved"
+    assert approved.next_run_at == now
+    later = now + timedelta(hours=1)
+    store.apply_control_and_mark(
+        submission_id=submission.id,
+        action="approve",
+        task_id=task.id,
+        next_run_at=later,
+        now=later,
+    )
+    replay = store.task(task.id)
+    assert replay is not None
+    assert replay.next_run_at == now
+
+
+def test_begin_and_finalize_run_are_atomic(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    task = store.create_task(
+        name="run",
+        schedule="every 1h",
+        prompt="p",
+        session="scheduler-session",
+        source="user",
+        status="approved",
+        next_run_at=now,
+    )
+    store.claim_due_tasks(
+        now=now, lease_id="daemon", lease_seconds=60, limit=1
+    )
+    run = store.begin_run(
+        task_id=task.id, lease_id="daemon", started_at=now, missed=False
+    )
+    assert run.status == "running"
+    assert store.running_run(task.id) is not None
+    next_at = now + timedelta(hours=1)
+    store.finalize_run(
+        run_id=run.id,
+        task_id=task.id,
+        lease_id="daemon",
+        status="success",
+        started_at=now,
+        finished_at=now + timedelta(seconds=1),
+        exit_code=0,
+        output="ok",
+        error=None,
+        missed=False,
+        next_run_at=next_at,
+    )
+    updated = store.task(task.id)
+    assert updated is not None
+    assert updated.next_run_at == next_at
+    assert updated.lease_id is None
+    assert store.running_run(task.id) is None
+    assert store.list_runs(task_id=task.id)[0].status == "success"
+
+
+def test_event_delivery_claim_is_idempotent(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    assert store.claim_event_delivery("sub-1", "task-1", now=now) is True
+    assert store.claim_event_delivery("sub-1", "task-1", now=now) is False
+    store.finish_event_delivery("sub-1", "task-1", status="done", now=now)
+    assert store.claim_event_delivery("sub-1", "task-1", now=now) is False
+    assert store.claim_event_delivery("sub-2", "task-1", now=now) is True
+    store.finish_event_delivery("sub-2", "task-1", status="failed", now=now)
+    assert store.claim_event_delivery("sub-2", "task-1", now=now) is True
