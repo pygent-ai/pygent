@@ -7,15 +7,17 @@ that effort. ``PygentRuntimeService.bind`` publishes these entries under a
 distinct profile (``fork:<model-key>``) so the main turn's profiles stay
 untouched.
 
-Version 1 injects the top-level ``reasoning_effort`` field only for the
-OpenAI Chat Completions dialect. The Responses protocol expects a nested
-``reasoning: {effort: ...}`` object and Anthropic expects ``thinking`` /
-``output_config``; those protocols are left unchanged for now, with the
-decision recorded on :class:`ForkModelProfile.decisions` for auditing.
+The effort is expressed in each protocol's native dial: the top-level
+``reasoning_effort`` field for OpenAI Chat Completions and
+``output_config.effort`` for Anthropic Messages. The Responses protocol
+expects a nested ``reasoning: {effort: ...}`` object and is left unchanged
+for now, with the decision recorded on
+:class:`ForkModelProfile.decisions` for auditing.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -24,6 +26,7 @@ from pygent.llm import ModelConfig, ModelEntry
 
 # Adapters that forward ``provider_options`` as top-level request fields.
 _REASONING_EFFORT_PROTOCOLS = frozenset({"openai_chat_completions"})
+_ANTHROPIC_MESSAGES = "anthropic_messages"
 
 ForkReasoningDecisionReason = Literal[
     "reasoning_effort_applied",
@@ -109,10 +112,18 @@ def _apply_reasoning_effort(
         return entry, "reasoning_not_supported"
     if not reasoning.controllable:
         return entry, "reasoning_not_controllable"
-    if entry.spec.protocol not in _REASONING_EFFORT_PROTOCOLS:
+    protocol = entry.spec.protocol
+    if protocol in _REASONING_EFFORT_PROTOCOLS:
+        options = dict(entry.spec.provider_options)
+        options["reasoning_effort"] = reasoning_effort
+    elif protocol == _ANTHROPIC_MESSAGES:
+        options = dict(entry.spec.provider_options)
+        raw_output = options.get("output_config")
+        output_config = dict(raw_output) if isinstance(raw_output, Mapping) else {}
+        output_config["effort"] = reasoning_effort
+        options["output_config"] = output_config
+    else:
         return entry, "protocol_not_supported"
-    options = dict(entry.spec.provider_options)
-    options["reasoning_effort"] = reasoning_effort
     return (
         replace(
             entry,

@@ -7,12 +7,18 @@ from typing import Any, cast
 
 import pytest
 
+from pygent import Context, GenerationConfig, UserMessage
 from pygent.agent.pygent_v1.runtime.realtime.fork_reasoning import (
     fork_model_profiles,
     fork_profile_name,
 )
 from pygent.agent.pygent_v1.schema.models import RealtimeInteractionConfig
-from pygent.llm import ModelConfig
+from pygent.llm import (
+    AnthropicMessagesAdapter,
+    ModelConfig,
+    ModelEntry,
+    ModelProviderRequest,
+)
 
 
 def _capabilities(
@@ -103,6 +109,10 @@ def _config() -> ModelConfig:
                     "anthropic_messages",
                     supported=True,
                     controllable=True,
+                    provider_options={
+                        "thinking": {"type": "adaptive", "display": "summarized"},
+                        "output_config": {"effort": "high"},
+                    },
                 ),
             },
             "model_groups": {
@@ -114,7 +124,7 @@ def _config() -> ModelConfig:
     )
 
 
-def test_fork_profile_injects_effort_only_for_controllable_openai_models() -> None:
+def test_fork_profile_injects_effort_for_openai_and_anthropic_models() -> None:
     config = _config()
     original = config.models["controllable"]
 
@@ -145,11 +155,53 @@ def test_fork_profile_injects_effort_only_for_controllable_openai_models() -> No
         "controllable": "reasoning_effort_applied",
         "fixed": "reasoning_not_controllable",
         "plain": "reasoning_not_supported",
-        "anthropic": "protocol_not_supported",
+        "anthropic": "reasoning_effort_applied",
     }
     assert profile.models[1] is config.models["fixed"]
     assert profile.models[2] is config.models["plain"]
-    assert profile.models[3] is config.models["anthropic"]
+
+    anthropic_original = config.models["anthropic"]
+    anthropic_forked = profile.models[3]
+    assert anthropic_forked is not anthropic_original
+    anthropic_options = dict(
+        cast(Mapping[str, object], anthropic_forked.spec.provider_options)
+    )
+    anthropic_original_options = dict(
+        cast(Mapping[str, object], anthropic_original.spec.provider_options)
+    )
+    assert dict(
+        cast(Mapping[str, object], anthropic_options["output_config"])
+    ) == {"effort": "low"}
+    assert dict(
+        cast(Mapping[str, object], anthropic_options["thinking"])
+    ) == {"type": "adaptive", "display": "summarized"}
+    assert dict(
+        cast(Mapping[str, object], anthropic_original_options["output_config"])
+    ) == {"effort": "high"}
+
+
+def test_forked_anthropic_entry_requests_the_fork_effort() -> None:
+    config = _config()
+    profile = fork_model_profiles(config, "mixed", "low")["anthropic"]
+    forked = profile.models[0]
+
+    def body(entry: ModelEntry) -> dict[str, object]:
+        return AnthropicMessagesAdapter().build_request(
+            ModelProviderRequest(
+                model_key=entry.key,
+                model=entry.spec,
+                message=UserMessage(content="question"),
+                context=Context(),
+                generation=GenerationConfig(max_output_tokens=4096),
+            )
+        ).to_dict()
+
+    assert body(forked)["output_config"] == {"effort": "low"}
+    assert body(forked)["thinking"] == {
+        "type": "adaptive",
+        "display": "summarized",
+    }
+    assert body(config.models["anthropic"])["output_config"] == {"effort": "high"}
 
 
 def test_none_effort_keeps_the_main_profile() -> None:
