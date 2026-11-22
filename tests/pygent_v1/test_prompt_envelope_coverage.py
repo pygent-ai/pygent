@@ -49,6 +49,7 @@ _INNER_TAGS = {
     "analysis": "model-generated compression analysis block",
     "memory-snapshot": "snapshot body inside memory-access-instruction",
     "user-asked": "inner exchange frame",
+    "user-interrupt": "wrapped interrupt body inside the fork fallback user message",
     "your-response-in-another-session": "inner exchange frame",
     "undelivered-draft": "quoted draft body inside the continuation reminder",
     "session": "runtime-context field",

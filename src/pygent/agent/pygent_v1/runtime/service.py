@@ -115,7 +115,11 @@ from .realtime.envelope import (
     render_exchange_envelope,
     render_interrupt_attachments,
 )
-from .realtime.fork_agent import ForkReplyModule, outcome_from_result
+from .realtime.fork_agent import (
+    FORK_MAX_MODEL_ATTEMPTS,
+    ForkReplyModule,
+    outcome_from_result,
+)
 from .realtime.fork_reasoning import ForkModelProfile, fork_model_profiles
 from .realtime.fork_reply import build_fork_context
 from .realtime.fork_state import SessionForkState
@@ -1133,7 +1137,8 @@ class PygentRuntimeService:
                 identity=run_ref.session_id,
                 model_calls=model_calls,
                 deadline=time.monotonic()
-                + config.realtime_interaction.fork_deadline_seconds,
+                + config.realtime_interaction.fork_deadline_seconds
+                * FORK_MAX_MODEL_ATTEMPTS,
             ),
         )
 
@@ -1162,6 +1167,7 @@ class PygentRuntimeService:
             llm=invoker,
             tools=tools,
             retry_policy=model_retry_policy(retry),
+            model_call_timeout=self.config.realtime_interaction.fork_deadline_seconds,
         )
         self._fork_agents[key] = agent
         return agent

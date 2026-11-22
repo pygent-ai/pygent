@@ -1,7 +1,10 @@
 """Fork-snapshot request construction and speak extraction (D-RT2/D-RT3).
 
 The interrupt path copies the main agent's request state verbatim (cache
-prefix), appends the user's message, and runs ONE model call. The call itself
+prefix), appends the user's message, and runs the model call; an undeliverable
+answer (no speak call, empty content) retries once with the interrupt wrapped
+and reply instructions in the user-message tail (``fork_agent``). The call
+itself
 is a pygent managed execution (see ``fork_agent.ForkReplyModule``) so it
 shares admission, capacity coordination, journaling and recovery with every
 other runtime call. Delivery is capability-gated (D-RT3): the main path
@@ -22,6 +25,7 @@ from dataclasses import dataclass
 from pygent.agent.pygent_v1.runtime.realtime.speak import (
     SPEAK_TOOL_NAME,
     SpeakArgs,
+    SpeakArgsError,
     parse_speak_args,
 )
 from pygent.core import AIMessage, Context, Message
@@ -63,7 +67,14 @@ def extract_speak_args(message: AIMessage) -> SpeakArgs | None:
     for call in message.tool_calls:
         if call.name != SPEAK_TOOL_NAME:
             continue
-        return parse_speak_args(dict(call.arguments))
+        try:
+            return parse_speak_args(dict(call.arguments))
+        except SpeakArgsError:
+            # Malformed speak arguments (e.g. empty args) count as "no speak
+            # call": the answer falls through to the text path, or — when the
+            # content is empty too — to the wrapped-message retry
+            # (``fork_agent``) instead of aborting the fork.
+            return None
     return None
 
 
