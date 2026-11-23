@@ -57,19 +57,25 @@ def render_interrupt_attachments(attachments: Sequence[ResolvedAttachment]) -> s
 def render_exchange_envelope(
     *,
     user_asked: str | Sequence[str],
-    response: str,
+    response: str | None = None,
     attachments: Sequence[ResolvedAttachment] = (),
 ) -> str:
-    """Build the ``<system-reminder>`` envelope for one fork-reply exchange."""
+    """Build the ``<system-reminder>`` envelope for one fork-reply exchange.
+
+    ``response=None`` renders the unanswered-interrupt form: only the question
+    (and attachments) reach the main agent — the total-fork-failure fallback,
+    so an accepted interrupt is never silently dropped from the context.
+    """
 
     asked_block = Prompt(format_user_asked(user_asked)).wrap("user-asked")
-    response_block = Prompt(response.strip()).wrap(
-        "your-response-in-another-session"
-    )
     parts = [str(asked_block)]
     if attachments:
         parts.append(render_interrupt_attachments(attachments))
-    parts.append(str(response_block))
+    if response is not None:
+        response_block = Prompt(response.strip()).wrap(
+            "your-response-in-another-session"
+        )
+        parts.append(str(response_block))
     return system_reminder("\n".join(parts))
 
 
@@ -122,9 +128,36 @@ class ExchangeEnvelope:
         )
 
 
+def build_exchange_envelope(
+    *,
+    session_id: str,
+    input_id: str,
+    user_asked: str | Sequence[str],
+    response: str | None,
+    attachments: Sequence[ResolvedAttachment] = (),
+) -> ExchangeEnvelope:
+    """The session-addressed envelope for one fork exchange (D-RT3).
+
+    ``response=None`` is the unanswered-interrupt form used after a total fork
+    failure: the question reaches the main agent without a fabricated reply.
+    """
+
+    return ExchangeEnvelope(
+        exchange_id=f"realtime-exchange:{input_id}",
+        session_id=session_id,
+        content=render_exchange_envelope(
+            user_asked=user_asked,
+            response=response,
+            attachments=attachments,
+        ),
+        attachments=tuple(item.relative for item in attachments),
+    )
+
+
 __all__ = [
     "EXCHANGE_MESSAGE_KIND",
     "ExchangeEnvelope",
+    "build_exchange_envelope",
     "format_user_asked",
     "render_exchange_envelope",
     "render_interrupt_attachments",

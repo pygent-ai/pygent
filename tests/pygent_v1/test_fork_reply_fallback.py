@@ -1,11 +1,13 @@
-"""Fork-reply fallback: one wrapped-user-message retry when the first
-attempt yields no deliverable reply (no ``speak`` call and empty content —
-the observed signature of an endpoint that silently ignores the forced
+"""Fork-reply fallback: one wrapped-user-message retry when the first attempt
+fails transiently (retryable model error or the per-attempt deadline) or
+yields no deliverable reply (no ``speak`` call and empty content — the
+observed signature of an endpoint that silently ignores the forced
 ``tool_choice``)."""
 
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from typing import Any
 
 import pytest
@@ -18,7 +20,7 @@ from pygent.agent.pygent_v1.runtime.realtime.fork_agent import (
     outcome_from_result,
 )
 from pygent.core import AIMessage, Context, UserMessage
-from pygent.llm import RetryPolicy
+from pygent.llm import ModelCallError, ModelErrorKind, RetryPolicy
 from pygent.tool import ToolCall
 
 
@@ -36,11 +38,33 @@ class _ScriptedForkModel:
         return self.answers.pop(0), context
 
 
+class _FailingForkModel:
+    """Raises scripted failures FIFO, then answers FIFO."""
+
+    def __init__(
+        self,
+        *failures: BaseException,
+        answers: tuple[AIMessage, ...] = (),
+    ) -> None:
+        self.failures = list(failures)
+        self.answers = list(answers)
+        self.calls: list[UserMessage] = []
+
+    async def __call__(
+        self, message: UserMessage, context: Any
+    ) -> tuple[AIMessage, Any]:
+        self.calls.append(message)
+        if self.failures:
+            raise self.failures.pop(0)
+        return self.answers.pop(0), context
+
+
 def _module(
     *answers: AIMessage,
+    model: Any | None = None,
     model_call_timeout: float = 60.0,
-    model_factory: type[_ScriptedForkModel] = _ScriptedForkModel,
-) -> tuple[ForkReplyModule, _ScriptedForkModel]:
+    model_factory: Any = _ScriptedForkModel,
+) -> tuple[ForkReplyModule, Any]:
     module = ForkReplyModule(
         config=None,
         model_group_name="test",
@@ -49,7 +73,8 @@ def _module(
         retry_policy=RetryPolicy(),
         model_call_timeout=model_call_timeout,
     )
-    model = model_factory(*answers)
+    if model is None:
+        model = model_factory(*answers)
     module.model = model
     return module, model
 
@@ -214,26 +239,113 @@ async def test_invalid_speak_args_with_body_text_delivered_as_text() -> None:
 @pytest.mark.asyncio
 async def test_model_call_timeout_caps_each_attempt() -> None:
     """Each attempt is capped at ``model_call_timeout`` — a slow first call
-    fails on its own slot instead of eating into the retry's."""
+    fails on its own slot and the wrapped retry runs on the second reserved
+    one instead of ending the fork."""
 
-    class _SlowModel(_ScriptedForkModel):
+    class _SlowOnceModel(_ScriptedForkModel):
+        def __init__(self, *answers: AIMessage, first_delay: float) -> None:
+            super().__init__(*answers)
+            self.first_delay = first_delay
+            self.slowed = False
+
         async def __call__(self, message: UserMessage, context: Any):
-            await asyncio.sleep(0.3)
+            if not self.slowed:
+                # The first attempt times out mid-sleep, before the scripted
+                # call is ever recorded — guard with a flag, not ``calls``.
+                self.slowed = True
+                await asyncio.sleep(self.first_delay)
             return await super().__call__(message, context)
 
     module, model = _module(
-        _speak_answer("迟到"),
-        model_factory=_SlowModel,
+        _speak_answer("迟到后兜底"),
+        model_factory=partial(_SlowOnceModel, first_delay=0.3),
         model_call_timeout=0.05,
     )
     context = _context()
 
-    with pytest.raises(TimeoutError):
-        await module.forward(_interrupt(), context)
+    result, _ = await module.forward(_interrupt(), context)
 
-    # the timeout fired inside the first attempt, on its own slot: the
-    # retry's scripted answer was never consumed
-    assert len(model.answers) == 1
+    # the timeout fired inside the first attempt, on its own slot — before
+    # the scripted model recorded anything; the wrapped retry consumed the
+    # scripted answer on the second reserved slot
+    assert len(model.calls) == 1
+    assert model.calls[0][0].content.startswith("<user-interrupt>")
+    assert result.data["attempts"] == FORK_MAX_MODEL_ATTEMPTS
+    outcome = outcome_from_result(result)
+    assert outcome.speak_args is not None
+    assert outcome.speak_args.text == "迟到后兜底"
+
+
+@pytest.mark.asyncio
+async def test_retryable_model_error_retries_with_wrapped_message() -> None:
+    model = _FailingForkModel(
+        ModelCallError("provider hiccup", kind=ModelErrorKind.RATE_LIMIT),
+        answers=(_speak_answer("重试成功"),),
+    )
+    module, _ = _module(model=model)
+    context = _context()
+
+    result, next_context = await module.forward(_interrupt(), context)
+
+    assert len(model.calls) == FORK_MAX_MODEL_ATTEMPTS
+    assert model.calls[1].content.startswith("<user-interrupt>")
+    # the retry reuses the original context: the failed attempt stays out
+    assert next_context is context
+    assert result.data["attempts"] == FORK_MAX_MODEL_ATTEMPTS
+    assert result.data["via"] == "speak"
+    outcome = outcome_from_result(result)
+    assert outcome.speak_args is not None
+    assert outcome.speak_args.text == "重试成功"
+
+
+@pytest.mark.asyncio
+async def test_first_attempt_timeout_retries_with_wrapped_message() -> None:
+    model = _FailingForkModel(TimeoutError(), answers=(_speak_answer("超时兜底"),))
+    module, _ = _module(model=model)
+    context = _context()
+
+    result, _ = await module.forward(_interrupt(), context)
+
+    assert len(model.calls) == FORK_MAX_MODEL_ATTEMPTS
+    assert result.data["attempts"] == FORK_MAX_MODEL_ATTEMPTS
+    outcome = outcome_from_result(result)
+    assert outcome.speak_args is not None
+    assert outcome.speak_args.text == "超时兜底"
+
+
+@pytest.mark.asyncio
+async def test_persistent_timeout_propagates_after_both_attempts() -> None:
+    model = _FailingForkModel(TimeoutError(), TimeoutError())
+    module, _ = _module(model=model)
+
+    with pytest.raises(TimeoutError):
+        await module.forward(_interrupt(), _context())
+
+    assert len(model.calls) == FORK_MAX_MODEL_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_non_retryable_model_error_propagates_without_retry() -> None:
+    model = _FailingForkModel(
+        ModelCallError("bad credential", kind=ModelErrorKind.AUTHENTICATION)
+    )
+    module, _ = _module(model=model)
+
+    with pytest.raises(ModelCallError):
+        await module.forward(_interrupt(), _context())
+
+    assert len(model.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_unexpected_exception_propagates_without_retry() -> None:
+    model = _FailingForkModel(ValueError("unexpected"))
+    module, _ = _module(model=model)
+
+    with pytest.raises(ValueError):
+        await module.forward(_interrupt(), _context())
+
+    assert len(model.calls) == 1
 
 
 def test_fallback_wrapper_keeps_the_interrupt_verbatim() -> None:

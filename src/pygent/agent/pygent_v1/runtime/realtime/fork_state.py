@@ -34,5 +34,17 @@ class SessionForkState:
                 known.add(item.relative)
                 self.attachments.append(item)
 
+    def reset(self) -> None:
+        """Drop the failed fork generation's bookkeeping.
+
+        ``generation`` stays: it is the monotonic supersede counter. ``lock``
+        is the coordination primitive itself.
+        """
+
+        self.handle = None
+        self.finished = False
+        self.pending = []
+        self.attachments = []
+
 
 __all__ = ["SessionForkState"]

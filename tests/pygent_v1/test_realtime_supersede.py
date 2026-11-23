@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from pygent import AIMessage
 from pygent.agent.pygent_v1.runtime.attachments import ResolvedAttachment
@@ -15,6 +18,7 @@ from pygent.agent.pygent_v1.runtime.realtime.envelope import (
     render_exchange_envelope,
 )
 from pygent.agent.pygent_v1.runtime.realtime.fork_agent import FORK_RESULT_KIND
+from pygent.agent.pygent_v1.runtime.realtime.fork_state import SessionForkState
 from pygent.agent.pygent_v1.runtime.service import PygentRuntimeService
 from pygent.agent.pygent_v1.schema import AgentSession, CaseRunRef, RunConfig
 
@@ -27,11 +31,13 @@ class _Handle:
         final: bool,
         late: bool = False,
         attachments: tuple[ResolvedAttachment, ...] = (),
+        failure: BaseException | None = None,
     ) -> None:
         self.message = message
         self.attachments = attachments
         self.final = final
         self.late = late
+        self.failure = failure
         self.release = asyncio.Event()
         self.cancelled = asyncio.Event()
         self.cancel_count = 0
@@ -45,6 +51,8 @@ class _Handle:
 
     async def result(self) -> tuple[AIMessage, None]:
         await self.release.wait()
+        if self.failure is not None:
+            raise self.failure
         if self.cancelled.is_set() and not self.late:
             raise asyncio.CancelledError
         return (
@@ -63,24 +71,44 @@ class _FakeService:
         final_index: int,
         late_first: bool = False,
         workspace_root: str = "C:/workspace",
+        start_failure: BaseException | None = None,
+        failure_index: int | None = None,
     ) -> None:
         self.config = RunConfig(
             workspace_root=workspace_root,
             user_pygent_root="C:/user",
             realtime_interaction={"enabled": True},  # type: ignore[arg-type]
         )
-        self._fork_states: dict[str, object] = {}
+        self._fork_states: dict[str, SessionForkState] = {}
         self.envelopes: list[ExchangeEnvelope] = []
         self.handles: list[_Handle] = []
         self.started: asyncio.Queue[str] = asyncio.Queue()
         self.final_index = final_index
         self.late_first = late_first
+        self.start_failure = start_failure
+        self.failure_index = failure_index
 
     async def initialize(self) -> None:
         return None
 
     async def _on_exchange_ready(self, envelope: ExchangeEnvelope) -> None:
         self.envelopes.append(envelope)
+
+    async def _deliver_unanswered_exchange(
+        self,
+        *,
+        session_id: str,
+        input_id: str,
+        user_asked: Sequence[str],
+        attachments: Sequence[ResolvedAttachment] = (),
+    ) -> None:
+        await PygentRuntimeService._deliver_unanswered_exchange(
+            self,
+            session_id=session_id,
+            input_id=input_id,
+            user_asked=user_asked,
+            attachments=attachments,
+        )
 
     async def _start_fork_reply(
         self,
@@ -93,12 +121,19 @@ class _FakeService:
         attachments: tuple[ResolvedAttachment, ...] = (),
     ) -> _Handle:
         del session, run_ref, config, input_id
+        if self.start_failure is not None:
+            raise self.start_failure
         index = len(self.handles)
         handle = _Handle(
             message,
             final=index == self.final_index,
             late=self.late_first and index == 0,
             attachments=attachments,
+            failure=(
+                RuntimeError("fork execution collapsed")
+                if self.failure_index == index
+                else None
+            ),
         )
         self.handles.append(handle)
         await self.started.put(message)
@@ -213,6 +248,77 @@ async def test_superseded_attachments_carry_into_merged_fork(tmp_path: Path) -> 
     service.handles[2].release.set()
     await third
     assert service.envelopes[-1].attachments == ()
+
+
+async def test_failed_fork_delivers_the_unanswered_interrupt(tmp_path: Path) -> None:
+    """A fork that fails outright still injects the bare question: the main
+    agent must learn the interrupt happened (D-RT2/3)."""
+
+    service = _FakeService(final_index=0, failure_index=0)
+    task = asyncio.create_task(_send(service, tmp_path, "帮我看下日志", "i1"))
+    assert await service.started.get() == "帮我看下日志"
+    service.handles[0].release.set()
+    with pytest.raises(RuntimeError):
+        await task
+    assert len(service.envelopes) == 1
+    envelope = service.envelopes[0]
+    assert envelope.exchange_id == "realtime-exchange:i1"
+    assert "<user-asked>\n帮我看下日志\n</user-asked>" in envelope.content
+    assert "your-response-in-another-session" not in envelope.content
+    state = service._fork_states["session-1"]
+    assert state.handle is None
+    assert state.pending == []
+
+
+async def test_failed_fork_start_delivers_the_unanswered_interrupt(
+    tmp_path: Path,
+) -> None:
+    """A fork that never starts (start/admission failure) loses nothing."""
+
+    service = _FakeService(
+        final_index=0, start_failure=RuntimeError("admission refused")
+    )
+    with pytest.raises(RuntimeError):
+        await _send(service, tmp_path, "帮我看下日志", "i2")
+    assert len(service.envelopes) == 1
+    envelope = service.envelopes[0]
+    assert envelope.exchange_id == "realtime-exchange:i2"
+    assert "<user-asked>\n帮我看下日志\n</user-asked>" in envelope.content
+    assert "your-response-in-another-session" not in envelope.content
+    state = service._fork_states["session-1"]
+    assert state.handle is None
+    assert state.pending == []
+
+
+async def test_failed_attachment_resolution_still_delivers_the_question(
+    tmp_path: Path,
+) -> None:
+    service = _FakeService(final_index=0)
+    with pytest.raises(ValueError):
+        await _send(service, tmp_path, "看下这张图", "i3", ("missing.png",))
+    assert len(service.envelopes) == 1
+    envelope = service.envelopes[0]
+    assert "<user-asked>\n看下这张图\n</user-asked>" in envelope.content
+    assert "your-response-in-another-session" not in envelope.content
+
+
+async def test_superseded_fork_failure_delivers_nothing(tmp_path: Path) -> None:
+    """A failing generation that was already superseded stays silent: the
+    merged envelope of the newer generation carries the information."""
+
+    service = _FakeService(final_index=1, failure_index=0)
+    first = asyncio.create_task(_send(service, tmp_path, "first", "i1"))
+    assert await service.started.get() == "first"
+    second = asyncio.create_task(_send(service, tmp_path, "second", "i2"))
+    assert await service.started.get() == "1. first\n2. second"
+    service.handles[1].release.set()
+    results = await asyncio.gather(first, second, return_exceptions=True)
+    assert isinstance(results[0], RuntimeError)
+    assert not isinstance(results[1], BaseException)
+    assert [item.exchange_id for item in service.envelopes] == [
+        "realtime-exchange:i2:g2"
+    ]
+    assert "1. first\n2. second" in service.envelopes[0].content
 
 
 def test_merged_user_asked_format_is_numbered() -> None:

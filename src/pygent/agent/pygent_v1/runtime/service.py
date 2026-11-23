@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import os
 import time
@@ -111,8 +112,8 @@ from .model_configuration import preferred_models, preferred_profile_name
 from .realtime.continuation import CONTINUATION_MESSAGE_KIND
 from .realtime.envelope import (
     ExchangeEnvelope,
+    build_exchange_envelope,
     format_user_asked,
-    render_exchange_envelope,
     render_interrupt_attachments,
 )
 from .realtime.fork_agent import (
@@ -961,10 +962,20 @@ class PygentRuntimeService:
                 "run the service through an execution host"
             )
         resolved_attachments: tuple[ResolvedAttachment, ...] = ()
-        if attachments:
-            resolved_attachments = resolve_attachments(
-                attachments, config.workspace_root
+        try:
+            if attachments:
+                resolved_attachments = resolve_attachments(
+                    attachments, config.workspace_root
+                )
+        except BaseException:
+            # The fork never started; the bare question still reaches the
+            # main agent, so an accepted interrupt is never dropped silently.
+            await self._deliver_unanswered_exchange(
+                session_id=session_id,
+                input_id=input_id,
+                user_asked=(message,),
             )
+            raise
         run_ref = manager.start_case_run(session_id, case_id)
         state = self._fork_states.setdefault(session_id, SessionForkState())
         async with state.lock:
@@ -993,14 +1004,26 @@ class PygentRuntimeService:
                 request_message = message
             fork_attachments = tuple(state.attachments)
             state.finished = False
-            handle = await self._start_fork_reply(
-                session=session,
-                run_ref=run_ref,
-                config=config,
-                input_id=fork_input_id,
-                message=request_message,
-                attachments=fork_attachments,
-            )
+            try:
+                handle = await self._start_fork_reply(
+                    session=session,
+                    run_ref=run_ref,
+                    config=config,
+                    input_id=fork_input_id,
+                    message=request_message,
+                    attachments=fork_attachments,
+                )
+            except BaseException:
+                # The fork never started: the queued generation drops and the
+                # bare question still reaches the main agent.
+                state.reset()
+                await self._deliver_unanswered_exchange(
+                    session_id=session_id,
+                    input_id=fork_input_id,
+                    user_asked=fork_messages,
+                    attachments=fork_attachments,
+                )
+                raise
             state.handle = handle
 
         try:
@@ -1010,10 +1033,16 @@ class PygentRuntimeService:
         except BaseException:
             async with state.lock:
                 if state.generation == generation:
-                    state.handle = None
-                    state.finished = False
-                    state.pending = []
-                    state.attachments = []
+                    # Total fork failure: the bare question still reaches the
+                    # main agent. A superseded generation stays silent — its
+                    # messages ride the replacing generation's envelope.
+                    state.reset()
+                    await self._deliver_unanswered_exchange(
+                        session_id=session_id,
+                        input_id=fork_input_id,
+                        user_asked=fork_messages,
+                        attachments=fork_attachments,
+                    )
             raise
         if output is None:
             return None
@@ -1029,23 +1058,46 @@ class PygentRuntimeService:
                 response_text = outcome.speak_args.text or ""
             else:
                 response_text = outcome.text or ""
-            envelope = ExchangeEnvelope(
-                exchange_id=f"realtime-exchange:{fork_input_id}",
+            envelope = build_exchange_envelope(
                 session_id=session_id,
-                content=render_exchange_envelope(
-                    user_asked=tuple(fork_messages),
-                    response=response_text or "(no verbal reply)",
-                    attachments=fork_attachments,
-                ),
-                attachments=tuple(item.relative for item in fork_attachments),
+                input_id=fork_input_id,
+                user_asked=tuple(fork_messages),
+                response=response_text or "(no verbal reply)",
+                attachments=fork_attachments,
             )
-            state.handle = None
-            state.finished = False
-            state.pending = []
-            state.attachments = []
+            state.reset()
         await self._on_exchange_ready(envelope)
         return outcome
 
+    async def _deliver_unanswered_exchange(
+        self,
+        *,
+        session_id: str,
+        input_id: str,
+        user_asked: Sequence[str],
+        attachments: Sequence[ResolvedAttachment] = (),
+    ) -> None:
+        """Deliver the bare interrupt after a total fork failure (D-RT2/3).
+
+        An accepted interrupt must never vanish from the main agent's context:
+        when the fork cannot produce any reply, the question alone (plus any
+        resolved attachments) is still injected as an exchange envelope. Hook
+        errors are swallowed — the fallback must not become the failure source.
+        """
+
+        hook = self._on_exchange_ready
+        if hook is None:  # unreachable behind send_interrupt's guard
+            return
+        envelope = build_exchange_envelope(
+            session_id=session_id,
+            input_id=input_id,
+            user_asked=user_asked,
+            response=None,
+            attachments=attachments,
+        )
+        # Delivery failure must not mask the fork failure — best effort.
+        with contextlib.suppress(Exception):
+            await hook(envelope)
     async def _start_fork_reply(
         self,
         *,

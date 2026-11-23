@@ -2,9 +2,11 @@
 
 The interrupt path runs as a real pygent execution: a minimal single-module
 agent graph — a managed model call with ``tool_choice`` forced to speak, then
-argument extraction. When the first answer yields no deliverable reply (no
-``speak`` call and empty content — e.g. an endpoint that silently ignores the
-forced ``tool_choice``), ``forward`` retries once with the interrupt wrapped
+argument extraction. When the first attempt fails — a retryable model error
+(timeout, rate limit, unavailability, invalid response) or the per-attempt
+deadline — or yields no deliverable reply (no ``speak`` call and empty
+content — e.g. an endpoint that silently ignores the forced ``tool_choice``),
+``forward`` retries once with the interrupt wrapped
 in ``<user-interrupt>`` plus reply instructions appended to the user message:
 the only uncached tail of the request, so the foreground cache prefix stays
 byte-identical. No ReAct loop, no tool execution, no conversation
@@ -20,6 +22,7 @@ import dataclasses
 from collections.abc import Mapping
 from typing import Any
 
+from pygent.agent.pygent_v1.graph.core import MODEL_RETRYABLE_ERROR_KINDS
 from pygent.agent.pygent_v1.runtime.realtime.fork_reply import (
     ForkReplyOutcome,
     extract_speak_args,
@@ -38,6 +41,7 @@ from pygent.core import (
 )
 from pygent.llm import (
     GenerationConfig,
+    ModelCallError,
     ModelCallLayer,
     ModelCallPolicy,
     ModelGroup,
@@ -135,41 +139,58 @@ class ForkReplyModule(Module[UserMessage, AIMessage]):
     async def forward(
         self, message: UserMessage, context: Any
     ) -> tuple[AIMessage, Any]:
-        answer, next_context = await self._model_call(message, context)
-        outcome = _outcome_from_answer(answer)
-        attempts = 1
-        if _undeliverable(outcome):
-            # Fallback (D-RT2/3): an endpoint may silently ignore the forced
-            # tool_choice, leaving the model free-forming phantom tool calls
-            # with empty content. Retry once with the interrupt wrapped and
-            # reply instructions in the user-message tail; the retry reuses
-            # the original context so the failed attempt stays out of it.
-            answer, next_context = await self._model_call(
-                _wrap_fallback_message(message), context
-            )
+        try:
+            answer, next_context = await self._model_call(message, context)
             outcome = _outcome_from_answer(answer)
-            attempts = FORK_MAX_MODEL_ATTEMPTS
+            if not _undeliverable(outcome):
+                return _result_message(outcome, attempts=1), next_context
+        except (TimeoutError, ModelCallError) as exc:
+            # The per-attempt deadline and transient provider failures (the
+            # same retryable kinds as the invoker's retry_on) route into the
+            # wrapped-message fallback on the second reserved slot;
+            # deterministic failures still propagate.
+            if isinstance(exc, ModelCallError) and (
+                exc.kind not in MODEL_RETRYABLE_ERROR_KINDS
+            ):
+                raise
+        # Fallback (D-RT2/3): an endpoint may silently ignore the forced
+        # tool_choice, leaving the model free-forming phantom tool calls with
+        # empty content — or the first attempt failed transiently. Retry once
+        # with the interrupt wrapped and reply instructions in the user-message
+        # tail; the retry reuses the original context so the failed attempt
+        # stays out of it.
+        answer, next_context = await self._model_call(
+            _wrap_fallback_message(message), context
+        )
         return (
-            AIMessage(
-                content="",
-                kind=FORK_RESULT_KIND,
-                data={
-                    "via": outcome.via,
-                    "speak_args": (
-                        None
-                        if outcome.speak_args is None
-                        else {
-                            "text": outcome.speak_args.text,
-                            "attachments": list(outcome.speak_args.attachments),
-                            "say_nothing": outcome.speak_args.say_nothing,
-                        }
-                    ),
-                    "text": outcome.text,
-                    "attempts": attempts,
-                },
+            _result_message(
+                _outcome_from_answer(answer), attempts=FORK_MAX_MODEL_ATTEMPTS
             ),
             next_context,
         )
+
+
+def _result_message(outcome: ForkReplyOutcome, attempts: int) -> AIMessage:
+    """The fork execution's result: how the reply was produced and its payload."""
+
+    return AIMessage(
+        content="",
+        kind=FORK_RESULT_KIND,
+        data={
+            "via": outcome.via,
+            "speak_args": (
+                None
+                if outcome.speak_args is None
+                else {
+                    "text": outcome.speak_args.text,
+                    "attachments": list(outcome.speak_args.attachments),
+                    "say_nothing": outcome.speak_args.say_nothing,
+                }
+            ),
+            "text": outcome.text,
+            "attempts": attempts,
+        },
+    )
 
 
 def _outcome_from_answer(answer: AIMessage) -> ForkReplyOutcome:
