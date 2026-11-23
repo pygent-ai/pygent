@@ -13,6 +13,15 @@ The effort is expressed in each protocol's native dial: the top-level
 expects a nested ``reasoning: {effort: ...}`` object and is left unchanged
 for now, with the decision recorded on
 :class:`ForkModelProfile.decisions` for auditing.
+
+``"none"`` asks for the model's lowest thinking posture. The Anthropic
+protocol expresses it as ``thinking: {"type": "disabled"}`` — a separate
+field from the effort dial — and only models whose capabilities declare
+``reasoning.disable_supported`` receive it (official Anthropic rejects
+``disabled`` on its adaptive-only models, Kimi's Anthropic endpoint has no
+switch at all). Everything else degrades to the low effort dial instead of
+sending a field the endpoint rejects; the degrade is recorded as
+``reasoning_effort_none_degraded``.
 """
 
 from __future__ import annotations
@@ -28,8 +37,14 @@ from pygent.llm import ModelConfig, ModelEntry
 _REASONING_EFFORT_PROTOCOLS = frozenset({"openai_chat_completions"})
 _ANTHROPIC_MESSAGES = "anthropic_messages"
 
+#: The fork's lowest controllable effort, used when "none" cannot be
+#: expressed on the model's endpoint.
+_NONE_FALLBACK_EFFORT = "low"
+
 ForkReasoningDecisionReason = Literal[
     "reasoning_effort_applied",
+    "reasoning_effort_none_applied",
+    "reasoning_effort_none_degraded",
     "reasoning_not_supported",
     "reasoning_not_controllable",
     "protocol_not_supported",
@@ -113,6 +128,30 @@ def _apply_reasoning_effort(
     if not reasoning.controllable:
         return entry, "reasoning_not_controllable"
     protocol = entry.spec.protocol
+    if reasoning_effort == "none":
+        # The off dial only exists on Anthropic Messages as thinking.type,
+        # and only for endpoints that accept "disabled" — the forked options
+        # drop the effort dial entirely so the fork fully owns the posture.
+        if protocol == _ANTHROPIC_MESSAGES and reasoning.disable_supported:
+            options = dict(entry.spec.provider_options)
+            options["thinking"] = {"type": "disabled"}
+            options.pop("output_config", None)
+            return (
+                replace(
+                    entry,
+                    spec=replace(entry.spec, provider_options=options),
+                ),
+                "reasoning_effort_none_applied",
+            )
+        forked, reason = _apply_reasoning_effort(entry, _NONE_FALLBACK_EFFORT)
+        return (
+            forked,
+            (
+                reason
+                if reason != "reasoning_effort_applied"
+                else "reasoning_effort_none_degraded"
+            ),
+        )
     if protocol in _REASONING_EFFORT_PROTOCOLS:
         options = dict(entry.spec.provider_options)
         options["reasoning_effort"] = reasoning_effort

@@ -22,7 +22,10 @@ from pygent.llm import (
 
 
 def _capabilities(
-    *, supported: bool, controllable: bool
+    *,
+    supported: bool,
+    controllable: bool,
+    disable_supported: bool = False,
 ) -> dict[str, object]:
     return {
         "modalities": {"input": ["text"], "output": ["text"]},
@@ -32,6 +35,11 @@ def _capabilities(
         "reasoning": {
             "supported": supported,
             "controllable": controllable,
+            **(
+                {}
+                if not disable_supported
+                else {"disable_supported": True}
+            ),
         },
         "limits": {"context_tokens": 100_000, "max_output_tokens": 4_096},
     }
@@ -44,6 +52,7 @@ def _model(
     *,
     supported: bool,
     controllable: bool,
+    disable_supported: bool = False,
     provider_options: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     value: dict[str, object] = {
@@ -51,7 +60,9 @@ def _model(
         "model_id": model_id,
         "protocol": protocol,
         "capabilities": _capabilities(
-            supported=supported, controllable=controllable
+            supported=supported,
+            controllable=controllable,
+            disable_supported=disable_supported,
         ),
     }
     if provider_options is not None:
@@ -114,11 +125,24 @@ def _config() -> ModelConfig:
                         "output_config": {"effort": "high"},
                     },
                 ),
+                "anthropic_off": _model(
+                    "anthropic",
+                    "claude-off",
+                    "anthropic_messages",
+                    supported=True,
+                    controllable=True,
+                    disable_supported=True,
+                    provider_options={
+                        "thinking": {"type": "adaptive", "display": "summarized"},
+                        "output_config": {"effort": "high"},
+                    },
+                ),
             },
             "model_groups": {
                 "mixed": {
                     "models": ["controllable", "fixed", "plain", "anthropic"]
-                }
+                },
+                "cutoff": {"models": ["anthropic_off"]},
             },
         }
     )
@@ -202,6 +226,68 @@ def test_forked_anthropic_entry_requests_the_fork_effort() -> None:
         "display": "summarized",
     }
     assert body(config.models["anthropic"])["output_config"] == {"effort": "high"}
+
+
+def test_fork_none_effort_disables_thinking_for_declared_anthropic_models() -> None:
+    config = _config()
+    profile = fork_model_profiles(config, "cutoff", "none")["anthropic_off"]
+    forked = profile.models[0]
+
+    options = dict(cast(Mapping[str, object], forked.spec.provider_options))
+    assert dict(cast(Mapping[str, object], options["thinking"])) == {
+        "type": "disabled"
+    }
+    assert "output_config" not in options
+    reasons = {decision.model_key: decision.reason for decision in profile.decisions}
+    assert reasons == {"anthropic_off": "reasoning_effort_none_applied"}
+
+
+def test_forked_anthropic_none_entry_requests_thinking_disabled() -> None:
+    config = _config()
+    forked = fork_model_profiles(config, "cutoff", "none")["anthropic_off"].models[0]
+
+    def body(entry: ModelEntry) -> dict[str, object]:
+        return AnthropicMessagesAdapter().build_request(
+            ModelProviderRequest(
+                model_key=entry.key,
+                model=entry.spec,
+                message=UserMessage(content="question"),
+                context=Context(),
+                generation=GenerationConfig(max_output_tokens=4096),
+            )
+        ).to_dict()
+
+    assert body(forked)["thinking"] == {"type": "disabled"}
+    assert "output_config" not in body(forked)
+
+
+def test_fork_none_effort_degrades_to_low_without_disable_support() -> None:
+    config = _config()
+    profile = fork_model_profiles(config, "mixed", "none")["controllable"]
+
+    reasons = {decision.model_key: decision.reason for decision in profile.decisions}
+    assert reasons == {
+        "controllable": "reasoning_effort_none_degraded",
+        "fixed": "reasoning_not_controllable",
+        "plain": "reasoning_not_supported",
+        "anthropic": "reasoning_effort_none_degraded",
+    }
+
+    by_key = {model.key: model for model in profile.models}
+    anthropic_options = dict(
+        cast(Mapping[str, object], by_key["anthropic"].spec.provider_options)
+    )
+    assert dict(cast(Mapping[str, object], anthropic_options["output_config"])) == {
+        "effort": "low"
+    }
+    assert dict(cast(Mapping[str, object], anthropic_options["thinking"])) == {
+        "type": "adaptive",
+        "display": "summarized",
+    }
+    openai_options = dict(
+        cast(Mapping[str, object], by_key["controllable"].spec.provider_options)
+    )
+    assert openai_options["reasoning_effort"] == "low"
 
 
 def test_none_effort_keeps_the_main_profile() -> None:

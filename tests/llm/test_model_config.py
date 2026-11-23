@@ -619,6 +619,63 @@ def test_direct_capability_values_normalize_sequences_and_validate_types() -> No
         ModelLimits(context_tokens=0, max_output_tokens=4_096)
 
 
+def test_reasoning_disable_supported_defaults_round_trips_and_validates() -> None:
+    capabilities = ModelReasoningCapabilities(supported=True, controllable=True)
+    assert capabilities.disable_supported is False
+
+    declared = ModelReasoningCapabilities.from_mapping(
+        {"supported": True, "controllable": True, "disable_supported": True}
+    )
+    assert declared.disable_supported is True
+
+    with pytest.raises(TypeError, match="reasoning.disable_supported"):
+        ModelReasoningCapabilities.from_mapping(
+            {"supported": True, "controllable": True, "disable_supported": "yes"}
+        )
+    with pytest.raises(ValueError, match="reasoning"):
+        ModelReasoningCapabilities.from_mapping(
+            {
+                "supported": True,
+                "controllable": True,
+                "disable_supported": True,
+                "levels": ["low"],
+            }
+        )
+
+    base_capabilities = {
+        "modalities": {"input": ["text"], "output": ["text"]},
+        "streaming": {"output": ["text"]},
+        "tools": {"call": True, "choice": ["auto"], "parallel": False},
+        "structured_output": {"json_object": False, "json_schema": False},
+        "limits": {"context_tokens": 1_000, "max_output_tokens": 100},
+    }
+    default_mapping = ModelCapabilities.from_mapping(
+        {
+            **base_capabilities,
+            "reasoning": {"supported": True, "controllable": True},
+        }
+    )
+    assert default_mapping.to_mapping()["reasoning"] == {
+        "supported": True,
+        "controllable": True,
+    }
+    declared_mapping = ModelCapabilities.from_mapping(
+        {
+            **base_capabilities,
+            "reasoning": {
+                "supported": True,
+                "controllable": True,
+                "disable_supported": True,
+            },
+        }
+    )
+    assert declared_mapping.to_mapping()["reasoning"] == {
+        "supported": True,
+        "controllable": True,
+        "disable_supported": True,
+    }
+
+
 def test_streaming_output_and_nullable_limits_round_trip() -> None:
     capabilities = ModelCapabilities.from_mapping(
         _capabilities(

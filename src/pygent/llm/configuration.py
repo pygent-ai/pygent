@@ -262,21 +262,41 @@ class ModelStructuredOutputCapabilities:
 class ModelReasoningCapabilities:
     supported: bool
     controllable: bool
+    disable_supported: bool = False
 
     def __post_init__(self) -> None:
         _bool(self.supported, "reasoning.supported")
         _bool(self.controllable, "reasoning.controllable")
+        _bool(self.disable_supported, "reasoning.disable_supported")
         if self.controllable and not self.supported:
             raise ValueError("reasoning.controllable requires reasoning.supported")
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> ModelReasoningCapabilities:
-        _exact_fields(value, frozenset({"supported", "controllable"}), "reasoning")
+        unknown = set(value) - {"supported", "controllable", "disable_supported"}
+        if unknown:
+            raise ValueError(
+                "unknown reasoning fields: " + ", ".join(sorted(unknown))
+            )
+        missing = {"supported", "controllable"} - set(value)
+        if missing:
+            raise ValueError(
+                "missing reasoning fields: " + ", ".join(sorted(missing))
+            )
         supported = _bool(value["supported"], "reasoning.supported")
         controllable = _bool(value["controllable"], "reasoning.controllable")
+        disable_supported = (
+            False
+            if "disable_supported" not in value
+            else _bool(value["disable_supported"], "reasoning.disable_supported")
+        )
         if controllable and not supported:
             raise ValueError("reasoning.controllable requires reasoning.supported")
-        return cls(supported=supported, controllable=controllable)
+        return cls(
+            supported=supported,
+            controllable=controllable,
+            disable_supported=disable_supported,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -626,6 +646,11 @@ class ModelCapabilities:
             "reasoning": {
                 "supported": self.reasoning.supported,
                 "controllable": self.reasoning.controllable,
+                **(
+                    {}
+                    if not self.reasoning.disable_supported
+                    else {"disable_supported": True}
+                ),
             },
             "limits": {
                 "context_tokens": self.limits.context_tokens,

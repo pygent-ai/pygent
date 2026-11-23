@@ -3602,7 +3602,8 @@
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": true,
+          "disable_supported": true
         },
         "limits": {
           "context_tokens": 200000,
@@ -3645,7 +3646,8 @@
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": true,
+          "disable_supported": true
         },
         "limits": {
           "context_tokens": null,
@@ -3688,7 +3690,8 @@
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": true,
+          "disable_supported": true
         },
         "limits": {
           "context_tokens": null,
@@ -3731,7 +3734,8 @@
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": true,
+          "disable_supported": true
         },
         "limits": {
           "context_tokens": null,
@@ -3774,7 +3778,8 @@
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": true,
+          "disable_supported": true
         },
         "limits": {
           "context_tokens": 1000000,
@@ -3817,7 +3822,8 @@
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": true,
+          "disable_supported": true
         },
         "limits": {
           "context_tokens": null,
@@ -3860,7 +3866,8 @@
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": true,
+          "disable_supported": true
         },
         "limits": {
           "context_tokens": 1000000,
@@ -4238,7 +4245,8 @@
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": true,
+          "disable_supported": true
         },
         "limits": {
           "context_tokens": 1000000,
@@ -4322,7 +4330,8 @@
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": true,
+          "disable_supported": true
         },
         "limits": {
           "context_tokens": 1000000,
@@ -4406,7 +4415,8 @@
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": true,
+          "disable_supported": true
         },
         "limits": {
           "context_tokens": 1000000,
@@ -4576,7 +4586,8 @@
         },
         "reasoning": {
           "supported": true,
-          "controllable": true
+          "controllable": true,
+          "disable_supported": true
         },
         "limits": {
           "context_tokens": 1000000,
