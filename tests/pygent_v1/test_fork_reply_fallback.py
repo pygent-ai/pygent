@@ -19,8 +19,19 @@ from pygent.agent.pygent_v1.runtime.realtime.fork_agent import (
     ForkReplyModule,
     outcome_from_result,
 )
-from pygent.core import AIMessage, Context, UserMessage
-from pygent.llm import ModelCallError, ModelErrorKind, RetryPolicy
+from pygent.agent.pygent_v1.runtime.realtime.fork_reply import (
+    build_fork_context,
+)
+from pygent.core import AIMessage, Context, ToolMessage, UserMessage
+from pygent.llm import (
+    AnthropicMessagesAdapter,
+    GenerationConfig,
+    ModelCallError,
+    ModelConfig,
+    ModelErrorKind,
+    ModelProviderRequest,
+    RetryPolicy,
+)
 from pygent.tool import ToolCall
 
 
@@ -362,3 +373,117 @@ def test_fallback_wrapper_keeps_the_interrupt_verbatim() -> None:
     assert wrapped.content.endswith(FORK_FALLBACK_INSTRUCTIONS.strip())
     assert wrapped.kind == original.kind
     assert wrapped.media == original.media
+
+
+def _dangling_answer() -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=(
+            ToolCall(call_id="call-1", name="bash", arguments={"command": "pytest"}),
+            ToolCall(call_id="call-2", name="bash", arguments={"command": "lint"}),
+        ),
+    )
+
+
+def test_fork_context_pairs_dangling_tool_calls() -> None:
+    """A snapshot taken mid-tool-batch ends with unanswered tool_calls: the
+    fork request pairs them with truthful in-flight results — the calls are
+    still running in the foreground, not cancelled."""
+
+    messages = (UserMessage(content="先跑测试"), _dangling_answer())
+
+    context = build_fork_context(system_prompt="p", messages=messages, tools=())
+
+    assert context.messages[:-1] == messages
+    paired = context.messages[-1]
+    assert isinstance(paired, ToolMessage)
+    assert [result.call_id for result in paired.results] == ["call-1", "call-2"]
+    for result in paired.results:
+        assert result.status == "unknown"
+        assert result.side_effect_committed is None
+        assert "still executing in the foreground session" in str(result.output)
+
+
+def test_fork_context_keeps_clean_tails_verbatim() -> None:
+    for tail in (UserMessage(content="hello"), AIMessage(content="final answer")):
+        messages = (UserMessage(content="q"), tail)
+        context = build_fork_context(system_prompt="p", messages=messages, tools=())
+        assert context.messages == messages
+
+
+def test_normalized_fork_context_encodes_paired_tool_results() -> None:
+    """The wire shape: the dangling tool_use is followed by matching
+    tool_result ids in the next user turn — what strict providers require."""
+
+    config = ModelConfig.from_mapping(
+        {
+            "connections": {
+                "anthropic": {
+                    "provider": "anthropic",
+                    "credential": {"none": True},
+                    "protocols": {
+                        "anthropic_messages": {"base_url": "http://127.0.0.1:1"}
+                    },
+                }
+            },
+            "models": {
+                "anthropic": {
+                    "connection": "anthropic",
+                    "model_id": "claude-sonnet-5",
+                    "protocol": "anthropic_messages",
+                    "capabilities": {
+                        "modalities": {"input": ["text"], "output": ["text"]},
+                        "streaming": {"output": ["text"]},
+                        "tools": {
+                            "call": True,
+                            "choice": ["auto"],
+                            "parallel": False,
+                        },
+                        "structured_output": {
+                            "json_object": False,
+                            "json_schema": False,
+                        },
+                        "reasoning": {"supported": False, "controllable": False},
+                        "limits": {
+                            "context_tokens": 100000,
+                            "max_output_tokens": 4096,
+                        },
+                    },
+                }
+            },
+        }
+    )
+    entry = config.models["anthropic"]
+    context = build_fork_context(
+        system_prompt="p",
+        messages=(UserMessage(content="跑一下"), _dangling_answer()),
+        tools=(),
+    )
+
+    body = AnthropicMessagesAdapter().build_request(
+        ModelProviderRequest(
+            model_key=entry.key,
+            model=entry.spec,
+            message=_interrupt(),
+            context=context,
+            generation=GenerationConfig(max_output_tokens=4096),
+        )
+    ).to_dict()
+
+    encoded = body["messages"]
+    assistant = encoded[-3]
+    results = encoded[-2]
+    assert assistant["role"] == "assistant"
+    tool_use_ids = [
+        block["id"]
+        for block in assistant["content"]
+        if block["type"] == "tool_use"
+    ]
+    assert tool_use_ids == ["call-1", "call-2"]
+    assert results["role"] == "user"
+    assert [
+        block["tool_use_id"]
+        for block in results["content"]
+        if block["type"] == "tool_result"
+    ] == ["call-1", "call-2"]
+    assert all(block["is_error"] for block in results["content"])

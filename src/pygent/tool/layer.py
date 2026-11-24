@@ -404,9 +404,19 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
         return await self._execute_sync(admitted_call, spec)
 
     @staticmethod
-    def _cancelled_result(
+    def cancelled_result(
         call: ToolCall, spec: ToolSpec | None, started: bool
     ) -> ToolResult:
+        """The paired result for a call an interrupt caught without output.
+
+        Shared shape: the tool batch's steering-interrupt path and any other
+        reader of a dangling ``tool_calls`` tail (e.g. the fork-reply context
+        builder) must record the same cancelled result so strict providers
+        never see a ``tool_use`` without its ``tool_result``. ``started=True``
+        reports ``side_effect_committed=None`` — the honest value when the
+        caller cannot know whether the interrupted call already committed.
+        """
+
         return ToolResult(
             call_id=call.call_id,
             name=call.name,
@@ -514,7 +524,7 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             or self.task_manager
         )
         if manager is None:
-            return self._cancelled_result(call, spec, started)
+            return self.cancelled_result(call, spec, started)
         # Optional manager capability, probed like the runtime probes
         # ``prepare_job`` on durable task managers.
         find = cast(
@@ -522,14 +532,14 @@ class ToolCallLayer(Module[AIMessage, ToolMessage]):
             getattr(manager, "get_task_by_call", None),
         )
         if find is None:
-            return self._cancelled_result(call, spec, started)
+            return self.cancelled_result(call, spec, started)
         task = await find(call.call_id)
         if (
             task is None
             or task.state == ToolTaskState.PENDING
             or (spec is not None and task.tool_id != spec.tool_id)
         ):
-            return self._cancelled_result(call, spec, started)
+            return self.cancelled_result(call, spec, started)
         snapshot = await manager.get_task(task.task_id) or task
         output = await manager.get_output(task.task_id)
         return ToolResult(

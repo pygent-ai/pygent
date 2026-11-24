@@ -28,8 +28,8 @@ from pygent.agent.pygent_v1.runtime.realtime.speak import (
     SpeakArgsError,
     parse_speak_args,
 )
-from pygent.core import AIMessage, Context, Message
-from pygent.tool import ToolDefinition
+from pygent.core import AIMessage, Context, Message, ToolMessage
+from pygent.tool import ToolDefinition, ToolResult
 
 
 @dataclass(frozen=True)
@@ -48,12 +48,53 @@ def build_fork_context(
     messages: Sequence[Message],
     tools: Sequence[ToolDefinition],
 ) -> Context:
-    """Copy the request state verbatim — this prefix IS the cache key."""
+    """Copy the request state verbatim — this prefix IS the cache key.
 
+    A snapshot taken while the foreground turn is mid-tool-batch ends with
+    assistant ``tool_calls`` whose paired ``ToolMessage`` does not exist yet
+    (the tools are still running). Strict providers reject the dangling
+    ``tool_use`` with HTTP 400, so the tail is paired with per-call results
+    that say exactly that: the calls are in flight, their output is not part
+    of this snapshot. Shaping only: the fork never writes the session
+    transcript, and the added tail sits outside the cached block-1 prefix.
+    """
+
+    window = tuple(messages)
+    tail = window[-1] if window else None
+    if isinstance(tail, AIMessage) and tail.tool_calls:
+        window = (*window, _in_flight_tool_message(tail))
     return Context(
         system_prompt=system_prompt,
-        messages=tuple(messages),
+        messages=window,
         tools=tuple(tools),
+    )
+
+
+def _in_flight_tool_message(answer: AIMessage) -> ToolMessage:
+    """Pair every dangling call with its in-flight status.
+
+    The foreground batch is still running — not cancelled — so ``cancelled``
+    would lie to the model. ``unknown`` keeps the side-effect verdict open
+    (the fork cannot know what the running call already committed) and the
+    rendered note tells the model where the work actually continues;
+    ``detached`` cannot be used because it requires a ToolTask snapshot the
+    fork does not own.
+    """
+
+    return ToolMessage(
+        results=tuple(
+            ToolResult(
+                call_id=call.call_id,
+                name=call.name,
+                status="unknown",
+                output=(
+                    "the tool call is still executing in the foreground "
+                    "session; its result is not part of this snapshot — "
+                    "answer the user's interrupt without waiting for it"
+                ),
+            )
+            for call in answer.tool_calls
+        ),
     )
 
 
