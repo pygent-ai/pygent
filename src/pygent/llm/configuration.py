@@ -262,7 +262,13 @@ class ModelStructuredOutputCapabilities:
 class ModelReasoningCapabilities:
     supported: bool
     controllable: bool
-    disable_supported: bool = False
+    # Omitted from the canonical definition projection while False so the
+    # serialized capability identity (and every config_ref hash built on it)
+    # stays byte-stable for models that do not declare the capability.
+    disable_supported: bool = field(
+        default=False,
+        metadata={"pygent_omit_if_empty": True},
+    )
 
     def __post_init__(self) -> None:
         _bool(self.supported, "reasoning.supported")
