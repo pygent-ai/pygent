@@ -30,6 +30,13 @@ from pygent.core import JsonValue, UserMessage
 
 EXCHANGE_MESSAGE_KIND = "pygent.v1.realtime.exchange"
 
+_ALREADY_ANSWERED_DIRECTIVE = """\
+The exchange above was already answered in another session — the
+your-response-in-another-session block quotes that reply verbatim. Treat both
+blocks as transcript context only.
+Do not re-answer the question or repeat the reply.
+"""
+
 
 def format_user_asked(user_asked: str | Sequence[str]) -> str:
     """Format one message or a numbered supersede-and-merge batch."""
@@ -62,9 +69,15 @@ def render_exchange_envelope(
 ) -> str:
     """Build the ``<system-reminder>`` envelope for one fork-reply exchange.
 
+    A delivered reply is followed by the ``already-answered`` frame: the
+    foreground agent must treat the exchange as transcript context and not
+    re-answer the question the fork just handled.
+
     ``response=None`` renders the unanswered-interrupt form: only the question
     (and attachments) reach the main agent — the total-fork-failure fallback,
-    so an accepted interrupt is never silently dropped from the context.
+    so an accepted interrupt is never silently dropped from the context. No
+    directive rides along: the question is open and the foreground agent is
+    expected to answer it.
     """
 
     asked_block = Prompt(format_user_asked(user_asked)).wrap("user-asked")
@@ -76,6 +89,9 @@ def render_exchange_envelope(
             "your-response-in-another-session"
         )
         parts.append(str(response_block))
+        parts.append(
+            str(Prompt(_ALREADY_ANSWERED_DIRECTIVE).wrap("already-answered"))
+        )
     return system_reminder("\n".join(parts))
 
 

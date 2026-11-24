@@ -51,6 +51,7 @@ _INNER_TAGS = {
     "user-asked": "inner exchange frame",
     "user-interrupt": "wrapped interrupt body inside the fork fallback user message",
     "your-response-in-another-session": "inner exchange frame",
+    "already-answered": "inner exchange frame",
     "undelivered-draft": "quoted draft body inside the continuation reminder",
     "session": "runtime-context field",
     "workspace-root": "runtime-context field",

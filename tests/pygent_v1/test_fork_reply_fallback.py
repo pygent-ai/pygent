@@ -12,6 +12,9 @@ from typing import Any
 
 import pytest
 
+from pygent.agent.pygent_v1.runtime.realtime.envelope import (
+    render_exchange_envelope,
+)
 from pygent.agent.pygent_v1.runtime.realtime.fork_agent import (
     FORK_FALLBACK_INSTRUCTIONS,
     FORK_MAX_MODEL_ATTEMPTS,
@@ -373,6 +376,34 @@ def test_fallback_wrapper_keeps_the_interrupt_verbatim() -> None:
     assert wrapped.content.endswith(FORK_FALLBACK_INSTRUCTIONS.strip())
     assert wrapped.kind == original.kind
     assert wrapped.media == original.media
+
+
+def test_answered_envelope_carries_the_no_repeat_directive() -> None:
+    """A delivered reply must not be re-answered by the foreground agent: the
+    directive frame rides right after the response block it qualifies."""
+
+    envelope = render_exchange_envelope(
+        user_asked="你不要删文件哈", response="放心，只看不动手"
+    )
+
+    assert "<already-answered>" in envelope
+    assert "Do not re-answer the question or repeat the reply" in envelope
+    assert (
+        envelope.index("your-response-in-another-session")
+        < envelope.index("already-answered")
+    )
+
+
+def test_unanswered_envelope_has_no_repeat_directive() -> None:
+    """The unanswered form leaves the question open — the foreground agent is
+    expected to answer it, so the no-repeat directive must not appear."""
+
+    envelope = render_exchange_envelope(
+        user_asked="你不要删文件哈", response=None
+    )
+
+    assert "<user-asked>\n你不要删文件哈\n</user-asked>" in envelope
+    assert "already-answered" not in envelope
 
 
 def _dangling_answer() -> AIMessage:
