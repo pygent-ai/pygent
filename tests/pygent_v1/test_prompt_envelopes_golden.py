@@ -91,6 +91,26 @@ what changed?
 <your-response-in-another-session>
 I fixed it.
 </your-response-in-another-session>
+<already-answered>
+The exchange above was already answered in another session — the
+your-response-in-another-session block quotes that reply verbatim. Treat both
+blocks as transcript context only.
+Do not re-answer the question or repeat the reply.
+</already-answered>
+</system-reminder>""",
+    )
+
+
+def test_exchange_envelope_unanswered_golden() -> None:
+    """The unanswered form carries no already-answered frame: the bare
+    question is open and the foreground agent is expected to answer it."""
+
+    _assert_exact(
+        render_exchange_envelope(user_asked=" what changed? \n", response=None),
+        """<system-reminder>
+<user-asked>
+what changed?
+</user-asked>
 </system-reminder>""",
     )
 
@@ -123,6 +143,12 @@ what is this?
 <your-response-in-another-session>
 A chart.
 </your-response-in-another-session>
+<already-answered>
+The exchange above was already answered in another session — the
+your-response-in-another-session block quotes that reply verbatim. Treat both
+blocks as transcript context only.
+Do not re-answer the question or repeat the reply.
+</already-answered>
 </system-reminder>""",
     )
 
@@ -171,6 +197,12 @@ line & two
 <your-response-in-another-session>
 noted
 </your-response-in-another-session>
+<already-answered>
+The exchange above was already answered in another session — the
+your-response-in-another-session block quotes that reply verbatim. Treat both
+blocks as transcript context only.
+Do not re-answer the question or repeat the reply.
+</already-answered>
 </system-reminder>""",
     )
 

@@ -34,8 +34,7 @@ _ALREADY_ANSWERED_DIRECTIVE = """\
 The exchange above was already answered in another session — the
 your-response-in-another-session block quotes that reply verbatim. Treat both
 blocks as transcript context only.
-Do not re-answer the question or repeat the reply.
-"""
+Do not re-answer the question or repeat the reply."""
 
 
 def format_user_asked(user_asked: str | Sequence[str]) -> str:
