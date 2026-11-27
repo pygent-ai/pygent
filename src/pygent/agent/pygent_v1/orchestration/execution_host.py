@@ -199,6 +199,11 @@ class LocalExecutionHost:
                     self._recover_deliveries(store),
                     name="pygent-message-recovery",
                 )
+        self._schedule_pending_inputs(config, manager, store)
+
+    def _schedule_pending_inputs(
+        self, config: RunConfig, manager: SessionManager, store: DeliveryStore
+    ) -> None:
         for row in store.pending("user:", prefix=True, available=True):
             self._route_task(config, manager, store, row["lane"], row["key"])
 
@@ -210,8 +215,7 @@ class LocalExecutionHost:
                 if store.pending("speak:", prefix=True, available=True):
                     lease = await self.acquire_runtime(config=config, manager=manager)
                     await lease.release()
-                for row in store.pending("user:", prefix=True, available=True):
-                    self._route_task(config, manager, store, row["lane"], row["key"])
+                self._schedule_pending_inputs(config, manager, store)
                 sessions = {
                     row["lane"].removeprefix("exchange:")
                     for row in store.pending("exchange:", prefix=True, available=True)

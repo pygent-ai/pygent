@@ -12,9 +12,7 @@ forces ``tool_choice="speak"`` and extracts the speak arguments; a stray text
 response is deliverable through the harness's fallback rendering
 (``via="text"``).
 
-The fork reply is transient by design: it never enters the session transcript
-(fork agents carry no conversation-checkpoint modules), and a lost reply is
-simply re-asked.
+The host records the user message and fork reply together for the foreground to consume.
 """
 
 from __future__ import annotations

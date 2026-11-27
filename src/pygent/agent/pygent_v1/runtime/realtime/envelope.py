@@ -4,10 +4,7 @@ When the fork child answers an interrupt, the main agent must learn what
 happened without being interrupted itself. The exchange travels as a ReAct
 projection operation — a wait-mode ``StandaloneUserMessage`` — so the react
 layer applies it at its next drain point: after the pending tool results and
-before the next model call. The same operation kind already carries the
-memory projection replacement, so no pipeline module and no persistence of
-its own are needed. See docs/design/realtime-interaction 3.3.2/3.3.3 for the
-timing diagrams.
+before the next model call. The delivery journal retains the exchange until the foreground takes it.
 """
 
 from __future__ import annotations

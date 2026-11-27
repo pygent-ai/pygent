@@ -493,8 +493,9 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
         answer: AIMessage | None = None
         try:
             visible = replace(execution_context, tools=self.tool_definitions)
-            if self.llm is None:
-                message, visible = await self.prompt(message, visible)
+            has_model = self.llm is not None
+            message, visible = await self.prompt(message, visible)
+            if not has_model:
                 answer = AIMessage(
                     content=(
                         "pygent_v1 agent is wired into chat, but API key is not configured "
@@ -509,7 +510,6 @@ class PygentAgent(Agent[UserMessage, AIMessage]):
                     boundary="local-answer",
                 )
             else:
-                message, visible = await self.prompt(message, visible)
                 answer, next_context = await self.foreground(message, visible)
             assert answer is not None
             committed_messages = next_context.committed_messages

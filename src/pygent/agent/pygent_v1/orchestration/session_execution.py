@@ -535,7 +535,15 @@ class SessionExecutionCoordinator:
         store = self.delivery_store(manager)
         lane_name = f"exchange:{envelope.session_id}"
         with store.transaction() as db:
-            if store.record_exchange(db, envelope)["receipt"] is not None:
+            # The reply producer records the exchange with the outbox.
+            row = (
+                store.find(db, lane_name, envelope.exchange_id)
+                if envelope.reply is not None
+                else None
+            )
+            if row is None:
+                row = store.record_exchange(db, envelope)
+            if row["receipt"] is not None:
                 return "injected"
         async with self._lock:
             lane = self._session_lanes.get(key)

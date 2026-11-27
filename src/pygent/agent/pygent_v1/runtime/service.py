@@ -184,18 +184,7 @@ def _config_fingerprint(config: RunConfig) -> str:
 
 
 class _SpeakExecutor:
-    """Delivers the model's speak calls as user-facing stream events (D-RT10).
-
-    The event (``pygent.v1.realtime.speak``) is the bubble the desktop renders;
-    ``say_nothing`` emits nothing and acknowledges silently. Attachments are
-    validated against the workspace and reported as workspace-relative paths.
-    Configured external channels receive the same text plus the resolved
-    attachment paths fire-and-forget — channel failures never affect the tool
-    result; they are recorded on ``service.warnings`` and surfaced as
-    ``RuntimeWarning`` so the host can observe them. Channels are supplied by
-    the host application through the speak channel slot; the kernel ships
-    none by default.
-    """
+    """Emit foreground speak events and queue replies for configured channels."""
 
     DRAIN_TIMEOUT_SECONDS = 5.0
 
@@ -752,9 +741,6 @@ class PygentRuntimeService:
         existing = self._agent_definitions.get(key)
         if existing is not None:
             return existing
-        invoker = (
-            self._model_invokers.get(resolved.alias) if resolved is not None else None
-        )
         agent = PygentAgent(
             effective_config,
             resolved_agent=effective_config.resolved_agent,
@@ -763,7 +749,7 @@ class PygentRuntimeService:
             managed_model=True,
             model_group_name=selected_group,
             interactive_approvals=interactive_approvals,
-            model_invoker=invoker,
+            model_invoker=self._model_invokers.get(resolved.alias),
             memory_harness=self.memory_harness,
             reminders=self.reminders,
             bash_tasks=self.bash_tasks,
@@ -772,7 +758,7 @@ class PygentRuntimeService:
             credential_environ=self._credential_environ,
             realtime_interaction_enabled=realtime_interaction,
         )
-        if resolved is not None and agent.llm is not None:
+        if agent.llm is not None:
             self._model_invokers.setdefault(resolved.alias, agent.llm)
         self._agent_definitions[key] = agent
         return agent
@@ -1115,7 +1101,7 @@ class PygentRuntimeService:
                         session_id=session_id,
                         input_id=fork_input_id,
                         user_asked=fork_messages,
-                    source_input_ids=source_input_ids,
+                        source_input_ids=source_input_ids,
                         attachments=fork_attachments,
                     )
             raise
@@ -1123,28 +1109,27 @@ class PygentRuntimeService:
             return None
         assert isinstance(output, AIMessage)
         outcome = outcome_from_result(output)
+        speak = outcome.speak_args
+        silent = speak is not None and speak.say_nothing
+        text = "" if silent else (speak.text if speak is not None else outcome.text) or ""
+        response = "(decided not to speak)" if silent else text or "(no verbal reply)"
         async with state.lock:
             if state.generation != generation:
                 return None
             state.finished = True
-            if outcome.speak_args is not None and outcome.speak_args.say_nothing:
-                response_text = "(decided not to speak)"
-            elif outcome.speak_args is not None:
-                response_text = outcome.speak_args.text or ""
-            else:
-                response_text = outcome.text or ""
             envelope = build_exchange_envelope(
                 session_id=session_id,
                 input_id=fork_input_id,
                 user_asked=tuple(fork_messages),
-                response=response_text or "(no verbal reply)",
+                response=response,
                 attachments=fork_attachments,
             )
             envelope = replace(
-                envelope, source_input_ids=source_input_ids, reply=cast(JsonValue, message_to_dict(output))
+                envelope,
+                source_input_ids=source_input_ids,
+                reply=cast(JsonValue, message_to_dict(output)),
             )
             state.reset()
-        speak = outcome.speak_args
         paths: list[Path] = []
         for attachment in speak.attachments if speak is not None else ():
             try:
@@ -1154,11 +1139,8 @@ class PygentRuntimeService:
                 )
             except (OSError, ValueError):
                 self._speak_executor._warn("fork speak attachment could not be resolved")
-        text = (
-            outcome.text if speak is None else None if speak.say_nothing else speak.text
-        )
         self._speak_executor.publish(
-            f"{session_id}:{envelope.exchange_id}", text or "", paths, exchange=envelope,
+            f"{session_id}:{envelope.exchange_id}", text, paths, exchange=envelope,
         )
         await self._on_exchange_ready(envelope)
         return outcome
@@ -1172,13 +1154,7 @@ class PygentRuntimeService:
         source_input_ids: tuple[str, ...] = (),
         attachments: Sequence[ResolvedAttachment] = (),
     ) -> None:
-        """Deliver the bare interrupt after a total fork failure (D-RT2/3).
-
-        An accepted interrupt must never vanish from the main agent's context:
-        when the fork cannot produce any reply, the question alone (plus any
-        resolved attachments) is still injected as an exchange envelope. Hook
-        errors are swallowed — the fallback must not become the failure source.
-        """
+        """Forward the unanswered question without masking the fork failure."""
 
         hook = self._on_exchange_ready
         if hook is None:  # unreachable behind send_interrupt's guard
@@ -1593,25 +1569,21 @@ class PygentRuntimeService:
                 limits=MEMORY_JOB_LIMITS,
                 label=request.label,
             )
+            job: ForkAgent | ChildAgent
             if request.role == "extractor":
                 window = session_fork_window(
                     mode="frozen",
                     system_prompt=request.system_prompt,
                     history_range=request.history_range,
                 )
-                result = await ForkAgent(
-                    runner,
-                    ForkSpec(source=SessionForkWindowSource(window)),
-                    label=request.label,
-                ).run(request.directive)
-                return result.text
-            child = ChildAgent(
-                runner,
-                ChildSpec(name="memory-builder", system_prompt=request.system_prompt),
-                label=request.label,
-            )
-            child_result = await child.run(request.directive)
-            return child_result.text
+                job = ForkAgent(
+                    runner, ForkSpec(source=SessionForkWindowSource(window)), label=request.label
+                )
+            else:
+                job = ChildAgent(
+                    runner, ChildSpec(name="memory-builder", system_prompt=request.system_prompt), label=request.label
+                )
+            return (await job.run(request.directive)).text
         finally:
             await agent.aclose()
 

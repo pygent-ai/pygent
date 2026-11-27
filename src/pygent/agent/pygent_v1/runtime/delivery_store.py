@@ -144,10 +144,14 @@ class DeliveryStore:
         return self.read(db, lane, envelope.exchange_id)
 
     @staticmethod
-    def read(db: sqlite3.Connection, lane: str, key: str) -> sqlite3.Row:
-        row = db.execute(
+    def find(db: sqlite3.Connection, lane: str, key: str) -> sqlite3.Row | None:
+        return db.execute(
             "SELECT * FROM deliveries WHERE lane=? AND key=?", (lane, key)
         ).fetchone()
+
+    @classmethod
+    def read(cls, db: sqlite3.Connection, lane: str, key: str) -> sqlite3.Row:
+        row = cls.find(db, lane, key)
         assert row is not None
         return row
 
