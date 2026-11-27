@@ -10,10 +10,15 @@ and the e2e delivery tests.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+import threading
 from collections.abc import Sequence
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from pygent import AIMessage
 from pygent.agent.pygent_v1.orchestration.execution_host import LocalExecutionHost
@@ -289,3 +294,52 @@ async def test_two_hosts_share_foreground_order(tmp_path: Path) -> None:
         gate.set()
         await first_host.host.aclose()
         await second_host.host.aclose()
+
+
+async def test_delivery_lock_wait_keeps_loop_responsive_and_joins_cancelled_write(
+    tmp_path: Path,
+) -> None:
+    harness = _Harness(tmp_path, create_session=True, mode="chat")
+    store = harness.host.coordinator.delivery_store(harness.manager)
+    with store.transaction():
+        pass
+
+    locked = threading.Event()
+    release = threading.Event()
+    writer_done = threading.Event()
+
+    def hold_database_lock() -> None:
+        with closing(sqlite3.connect(store.path)) as db, db:
+            db.execute("BEGIN EXCLUSIVE")
+            locked.set()
+            release.wait(3)
+        writer_done.set()
+
+    writer = asyncio.create_task(asyncio.to_thread(hold_database_lock))
+    try:
+        assert await asyncio.to_thread(locked.wait, 2)
+        delivery = asyncio.create_task(harness.deliver("message", input_id="lock-test"))
+        await asyncio.sleep(0.05)
+        assert not writer_done.is_set()
+        assert not delivery.done()
+
+        delivery.cancel()
+        await asyncio.sleep(0)
+        delivery.cancel()
+        await asyncio.sleep(0)
+        assert not delivery.done()
+
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(delivery, 5)
+        lane = f"user:{harness.session_id}"
+        assert (await store.run(store.get, lane, "lock-test"))["receipt"] is None
+
+        retry = await asyncio.wait_for(harness.deliver("message", input_id="lock-test"), 5)
+        assert retry.turn is not None
+        await asyncio.wait_for(retry.turn.result(), 5)
+        assert harness.service.started_turns == ["message"]
+    finally:
+        release.set()
+        await writer
+        await harness.host.aclose()

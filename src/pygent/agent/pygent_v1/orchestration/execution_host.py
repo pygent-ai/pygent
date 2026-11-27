@@ -13,6 +13,7 @@ from typing import Any, Literal, Self
 
 from pygent.agent.pygent_v1.core.io import validate_path_id
 from pygent.agent.pygent_v1.graph.prompts import PromptRegistry
+from pygent.agent.pygent_v1.runtime.attachments import InvalidAttachmentError
 from pygent.agent.pygent_v1.runtime.delivery_store import DeliveryStore
 from pygent.agent.pygent_v1.runtime.realtime.envelope import ExchangeEnvelope
 from pygent.agent.pygent_v1.runtime.realtime.fork_agent import outcome_from_result
@@ -136,42 +137,46 @@ class LocalExecutionHost:
         validate_path_id(case_id, "case_id")
         input_id = input_id or uuid.uuid4().hex
         store = self.coordinator.delivery_store(manager)
-        with store.transaction() as db:
-            if session_id is None:
-                # A retried initial request must return to the session it created.
-                db.execute("BEGIN IMMEDIATE")
-                initial = db.execute(
-                    "SELECT payload FROM deliveries WHERE lane='new' AND key=?",
-                    (input_id,),
-                ).fetchone()
-                if initial is None:
-                    session_id = manager.create(
-                        case_id,
-                        mode="chat",
-                        model_group_name=model_group_name,
-                        selected_model_key=selected_model_key,
-                    ).session_id
-                    store.put(db, "new", input_id, {"session_id": session_id})
-                    store.set_receipt(db, "new", input_id, {"created": True})
-                else:
-                    session_id = json.loads(initial["payload"])["session_id"]
-            else:
-                manager.load(session_id)
-            assert session_id is not None
-            lane = f"user:{session_id}"
-            payload = {
-                "message": message,
-                "case_id": case_id,
-                "interactive_approvals": interactive_approvals,
-                "attachments": list(attachments),
-                "session_title": session_title,
-            }
-            store.put(db, lane, input_id, payload)
-            if json.loads(store.read(db, lane, input_id)["payload"]) != payload:
-                raise ValueError(
-                    "input_id is already associated with a different message"
-                )
 
+        def persist_input(session_id: str | None) -> str:
+            with store.transaction() as db:
+                if session_id is None:
+                    # A retried initial request must return to the session it created.
+                    db.execute("BEGIN IMMEDIATE")
+                    initial = db.execute(
+                        "SELECT payload FROM deliveries WHERE lane='new' AND key=?",
+                        (input_id,),
+                    ).fetchone()
+                    if initial is None:
+                        session_id = manager.create(
+                            case_id,
+                            mode="chat",
+                            model_group_name=model_group_name,
+                            selected_model_key=selected_model_key,
+                        ).session_id
+                        store.put(db, "new", input_id, {"session_id": session_id})
+                        store.set_receipt(db, "new", input_id, {"created": True})
+                    else:
+                        session_id = json.loads(initial["payload"])["session_id"]
+                else:
+                    manager.load(session_id)
+                assert session_id is not None
+                lane = f"user:{session_id}"
+                payload = {
+                    "message": message,
+                    "case_id": case_id,
+                    "interactive_approvals": interactive_approvals,
+                    "attachments": list(attachments),
+                    "session_title": session_title,
+                }
+                store.put(db, lane, input_id, payload)
+                if json.loads(store.read(db, lane, input_id)["payload"]) != payload:
+                    raise ValueError(
+                        "input_id is already associated with a different message"
+                    )
+            return lane
+
+        lane = await store.run(persist_input, session_id)
         await self.recover_pending_messages(config=config, manager=manager)
         active = self._active_inputs.get((store.path, lane, input_id))
         if active is not None:
@@ -199,12 +204,12 @@ class LocalExecutionHost:
                     self._recover_deliveries(store),
                     name="pygent-message-recovery",
                 )
-        self._schedule_pending_inputs(config, manager, store)
+        await self._schedule_pending_inputs(config, manager, store)
 
-    def _schedule_pending_inputs(
+    async def _schedule_pending_inputs(
         self, config: RunConfig, manager: SessionManager, store: DeliveryStore
     ) -> None:
-        for row in store.pending("user:", prefix=True, available=True):
+        for row in await store.run(store.pending, "user:", prefix=True, available=True):
             self._route_task(config, manager, store, row["lane"], row["key"])
 
     async def _recover_deliveries(self, store: DeliveryStore) -> None:
@@ -212,13 +217,17 @@ class LocalExecutionHost:
             try:
                 config, manager = self._recovery_configs[store.path]
                 await self._recover_exchange_turns(config, manager, store)
-                if store.pending("speak:", prefix=True, available=True):
+                if await store.run(
+                    store.pending, "speak:", prefix=True, available=True
+                ):
                     lease = await self.acquire_runtime(config=config, manager=manager)
                     await lease.release()
-                self._schedule_pending_inputs(config, manager, store)
+                await self._schedule_pending_inputs(config, manager, store)
                 sessions = {
                     row["lane"].removeprefix("exchange:")
-                    for row in store.pending("exchange:", prefix=True, available=True)
+                    for row in await store.run(
+                        store.pending, "exchange:", prefix=True, available=True
+                    )
                 }
                 for session_id in sessions:
                     if not self.coordinator.has_active_execution(manager, session_id):
@@ -230,7 +239,7 @@ class LocalExecutionHost:
     async def _recover_exchange_turns(
         self, config: RunConfig, manager: SessionManager, store: DeliveryStore
     ) -> None:
-        pending = store.pending("recover:", prefix=True)
+        pending = await store.run(store.pending, "recover:", prefix=True)
         if not pending:
             return
         lease = await self.acquire_runtime(config=config, manager=manager)
@@ -248,13 +257,17 @@ class LocalExecutionHost:
                 else:
                     stored = await history.get_execution(identity)
                 if stored is None:
-                    targets = store.pending(f"exchange:{session_id}")
+                    targets = await store.run(store.pending, f"exchange:{session_id}")
                     if not any(target["target"] == row["key"] for target in targets):
-                        store.finish(row["lane"], row["key"], {"committed": False})
+                        await store.run(
+                            store.finish, row["lane"], row["key"], {"committed": False}
+                        )
                     continue
                 turn = await self._existing_turn(config, manager, stored.execution_id)
                 if turn is not None and turn.done:
-                    store.finish(row["lane"], row["key"], {"status": turn.status})
+                    await store.run(
+                        store.finish, row["lane"], row["key"], {"status": turn.status}
+                    )
         finally:
             await lease.release()
 
@@ -298,7 +311,7 @@ class LocalExecutionHost:
     ) -> UserDelivery:
         session_id = lane.removeprefix("user:")
         while True:
-            current = store.get(lane, input_id)
+            current = await store.run(store.get, lane, input_id)
             if current["receipt"] is not None:
                 return await self._read_receipt(
                     config,
@@ -307,7 +320,7 @@ class LocalExecutionHost:
                     input_id,
                     json.loads(current["receipt"]),
                 )
-            row = store.claim(lane, input_id, self._owner, 30)
+            row = await store.run(store.claim, lane, input_id, self._owner, 30)
             if row is not None:
                 break
             await asyncio.sleep(0.1)
@@ -338,7 +351,7 @@ class LocalExecutionHost:
                         manager, session_id, input_id
                     ):
                         receipt = {"mode": "steering", "execution_id": execution_id}
-                        store.finish(lane, input_id, receipt)
+                        await store.run(store.finish, lane, input_id, receipt)
                         return await self._read_receipt(
                             config, manager, session_id, input_id, receipt
                         )
@@ -346,8 +359,11 @@ class LocalExecutionHost:
                     if mode == "turn":
                         self._watch_turn(store, lane, input_id, turn)
                     else:
-                        store.finish(
-                            lane, input_id, {"mode": mode, "execution_id": execution_id}
+                        await store.run(
+                            store.finish,
+                            lane,
+                            input_id,
+                            {"mode": mode, "execution_id": execution_id},
                         )
                     return UserDelivery(mode=mode, turn=turn, input_id=input_id)
 
@@ -355,23 +371,24 @@ class LocalExecutionHost:
             if target is None and not realtime_enabled_for(session):
 
                 async def select_steering(execution_id: str) -> None:
-                    store.set_target(lane, input_id, f"steering:{execution_id}")
+                    await store.run(
+                        store.set_target, lane, input_id, f"steering:{execution_id}"
+                    )
 
                 try:
                     steered = await self._try_steering(
                         manager, session_id, input_id, payload, select_steering
                     )
                 except ValueError as exc:
-                    store.finish(
-                        lane, input_id, {"mode": "rejected", "error": str(exc)}
-                    )
+                    await store.run(store.reject_input, lane, input_id, exc)
                     raise
                 if steered is not None:
                     history = getattr(steered.runtime_service, "history", None)
                     if history is None or await history.has_execution_input(
                         steered.execution_id, input_id
                     ):
-                        store.finish(
+                        await store.run(
+                            store.finish,
                             lane,
                             input_id,
                             {
@@ -390,7 +407,7 @@ class LocalExecutionHost:
                 and realtime_enabled_for(session)
                 and self.coordinator.has_active_execution(manager, session_id)
             ):
-                store.set_target(lane, input_id, "interrupt")
+                await store.run(store.set_target, lane, input_id, "interrupt")
                 lease = await self.acquire_runtime(config=config, manager=manager)
                 service = lease.runtime.runtime_service
                 try:
@@ -405,7 +422,8 @@ class LocalExecutionHost:
                 finally:
                     await lease.release()
                 if outcome is not None:
-                    store.finish(
+                    await store.run(
+                        store.finish,
                         lane,
                         input_id,
                         {
@@ -424,7 +442,7 @@ class LocalExecutionHost:
                     self._fork_receipt_tasks.add(watcher)
                     watcher.add_done_callback(self._fork_receipt_tasks.discard)
                 else:
-                    store.retry(lane, input_id, self._owner, delay=2)
+                    await store.run(store.retry, lane, input_id, self._owner, delay=2)
                 return UserDelivery("interrupt", outcome=outcome, input_id=input_id)
 
             execution_id = (
@@ -434,7 +452,7 @@ class LocalExecutionHost:
                     uuid.NAMESPACE_URL, json.dumps([str(store.path), lane, input_id])
                 ).hex
             )
-            store.set_target(lane, input_id, f"turn:{execution_id}")
+            await store.run(store.set_target, lane, input_id, f"turn:{execution_id}")
             turn = await self._submit_user_turn(
                 config=config,
                 manager=manager,
@@ -446,7 +464,7 @@ class LocalExecutionHost:
             self._watch_turn(store, lane, input_id, turn)
             return UserDelivery("turn", turn=turn, input_id=input_id)
         except BaseException:
-            store.retry(lane, input_id, self._owner, delay=2)
+            await store.run(store.retry, lane, input_id, self._owner, delay=2)
             raise
         finally:
             renew.cancel()
@@ -465,16 +483,16 @@ class LocalExecutionHost:
         session_id = lane.removeprefix("user:")
         try:
             while service.owns_interrupt(session_id, input_id):
-                if not store.renew(lane, input_id, self._owner, 30):
+                if not await store.run(store.renew, lane, input_id, self._owner, 30):
                     return
                 await asyncio.sleep(5)
         finally:
-            store.retry(lane, input_id, self._owner)
+            await store.run(store.retry, lane, input_id, self._owner)
 
     async def _renew_route(self, store: DeliveryStore, lane: str, key: str) -> None:
         while True:
             await asyncio.sleep(10)
-            if not store.renew(lane, key, self._owner, 30):
+            if not await store.run(store.renew, lane, key, self._owner, 30):
                 return
 
     def _watch_turn(
@@ -517,8 +535,12 @@ class LocalExecutionHost:
                 try:
                     await asyncio.wait_for(turn.wait_finalized(), 10)
                 except TimeoutError:
-                    store.renew(lane, input_id, self._owner, 30)
+                    await store.run(store.renew, lane, input_id, self._owner, 30)
             if turn.execution_id is None and not turn.user_cancelled:
+                if isinstance(turn.startup_error, InvalidAttachmentError):
+                    await store.run(
+                        store.reject_input, lane, input_id, turn.startup_error
+                    )
                 return
             if (
                 mode == "steering"
@@ -538,9 +560,15 @@ class LocalExecutionHost:
                 receipt["output"] = message_to_dict(turn.output)
             if turn.startup_error is not None:
                 receipt["error"] = str(turn.startup_error)
-            store.finish(lane, input_id, receipt)
+            await store.run(store.finish, lane, input_id, receipt)
         finally:
-            store.retry(lane, input_id, self._owner, delay=2 if not self._closed else 0)
+            await store.run(
+                store.retry,
+                lane,
+                input_id,
+                self._owner,
+                delay=2 if not self._closed else 0,
+            )
 
     async def _try_steering(
         self,
@@ -578,11 +606,9 @@ class LocalExecutionHost:
             else None
         )
         if turn is None:
-            payload = json.loads(
-                self.coordinator.delivery_store(manager).get(
-                    f"user:{session_id}", input_id
-                )["payload"]
-            )
+            store = self.coordinator.delivery_store(manager)
+            row = await store.run(store.get, f"user:{session_id}", input_id)
+            payload = json.loads(row["payload"])
             turn = ManagedSessionTurn(
                 lease=None,
                 command=TurnCommand(

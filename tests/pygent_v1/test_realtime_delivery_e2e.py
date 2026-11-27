@@ -20,6 +20,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from pygent.agent.pygent_v1.core.io import read_json
 from pygent.agent.pygent_v1.orchestration.execution_host import LocalExecutionHost
 from pygent.agent.pygent_v1.orchestration.models import TurnCommand
@@ -852,4 +854,45 @@ async def test_restarted_host_reconciles_committed_turn_without_running_it_again
     finally:
         await restarted.aclose()
         await original.aclose()
+        await harness.server.aclose()
+
+
+async def test_missing_attachment_is_rejected_without_blocking_later_turns(
+    tmp_path: Path,
+) -> None:
+    harness = await _harness(tmp_path, [{"response": _text_response("next turn ran")}])
+    restarted = LocalExecutionHost(credential_environ={})
+    try:
+        session = harness.manager.create("chat", mode="chat")
+        scope = {
+            "config": harness.config,
+            "manager": harness.manager,
+            "session_id": session.session_id,
+            "interactive_approvals": False,
+        }
+        bad_input = {
+            "input_id": "bad-attachment",
+            "message": "read this file",
+            "attachments": ("missing.txt",),
+        }
+        bad = await harness.host.deliver_user_message(**scope, **bad_input)
+        assert bad.turn is not None
+        with pytest.raises(ValueError, match="attachment file not found"):
+            await asyncio.wait_for(bad.turn.result(), 5)
+        assert bad.turn.execution_id is None
+
+        following = await harness.host.deliver_user_message(
+            **scope, input_id="next", message="continue"
+        )
+        assert following.turn is not None
+        output, _ = await asyncio.wait_for(following.turn.result(), 5)
+        assert output.content == "next turn ran"
+        await harness.host.aclose()
+
+        with pytest.raises(ValueError, match="attachment file not found"):
+            await asyncio.wait_for(restarted.deliver_user_message(**scope, **bad_input), 5)
+        assert len(harness.server.requests) == 1
+    finally:
+        await restarted.aclose()
+        await harness.host.aclose()
         await harness.server.aclose()

@@ -221,14 +221,15 @@ class _FakeRuntimeService:
         )
 
         async def execute() -> None:
-            # Yield once so the coordinator marks the turn RUNNING before the
-            # script delivers anything into it.
-            await asyncio.sleep(0)
+            turn = await self.coordinator.find_delivery_turn(handle.execution_id)
+            assert turn is not None
+            await turn.wait_ready()
             await script.run(
                 self.coordinator, manager, handle, session, run_ref.session_id
             )
-            self.completed.put_nowait(turn_id)
             handle.finished.set()
+            await turn.wait_finalized()
+            self.completed.put_nowait(turn_id)
 
         task = asyncio.create_task(execute())
         self._tasks.add(task)

@@ -39,3 +39,7 @@ retries. A session lock serializes foreground work across processes, and
 stable execution and inbox identities bridge the commit boundary between
 the delivery database and the execution journal. The runtime retries pending
 external replies with their original reply IDs.
+
+The delivery store runs complete SQLite operations on worker threads, including
+lazy schema initialization. Each transaction uses one connection. Cancelling an
+async caller waits for its in-flight database operation to commit or roll back.

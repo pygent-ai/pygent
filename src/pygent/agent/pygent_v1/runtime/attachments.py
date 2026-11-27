@@ -43,6 +43,10 @@ TEXT_SUFFIXES = frozenset(
 )
 
 
+class InvalidAttachmentError(ValueError):
+    """A supplied attachment reference is invalid for this input."""
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedAttachment:
     """One user attachment classified for delivery."""
@@ -69,17 +73,17 @@ def resolve_attachments(
     unique: list[str] = []
     for raw in paths:
         if not isinstance(raw, str) or not raw.strip():
-            raise ValueError("attachment paths must be non-empty strings")
+            raise InvalidAttachmentError("attachment paths must be non-empty strings")
         if raw not in unique:
             unique.append(raw)
     if len(unique) > MAX_ATTACHMENTS:
-        raise ValueError(f"too many attachments; at most {MAX_ATTACHMENTS} allowed")
+        raise InvalidAttachmentError(f"too many attachments; at most {MAX_ATTACHMENTS} allowed")
 
     resolved: list[ResolvedAttachment] = []
     for raw in unique:
         path = _workspace_path(root, raw)
         if not path.is_file():
-            raise ValueError(f"attachment file not found: {raw}")
+            raise InvalidAttachmentError(f"attachment file not found: {raw}")
         stat = path.stat()
         relative = path.relative_to(root).as_posix()
         mime, media_type, delivery = _classify(path)
@@ -166,7 +170,7 @@ def _workspace_path(root: Path, raw: str) -> Path:
         path = root / path
     resolved = path.resolve()
     if resolved != root and root not in resolved.parents:
-        raise ValueError(f"attachment path escapes the workspace: {raw}")
+        raise InvalidAttachmentError(f"attachment path escapes the workspace: {raw}")
     return resolved
 
 

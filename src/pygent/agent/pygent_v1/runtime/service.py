@@ -216,7 +216,7 @@ class _SpeakExecutor:
             try:
                 assert self._store is not None
                 for lane in self._recipients:
-                    for row in self._store.pending(lane):
+                    for row in await self._store.run(self._store.pending, lane):
                         self._schedule(lane, row["key"])
             except Exception as exc:  # noqa: BLE001 - keep the outbox polling
                 self._warn(f"speak outbox scan failed: {exc!r}")
@@ -238,7 +238,7 @@ class _SpeakExecutor:
                 "runtime close"
             )
 
-    def publish(
+    async def publish(
         self, reply_id: str, text: str, attachments: Sequence[Path],
         *, exchange: ExchangeEnvelope | None = None,
     ) -> None:
@@ -251,11 +251,15 @@ class _SpeakExecutor:
             return
         recipients = tuple(self._recipients) if text or attachments else ()
         payload = {"text": text, "attachments": [str(path) for path in attachments]}
-        with store.transaction() as db:
-            if exchange is not None:
-                store.record_exchange(db, exchange)
-            for lane in recipients:
-                store.put(db, lane, reply_id, payload)
+
+        def persist_reply() -> None:
+            with store.transaction() as db:
+                if exchange is not None:
+                    store.record_exchange(db, exchange)
+                for lane in recipients:
+                    store.put(db, lane, reply_id, payload)
+
+        await store.run(persist_reply)
         for lane in recipients:
             self._schedule(lane, reply_id)
 
@@ -274,7 +278,7 @@ class _SpeakExecutor:
         channel = self._recipients[lane]
         name = type(channel).__name__
         try:
-            row = store.claim(lane, reply_id, self._owner, 60)
+            row = await store.run(store.claim, lane, reply_id, self._owner, 60)
             if row is None:
                 return
             payload = json.loads(row["payload"])
@@ -289,14 +293,14 @@ class _SpeakExecutor:
             while not attempt.done():
                 done, _ = await asyncio.wait({attempt}, timeout=15)
                 if not done:
-                    store.renew(lane, reply_id, self._owner, 60)
+                    await store.run(store.renew, lane, reply_id, self._owner, 60)
             if attempt.result() is True:
-                store.finish(lane, reply_id, {"delivered": True})
+                await store.run(store.finish, lane, reply_id, {"delivered": True})
             else:
-                store.retry(lane, reply_id, self._owner, delay=5)
+                await store.run(store.retry, lane, reply_id, self._owner, delay=5)
                 self._warn(f"speak channel {name} declined the message")
         except Exception as exc:  # noqa: BLE001 - host channel failure
-            store.retry(lane, reply_id, self._owner, delay=5)
+            await store.run(store.retry, lane, reply_id, self._owner, delay=5)
             self._warn(f"speak channel {name} failed: {exc!r}")
         finally:
             self._sending.discard((lane, reply_id))
@@ -330,7 +334,7 @@ class _SpeakExecutor:
             if context.execution_id and call_id
             else uuid.uuid4().hex
         )
-        self.publish(reply_id, text, tuple(item.path for item in attachments))
+        await self.publish(reply_id, text, tuple(item.path for item in attachments))
         await context.emit("pygent.v1.realtime.speak", speak_event)
         return "delivered"
 
@@ -1139,7 +1143,7 @@ class PygentRuntimeService:
                 )
             except (OSError, ValueError):
                 self._speak_executor._warn("fork speak attachment could not be resolved")
-        self._speak_executor.publish(
+        await self._speak_executor.publish(
             f"{session_id}:{envelope.exchange_id}", text, paths, exchange=envelope,
         )
         await self._on_exchange_ready(envelope)

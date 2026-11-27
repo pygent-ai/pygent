@@ -339,7 +339,7 @@ async def test_speak_receipts_retry_in_a_new_runtime(tmp_path: Path) -> None:
     failing = Channel(False)
     first = PygentRuntimeService(config, speak_channels=(failing,))
     executor = first._speak_executor
-    executor.publish("reply-1", "reply", ())
+    await executor.publish("reply-1", "reply", ())
     with pytest.warns(RuntimeWarning, match="declined"):
         await asyncio.gather(*executor._delivery_tasks)
     store = executor._store
@@ -361,7 +361,7 @@ async def test_speak_receipts_retry_in_a_new_runtime(tmp_path: Path) -> None:
                 await asyncio.sleep(0.01)
 
         await asyncio.wait_for(wait_for_receipt(), 5)
-        second._speak_executor.publish("reply-1", "reply", ())
+        await second._speak_executor.publish("reply-1", "reply", ())
         await asyncio.gather(*second._speak_executor._delivery_tasks)
         assert failing.reply_ids == succeeding.reply_ids == ["reply-1"]
     finally:

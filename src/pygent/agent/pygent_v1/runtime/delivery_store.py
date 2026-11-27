@@ -6,11 +6,12 @@ import hashlib
 import json
 import sqlite3
 import sys
+import threading
 import time
-from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager, suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 from pygent.agent.pygent_v1.core.io import plain_object
 from pygent.agent.pygent_v1.runtime.realtime.envelope import ExchangeEnvelope
@@ -19,6 +20,10 @@ if sys.platform == "win32":
     import msvcrt
 else:
     import fcntl
+
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
 
 
 def session_delivery_path(sessions_root: str | Path) -> Path:
@@ -31,7 +36,17 @@ class DeliveryStore:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        with self.transaction() as db:
+        self._initialized = False
+        self._init_lock = threading.Lock()
+
+    def _initialize(self) -> None:
+        with self._init_lock:
+            if not self._initialized:
+                self._create_schema()
+                self._initialized = True
+
+    def _create_schema(self) -> None:
+        with self._connect() as db:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS deliveries (
                     sequence INTEGER PRIMARY KEY,
@@ -50,6 +65,23 @@ class DeliveryStore:
                 CREATE INDEX IF NOT EXISTS deliveries_pending
                 ON deliveries(lane, sequence) WHERE receipt IS NULL
                 """)
+
+    async def run(
+        self, operation: Callable[_P, _T], /, *args: _P.args, **kwargs: _P.kwargs
+    ) -> _T:
+        """Run one complete SQLite operation in a worker thread."""
+        worker = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # Wait for the transaction before releasing claims or scheduling
+            # a retry. Cancellation cannot stop sqlite3 on the worker.
+            while not worker.done():
+                with suppress(asyncio.CancelledError):
+                    await asyncio.wait((worker,))
+            if not worker.cancelled():
+                worker.exception()
+            raise
 
     @asynccontextmanager
     async def session_execution(self, session_id: str) -> AsyncIterator[None]:
@@ -95,6 +127,13 @@ class DeliveryStore:
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
+        if not self._initialized:
+            self._initialize()
+        with self._connect() as db:
+            yield db
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
@@ -200,6 +239,9 @@ class DeliveryStore:
     def finish(self, lane: str, key: str, receipt: dict[str, Any]) -> None:
         with self.transaction() as db:
             self.set_receipt(db, lane, key, receipt)
+
+    def reject_input(self, lane: str, input_id: str, error: ValueError) -> None:
+        self.finish(lane, input_id, {"mode": "rejected", "error": str(error)})
 
     def set_target(self, lane: str, key: str, target: str | None) -> None:
         with self.transaction() as db:

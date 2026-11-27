@@ -80,7 +80,7 @@ class _FakeService:
             realtime_interaction={"enabled": True},  # type: ignore[arg-type]
         )
         self._fork_states: dict[str, SessionForkState] = {}
-        self._speak_executor = SimpleNamespace(publish=lambda *_args, **_kwargs: None)
+        self._speak_executor = SimpleNamespace(publish=self._publish)
         self.envelopes: list[ExchangeEnvelope] = []
         self.handles: list[_Handle] = []
         self.started: asyncio.Queue[str] = asyncio.Queue()
@@ -88,6 +88,9 @@ class _FakeService:
         self.late_first = late_first
         self.start_failure = start_failure
         self.failure_index = failure_index
+
+    async def _publish(self, *_args: object, **_kwargs: object) -> None:
+        pass
 
     async def initialize(self) -> None:
         return None

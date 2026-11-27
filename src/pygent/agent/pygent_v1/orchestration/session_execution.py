@@ -171,13 +171,16 @@ class SessionExecutionCoordinator:
                 and turn.command.submission_id
             ):
                 store = self.delivery_store(turn.manager)
-                while store.prior_turn_pending(user_lane, turn.command.submission_id):
+                while await store.run(
+                    store.prior_turn_pending, user_lane, turn.command.submission_id
+                ):
                     await asyncio.sleep(0.05)
             after_deliveries = turn.command.message_data.get("after_deliveries")
             if isinstance(after_deliveries, list) and after_deliveries:
                 store = self.delivery_store(turn.manager)
                 while any(
-                    row["key"] in after_deliveries for row in store.pending(user_lane)
+                    row["key"] in after_deliveries
+                    for row in await store.run(store.pending, user_lane)
                 ):
                     await asyncio.sleep(0.05)
             async with self.session_execution(
@@ -279,7 +282,9 @@ class SessionExecutionCoordinator:
                 store = self.delivery_store(turn.manager)
                 lane = f"exchange:{turn.command.session_id}"
                 for exchange in opening_exchanges:
-                    store.retry(lane, exchange.exchange_id, self._delivery_owner)
+                    await store.run(
+                        store.retry, lane, exchange.exchange_id, self._delivery_owner
+                    )
             turn.state = TurnState.FINALIZING
             terminal = _terminal_state(status)
             if turn.run_ref is not None:
@@ -290,25 +295,30 @@ class SessionExecutionCoordinator:
                 if opening_exchanges or turn.execution_id is not None:
                     store = self.delivery_store(turn.manager)
                     recovery_lane = f"recover:{turn.command.session_id}"
-                    with store.transaction() as db:
-                        if opening_exchanges:
-                            store.set_receipt(
-                                db,
-                                recovery_lane,
-                                f"request:{turn.run_ref.case_run_id}",
-                                {
-                                    "status": terminal.value,
-                                },
-                            )
-                        if turn.execution_id is not None:
-                            store.set_receipt(
-                                db,
-                                recovery_lane,
-                                f"input:{turn.execution_id}",
-                                {
-                                    "status": terminal.value,
-                                },
-                            )
+                    case_run_id = turn.run_ref.case_run_id
+
+                    def record_recovery_receipts() -> None:
+                        with store.transaction() as db:
+                            if opening_exchanges:
+                                store.set_receipt(
+                                    db,
+                                    recovery_lane,
+                                    f"request:{case_run_id}",
+                                    {
+                                        "status": terminal.value,
+                                    },
+                                )
+                            if turn.execution_id is not None:
+                                store.set_receipt(
+                                    db,
+                                    recovery_lane,
+                                    f"input:{turn.execution_id}",
+                                    {
+                                        "status": terminal.value,
+                                    },
+                                )
+
+                    await store.run(record_recovery_receipts)
             turn.state = terminal
             turn.ready.set()
             turn.finalized.set()
@@ -361,7 +371,9 @@ class SessionExecutionCoordinator:
             store = self.delivery_store(turn.manager)
             queued_inputs = [
                 row["key"]
-                for row in store.pending(f"user:{turn.command.session_id}")
+                for row in await store.run(
+                    store.pending, f"user:{turn.command.session_id}"
+                )
                 if row["target"] is None or row["target"].startswith("turn:")
             ]
             await self.submit_turn(
@@ -506,8 +518,9 @@ class SessionExecutionCoordinator:
                     return None
             if key in self._admitted_drains:
                 return None
-            if not self.delivery_store(manager).pending(
-                f"exchange:{session_id}", available=True
+            store = self.delivery_store(manager)
+            if not await store.run(
+                store.pending, f"exchange:{session_id}", available=True
             ):
                 return None
             turn = ManagedSessionTurn(
@@ -534,17 +547,21 @@ class SessionExecutionCoordinator:
         key = SessionExecutionKey.from_manager(manager, envelope.session_id)
         store = self.delivery_store(manager)
         lane_name = f"exchange:{envelope.session_id}"
-        with store.transaction() as db:
-            # The reply producer records the exchange with the outbox.
-            row = (
-                store.find(db, lane_name, envelope.exchange_id)
-                if envelope.reply is not None
-                else None
-            )
-            if row is None:
-                row = store.record_exchange(db, envelope)
-            if row["receipt"] is not None:
-                return "injected"
+
+        def exchange_already_delivered() -> bool:
+            with store.transaction() as db:
+                # The reply producer records the exchange with the outbox.
+                row = (
+                    store.find(db, lane_name, envelope.exchange_id)
+                    if envelope.reply is not None
+                    else None
+                )
+                if row is None:
+                    row = store.record_exchange(db, envelope)
+                return row["receipt"] is not None
+
+        if await store.run(exchange_already_delivered):
+            return "injected"
         async with self._lock:
             lane = self._session_lanes.get(key)
             active = lane.active if lane is not None else None
@@ -555,19 +572,32 @@ class SessionExecutionCoordinator:
             and active.execution_handle is not None
             and active.run_ref is not None
         ):
-            row = store.claim(lane_name, envelope.exchange_id, self._delivery_owner, 30)
+            row = await store.run(
+                store.claim, lane_name, envelope.exchange_id, self._delivery_owner, 30
+            )
             if row is None:
                 return "pending"
             try:
                 if await self._exchange_committed(
                     active, row["target"], envelope.exchange_id
                 ):
-                    store.finish(lane_name, envelope.exchange_id, {"delivered": True})
+                    await store.run(
+                        store.finish,
+                        lane_name,
+                        envelope.exchange_id,
+                        {"delivered": True},
+                    )
                     return "injected"
                 destination = f"input:{active.execution_id}"
-                store.set_target(lane_name, envelope.exchange_id, destination)
-                with store.transaction() as db:
-                    store.put(db, f"recover:{envelope.session_id}", destination, {})
+                await store.run(
+                    store.set_target, lane_name, envelope.exchange_id, destination
+                )
+
+                def record_recovery_target() -> None:
+                    with store.transaction() as db:
+                        store.put(db, f"recover:{envelope.session_id}", destination, {})
+
+                await store.run(record_recovery_target)
                 delivery = await active.execution_handle.send_input(
                     input_id=envelope.exchange_id,
                     kind=REACT_PROJECTION_OPERATION_KIND,
@@ -580,12 +610,17 @@ class SessionExecutionCoordinator:
                     if history is None or await history.has_execution_input(
                         active.execution_handle.execution_id, envelope.exchange_id
                     ):
-                        store.finish(
-                            lane_name, envelope.exchange_id, {"delivered": True}
+                        await store.run(
+                            store.finish,
+                            lane_name,
+                            envelope.exchange_id,
+                            {"delivered": True},
                         )
                     return "injected"
             finally:
-                store.retry(lane_name, envelope.exchange_id, self._delivery_owner)
+                await store.run(
+                    store.retry, lane_name, envelope.exchange_id, self._delivery_owner
+                )
         return "pending"
 
     async def _exchange_committed(
@@ -606,7 +641,8 @@ class SessionExecutionCoordinator:
         )
 
     async def _has_pending_exchanges(self, manager: Any, session_id: str) -> bool:
-        return bool(self.delivery_store(manager).pending(f"exchange:{session_id}"))
+        store = self.delivery_store(manager)
+        return bool(await store.run(store.pending, f"exchange:{session_id}"))
 
     async def _opening_exchanges(
         self, turn: ManagedSessionTurn
@@ -622,21 +658,27 @@ class SessionExecutionCoordinator:
             if self._admitted_drains.get(key) is turn:
                 del self._admitted_drains[key]
         exchanges: list[ExchangeEnvelope] = []
-        for candidate in store.pending(lane):
+        for candidate in await store.run(store.pending, lane):
             exchange_id = candidate["key"]
-            row = store.claim(lane, exchange_id, self._delivery_owner, 30)
+            row = await store.run(
+                store.claim, lane, exchange_id, self._delivery_owner, 30
+            )
             if row is None:
                 continue
             if await self._exchange_committed(turn, row["target"], exchange_id):
-                store.finish(lane, exchange_id, {"delivered": True})
+                await store.run(store.finish, lane, exchange_id, {"delivered": True})
                 continue
             destination = f"request:{turn.run_ref.case_run_id}"
-            with store.transaction() as db:
-                store.put(db, f"recover:{session_id}", destination, {})
-                db.execute(
-                    "UPDATE deliveries SET target=? WHERE lane=? AND key=?",
-                    (destination, lane, exchange_id),
-                )
+
+            def record_opening_target(destination: str, exchange_id: str) -> None:
+                with store.transaction() as db:
+                    store.put(db, f"recover:{session_id}", destination, {})
+                    db.execute(
+                        "UPDATE deliveries SET target=? WHERE lane=? AND key=?",
+                        (destination, lane, exchange_id),
+                    )
+
+            await store.run(record_opening_target, destination, exchange_id)
             exchanges.append(
                 ExchangeEnvelope(
                     exchange_id=exchange_id,
@@ -651,9 +693,15 @@ class SessionExecutionCoordinator:
     ) -> None:
         store = self.delivery_store(turn.manager)
         lane = f"exchange:{turn.command.session_id}"
-        with store.transaction() as db:
-            for exchange in exchanges:
-                store.set_receipt(db, lane, exchange.exchange_id, {"delivered": True})
+
+        def acknowledge_batch() -> None:
+            with store.transaction() as db:
+                for exchange in exchanges:
+                    store.set_receipt(
+                        db, lane, exchange.exchange_id, {"delivered": True}
+                    )
+
+        await store.run(acknowledge_batch)
 
     def _drain_command(
         self, session_id: str, case_id: str, turn_id: str
