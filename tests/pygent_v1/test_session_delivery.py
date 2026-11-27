@@ -233,3 +233,59 @@ async def test_delivery_without_session_creates_chat_turn(tmp_path: Path) -> Non
     assert session.metadata.get("mode") == "chat"
     await delivery.turn.result()
     assert delivery.turn.status == "passed"
+
+
+async def test_queued_message_is_replayed_after_host_restart(tmp_path: Path) -> None:
+    original = _Harness(tmp_path, create_session=True, mode="chat")
+    service = await original.service_eagerly()
+    service.turn_gate = asyncio.Event()
+    first = await original.deliver("first", input_id="first")
+    await original.wait_turn_started()
+    second = await original.deliver("second", input_id="second")
+    assert first.turn is not None and second.turn is not None
+    await original.host.aclose()
+
+    restarted = _Harness(tmp_path, create_session=False, mode="chat")
+    try:
+        restarted.session_id = original.session_id
+        await restarted.host.recover_pending_messages(
+            config=restarted.config, manager=restarted.manager
+        )
+        result = await asyncio.wait_for(
+            restarted.deliver("second", input_id="second"), timeout=10
+        )
+        assert result.turn is not None
+        await asyncio.wait_for(result.turn.result(), timeout=10)
+        duplicate = await restarted.deliver("second", input_id="second")
+        assert duplicate.turn is not None
+        assert (await duplicate.turn.result())[0].kind == "pygent.v1.chat.result"
+        assert restarted.service.started_turns == ["first", "second"]
+    finally:
+        await restarted.host.aclose()
+
+
+async def test_two_hosts_share_foreground_order(tmp_path: Path) -> None:
+    first_host = _Harness(tmp_path, create_session=True, mode="chat")
+    second_host = _Harness(tmp_path, create_session=False, mode="chat")
+    second_host.session_id = first_host.session_id
+    first_runtime = await first_host.service_eagerly()
+    second_runtime = await second_host.service_eagerly()
+    gate = asyncio.Event()
+    first_runtime.turn_gate = gate
+    try:
+        first = await first_host.deliver("first", input_id="first")
+        await first_host.wait_turn_started()
+        second = await second_host.deliver("second", input_id="second")
+        await asyncio.sleep(0.1)
+        assert first_runtime.started_turns == ["first"]
+        assert second_runtime.started_turns == []
+
+        gate.set()
+        assert first.turn is not None and second.turn is not None
+        await asyncio.wait_for(asyncio.gather(first.turn.result(), second.turn.result()), 10)
+        assert first_runtime.started_turns == ["first"]
+        assert second_runtime.started_turns == ["second"]
+    finally:
+        gate.set()
+        await first_host.host.aclose()
+        await second_host.host.aclose()

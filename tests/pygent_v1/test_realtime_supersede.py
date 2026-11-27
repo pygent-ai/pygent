@@ -80,6 +80,7 @@ class _FakeService:
             realtime_interaction={"enabled": True},  # type: ignore[arg-type]
         )
         self._fork_states: dict[str, SessionForkState] = {}
+        self._speak_executor = SimpleNamespace(publish=lambda *_args, **_kwargs: None)
         self.envelopes: list[ExchangeEnvelope] = []
         self.handles: list[_Handle] = []
         self.started: asyncio.Queue[str] = asyncio.Queue()
@@ -100,6 +101,7 @@ class _FakeService:
         session_id: str,
         input_id: str,
         user_asked: Sequence[str],
+        source_input_ids: tuple[str, ...] = (),
         attachments: Sequence[ResolvedAttachment] = (),
     ) -> None:
         await PygentRuntimeService._deliver_unanswered_exchange(
@@ -107,6 +109,7 @@ class _FakeService:
             session_id=session_id,
             input_id=input_id,
             user_asked=user_asked,
+            source_input_ids=source_input_ids,
             attachments=attachments,
         )
 

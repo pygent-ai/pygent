@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import json
 import os
 import time
+import uuid
 import warnings
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
-from functools import partial
 from html import escape
 from pathlib import Path
 from typing import Any, Protocol, TypeAlias, cast
@@ -53,7 +54,7 @@ from pygent.agent.react_projection_operations import (
     ReplaceMessageProjection,
     encode_react_projection_operation,
 )
-from pygent.core import AIMessage, UserMessage, freeze_json_object
+from pygent.core import AIMessage, JsonValue, UserMessage, freeze_json_object
 from pygent.llm import ModelGroup, ModelResourceRef
 from pygent.runtime import (
     CapacityPolicy,
@@ -69,7 +70,7 @@ from pygent.runtime import (
     SQLiteHistoryStore,
     SQLiteModelDeploymentStore,
 )
-from pygent.runtime.codec import invocation_from_dict
+from pygent.runtime.codec import invocation_from_dict, message_to_dict
 from pygent.tool import (
     ExecutorRegistry,
     LocalToolExecutor,
@@ -80,10 +81,7 @@ from pygent.tool import (
 from pygent.tool.executors import ToolExecutionContext, ToolExecutor
 from pygent.tool.mcp import MCPClientPool
 
-from ..graph.common import (
-    DEFAULT_REACT_MAX_STEPS,
-    _to_pygent_message,
-)
+from ..graph.common import DEFAULT_REACT_MAX_STEPS
 from ..graph.core import (
     PYGENT_PROJECTION_READY_KIND,
     PygentAgent,
@@ -91,6 +89,7 @@ from ..graph.core import (
 )
 from ..graph.prompts import PromptRegistry
 from .context import PYGENT_CONTEXT_CODEC, PygentContext
+from .delivery_store import DeliveryStore, session_delivery_path
 from .deployment import (
     PygentModelResourceResolver,
     WorkspaceToolExecutor,
@@ -99,12 +98,11 @@ from .eternal_conversation import (
     EternalConversationHarness,
     MemoryJobRequest,
     eternal_enabled_for,
-    load_projection,
-    render_memory_snapshot,
 )
 from .file_effects import FILE_EFFECT_TOOL_SPEC, FileEffectToolExecutor
 from .fork_context import (
     SessionForkWindowSource,
+    eternal_conversation_messages,
     restore_session_context,
     session_fork_window,
 )
@@ -185,28 +183,6 @@ def _config_fingerprint(config: RunConfig) -> str:
     return RuntimeGenerationKey.from_config(config).config_fingerprint
 
 
-def _uncovered_conversation_messages(
-    history: list[dict[str, Any]], covered_through: int
-) -> tuple[Any, ...]:
-    """Keep the uncovered suffix, including its complete opening user turn.
-
-    When the snapshot covers everything, retain the latest exchange so short
-    follow-ups still have their immediate conversational referent.
-    """
-    if not 0 <= covered_through <= len(history):
-        raise ValueError("memory coverage is outside the persisted conversation")
-    start = covered_through
-    if start == len(history) and start:
-        start -= 1
-    while start > 0 and history[start].get("role") != "user":
-        start -= 1
-    return tuple(
-        message
-        for item in history[start:]
-        if (message := _to_pygent_message(item)) is not None
-    )
-
-
 class _SpeakExecutor:
     """Delivers the model's speak calls as user-facing stream events (D-RT10).
 
@@ -228,37 +204,113 @@ class _SpeakExecutor:
     ) -> None:
         self.service = service
         self.channels = tuple(channels)
-        self._delivery_tasks: set[asyncio.Task[bool]] = set()
+        self._owner = uuid.uuid4().hex
+        self._store = (
+            DeliveryStore(session_delivery_path(SessionManager(service.config).sessions_root))
+            if channels
+            else None
+        )
+        self._recipients = {
+            f"speak:{getattr(channel, 'recipient_id', f'{type(channel).__module__}.{type(channel).__qualname__}:{index}')}": channel
+            for index, channel in enumerate(channels)
+        }
+        self._delivery_tasks: set[asyncio.Task[None]] = set()
+        self._sending: set[tuple[str, str]] = set()
+        self._poller: asyncio.Task[None] | None = None
+
+    def start(self) -> None:
+        if self._store is not None:
+            self._poller = asyncio.create_task(self._poll(), name="pygent-speak-outbox")
+
+    async def _poll(self) -> None:
+        while True:
+            try:
+                assert self._store is not None
+                for lane in self._recipients:
+                    for row in self._store.pending(lane):
+                        self._schedule(lane, row["key"])
+            except Exception as exc:  # noqa: BLE001 - keep the outbox polling
+                self._warn(f"speak outbox scan failed: {exc!r}")
+            await asyncio.sleep(1)
 
     async def drain(self) -> None:
-        """Wait briefly for in-flight channel deliveries at shutdown.
-
-        ``deliver`` runs in a worker thread and cannot be cancelled; deliveries
-        still pending after the timeout are abandoned and reported.
-        """
+        if self._poller is not None:
+            self._poller.cancel()
+            await asyncio.gather(self._poller, return_exceptions=True)
         pending = set(self._delivery_tasks)
         if not pending:
             return
-        _done, still_pending = await asyncio.wait(
+        _, still_pending = await asyncio.wait(
             pending, timeout=self.DRAIN_TIMEOUT_SECONDS
         )
         if still_pending:
             self._warn(
                 f"{len(still_pending)} speak channel deliveries still pending at "
-                "runtime close; abandoned"
+                "runtime close"
             )
 
-    def _finish_delivery(self, channel: SpeakChannel, task: asyncio.Task[bool]) -> None:
-        self._delivery_tasks.discard(task)
-        if task.cancelled():
-            return
-        error = task.exception()
-        if error is not None:
-            self._warn(
-                f"speak channel {type(channel).__name__} failed: {error!r}"
+    def publish(
+        self, reply_id: str, text: str, attachments: Sequence[Path],
+        *, exchange: ExchangeEnvelope | None = None,
+    ) -> None:
+        store = self._store
+        if store is None and exchange is not None:
+            store = DeliveryStore(
+                session_delivery_path(SessionManager(self.service.config).sessions_root)
             )
-        elif task.result() is False:
-            self._warn(f"speak channel {type(channel).__name__} declined the message")
+        if store is None:
+            return
+        recipients = tuple(self._recipients) if text or attachments else ()
+        payload = {"text": text, "attachments": [str(path) for path in attachments]}
+        with store.transaction() as db:
+            if exchange is not None:
+                store.record_exchange(db, exchange)
+            for lane in recipients:
+                store.put(db, lane, reply_id, payload)
+        for lane in recipients:
+            self._schedule(lane, reply_id)
+
+    def _schedule(self, lane: str, reply_id: str) -> None:
+        key = (lane, reply_id)
+        if key in self._sending:
+            return
+        self._sending.add(key)
+        task = asyncio.create_task(self._send(lane, reply_id))
+        self._delivery_tasks.add(task)
+        task.add_done_callback(self._delivery_tasks.discard)
+
+    async def _send(self, lane: str, reply_id: str) -> None:
+        store = self._store
+        assert store is not None
+        channel = self._recipients[lane]
+        name = type(channel).__name__
+        try:
+            row = store.claim(lane, reply_id, self._owner, 60)
+            if row is None:
+                return
+            payload = json.loads(row["payload"])
+            paths = tuple(Path(path) for path in payload["attachments"])
+            send_with_id = getattr(channel, "deliver_with_id", None)
+            send = (
+                asyncio.to_thread(channel.deliver, payload["text"], paths)
+                if send_with_id is None
+                else asyncio.to_thread(send_with_id, reply_id, payload["text"], paths)
+            )
+            attempt = asyncio.create_task(send)
+            while not attempt.done():
+                done, _ = await asyncio.wait({attempt}, timeout=15)
+                if not done:
+                    store.renew(lane, reply_id, self._owner, 60)
+            if attempt.result() is True:
+                store.finish(lane, reply_id, {"delivered": True})
+            else:
+                store.retry(lane, reply_id, self._owner, delay=5)
+                self._warn(f"speak channel {name} declined the message")
+        except Exception as exc:  # noqa: BLE001 - host channel failure
+            store.retry(lane, reply_id, self._owner, delay=5)
+            self._warn(f"speak channel {name} failed: {exc!r}")
+        finally:
+            self._sending.discard((lane, reply_id))
 
     def _warn(self, message: str) -> None:
         self.service.warnings.append(message)
@@ -283,14 +335,14 @@ class _SpeakExecutor:
             "text": text,
             "attachments": [item.relative for item in attachments],
         }
+        call_id = getattr(call, "call_id", None)
+        reply_id = (
+            f"speak:{context.execution_id}:{call_id}"
+            if context.execution_id and call_id
+            else uuid.uuid4().hex
+        )
+        self.publish(reply_id, text, tuple(item.path for item in attachments))
         await context.emit("pygent.v1.realtime.speak", speak_event)
-        paths = tuple(item.path for item in attachments)
-        for channel in self.channels:
-            task = asyncio.create_task(
-                asyncio.to_thread(channel.deliver, text, paths)
-            )
-            self._delivery_tasks.add(task)
-            task.add_done_callback(partial(self._finish_delivery, channel))
         return "delivered"
 
 
@@ -586,6 +638,7 @@ class PygentRuntimeService:
         ):
             path.parent.mkdir(parents=True, exist_ok=True)
         await self.history.open()
+        self._speak_executor.start()
         self._journal_prune_task = asyncio.create_task(
             self._prune_journal_periodically(), name="pygent-journal-prune"
         )
@@ -832,10 +885,13 @@ class PygentRuntimeService:
         context: PygentContext,
         *,
         execution: Any,
+        wait_for_invocation_commit: bool = False,
     ) -> Any:
         handle = await bound.start(message, context, execution=execution)
         try:
             await self._deliver_projection_replacement(handle, context)
+            if wait_for_invocation_commit:
+                await handle.wait_for_invocation_commit()
         except BaseException:
             await handle.cancel()
             raise
@@ -885,6 +941,11 @@ class PygentRuntimeService:
             eternal_memory_enabled=eternal_enabled_for(session, self.config),
             realtime_interaction_enabled=realtime_enabled,
         )
+        if opening_exchanges:
+            message_data = {
+                **(message_data or {}),
+                "opening_exchange_ids": [item.exchange_id for item in opening_exchanges],
+            }
         try:
             turn_message, turn_context = await self._prepare_turn(
                 manager=manager,
@@ -905,6 +966,7 @@ class PygentRuntimeService:
                 turn_message,
                 turn_context,
                 execution=ExecutionOptions(
+                    execution_id=cast(str | None, (message_data or {}).get("delivery_execution_id")),
                     request_id=run_ref.case_run_id,
                     idempotency_key=run_ref.case_run_id,
                     identity=run_ref.session_id,
@@ -917,6 +979,9 @@ class PygentRuntimeService:
                     if deadline is not None
                     else time.monotonic() + TURN_DEADLINE_SECONDS,
                 ),
+                wait_for_invocation_commit=bool(
+                    opening_exchanges or (message_data or {}).get("delivery_execution_id")
+                ),
             )
         except BaseException:
             await self.reminders.release_initial(run_ref.session_id, turn_id)
@@ -927,6 +992,10 @@ class PygentRuntimeService:
         self._record_execution_id(run_ref, handle.execution_id)
         self._track_turn_context(handle.execution_id, turn_context)
         return handle
+
+    def owns_interrupt(self, session_id: str, input_id: str) -> bool:
+        state = self._fork_states.get(session_id)
+        return state is not None and input_id in state.input_ids
 
     async def send_interrupt(
         self,
@@ -974,6 +1043,7 @@ class PygentRuntimeService:
                 session_id=session_id,
                 input_id=input_id,
                 user_asked=(message,),
+                source_input_ids=(input_id,),
             )
             raise
         run_ref = manager.start_case_run(session_id, case_id)
@@ -981,6 +1051,7 @@ class PygentRuntimeService:
         async with state.lock:
             if state.handle is not None and not state.finished:
                 state.pending.append(message)
+                state.input_ids.append(input_id)
                 state.merge_attachments(resolved_attachments)
                 state.generation += 1
                 generation = state.generation
@@ -993,6 +1064,7 @@ class PygentRuntimeService:
                 state.generation += 1
                 generation = state.generation
                 state.pending = [message]
+                state.input_ids = [input_id]
                 state.attachments = []
                 state.merge_attachments(resolved_attachments)
                 fork_messages = [message]
@@ -1002,6 +1074,7 @@ class PygentRuntimeService:
                     else f"{input_id}:g{generation}"
                 )
                 request_message = message
+            source_input_ids = tuple(state.input_ids)
             fork_attachments = tuple(state.attachments)
             state.finished = False
             try:
@@ -1021,6 +1094,7 @@ class PygentRuntimeService:
                     session_id=session_id,
                     input_id=fork_input_id,
                     user_asked=fork_messages,
+                    source_input_ids=source_input_ids,
                     attachments=fork_attachments,
                 )
                 raise
@@ -1041,6 +1115,7 @@ class PygentRuntimeService:
                         session_id=session_id,
                         input_id=fork_input_id,
                         user_asked=fork_messages,
+                    source_input_ids=source_input_ids,
                         attachments=fork_attachments,
                     )
             raise
@@ -1065,7 +1140,26 @@ class PygentRuntimeService:
                 response=response_text or "(no verbal reply)",
                 attachments=fork_attachments,
             )
+            envelope = replace(
+                envelope, source_input_ids=source_input_ids, reply=cast(JsonValue, message_to_dict(output))
+            )
             state.reset()
+        speak = outcome.speak_args
+        paths: list[Path] = []
+        for attachment in speak.attachments if speak is not None else ():
+            try:
+                paths.extend(
+                    item.path
+                    for item in resolve_attachments((attachment,), config.workspace_root)
+                )
+            except (OSError, ValueError):
+                self._speak_executor._warn("fork speak attachment could not be resolved")
+        text = (
+            outcome.text if speak is None else None if speak.say_nothing else speak.text
+        )
+        self._speak_executor.publish(
+            f"{session_id}:{envelope.exchange_id}", text or "", paths, exchange=envelope,
+        )
         await self._on_exchange_ready(envelope)
         return outcome
 
@@ -1075,6 +1169,7 @@ class PygentRuntimeService:
         session_id: str,
         input_id: str,
         user_asked: Sequence[str],
+        source_input_ids: tuple[str, ...] = (),
         attachments: Sequence[ResolvedAttachment] = (),
     ) -> None:
         """Deliver the bare interrupt after a total fork failure (D-RT2/3).
@@ -1097,7 +1192,7 @@ class PygentRuntimeService:
         )
         # Delivery failure must not mask the fork failure — best effort.
         with contextlib.suppress(Exception):
-            await hook(envelope)
+            await hook(replace(envelope, source_input_ids=source_input_ids))
     async def _start_fork_reply(
         self,
         *,
@@ -1224,6 +1319,17 @@ class PygentRuntimeService:
         self._fork_agents[key] = agent
         return agent
 
+    async def recovery_case_run(self, execution_id: str) -> CaseRunRef:
+        stored = await self.history.get_execution(execution_id)
+        if stored is None:
+            raise KeyError(execution_id)
+        _, context = invocation_from_dict(
+            stored.input, registry=self.runtime.context_codec_registry
+        )
+        if not isinstance(context, PygentContext):
+            raise TypeError("durable execution context is not a PygentContext")
+        return context.case_run_ref
+
     async def recover_turn(
         self,
         execution_id: str,
@@ -1238,7 +1344,7 @@ class PygentRuntimeService:
         stored = await self.history.get_execution(execution_id)
         if stored is None:
             raise KeyError(f"unknown durable execution {execution_id!r}")
-        _, recovered_context = invocation_from_dict(
+        recovered_input, recovered_context = invocation_from_dict(
             stored.input,
             registry=self.runtime.context_codec_registry,
         )
@@ -1250,7 +1356,7 @@ class PygentRuntimeService:
         )
         recovered_session = session_manager.load(recovered_context.session_id)
         agent = self.new_agent(
-            interactive_approvals=True,
+            interactive_approvals=bool(plain_object(recovered_input.data).get("interactive_approvals", True)),
             model_group_name=group_name,
             selected_model_key=selected_model_key,
             eternal_memory_enabled=eternal_enabled_for(
@@ -1392,28 +1498,18 @@ class PygentRuntimeService:
             media=build_media_blocks(resolved_attachments),
         )
         metadata = dict(execution_context.metadata)
-        if (
-            eternal_enabled_for(session, config)
-            and carry_context
-            and covered_through > 0
-        ):
-            memory_projection = load_projection(session.session_dir)
-            snapshot = UserMessage(
-                content=render_memory_snapshot(memory_projection),
-                kind="pygent.v1.memory.snapshot",
-                slot="pygent.v1.memory.snapshot",
-            )
+        memory_messages = eternal_conversation_messages(session, execution_context)
+        if memory_messages is not None:
             replacement = ReplaceMessageProjection(
-                messages=(
-                    snapshot,
-                    *_uncovered_conversation_messages(session.history, covered_through),
-                    current,
-                ),
+                messages=(*memory_messages, current),
                 expected_revision=execution_context.projection_revision + 1,
+            )
+            snapshot_revision = execution_context.memory_projection.get(
+                "snapshot_revision", 0
             )
             identity = (
                 f"{run_ref.case_run_id}:memory-projection:"
-                f"{memory_projection.get('snapshot_revision', 0)}:{covered_through}"
+                f"{snapshot_revision}:{covered_through}"
             )
             metadata.update(
                 {

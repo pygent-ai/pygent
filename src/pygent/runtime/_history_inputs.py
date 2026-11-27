@@ -133,6 +133,14 @@ class ExecutionInputHistoryMixin:
             ) = None,
         ) -> _T: ...
 
+    async def has_execution_input(self, execution_id: str, input_id: str) -> bool:
+        cursor = await self._db().execute(
+            "SELECT 1 FROM execution_inputs WHERE execution_id=? AND input_id=?",
+            (execution_id, input_id),
+        )
+        async with cursor:
+            return await cursor.fetchone() is not None
+
     async def send_execution_input(
         self,
         execution_id: str,

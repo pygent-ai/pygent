@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -10,6 +11,10 @@ from typing import Any
 
 from pygent.agent.pygent_v1.core.io import plain_object
 from pygent.agent.pygent_v1.core.prompt import system_reminder
+from pygent.agent.pygent_v1.runtime.delivery_store import (
+    DeliveryStore,
+    session_delivery_path,
+)
 from pygent.agent.pygent_v1.runtime.realtime.continuation import (
     CONTINUATION_MESSAGE_KIND,
     render_draft_delivery_message,
@@ -21,11 +26,22 @@ from pygent.agent.pygent_v1.runtime.realtime.turn_finalizer import (
     FINALIZER_MESSAGE_KIND,
     decide_turn_finalization,
 )
+from pygent.agent.pygent_v1.schema import CaseRunRef
 from pygent.agent.pygent_v1.sessions import realtime_enabled_for
 from pygent.agent.react_projection_operations import REACT_PROJECTION_OPERATION_KIND
 
 from .managed_turn import ManagedSessionTurn
 from .models import TurnCommand, TurnState
+
+
+def transcript_contains_input(manager: Any, session_id: str, input_id: str) -> bool:
+    for item in reversed(manager.load(session_id).history):
+        data = plain_object(item.get("data"))
+        if data.get("input_id") == input_id or input_id in (
+            data.get("opening_exchange_ids") or ()
+        ):
+            return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,11 +74,8 @@ class SessionExecutionCoordinator:
     def __init__(self) -> None:
         self._managed_runs: dict[int, ManagedSessionTurn] = {}
         self._session_lanes: dict[SessionExecutionKey, _SessionLane] = {}
-        # Exchange envelopes that found no running turn to join: the next turn
-        # that starts on the session carries them in its opening context.
-        # Pending envelopes share the fate of lane-queued turns — both live
-        # only in this process.
-        self._pending_exchanges: dict[SessionExecutionKey, list[ExchangeEnvelope]] = {}
+        self._delivery_stores: dict[str, DeliveryStore] = {}
+        self._delivery_owner = uuid.uuid4().hex
         # Continuation turns admitted for pending envelopes but not yet opened.
         # Admission increments the lane's user count only once the turn's task
         # runs, so this reservation is what keeps the chain's tail and the
@@ -72,6 +85,14 @@ class SessionExecutionCoordinator:
         self._lock = asyncio.Lock()
         self._closing = False
         self._finalized_turns: set[str] = set()
+
+    def delivery_store(self, manager: Any) -> DeliveryStore:
+        root = str(Path(manager.sessions_root).resolve())
+        store = self._delivery_stores.get(root)
+        if store is None:
+            store = DeliveryStore(session_delivery_path(root))
+            self._delivery_stores[root] = store
+        return store
 
     async def submit_turn(
         self,
@@ -87,6 +108,46 @@ class SessionExecutionCoordinator:
         )
         await self._admit(turn)
         return turn
+
+    async def find_delivery_turn(self, execution_id: str) -> ManagedSessionTurn | None:
+        async with self._lock:
+            return next(
+                (
+                    turn
+                    for turn in self._managed_runs.values()
+                    if execution_id in (turn.execution_id, turn.recovery_execution_id)
+                ),
+                None,
+            )
+
+    async def recover_turn(
+        self, *, lease: Any, run_ref: CaseRunRef, execution_id: str
+    ) -> ManagedSessionTurn:
+        turn = ManagedSessionTurn(
+            lease=lease,
+            command=TurnCommand(
+                session_id=run_ref.session_id,
+                case_id=run_ref.case_id,
+                message="recovered execution",
+            ),
+            run_ref=run_ref,
+            recovery_execution_id=execution_id,
+        )
+        async with self._lock:
+            existing = next(
+                (
+                    active
+                    for active in self._managed_runs.values()
+                    if execution_id
+                    in (active.execution_id, active.recovery_execution_id)
+                ),
+                None,
+            )
+            if existing is None:
+                self._admit_locked(turn)
+                return turn
+        await lease.release()
+        return existing
 
     async def _admit(self, turn: ManagedSessionTurn) -> None:
         async with self._lock:
@@ -104,6 +165,21 @@ class SessionExecutionCoordinator:
 
     async def _drive_turn(self, turn: ManagedSessionTurn) -> None:
         try:
+            user_lane = f"user:{turn.command.session_id}"
+            if (
+                turn.command.message_data.get("delivery_execution_id")
+                and turn.command.submission_id
+            ):
+                store = self.delivery_store(turn.manager)
+                while store.prior_turn_pending(user_lane, turn.command.submission_id):
+                    await asyncio.sleep(0.05)
+            after_deliveries = turn.command.message_data.get("after_deliveries")
+            if isinstance(after_deliveries, list) and after_deliveries:
+                store = self.delivery_store(turn.manager)
+                while any(
+                    row["key"] in after_deliveries for row in store.pending(user_lane)
+                ):
+                    await asyncio.sleep(0.05)
             async with self.session_execution(
                 turn.manager,
                 turn.command.session_id,
@@ -126,6 +202,8 @@ class SessionExecutionCoordinator:
     async def _drive_in_session_lane(self, turn: ManagedSessionTurn) -> None:
         status = "error"
         error_detail: str | None = None
+        opening_exchanges: tuple[ExchangeEnvelope, ...] = ()
+        opening_is_durable = False
         try:
             turn.state = TurnState.STARTING
             if turn.run_ref is None:
@@ -137,6 +215,7 @@ class SessionExecutionCoordinator:
             run_ref = turn.run_ref
             assert run_ref is not None
             if turn.recovery_execution_id is None:
+                opening_exchanges = await self._opening_exchanges(turn)
                 turn.execution_handle = await turn.runtime_service.start_turn(
                     manager=turn.manager,
                     message=turn.command.message,
@@ -148,8 +227,21 @@ class SessionExecutionCoordinator:
                     message_kind=turn.command.message_kind,
                     message_data=turn.command.message_data,
                     attachments=turn.command.attachments,
-                    opening_exchanges=await self._take_opening_exchanges(turn),
+                    opening_exchanges=opening_exchanges,
                 )
+                if opening_exchanges:
+                    history = getattr(turn.runtime_service, "history", None)
+                    opening_is_durable = (
+                        history is None
+                        or await history.get_execution(
+                            turn.execution_handle.execution_id
+                        )
+                        is not None
+                    )
+                    if opening_is_durable:
+                        await self._acknowledge_opening_exchanges(
+                            turn, opening_exchanges
+                        )
             else:
                 turn.execution_handle = await turn.runtime_service.recover_turn(
                     turn.recovery_execution_id,
@@ -159,6 +251,8 @@ class SessionExecutionCoordinator:
             turn.state = TurnState.RUNNING
             turn.ready.set()
             turn.output, turn.output_context = await execution_handle.result()
+            if opening_exchanges and not opening_is_durable:
+                await self._acknowledge_opening_exchanges(turn, opening_exchanges)
             output = turn.output
             assert output is not None
             result = plain_object(plain_object(output.data).get("result"))
@@ -181,6 +275,11 @@ class SessionExecutionCoordinator:
             # with the terminal is what makes a failed start diagnosable.
             error_detail = f"{type(exc).__name__}: {exc}"
         finally:
+            if opening_exchanges:
+                store = self.delivery_store(turn.manager)
+                lane = f"exchange:{turn.command.session_id}"
+                for exchange in opening_exchanges:
+                    store.retry(lane, exchange.exchange_id, self._delivery_owner)
             turn.state = TurnState.FINALIZING
             terminal = _terminal_state(status)
             if turn.run_ref is not None:
@@ -188,6 +287,28 @@ class SessionExecutionCoordinator:
                 turn.manager.finish_case_run(
                     turn.run_ref, terminal.value, error=error_detail
                 )
+                if opening_exchanges or turn.execution_id is not None:
+                    store = self.delivery_store(turn.manager)
+                    recovery_lane = f"recover:{turn.command.session_id}"
+                    with store.transaction() as db:
+                        if opening_exchanges:
+                            store.set_receipt(
+                                db,
+                                recovery_lane,
+                                f"request:{turn.run_ref.case_run_id}",
+                                {
+                                    "status": terminal.value,
+                                },
+                            )
+                        if turn.execution_id is not None:
+                            store.set_receipt(
+                                db,
+                                recovery_lane,
+                                f"input:{turn.execution_id}",
+                                {
+                                    "status": terminal.value,
+                                },
+                            )
             turn.state = terminal
             turn.ready.set()
             turn.finalized.set()
@@ -237,6 +358,12 @@ class SessionExecutionCoordinator:
         draft = str(last.get("content") or "")
         self._finalized_turns.add(turn_key)
         if await self._has_pending_input(turn):
+            store = self.delivery_store(turn.manager)
+            queued_inputs = [
+                row["key"]
+                for row in store.pending(f"user:{turn.command.session_id}")
+                if row["target"] is None or row["target"].startswith("turn:")
+            ]
             await self.submit_turn(
                 lease=turn.lease,
                 command=TurnCommand(
@@ -246,6 +373,7 @@ class SessionExecutionCoordinator:
                     turn_id=f"{turn_key}:cont",
                     interactive_approvals=False,
                     message_kind=CONTINUATION_MESSAGE_KIND,
+                    message_data={"after_deliveries": queued_inputs},
                 ),
             )
             return True
@@ -272,7 +400,12 @@ class SessionExecutionCoordinator:
 
         key = SessionExecutionKey.from_manager(manager, session_id)
         lane = self._session_lanes.get(key)
-        return lane is not None and lane.users > 0
+        return (lane is not None and lane.users > 0) or any(
+            SessionExecutionKey.from_manager(turn.manager, turn.command.session_id)
+            == key
+            for turn in self._managed_runs.values()
+            if not turn.state.terminal
+        )
 
     def _lane_has_waiters(self, manager: Any, session_id: str) -> bool:
         """Whether turns are queued behind the lane lock.
@@ -283,7 +416,18 @@ class SessionExecutionCoordinator:
 
         key = SessionExecutionKey.from_manager(manager, session_id)
         lane = self._session_lanes.get(key)
-        return lane is not None and lane.users > 1
+        return lane is not None and (
+            lane.users > 1
+            or any(
+                turn is not lane.active
+                and not turn.state.terminal
+                and SessionExecutionKey.from_manager(
+                    turn.manager, turn.command.session_id
+                )
+                == key
+                for turn in self._managed_runs.values()
+            )
+        )
 
     async def _has_pending_input(self, turn: ManagedSessionTurn) -> bool:
         """Whether user input is waiting at this turn's ending: lane-queued
@@ -293,9 +437,7 @@ class SessionExecutionCoordinator:
 
         if self._lane_has_waiters(turn.manager, turn.command.session_id):
             return True
-        return await self._has_pending_exchanges(
-            turn.manager, turn.command.session_id
-        )
+        return await self._has_pending_exchanges(turn.manager, turn.command.session_id)
 
     async def _maybe_drain_pending(self, turn: ManagedSessionTurn) -> None:
         """Submit a continuation turn for exchange envelopes left pending after
@@ -357,11 +499,16 @@ class SessionExecutionCoordinator:
         key = SessionExecutionKey.from_manager(manager, session_id)
         async with self._lock:
             lane = self._session_lanes.get(key)
-            if lane is not None and lane.users > 1:
-                return None
+            if lane is not None:
+                if self._lane_has_waiters(manager, session_id):
+                    return None
+                if lane.active is not None and lane.active.state is TurnState.STARTING:
+                    return None
             if key in self._admitted_drains:
                 return None
-            if not self._pending_exchanges.get(key):
+            if not self.delivery_store(manager).pending(
+                f"exchange:{session_id}", available=True
+            ):
                 return None
             turn = ManagedSessionTurn(
                 lease=lease,
@@ -371,9 +518,7 @@ class SessionExecutionCoordinator:
             self._admitted_drains[key] = turn
         return turn
 
-    async def deliver_exchange(
-        self, manager: Any, envelope: ExchangeEnvelope
-    ) -> str:
+    async def deliver_exchange(self, manager: Any, envelope: ExchangeEnvelope) -> str:
         """Hand one fork-reply exchange to the session's main agent.
 
         A turn running on the lane receives it as a wait-mode steering input,
@@ -387,6 +532,11 @@ class SessionExecutionCoordinator:
         """
 
         key = SessionExecutionKey.from_manager(manager, envelope.session_id)
+        store = self.delivery_store(manager)
+        lane_name = f"exchange:{envelope.session_id}"
+        with store.transaction() as db:
+            if store.record_exchange(db, envelope)["receipt"] is not None:
+                return "injected"
         async with self._lock:
             lane = self._session_lanes.get(key)
             active = lane.active if lane is not None else None
@@ -397,40 +547,105 @@ class SessionExecutionCoordinator:
             and active.execution_handle is not None
             and active.run_ref is not None
         ):
-            delivery = await active.execution_handle.send_input(
-                input_id=envelope.exchange_id,
-                kind=REACT_PROJECTION_OPERATION_KIND,
-                value=envelope.projection_operation(
-                    case_run_id=active.run_ref.case_run_id
-                ),
-            )
-            if delivery.status in {"accepted", "duplicate"}:
-                return "injected"
-        async with self._lock:
-            self._pending_exchanges.setdefault(key, []).append(envelope)
+            row = store.claim(lane_name, envelope.exchange_id, self._delivery_owner, 30)
+            if row is None:
+                return "pending"
+            try:
+                if await self._exchange_committed(
+                    active, row["target"], envelope.exchange_id
+                ):
+                    store.finish(lane_name, envelope.exchange_id, {"delivered": True})
+                    return "injected"
+                destination = f"input:{active.execution_id}"
+                store.set_target(lane_name, envelope.exchange_id, destination)
+                with store.transaction() as db:
+                    store.put(db, f"recover:{envelope.session_id}", destination, {})
+                delivery = await active.execution_handle.send_input(
+                    input_id=envelope.exchange_id,
+                    kind=REACT_PROJECTION_OPERATION_KIND,
+                    value=envelope.projection_operation(
+                        case_run_id=active.run_ref.case_run_id
+                    ),
+                )
+                if delivery.status in {"accepted", "duplicate"}:
+                    history = getattr(active.runtime_service, "history", None)
+                    if history is None or await history.has_execution_input(
+                        active.execution_handle.execution_id, envelope.exchange_id
+                    ):
+                        store.finish(
+                            lane_name, envelope.exchange_id, {"delivered": True}
+                        )
+                    return "injected"
+            finally:
+                store.retry(lane_name, envelope.exchange_id, self._delivery_owner)
         return "pending"
 
-    async def _has_pending_exchanges(self, manager: Any, session_id: str) -> bool:
-        key = SessionExecutionKey.from_manager(manager, session_id)
-        async with self._lock:
-            return bool(self._pending_exchanges.get(key))
+    async def _exchange_committed(
+        self, turn: ManagedSessionTurn, target: str | None, exchange_id: str
+    ) -> bool:
+        history = getattr(turn.runtime_service, "history", None)
+        if target is None:
+            return False
+        if history is not None:
+            kind, identity = target.split(":", 1)
+            if kind == "request":
+                if await history.get_execution_by_request(identity) is not None:
+                    return True
+            elif await history.has_execution_input(identity, exchange_id):
+                return True
+        return transcript_contains_input(
+            turn.manager, turn.command.session_id, exchange_id
+        )
 
-    async def _take_opening_exchanges(
+    async def _has_pending_exchanges(self, manager: Any, session_id: str) -> bool:
+        return bool(self.delivery_store(manager).pending(f"exchange:{session_id}"))
+
+    async def _opening_exchanges(
         self, turn: ManagedSessionTurn
     ) -> tuple[ExchangeEnvelope, ...]:
-        """Pending envelopes for this turn's opening context.
-
-        The finalizer round decides only its own turn's bottom line and leaves
-        pending envelopes to the continuation turn that follows it.
-        """
-
         if turn.command.message_kind == FINALIZER_MESSAGE_KIND:
             return ()
-        key = SessionExecutionKey.from_manager(turn.manager, turn.command.session_id)
+        assert turn.run_ref is not None
+        session_id = turn.command.session_id
+        key = SessionExecutionKey.from_manager(turn.manager, session_id)
+        store = self.delivery_store(turn.manager)
+        lane = f"exchange:{session_id}"
         async with self._lock:
             if self._admitted_drains.get(key) is turn:
                 del self._admitted_drains[key]
-            return tuple(self._pending_exchanges.pop(key, ()))
+        exchanges: list[ExchangeEnvelope] = []
+        for candidate in store.pending(lane):
+            exchange_id = candidate["key"]
+            row = store.claim(lane, exchange_id, self._delivery_owner, 30)
+            if row is None:
+                continue
+            if await self._exchange_committed(turn, row["target"], exchange_id):
+                store.finish(lane, exchange_id, {"delivered": True})
+                continue
+            destination = f"request:{turn.run_ref.case_run_id}"
+            with store.transaction() as db:
+                store.put(db, f"recover:{session_id}", destination, {})
+                db.execute(
+                    "UPDATE deliveries SET target=? WHERE lane=? AND key=?",
+                    (destination, lane, exchange_id),
+                )
+            exchanges.append(
+                ExchangeEnvelope(
+                    exchange_id=exchange_id,
+                    session_id=session_id,
+                    **json.loads(row["payload"]),
+                )
+            )
+        return tuple(exchanges)
+
+    async def _acknowledge_opening_exchanges(
+        self, turn: ManagedSessionTurn, exchanges: tuple[ExchangeEnvelope, ...]
+    ) -> None:
+        store = self.delivery_store(turn.manager)
+        lane = f"exchange:{turn.command.session_id}"
+        with store.transaction() as db:
+            for exchange in exchanges:
+                store.set_receipt(db, lane, exchange.exchange_id, {"delivered": True})
 
     def _drain_command(
         self, session_id: str, case_id: str, turn_id: str
@@ -460,7 +675,10 @@ class SessionExecutionCoordinator:
             lane = self._session_lanes.setdefault(key, _SessionLane())
             lane.users += 1
         try:
-            async with lane.lock:
+            async with (
+                lane.lock,
+                self.delivery_store(manager).session_execution(session_id),
+            ):
                 lane.active = active
                 try:
                     yield
@@ -477,7 +695,9 @@ class SessionExecutionCoordinator:
             self._managed_runs.pop(id(turn), None)
             # A drain that never opened (cancelled or failed at startup) must
             # not keep later drains out; its envelopes are still pending.
-            key = SessionExecutionKey.from_manager(turn.manager, turn.command.session_id)
+            key = SessionExecutionKey.from_manager(
+                turn.manager, turn.command.session_id
+            )
             if self._admitted_drains.get(key) is turn:
                 del self._admitted_drains[key]
         await turn.lease.release()
@@ -488,7 +708,7 @@ class SessionExecutionCoordinator:
             turns = tuple(self._managed_runs.values())
         if turns:
             await asyncio.gather(
-                *(turn.cancel() for turn in turns),
+                *(turn.cancel(user_requested=False) for turn in turns),
                 return_exceptions=True,
             )
             # A task cancelled before its coroutine receives its first timeslice

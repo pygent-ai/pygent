@@ -19,13 +19,18 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from pygent.agent.pygent_v1.agents.context import ContextWindow, messages_from_history
+from pygent.agent.pygent_v1.core.io import plain_object
 from pygent.agent.pygent_v1.schema import AgentSession, CaseRunRef, RunConfig
-from pygent.core import JsonValue, freeze_json_object
+from pygent.core import JsonValue, Message, UserMessage, freeze_json_object
 
-from ..graph.common import _initial_pygent_context
+from ..graph.common import _initial_pygent_context, _to_pygent_message
 from ..graph.pipeline import render_model_request_text
 from .context import PygentContext
-from .eternal_conversation import eternal_enabled_for, load_projection
+from .eternal_conversation import (
+    eternal_enabled_for,
+    load_projection,
+    render_memory_snapshot,
+)
 
 ForkContextMode = Literal["live", "frozen"]
 
@@ -77,6 +82,42 @@ def restore_session_context(
     )
 
 
+def _uncovered_conversation_messages(
+    history: list[dict[str, Any]], covered_through: int
+) -> tuple[Message, ...]:
+    """Keep the uncovered suffix, including its complete opening user turn.
+
+    When the snapshot covers everything, retain the latest exchange so short
+    follow-ups still have their immediate conversational referent.
+    """
+    if not 0 <= covered_through <= len(history):
+        raise ValueError("memory coverage is outside the persisted conversation")
+    start = covered_through
+    if start == len(history) and start:
+        start -= 1
+    while start > 0 and history[start].get("role") != "user":
+        start -= 1
+    return tuple(
+        message
+        for item in history[start:]
+        if (message := _to_pygent_message(item)) is not None
+    )
+
+
+def eternal_conversation_messages(
+    session: AgentSession, context: PygentContext
+) -> tuple[Message, ...] | None:
+    covered_through = context.memory_covered_through
+    if not context.eternal_memory_enabled or not covered_through:
+        return None
+    snapshot = UserMessage(
+        content=render_memory_snapshot(plain_object(context.memory_projection)),
+        kind="pygent.v1.memory.snapshot",
+        slot="pygent.v1.memory.snapshot",
+    )
+    return snapshot, *_uncovered_conversation_messages(session.history, covered_through)
+
+
 def session_fork_window(
     *,
     mode: ForkContextMode,
@@ -90,11 +131,9 @@ def session_fork_window(
     """Build the fork block-1 window for the live or frozen lifecycle.
 
     ``live`` reads the current session projection and renders the exact
-    model-request system prompt the foreground would use. Its
-    ``system_prompt`` and ``messages`` are byte-identical to calling
-    :func:`restore_session_context` and
-    :func:`~pygent_v1.graph.pipeline.render_model_request_text` directly;
-    this preserves the fork-reply cache prefix.
+    model-request system prompt the foreground would use. Once a memory
+    snapshot has been published, the fork uses the same snapshot and
+    uncovered messages as the next foreground model request.
 
     ``frozen`` pairs the persisted ``session.json`` system prompt supplied by
     the caller with an explicitly selected persisted history range. It reads no
@@ -115,7 +154,8 @@ def session_fork_window(
         )
         return ContextWindow(
             system_prompt=render_model_request_text(config, context, None),
-            messages=tuple(context.messages),
+            messages=eternal_conversation_messages(session, context)
+            or tuple(context.messages),
             # PygentContext.metadata 类型标注是 Mapping[str, object]，但实际只存
             # FrozenJsonObject（JSON）值；与 AgentRunResult.window() 同一处理。
             metadata=cast("Mapping[str, JsonValue]", dict(context.metadata)),

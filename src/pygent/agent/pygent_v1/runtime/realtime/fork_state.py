@@ -21,6 +21,7 @@ class SessionForkState:
     handle: Any | None = None
     finished: bool = False
     pending: list[str] = field(default_factory=list)
+    input_ids: list[str] = field(default_factory=list)
     attachments: list[ResolvedAttachment] = field(default_factory=list)
     generation: int = 0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -44,6 +45,7 @@ class SessionForkState:
         self.handle = None
         self.finished = False
         self.pending = []
+        self.input_ids = []
         self.attachments = []
 
 

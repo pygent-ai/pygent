@@ -21,6 +21,7 @@ class ManagedSessionTurn:
     task: asyncio.Task[None] | None = None
     execution_handle: Any | None = None
     startup_error: BaseException | None = None
+    user_cancelled: bool = False
     output: Any | None = None
     output_context: Any | None = None
     ready: asyncio.Event = field(default_factory=asyncio.Event)
@@ -62,10 +63,11 @@ class ManagedSessionTurn:
             raise self.startup_error
         return self.output, self.output_context
 
-    async def cancel(self) -> bool:
+    async def cancel(self, *, user_requested: bool = True) -> bool:
         task = self.task
         if task is None or task.done():
             return False
+        self.user_cancelled = user_requested
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         return True

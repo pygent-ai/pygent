@@ -24,8 +24,8 @@ class TurnCommand:
             raise ValueError("session_id must be non-empty")
         if not self.case_id:
             raise ValueError("case_id must be non-empty")
-        if not self.message:
-            raise ValueError("message must be non-empty")
+        if not self.message and not self.attachments:
+            raise ValueError("turn requires a message or attachments")
 
 
 class TurnState(StrEnum):

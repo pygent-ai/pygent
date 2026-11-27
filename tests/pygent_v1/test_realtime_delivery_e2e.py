@@ -807,3 +807,49 @@ async def test_envelope_lands_at_tool_result_boundary(tmp_path: Path) -> None:
     finally:
         await harness.host.aclose()
         await harness.server.aclose()
+
+
+async def test_restarted_host_reconciles_committed_turn_without_running_it_again(
+    tmp_path: Path,
+) -> None:
+    harness = await _harness(tmp_path, [{"response": _text_response("already done")}])
+    original = harness.host
+    restarted = LocalExecutionHost(credential_environ={})
+    try:
+        session = harness.manager.create("chat", mode="chat")
+        submit = {
+            "config": harness.config,
+            "manager": harness.manager,
+            "session_id": session.session_id,
+            "message": "one delivery",
+            "input_id": "same-input",
+            "interactive_approvals": False,
+        }
+        delivered = await original.deliver_user_message(**submit)
+        assert delivered.turn is not None
+        output, _ = await asyncio.wait_for(delivered.turn.result(), 10)
+        assert output.content == "already done"
+        execution_id = delivered.turn.execution_id
+        store = original.coordinator.delivery_store(harness.manager)
+        await original.aclose()
+
+        # Leave the committed execution but remove the receipt to emulate a
+        # host that stopped between the runtime commit and its inbox update.
+        with store.transaction() as db:
+            db.execute(
+                "UPDATE deliveries SET receipt=NULL,owner=NULL,expires=0,due=0 "
+                "WHERE lane=? AND key=?",
+                (f"user:{session.session_id}", "same-input"),
+            )
+
+        replay = await asyncio.wait_for(restarted.deliver_user_message(**submit), 10)
+        assert replay.turn is not None
+        assert replay.turn.execution_id == execution_id
+        assert (await replay.turn.result())[0].content == "already done"
+        assert len(harness.server.requests) == 1
+        history = harness.manager.load(session.session_id).history
+        assert sum(item.get("data", {}).get("input_id") == "same-input" for item in history) == 1
+    finally:
+        await restarted.aclose()
+        await original.aclose()
+        await harness.server.aclose()

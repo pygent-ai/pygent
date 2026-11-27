@@ -314,3 +314,55 @@ def test_fork_profile_helpers_are_exported_from_runtime_package() -> None:
     assert fork_model_profiles is fork_reasoning.fork_model_profiles
     assert ForkModelProfile is fork_reasoning.ForkModelProfile
     assert fork_profile_name("gpt") == "fork:gpt"
+
+
+async def test_speak_receipts_retry_in_a_new_runtime(tmp_path: Path) -> None:
+    class Channel:
+        recipient_id = "destination"
+
+        def __init__(self, success: bool) -> None:
+            self.success = success
+            self.reply_ids: list[str] = []
+
+        def deliver(self, text: str, attachments: Sequence[Path]) -> bool:
+            raise AssertionError("the delivery id should reach the channel")
+
+        def deliver_with_id(
+            self, reply_id: str, text: str, attachments: Sequence[Path]
+        ) -> bool:
+            assert text == "reply"
+            assert not attachments
+            self.reply_ids.append(reply_id)
+            return self.success
+
+    config = _config(tmp_path)
+    failing = Channel(False)
+    first = PygentRuntimeService(config, speak_channels=(failing,))
+    executor = first._speak_executor
+    executor.publish("reply-1", "reply", ())
+    with pytest.warns(RuntimeWarning, match="declined"):
+        await asyncio.gather(*executor._delivery_tasks)
+    store = executor._store
+    assert store is not None
+    assert store.get("speak:destination", "reply-1")["receipt"] is None
+    await first.close()
+
+    with store.transaction() as db:
+        db.execute("UPDATE deliveries SET due=0 WHERE lane='speak:destination'")
+
+    succeeding = Channel(True)
+    second = PygentRuntimeService(config, speak_channels=(succeeding,))
+    try:
+        # Initialization starts the replay worker without another speak call.
+        await second.initialize()
+
+        async def wait_for_receipt() -> None:
+            while store.get("speak:destination", "reply-1")["receipt"] is None:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(wait_for_receipt(), 5)
+        second._speak_executor.publish("reply-1", "reply", ())
+        await asyncio.gather(*second._speak_executor._delivery_tasks)
+        assert failing.reply_ids == succeeding.reply_ids == ["reply-1"]
+    finally:
+        await second.close()

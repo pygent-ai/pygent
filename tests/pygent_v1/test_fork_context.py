@@ -8,6 +8,7 @@ extractor's fixed cursor range.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -20,7 +21,12 @@ from pygent.agent.pygent_v1.runtime.fork_context import (
     session_fork_window,
 )
 from pygent.agent.pygent_v1.runtime.service import PygentRuntimeService
-from pygent.agent.pygent_v1.schema import AgentSession, CaseRunRef, RunConfig
+from pygent.agent.pygent_v1.schema import (
+    AgentSession,
+    CaseRunRef,
+    EternalConversationConfig,
+    RunConfig,
+)
 from pygent.runtime.codec import message_to_dict
 
 
@@ -123,3 +129,38 @@ def test_frozen_window_is_deterministic_and_auditable() -> None:
     assert snapshot.source == "session-frozen:3"
     assert snapshot.message_count == 3
     assert snapshot.source_hash == snapshot.effective_context_hash
+
+
+def test_live_window_includes_uncovered_history_after_snapshot(tmp_path: Path) -> None:
+    config, session, run_ref = _fixture(tmp_path)
+    config = replace(config, eternal_conversation=EternalConversationConfig(enabled=True))
+    session.metadata["eternal_memory"] = True
+    session.history.extend(
+        [
+            message_to_dict(UserMessage(content="uncovered question")),
+            message_to_dict(AIMessage(content="uncovered answer")),
+        ]
+    )
+    write_json(
+        Path(session.session_dir) / "state" / "eternal-conversation.json",
+        {
+            "snapshot_revision": 7,
+            "covered_through": 2,
+            "snapshot": {"topic": ["remembered"]},
+        },
+    )
+
+    window = session_fork_window(
+        mode="live",
+        config=config,
+        session=session,
+        run_ref=run_ref,
+        turn_id="fork:test",
+    )
+
+    snapshot, question, answer = window.messages
+    assert snapshot.kind == "pygent.v1.memory.snapshot"
+    assert 'revision="7" covered-through="2"' in snapshot.content
+    assert "remembered" in snapshot.content
+    assert question.content == "uncovered question"
+    assert answer.content == "uncovered answer"

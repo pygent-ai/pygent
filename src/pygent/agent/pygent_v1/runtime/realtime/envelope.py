@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import textwrap
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pygent.agent.pygent_v1.core.prompt import Prompt, system_reminder
 from pygent.agent.pygent_v1.runtime.attachments import (
@@ -109,6 +109,9 @@ class ExchangeEnvelope:
     # Workspace-relative paths of the user's attachments; the transcript
     # checkpoint records them on the steering message the main agent reads.
     attachments: tuple[str, ...] = ()
+
+    source_input_ids: tuple[str, ...] = field(default=(), compare=False)
+    reply: JsonValue = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         for name in ("exchange_id", "session_id", "content"):

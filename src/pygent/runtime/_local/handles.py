@@ -214,26 +214,34 @@ class _LocalExecutionHandle(Generic[OutputMessageT]):
             pass
         return True
 
+    async def _wait_for_history_start(self) -> bool:
+        if self._record.history_started:
+            return True
+        ready = asyncio.create_task(self._record.history_ready.wait())
+        task = self._record.task
+        waits = {ready} if task is None else {ready, task}
+        try:
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+            return self._record.history_started
+        finally:
+            ready.cancel()
+            await asyncio.gather(ready, return_exceptions=True)
+
+    async def wait_for_invocation_commit(self) -> None:
+        """Wait until a durable execution's initial input is recorded."""
+        if self._record.history is not None and not await self._wait_for_history_start():
+            await self.result()
+            raise RuntimeError("execution finished before recording its invocation")
+
     async def send_input(
         self, *, input_id: str, kind: str, value: JsonValue
     ) -> ExecutionInputDelivery:
         history = self._record.history
         if history is not None:
-            if not self._record.history_started:
-                ready = asyncio.create_task(self._record.history_ready.wait())
-                task = self._record.task
-                waits = {ready} if task is None else {ready, task}
-                try:
-                    done, _ = await asyncio.wait(
-                        waits, return_when=asyncio.FIRST_COMPLETED
-                    )
-                finally:
-                    ready.cancel()
-                    await asyncio.gather(ready, return_exceptions=True)
-                if ready not in done:
-                    return ExecutionInputDelivery(
-                        "execution_finished", self.execution_id, input_id
-                    )
+            if not await self._wait_for_history_start():
+                return ExecutionInputDelivery(
+                    "execution_finished", self.execution_id, input_id
+                )
             delivery = await history.send_execution_input(
                 self.execution_id, input_id=input_id, kind=kind, value=value
             )

@@ -188,6 +188,7 @@ class _FakeRuntimeService:
         self.handles: dict[str, _FakeHandle] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self._counter = 0
+        self.fail_start: set[str] = set()
 
     async def start_turn(
         self,
@@ -210,6 +211,8 @@ class _FakeRuntimeService:
         self.messages[turn_id] = message
         self.kinds[turn_id] = message_kind
         self.openings[turn_id] = "\n".join(item.content for item in opening_exchanges)
+        if turn_id in self.fail_start:
+            raise RuntimeError("injected startup failure")
         session.history.append({"role": "user", "content": message})
         handle = _FakeHandle(f"exec-{self._counter}")
         self.handles[turn_id] = handle
@@ -551,3 +554,40 @@ async def test_finalizer_turn_leaves_pending_envelopes_to_continuation(
     assert await _completed(service, 2) == ["turn-1:finalize", "turn-1:finalize:cont"]
     assert service.openings["turn-1:finalize"] == ""
     assert service.openings["turn-1:finalize:cont"] == "late?"
+
+
+async def test_opening_exchange_survives_failed_start(tmp_path: Path) -> None:
+    coordinator, manager, service = await _harness(tmp_path)
+    envelope = _envelope("session-1", "user asked: status?")
+    await coordinator.deliver_exchange(manager, envelope)
+    service.fail_start.add("failed-turn")
+
+    failed = await _submit(coordinator, _lease(manager, service), "failed-turn", "first")
+    await failed.wait_finalized()
+    assert isinstance(failed.startup_error, RuntimeError)
+    assert service.openings["failed-turn"] == envelope.content
+
+    next_turn = await _submit(coordinator, _lease(manager, service), "next-turn", "retry")
+    await next_turn.result()
+    assert service.openings["next-turn"] == envelope.content
+    assert not await coordinator._has_pending_exchanges(manager, "session-1")
+
+
+async def test_pending_exchange_survives_coordinator_restart(tmp_path: Path) -> None:
+    coordinator, manager, _ = await _harness(tmp_path)
+    envelope = _envelope("session-1", "persisted exchange")
+    assert await coordinator.deliver_exchange(manager, envelope) == "pending"
+    await coordinator.close()
+
+    restarted, manager, service = await _harness(tmp_path)
+    try:
+        turn = await restarted.submit_pending_drain(
+            lease=_lease(manager, service), session_id="session-1"
+        )
+        assert turn is not None
+        await asyncio.wait_for(turn.result(), 5)
+        assert list(service.openings.values()) == [envelope.content]
+        assert await restarted.deliver_exchange(manager, envelope) == "injected"
+        assert not await restarted._has_pending_exchanges(manager, "session-1")
+    finally:
+        await restarted.close()
