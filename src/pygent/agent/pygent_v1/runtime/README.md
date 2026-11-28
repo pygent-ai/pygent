@@ -24,16 +24,14 @@ Owns model execution, tool execution, context management, and the high-level run
   markup into inert text. Raw ToolResults remain unchanged, and the outer
   conversation checkpoint persists the exact projection the model receives.
   There is no legacy system-reminder renderer or v1 adapter.
-- `realtime/`: the silent-agent harness. A fork reply's exchange envelope reaches
-  the running turn as a wait-mode steering input on the react layer's execution
-  inbox — the same channel as the memory projection replacement — and is
-  checkpointed like any other steering message. Until it is checkpointed the
-  envelope is transient by design: an envelope the inbox rejects (no turn, inbox
-  already sealed, finalizer round) waits in the coordinator's process memory
-  for the next turn's opening context, and a process exit before that turn
-  drops it. The fork reply never enters the transcript on its own, so a lost
-  reply is re-asked rather than recovered; persisting undelivered envelopes
-  would make the harness a second session-state source.
+- `realtime/`: speak, fork replies, and nudges. The delivery journal retains a
+  fork exchange until the foreground accepts it through the execution inbox
+  or opens a turn with it.
+  `RealtimeInteractionConfig.fork_reasoning_budget_seconds` (default 10) limits
+  a fork model attempt configured for low effort. The timer starts at the first
+  non-blank reasoning chunk and stops when answer text or a speak call begins.
+  Explicitly disabled reasoning cancels on the first non-blank reasoning chunk.
+  The existing per-call deadline still applies to both fork calls.
 - `tools.py`: tool observation and file-effect discovery.
 - `file_effect_models.py`: dependency-light file-effect contracts.
 - `file_effects.py`: deferred file-effect persistence and execution.

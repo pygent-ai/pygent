@@ -7,6 +7,7 @@ observed signature of an endpoint that silently ignores the forced
 from __future__ import annotations
 
 import asyncio
+import time
 from functools import partial
 from typing import Any
 
@@ -25,17 +26,22 @@ from pygent.agent.pygent_v1.runtime.realtime.fork_agent import (
 from pygent.agent.pygent_v1.runtime.realtime.fork_reply import (
     build_fork_context,
 )
-from pygent.core import AIMessage, Context, ToolMessage, UserMessage
+from pygent.agent.pygent_v1.runtime.realtime.speak import SPEAK_TOOL_SPEC
+from pygent.core import AIMessage, Context, ToolMessage, UserMessage, freeze_json_object
 from pygent.llm import (
     AnthropicMessagesAdapter,
     GenerationConfig,
     ModelCallError,
+    ModelCallLayer,
     ModelConfig,
     ModelErrorKind,
     ModelProviderRequest,
+    OpenAICompatibleAdapter,
     RetryPolicy,
 )
+from pygent.runtime import ExecutionOptions, LocalRuntime
 from pygent.tool import ToolCall
+from tests.support.model_specs import configured_invoker, model_entry, model_group
 
 
 class _ScriptedForkModel:
@@ -77,6 +83,7 @@ def _module(
     *answers: AIMessage,
     model: Any | None = None,
     model_call_timeout: float = 60.0,
+    reasoning_budget_seconds: float = 10.0,
     model_factory: Any = _ScriptedForkModel,
 ) -> tuple[ForkReplyModule, Any]:
     module = ForkReplyModule(
@@ -86,6 +93,7 @@ def _module(
         tools=(),
         retry_policy=RetryPolicy(),
         model_call_timeout=model_call_timeout,
+        reasoning_budget_seconds=reasoning_budget_seconds,
     )
     if model is None:
         model = model_factory(*answers)
@@ -518,3 +526,102 @@ def test_normalized_fork_context_encodes_paired_tool_results() -> None:
         if block["type"] == "tool_result"
     ] == ["call-1", "call-2"]
     assert all(block["is_error"] for block in results["content"])
+
+
+@pytest.mark.parametrize(
+    ("wire_effort", "first_output", "fallback_stalls", "attempts"),
+    [
+        ("none", None, False, 2),
+        ("low", None, False, 2),
+        ("low", None, True, 2),
+        ("low", "text", False, 1),
+        ("low", "speak", False, 1),
+        ("high", None, False, 1),
+    ],
+)
+async def test_fork_reasoning_budget_uses_wire_attempt_and_reply_progress(
+    wire_effort: str, first_output: str | None, fallback_stalls: bool, attempts: int
+) -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.closed: list[int] = []
+            self.prompts: list[str] = []
+            self.calls = 0
+
+        async def stream(self, _route, payload):
+            self.calls += 1
+            call = self.calls
+            assert payload["reasoning_effort"] == wire_effort
+            self.prompts.append(payload["messages"][-1]["content"])
+
+            def delta(**fields):
+                return freeze_json_object({"choices": [{"delta": fields}]})
+
+            try:
+                if call == 1 or fallback_stalls:
+                    yield delta(reasoning_content="thinking")
+                    if first_output == "text":
+                        yield delta(content="answer")
+                    if first_output == "speak":
+                        yield delta(tool_calls=[{"index": 0, "id": "call-1", "function": {"name": "sp"}}])
+                        yield delta(tool_calls=[{"index": 0, "function": {"name": "eak"}}])
+                    await asyncio.sleep(0.2)
+                    if first_output == "speak":
+                        yield delta(tool_calls=[{"index": 0, "function": {"arguments": '{"text":"answer"}'}}])
+                    elif first_output != "text":
+                        yield delta(content="original answer")
+                else:
+                    yield delta(content="fallback reply")
+                yield freeze_json_object({"done": True})
+            finally:
+                self.closed.append(call)
+
+        async def aclose(self):
+            pass
+
+    client = Client()
+    invoker = configured_invoker(
+        adapters={"openai": OpenAICompatibleAdapter()},
+        clients={"primary": client},
+    )
+    group = model_group("fork", (model_entry("primary", "openai", "test", provider_options={"reasoning_effort": wire_effort}),))
+    module, _ = _module(
+        model_call_timeout=1.0,
+        reasoning_budget_seconds=0.5 if wire_effort == "none" else 0.08,
+    )
+    module.model = ModelCallLayer(
+        model_group=group,
+        retry_policy=RetryPolicy(),
+        generation=GenerationConfig(),
+        tools=(SPEAK_TOOL_SPEC.definition,),
+        invoker=invoker,
+    )
+    runtime = LocalRuntime()
+    bound = runtime.bind(module)
+
+    async def invoke():
+        return await bound.invoke(
+            _interrupt(), _context(),
+            execution=ExecutionOptions(deadline=time.monotonic() + 3),
+        )
+
+    try:
+        if fallback_stalls:
+            with pytest.raises(TimeoutError):
+                await invoke()
+        else:
+            result, _ = await invoke()
+            outcome = outcome_from_result(result)
+            reply = outcome.speak_args.text if outcome.speak_args else outcome.text
+            assert reply == (
+                "fallback reply" if attempts == 2 else
+                "answer" if first_output else "original answer"
+            )
+            assert result.data["attempts"] == attempts
+        assert client.calls == attempts
+        assert client.closed == list(range(1, attempts + 1))
+        if attempts == 2:
+            assert client.prompts[1].startswith("<user-interrupt>")
+    finally:
+        await runtime.close()
+        await invoker.aclose()

@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextvars import ContextVar
 from dataclasses import replace
 from typing import Any, cast
 
@@ -67,6 +68,12 @@ from .types import (
     ModelProviderError,
     RetryPolicy,
 )
+
+# A call-scoped observer sees the wire payload and stream without changing
+# the public model events or the provider request snapshot.
+_model_attempt_observer: ContextVar[
+    Callable[[str, FrozenJsonObject], Callable[[ModelProviderStreamPart], None]] | None
+] = ContextVar("pygent_model_attempt_observer", default=None)
 
 _CANCELLATION_CLEANUP_GRACE_SECONDS = 1.0
 
@@ -598,7 +605,13 @@ class DefaultModelInvoker:
                 # Request construction happens before Provider I/O, so the
                 # adapter-authored message is safe to surface.
                 raise ModelCallError(str(exc), kind=exc.kind) from None
+            observe_attempt = _model_attempt_observer.get()
             for number in range(1, retry_policy.max_attempts_per_model + 1):
+                observe_part = (
+                    observe_attempt(model.protocol, payload)
+                    if observe_attempt is not None
+                    else None
+                )
                 prepared_event = prepared_request_event(request, attempt=number)
                 emitted = False
                 completed = False
@@ -627,6 +640,8 @@ class DefaultModelInvoker:
                         ),
                         cancel_event=cancel_event,
                     ):
+                        if observe_part is not None:
+                            observe_part(part)
                         if part.kind == ModelProviderStreamKind.FINISH:
                             _raise_for_unsuccessful_finish(
                                 cast(FrozenJsonObject, part.data).get("finish_reason")

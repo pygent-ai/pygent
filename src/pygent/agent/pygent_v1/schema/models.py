@@ -181,6 +181,9 @@ class DelegationConfig:
             raise ValueError("delegation limits must be positive")
 
 
+DEFAULT_FORK_REASONING_BUDGET_SECONDS = 10.0
+
+
 @dataclass(slots=True)
 class RealtimeInteractionConfig:
     """Silent-work interaction (speak, fork replies, nudges) — off by default."""
@@ -189,6 +192,7 @@ class RealtimeInteractionConfig:
     nudge_interval: int = 5
     fork_deadline_seconds: float = 60.0
     fork_reasoning_effort: str | None = "low"
+    fork_reasoning_budget_seconds: float = DEFAULT_FORK_REASONING_BUDGET_SECONDS
 
     def __post_init__(self) -> None:
         self.enabled = bool(self.enabled)
@@ -202,6 +206,14 @@ class RealtimeInteractionConfig:
             or self.fork_deadline_seconds <= 0
         ):
             raise ValueError("fork_deadline_seconds must be positive")
+        budget = self.fork_reasoning_budget_seconds
+        if (
+            isinstance(budget, bool)
+            or not isinstance(budget, (int, float))
+            or not math.isfinite(budget)
+            or budget <= 0
+        ):
+            raise ValueError("fork_reasoning_budget_seconds must be positive and finite")
         if self.fork_reasoning_effort is not None:
             self.fork_reasoning_effort = _require(
                 self.fork_reasoning_effort, "fork_reasoning_effort"

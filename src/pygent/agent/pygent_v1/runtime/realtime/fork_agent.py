@@ -23,6 +23,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pygent.agent.pygent_v1.graph.core import MODEL_RETRYABLE_ERROR_KINDS
+from pygent.agent.pygent_v1.runtime.realtime.fork_reasoning import ForkReasoningBudget
 from pygent.agent.pygent_v1.runtime.realtime.fork_reply import (
     ForkReplyOutcome,
     extract_speak_args,
@@ -31,6 +32,7 @@ from pygent.agent.pygent_v1.runtime.realtime.speak import (
     SPEAK_TOOL_NAME,
     parse_speak_args,
 )
+from pygent.agent.pygent_v1.schema.models import DEFAULT_FORK_REASONING_BUDGET_SECONDS
 from pygent.core import (
     AIMessage,
     EffectSafety,
@@ -47,6 +49,7 @@ from pygent.llm import (
     ModelGroup,
     RetryPolicy,
 )
+from pygent.llm.invoker import _model_attempt_observer
 
 FORK_RESULT_KIND = "pygent.v1.realtime.fork-result"
 
@@ -108,12 +111,14 @@ class ForkReplyModule(Module[UserMessage, AIMessage]):
         tools: tuple,
         retry_policy: RetryPolicy,
         model_call_timeout: float,
+        reasoning_budget_seconds: float = DEFAULT_FORK_REASONING_BUDGET_SECONDS,
     ) -> None:
         super().__init__()
         self.config = config
         self.model_group_name = model_group_name
         self.llm = llm
         self.model_call_timeout = model_call_timeout
+        self.reasoning_budget_seconds = reasoning_budget_seconds
         self.model = ModelCallLayer(
             model_group=ModelGroup.deferred(name=f"pygent.v1:{model_group_name}"),
             policy=ModelCallPolicy(allow_profile_override=True),
@@ -133,8 +138,16 @@ class ForkReplyModule(Module[UserMessage, AIMessage]):
         # ``asyncio.timeout`` (not ``wait_for``) keeps the managed child call
         # inside this owner task — the runtime rejects cross-task module
         # invocations as unstructured.
-        async with asyncio.timeout(self.model_call_timeout):
-            return await self.model(message, context)
+        async with asyncio.timeout(self.model_call_timeout) as timeout:
+            budget = ForkReasoningBudget(timeout, self.reasoning_budget_seconds)
+            token = _model_attempt_observer.set(budget.observe_attempt)
+            try:
+                result = await self.model(message, context)
+                if budget.expired:
+                    raise TimeoutError("fork reasoning budget expired")
+                return result
+            finally:
+                _model_attempt_observer.reset(token)
 
     async def forward(
         self, message: UserMessage, context: Any

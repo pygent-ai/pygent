@@ -9,10 +9,12 @@ import pytest
 
 from pygent import Context, GenerationConfig, UserMessage
 from pygent.agent.pygent_v1.runtime.realtime.fork_reasoning import (
+    _wire_reasoning_mode,
     fork_model_profiles,
     fork_profile_name,
 )
 from pygent.agent.pygent_v1.schema.models import RealtimeInteractionConfig
+from pygent.core import freeze_json_object
 from pygent.llm import (
     AnthropicMessagesAdapter,
     ModelConfig,
@@ -310,3 +312,18 @@ def test_realtime_config_defaults_fork_reasoning_effort_to_low() -> None:
 def test_realtime_config_rejects_blank_fork_reasoning_effort() -> None:
     with pytest.raises(ValueError, match="fork_reasoning_effort"):
         RealtimeInteractionConfig(fork_reasoning_effort="  ")
+
+
+@pytest.mark.parametrize(
+    ("protocol", "body", "mode"),
+    [
+        ("openai_chat_completions", {"enable_thinking": False}, "off"),
+        ("anthropic_messages", {"thinking": {"type": "disabled"}}, "off"),
+        ("anthropic_messages", {"output_config": {"effort": "low"}}, "low"),
+        ("openai_responses", {"reasoning": {"effort": "low"}}, "low"),
+        ("gemini_generate_content", {"generationConfig": {"thinkingConfig": {"thinkingBudget": 0}}}, "off"),
+        ("openai_chat_completions", {}, "other"),
+    ],
+)
+def test_fork_budget_classifies_prepared_wire_reasoning(protocol, body, mode) -> None:
+    assert _wire_reasoning_mode(protocol, freeze_json_object(body)) == mode

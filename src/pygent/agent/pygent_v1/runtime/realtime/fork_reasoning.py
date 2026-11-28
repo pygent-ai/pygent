@@ -26,12 +26,20 @@ sending a field the endpoint rejects; the degrade is recorded as
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import asyncio
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Literal
 
 from pygent.agent.pygent_v1.runtime.model_configuration import preferred_models
-from pygent.llm import ModelConfig, ModelEntry
+from pygent.agent.pygent_v1.runtime.realtime.speak import SPEAK_TOOL_NAME
+from pygent.core import FrozenJsonObject
+from pygent.llm import (
+    ModelConfig,
+    ModelEntry,
+    ModelProviderStreamKind,
+    ModelProviderStreamPart,
+)
 
 # Adapters that forward ``provider_options`` as top-level request fields.
 _REASONING_EFFORT_PROTOCOLS = frozenset({"openai_chat_completions"})
@@ -170,6 +178,93 @@ def _apply_reasoning_effort(
         ),
         "reasoning_effort_applied",
     )
+
+
+def _wire_reasoning_mode(
+    protocol: str, payload: FrozenJsonObject
+) -> Literal["off", "low", "other"]:
+    thinking = payload.get("thinking")
+    effort = None
+    if protocol in (_ANTHROPIC_MESSAGES, "openai_chat_completions"):
+        if isinstance(thinking, Mapping) and thinking.get("type") == "disabled":
+            return "off"
+        if protocol == _ANTHROPIC_MESSAGES:
+            output = payload.get("output_config")
+            effort = output.get("effort") if isinstance(output, Mapping) else None
+        else:
+            if payload.get("enable_thinking") is False:
+                return "off"
+            effort = payload.get("reasoning_effort")
+    elif protocol == "openai_responses":
+        reasoning = payload.get("reasoning")
+        effort = reasoning.get("effort") if isinstance(reasoning, Mapping) else None
+    elif protocol == "gemini_generate_content":
+        generation = payload.get("generationConfig")
+        if isinstance(generation, Mapping):
+            thinking_config = generation.get("thinkingConfig")
+            if isinstance(thinking_config, Mapping):
+                budget = thinking_config.get("thinkingBudget")
+                if type(budget) is int and budget == 0:
+                    return "off"
+    if effort == "none":
+        return "off"
+    return "low" if effort == "low" else "other"
+
+
+class ForkReasoningBudget:
+    """Adjust the fork's owner-task deadline using the current wire attempt."""
+
+    def __init__(self, timeout: asyncio.Timeout, seconds: float) -> None:
+        self._timeout = timeout
+        self._seconds = seconds
+        hard_deadline = timeout.when()
+        assert hard_deadline is not None
+        self._hard_deadline = hard_deadline
+        self.expired = False
+
+    def observe_attempt(
+        self, protocol: str, payload: FrozenJsonObject
+    ) -> Callable[[ModelProviderStreamPart], None]:
+        mode = _wire_reasoning_mode(protocol, payload)
+        if not self.expired and not self._timeout.expired():
+            self._timeout.reschedule(self._hard_deadline)
+        short_deadline: float | None = None
+        started_reply = False
+        tool_names: dict[int, str] = {}
+
+        def observe(part: ModelProviderStreamPart) -> None:
+            nonlocal short_deadline, started_reply
+            if mode == "other" or self.expired or self._timeout.expired():
+                return
+            now = asyncio.get_running_loop().time()
+            if short_deadline is not None and now >= short_deadline:
+                self.expired = True
+                return
+            data = part.data
+            if not isinstance(data, Mapping):
+                return
+            text = data.get("text")
+            non_empty = isinstance(text, str) and bool(text.strip())
+            if part.kind == ModelProviderStreamKind.REASONING and non_empty:
+                if mode == "off":
+                    self.expired = True
+                    self._timeout.reschedule(now)
+                elif not started_reply and short_deadline is None:
+                    short_deadline = min(now + self._seconds, self._hard_deadline)
+                    self._timeout.reschedule(short_deadline)
+            elif mode == "low" and not started_reply:
+                if part.kind == ModelProviderStreamKind.TEXT and non_empty:
+                    started_reply = True
+                elif part.kind == ModelProviderStreamKind.TOOL_CALL:
+                    index, delta = data.get("index", 0), data.get("name_delta")
+                    if isinstance(index, int) and isinstance(delta, str):
+                        tool_names[index] = tool_names.get(index, "") + delta
+                        started_reply = tool_names[index] == SPEAK_TOOL_NAME
+                if started_reply and short_deadline is not None:
+                    self._timeout.reschedule(self._hard_deadline)
+                    short_deadline = None
+
+        return observe
 
 
 __all__ = [

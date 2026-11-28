@@ -1295,6 +1295,9 @@ class PygentRuntimeService:
             tools=tools,
             retry_policy=model_retry_policy(retry),
             model_call_timeout=self.config.realtime_interaction.fork_deadline_seconds,
+            reasoning_budget_seconds=(
+                self.config.realtime_interaction.fork_reasoning_budget_seconds
+            ),
         )
         self._fork_agents[key] = agent
         return agent
